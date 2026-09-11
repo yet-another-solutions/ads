@@ -5,6 +5,7 @@ import shutil
 import socket
 import threading
 from collections.abc import Iterator
+from http.cookiejar import DefaultCookiePolicy
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -32,6 +33,22 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+class _AllowHttpSecureCookies(DefaultCookiePolicy):
+    def return_ok_secure(self, cookie: object, request: object) -> bool:
+        return True
+
+
+def _http_client() -> httpx.Client:
+    cookies = httpx.Cookies()
+    cookies.jar.set_policy(_AllowHttpSecureCookies())
+    return httpx.Client(
+        follow_redirects=True,
+        timeout=30.0,
+        cookies=cookies,
+        headers={"User-Agent": "Mozilla/5.0 ads-integration-test"},
+    )
 
 
 def _tag_attrs(tag: str) -> dict[str, str]:
@@ -69,11 +86,14 @@ def keycloak_base() -> Iterator[str]:
         .with_env("KC_BOOTSTRAP_ADMIN_PASSWORD", ADMIN_PASSWORD)
         .with_env("KC_HTTP_ENABLED", "true")
         .with_env("KC_HOSTNAME_STRICT", "false")
+        .with_env("KC_HOSTNAME_STRICT_HTTPS", "false")
         .with_command("start-dev")
         .waiting_for(LogMessageWaitStrategy("Listening on").with_startup_timeout(180))
     )
     with container:
         host = container.get_container_host_ip()
+        if host in {"localhost", "0.0.0.0"}:
+            host = "127.0.0.1"
         port = container.get_exposed_port(8080)
         yield f"http://{host}:{port}"
 
@@ -99,7 +119,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
     create = httpx.post(
         f"{base}/admin/realms",
         headers=headers,
-        json={"realm": REALM, "enabled": True},
+        json={"realm": REALM, "enabled": True, "sslRequired": "none"},
         timeout=30.0,
     )
     if create.status_code not in {201, 409}:
@@ -238,12 +258,13 @@ def running_app(keycloak_base: str, tmp_path_factory: pytest.TempPathFactory) ->
 
 @pytest.mark.integration
 def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
-    with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+    with _http_client() as client:
         page = client.get(running_app + "/")
         assert page.status_code == 200
         action, fields = _html_form(page.text, "kc-form-login")
         fields["username"] = USER_NAME
         fields["password"] = USER_PASSWORD
+        fields.setdefault("credentialId", "")
         fields["login"] = fields.get("login") or "Sign In"
         origin = f"{urlsplit(str(page.url)).scheme}://{urlsplit(str(page.url)).netloc}"
         hello = client.post(
@@ -251,7 +272,7 @@ def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
             data=fields,
             headers={"Origin": origin, "Referer": str(page.url)},
         )
-        assert hello.status_code == 200
+        assert hello.status_code == 200, hello.text[:500]
         assert "hello world" in hello.text
         pressed = client.post(running_app + "/hello/press", follow_redirects=True)
         assert pressed.status_code == 200
