@@ -13,7 +13,7 @@ from ads.auth import AuthController
 from ads.config import Settings
 from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
-from ads.hello.controller import HelloController
+from ads.hello.controller import HelloApiController, HelloController
 from ads.ioc import AppProvider
 from ads.logconfig import configure_logging
 from ads.security_middleware import SecurityContextMiddleware
@@ -35,7 +35,7 @@ def create_app(settings: Settings) -> Litestar:
     session_config = build_session_config(settings)
     container = make_async_container(AppProvider(settings), LitestarProvider())
     app = Litestar(
-        route_handlers=[HelloController, AuthController, live, ready],
+        route_handlers=[HelloController, HelloApiController, AuthController, live, ready],
         template_config=TemplateConfig(
             engine=JinjaTemplateEngine(directory=templates),
         ),

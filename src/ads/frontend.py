@@ -6,6 +6,7 @@ from typing import Any
 from litestar import Controller, Request
 from litestar.connection import ASGIConnection
 from litestar.di import Provide
+from litestar.exceptions import MethodNotAllowedException
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Redirect
 
@@ -14,6 +15,7 @@ from ads.identity import identity_from_session
 
 RETURN_TO_SESSION_KEY = "return_to"
 _BLOCKED_RETURN_PATHS = frozenset({"/login", "/auth/callback", "/logout"})
+_FRONTEND_METHODS = frozenset({"GET", "HEAD"})
 
 
 class LoginRequired(Exception):
@@ -57,12 +59,15 @@ def handle_login_required(request: Request[Any, Any, Any], _exc: LoginRequired) 
 def require_frontend_login(
     connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler
 ) -> None:
+    method = str(connection.scope.get("method", ""))
+    if method not in _FRONTEND_METHODS:
+        raise MethodNotAllowedException()
     if identity_from_session(connection.session) is None:
         raise LoginRequired
 
 
 class FrontendController(Controller):
-    """HTML. Redirect to login, then back to the same URL."""
+    """HTML GET pages. Redirect to login, then back to the same URL. Never POST."""
 
     guards = [require_frontend_login]
     dependencies = {
