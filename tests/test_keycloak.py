@@ -46,14 +46,20 @@ def _openssl(*args: str) -> None:
         raise RuntimeError(result.stderr or result.stdout or "openssl failed")
 
 
-def _issue_tls(cert_dir: Path) -> Path:
+def _issue_tls(cert_dir: Path) -> tuple[Path, Path, Path]:
     ca_key = cert_dir / "ca.key"
     ca_crt = cert_dir / "ca.crt"
     server_key = cert_dir / "tls.key"
     server_csr = cert_dir / "tls.csr"
     server_crt = cert_dir / "tls.crt"
     ext = cert_dir / "ext.cnf"
-    ext.write_text("[v3_req]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n")
+    ext.write_text(
+        "[v3_req]\n"
+        "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+        "basicConstraints=CA:FALSE\n"
+    )
     _openssl(
         "req",
         "-x509",
@@ -105,7 +111,7 @@ def _issue_tls(cert_dir: Path) -> Path:
     )
     for path in (ca_crt, server_crt, server_key):
         path.chmod(0o644)
-    return ca_crt
+    return ca_crt, server_crt, server_key
 
 
 def _http_client() -> httpx2.Client:
@@ -145,7 +151,7 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
     cert_dir = tmp_path_factory.mktemp("kc-certs")
-    ca_crt = _issue_tls(cert_dir)
+    ca_crt, server_crt, server_key = _issue_tls(cert_dir)
     previous = os.environ.get("SSL_CERT_FILE")
     os.environ["SSL_CERT_FILE"] = str(ca_crt)
     container = (
@@ -154,26 +160,40 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         .with_env("KC_BOOTSTRAP_ADMIN_USERNAME", ADMIN_USER)
         .with_env("KC_BOOTSTRAP_ADMIN_PASSWORD", ADMIN_PASSWORD)
         .with_env("KC_HOSTNAME_STRICT", "false")
-        .with_env("KC_HTTPS_CERTIFICATE_FILE", "/opt/keycloak/certs/tls.crt")
-        .with_env("KC_HTTPS_CERTIFICATE_KEY_FILE", "/opt/keycloak/certs/tls.key")
-        .with_volume_mapping(str(cert_dir), "/opt/keycloak/certs", "ro")
-        .with_command("start-dev")
+        .with_copy_into_container(server_crt, "tmp/tls.crt")
+        .with_copy_into_container(server_key, "tmp/tls.key")
+        .with_command(
+            [
+                "start-dev",
+                "--https-certificate-file=/tmp/tls.crt",
+                "--https-certificate-key-file=/tmp/tls.key",
+            ]
+        )
         .waiting_for(LogMessageWaitStrategy("Listening on").with_startup_timeout(180))
     )
+
+    def _logs() -> str:
+        try:
+            stdout, stderr = container.get_logs()
+            return f"stdout={stdout.decode()[-3000:]}\nstderr={stderr.decode()[-3000:]}"
+        except Exception as log_exc:
+            return f"logs unavailable: {log_exc}"
+
     try:
-        with container:
-            host = container.get_container_host_ip()
-            if host in {"localhost", "0.0.0.0"}:
-                host = "127.0.0.1"
-            port = container.get_exposed_port(8443)
-            yield f"https://{host}:{port}"
-    except Exception as exc:
-        stdout, stderr = container.get_logs()
-        raise RuntimeError(
-            f"keycloak failed: {exc}\nstdout={stdout.decode()[-2000:]}\n"
-            f"stderr={stderr.decode()[-2000:]}"
-        ) from exc
+        try:
+            container.start()
+        except Exception as exc:
+            raise RuntimeError(f"keycloak failed: {exc}\n{_logs()}") from exc
+        host = container.get_container_host_ip()
+        if host in {"localhost", "0.0.0.0"}:
+            host = "127.0.0.1"
+        port = container.get_exposed_port(8443)
+        yield f"https://{host}:{port}"
     finally:
+        try:
+            container.stop()
+        except Exception:
+            pass
         if previous is None:
             os.environ.pop("SSL_CERT_FILE", None)
         else:
