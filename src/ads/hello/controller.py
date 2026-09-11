@@ -7,12 +7,12 @@ from litestar import Request, get, post
 from litestar.di import NamedDependency
 from litestar.response import Redirect, Template
 
-from ads.authenticated import AuthenticatedController
+from ads.frontend import FrontendController
 from ads.hello.service import HelloService
 from ads.identity import Identity
 
 
-class HelloController(AuthenticatedController):
+class HelloController(FrontendController):
     path = "/"
 
     @get("/")

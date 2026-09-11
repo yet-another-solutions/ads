@@ -9,6 +9,7 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
 from msgspec import structs
 
+from ads.frontend import pop_return_to
 from ads.oidc import OidcClient
 
 
@@ -44,7 +45,7 @@ class AuthController(Controller):
             raise NotAuthorizedException(detail="token response missing id_token")
         identity = oidc.decode_id_token(id_token, nonce=nonce)
         request.session["identity"] = structs.asdict(identity)
-        return Redirect("/")
+        return Redirect(pop_return_to(request.session))
 
     @get("/logout")
     async def logout(self, request: Request[Any, Any, Any]) -> Redirect:

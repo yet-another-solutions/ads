@@ -10,8 +10,8 @@ from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 
 from ads.auth import AuthController
-from ads.authenticated import LoginRequired, handle_login_required
 from ads.config import Settings
+from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
 from ads.hello.controller import HelloController
 from ads.ioc import AppProvider
