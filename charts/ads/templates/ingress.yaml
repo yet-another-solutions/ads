@@ -1,0 +1,72 @@
+{{- if .Values.ingress.enabled }}
+{{- if and .Values.tls.enabled .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "ads.fullname" . }}-ingress
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "ads.ingressSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ .Values.ingress.hostname | quote }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "ads.fullname" . }}-service
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "ads.serviceSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ .Values.ingress.hostname | quote }}
+    - {{ include "ads.fullname" . | quote }}
+    - {{ printf "%s.%s" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "ads.fullname" .) .Release.Namespace | quote }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "ads.fullname" . }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+  annotations:
+    {{- if and .Values.tls.enabled }}
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.hostname | quote }}
+      secretName: {{ include "ads.ingressSecretName" . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "ads.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

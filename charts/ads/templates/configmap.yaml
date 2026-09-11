@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+data:
+  ADS_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.keycloak.wellKnownUrl | quote }}
+  ADS_KEYCLOAK_ISSUER: {{ .Values.keycloak.issuer | quote }}
+  ADS_KEYCLOAK_CLIENT_ID: {{ .Values.keycloak.clientId | quote }}
+  ADS_KEYCLOAK_AUDIENCE: {{ .Values.keycloak.audience | quote }}
+  ADS_KEYCLOAK_ROLE: {{ .Values.keycloak.role | quote }}
+  ADS_PUBLIC_BASE_URL: {{ include "ads.publicBaseUrl" . | quote }}
+  ADS_DATA_DIR: {{ .Values.persistence.mountPath | quote }}
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.service.port | quote }}
+  ADS_TLS_ENABLED: {{ .Values.tls.enabled | quote }}
+  {{- if .Values.tls.enabled }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  {{- end }}
