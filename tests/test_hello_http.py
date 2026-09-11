@@ -22,10 +22,9 @@ def test_unauthenticated_root_redirects_to_login(client: TestClient) -> None:
     assert response.headers["location"].endswith("/login")
 
 
-def test_unauthenticated_press_redirects_to_login(client: TestClient) -> None:
+def test_unauthenticated_press_is_unauthorized(client: TestClient) -> None:
     response = client.post("/hello/press", follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers["location"].endswith("/login")
+    assert response.status_code == 401
 
 
 def test_authenticated_user_sees_hello_world(client: TestClient) -> None:
