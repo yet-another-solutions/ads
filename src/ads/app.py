@@ -16,6 +16,7 @@ from ads.health import live, ready
 from ads.hello.controller import HelloController
 from ads.ioc import AppProvider
 from ads.logconfig import configure_logging
+from ads.security_middleware import SecurityContextMiddleware
 
 
 def build_session_config(settings: Settings) -> CookieBackendConfig:
@@ -38,7 +39,7 @@ def create_app(settings: Settings) -> Litestar:
         template_config=TemplateConfig(
             engine=JinjaTemplateEngine(directory=templates),
         ),
-        middleware=[session_config.middleware],
+        middleware=[session_config.middleware, SecurityContextMiddleware],
         exception_handlers={LoginRequired: handle_login_required},
         on_shutdown=[container.close],
     )
