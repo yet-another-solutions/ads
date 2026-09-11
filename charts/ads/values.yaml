@@ -1,0 +1,72 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/yet-another-solutions/ads
+  tag: "0.0.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: true
+  className: nginx
+  hostname: ads.interlab
+  annotations: {}
+
+tls:
+  enabled: true
+  certManager:
+    enabled: true
+    issuer:
+      name: testlab-ca
+      kind: ClusterIssuer
+      group: cert-manager.io
+  ingressSecretName: ""
+  serviceSecretName: ""
+
+keycloak:
+  wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+  issuer: https://keycloak.interlab/realms/ads
+  clientId: ads
+  audience: ads
+  role: user
+
+secrets:
+  keycloakClientSecret: change-me
+  sessionSecret: change-me-change-me-32b
+
+persistence:
+  enabled: true
+  storageClass: local-path
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  mountPath: /data
+  pv:
+    enabled: false
+    hostPath: /storage/ads
+    name: ""
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

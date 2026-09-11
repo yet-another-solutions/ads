@@ -1,0 +1,11 @@
+.venv
+.nox
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+tests
+charts
+dist
+noxfile.py
