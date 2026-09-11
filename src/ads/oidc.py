@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ssl
 from typing import Any
 from urllib.parse import urlencode
 
@@ -20,9 +21,20 @@ class OidcClient:
         self._jwks_client: PyJWKClient | None = None
         self._jwks_uri: str | None = None
 
+    def _ssl_context(self) -> ssl.SSLContext | None:
+        if self._settings.tls_ca_bundle is None:
+            return None
+        return ssl.create_default_context(cafile=str(self._settings.tls_ca_bundle))
+
+    def _verify(self) -> ssl.SSLContext | bool:
+        context = self._ssl_context()
+        if context is None:
+            return True
+        return context
+
     @stamina.retry(on=httpx2.HTTPError, attempts=5, wait_initial=0.2)
     async def _get_json(self, url: str) -> dict[str, Any]:
-        async with httpx2.AsyncClient(timeout=10.0) as client:
+        async with httpx2.AsyncClient(timeout=10.0, verify=self._verify()) as client:
             response = await client.get(url)
             response.raise_for_status()
             payload = response.json()
@@ -59,6 +71,7 @@ class OidcClient:
             client_id=self._settings.keycloak_client_id,
             client_secret=self._settings.keycloak_client_secret,
             token_endpoint_auth_method="client_secret_post",
+            verify=self._verify(),
         ) as client:
             token = await client.fetch_token(
                 metadata["token_endpoint"],
@@ -75,7 +88,7 @@ class OidcClient:
             raise RuntimeError("OIDC metadata has not been loaded")
         jwks_uri = str(self._metadata["jwks_uri"])
         if self._jwks_client is None or self._jwks_uri != jwks_uri:
-            self._jwks_client = PyJWKClient(jwks_uri)
+            self._jwks_client = PyJWKClient(jwks_uri, ssl_context=self._ssl_context())
             self._jwks_uri = jwks_uri
         signing_key = self._jwks_client.get_signing_key_from_jwt(id_token)
         payload = jwt.decode(

@@ -33,7 +33,6 @@ ingress:
   annotations: {}
 
 tls:
-  enabled: true
   certManager:
     enabled: true
     issuer:
@@ -42,6 +41,9 @@ tls:
       group: cert-manager.io
   ingressSecretName: ""
   serviceSecretName: ""
+  caBundle:
+    secretName: ""
+    key: ca.crt
 
 keycloak:
   wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration

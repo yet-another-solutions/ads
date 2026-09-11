@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,11 +13,11 @@ def _env(name: str, default: str | None = None) -> str:
     return value
 
 
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+def _existing_file(name: str, raw: str) -> Path:
+    path = Path(raw)
+    if not path.is_file():
+        raise RuntimeError(f"{name} must exist")
+    return path
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +31,9 @@ class Settings:
     session_secret: str
     public_base_url: str
     data_dir: Path
-    tls_enabled: bool
-    tls_cert_path: Path | None
-    tls_key_path: Path | None
+    tls_cert_path: Path
+    tls_key_path: Path
+    tls_ca_bundle: Path | None
     bind_host: str
     port: int
 
@@ -44,19 +45,33 @@ class Settings:
             raise RuntimeError("ADS_SESSION_SECRET must be at least 16 bytes")
         return encoded[:32].ljust(32, b"\0")
 
+    def cookie_secure(self) -> bool:
+        return self.public_base_url.startswith("https://")
+
+
+def load_tls_context(settings: Settings) -> ssl.SSLContext:
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(settings.tls_cert_path), str(settings.tls_key_path))
+    except ssl.SSLError as exc:
+        raise RuntimeError("ADS TLS certificate and key could not be loaded") from exc
+    if settings.tls_ca_bundle is not None:
+        try:
+            ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
+        except ssl.SSLError as exc:
+            raise RuntimeError("ADS_TLS_CA_BUNDLE could not be loaded") from exc
+    return context
+
 
 def load_settings() -> Settings:
-    tls_enabled = _env_bool("ADS_TLS_ENABLED", default=False)
-    cert_raw = os.environ.get("ADS_TLS_CERT_PATH", "").strip()
-    key_raw = os.environ.get("ADS_TLS_KEY_PATH", "").strip()
-    if tls_enabled and (not cert_raw or not key_raw):
-        raise RuntimeError(
-            "ADS_TLS_CERT_PATH and ADS_TLS_KEY_PATH are required when TLS is enabled"
-        )
+    cert_path = _existing_file("ADS_TLS_CERT_PATH", _env("ADS_TLS_CERT_PATH").strip())
+    key_path = _existing_file("ADS_TLS_KEY_PATH", _env("ADS_TLS_KEY_PATH").strip())
+    ca_raw = os.environ.get("ADS_TLS_CA_BUNDLE", "").strip()
+    ca_bundle = _existing_file("ADS_TLS_CA_BUNDLE", ca_raw) if ca_raw else None
     session_secret = _env("ADS_SESSION_SECRET")
     if not session_secret.strip():
         raise RuntimeError("ADS_SESSION_SECRET must be non-empty")
-    return Settings(
+    settings = Settings(
         keycloak_well_known_url=_env("ADS_KEYCLOAK_WELL_KNOWN_URL"),
         keycloak_issuer=_env("ADS_KEYCLOAK_ISSUER"),
         keycloak_client_id=_env("ADS_KEYCLOAK_CLIENT_ID"),
@@ -66,9 +81,11 @@ def load_settings() -> Settings:
         session_secret=session_secret,
         public_base_url=_env("ADS_PUBLIC_BASE_URL").rstrip("/"),
         data_dir=Path(_env("ADS_DATA_DIR", "/data")),
-        tls_enabled=tls_enabled,
-        tls_cert_path=Path(cert_raw) if cert_raw else None,
-        tls_key_path=Path(key_raw) if key_raw else None,
+        tls_cert_path=cert_path,
+        tls_key_path=key_path,
+        tls_ca_bundle=ca_bundle,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
     )
+    load_tls_context(settings)
+    return settings

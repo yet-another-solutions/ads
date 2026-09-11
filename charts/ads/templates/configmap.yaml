@@ -14,8 +14,8 @@ data:
   ADS_DATA_DIR: {{ .Values.persistence.mountPath | quote }}
   ADS_BIND_HOST: "0.0.0.0"
   ADS_PORT: {{ .Values.service.port | quote }}
-  ADS_TLS_ENABLED: {{ .Values.tls.enabled | quote }}
-  {{- if .Values.tls.enabled }}
   ADS_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_TLS_KEY_PATH: "/certs/tls.key"
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}

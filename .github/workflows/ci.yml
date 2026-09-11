@@ -73,10 +73,31 @@ jobs:
       - name: Lint and template
         run: |
           helm lint charts/ads
-          helm template ads charts/ads >/tmp/ads.yaml
-          grep -q 'kind: Deployment' /tmp/ads.yaml
-          helm template ads charts/ads --set tls.enabled=false >/tmp/ads-plain.yaml
-          if grep -q 'backend-protocol' /tmp/ads-plain.yaml; then
-            echo 'plain HTTP template still has TLS backend protocol' >&2
+          helm template ads charts/ads >/tmp/ads-cm.yaml
+          grep -q 'kind: Deployment' /tmp/ads-cm.yaml
+          grep -q 'kind: Certificate' /tmp/ads-cm.yaml
+          grep -q 'backend-protocol: "HTTPS"' /tmp/ads-cm.yaml
+          grep -q 'ADS_TLS_CERT_PATH' /tmp/ads-cm.yaml
+          if grep -q 'ADS_TLS_ENABLED' /tmp/ads-cm.yaml; then
+            echo 'plain HTTP toggle still present' >&2
             exit 1
           fi
+          helm template ads charts/ads \
+            --set tls.certManager.enabled=false \
+            --set tls.ingressSecretName=byo-ingress \
+            --set tls.serviceSecretName=byo-service \
+            >/tmp/ads-byo.yaml
+          if grep -q 'kind: Certificate' /tmp/ads-byo.yaml; then
+            echo 'BYO template still issues Certificates' >&2
+            exit 1
+          fi
+          grep -q 'secretName: byo-ingress' /tmp/ads-byo.yaml
+          grep -q 'secretName: byo-service' /tmp/ads-byo.yaml
+          if helm template ads charts/ads --set tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
+            echo 'BYO without secrets should fail' >&2
+            exit 1
+          fi
+          helm template ads charts/ads \
+            --set tls.caBundle.secretName=lab-ca \
+            >/tmp/ads-ca.yaml
+          grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml

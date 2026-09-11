@@ -46,25 +46,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "ads.publicBaseUrl" -}}
-{{- if .Values.tls.enabled -}}
 https://{{ .Values.ingress.hostname }}
-{{- else -}}
-http://{{ .Values.ingress.hostname }}
-{{- end -}}
 {{- end }}
 
 {{- define "ads.ingressSecretName" -}}
-{{- if and .Values.tls.enabled .Values.tls.certManager.enabled -}}
+{{- if .Values.tls.certManager.enabled -}}
 {{ include "ads.fullname" . }}-ingress-tls
 {{- else -}}
-{{ .Values.tls.ingressSecretName }}
+{{ required "tls.ingressSecretName is required when tls.certManager.enabled is false" .Values.tls.ingressSecretName }}
 {{- end -}}
 {{- end }}
 
 {{- define "ads.serviceSecretName" -}}
-{{- if and .Values.tls.enabled .Values.tls.certManager.enabled -}}
+{{- if .Values.tls.certManager.enabled -}}
 {{ include "ads.fullname" . }}-service-tls
 {{- else -}}
-{{ .Values.tls.serviceSecretName }}
+{{ required "tls.serviceSecretName is required when tls.certManager.enabled is false" .Values.tls.serviceSecretName }}
 {{- end -}}
 {{- end }}
