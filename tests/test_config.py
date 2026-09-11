@@ -1,26 +1,147 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from ads.config import Settings
+from ads.config import Settings, load_settings, load_tls_context
+from tests.certs import issue_tls, openssl_available
 
 
-def test_session_secret_must_be_at_least_16_bytes(tmp_path) -> None:
+def test_session_secret_must_be_at_least_16_bytes(tmp_path: Path) -> None:
     settings = Settings(
-        keycloak_well_known_url="http://keycloak.test/realms/ads/.well-known/openid-configuration",
-        keycloak_issuer="http://keycloak.test/realms/ads",
+        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
+        keycloak_issuer="https://keycloak.test/realms/ads",
         keycloak_client_id="ads",
         keycloak_client_secret="test-secret",
         keycloak_audience="ads",
         keycloak_role="user",
         session_secret="short",
-        public_base_url="http://testserver",
+        public_base_url="https://testserver",
         data_dir=tmp_path / "data",
-        tls_enabled=False,
-        tls_cert_path=None,
-        tls_key_path=None,
+        tls_cert_path=tmp_path / "tls.crt",
+        tls_key_path=tmp_path / "tls.key",
+        tls_ca_bundle=None,
         bind_host="127.0.0.1",
         port=8080,
     )
     with pytest.raises(RuntimeError, match="16 bytes"):
         settings.session_secret_bytes()
+
+
+def test_cookie_secure_follows_public_https_url(tmp_path: Path) -> None:
+    cert = tmp_path / "tls.crt"
+    key = tmp_path / "tls.key"
+    http_settings = Settings(
+        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
+        keycloak_issuer="https://keycloak.test/realms/ads",
+        keycloak_client_id="ads",
+        keycloak_client_secret="test-secret",
+        keycloak_audience="ads",
+        keycloak_role="user",
+        session_secret="test-session-secret-32b!",
+        public_base_url="http://testserver",
+        data_dir=tmp_path / "data",
+        tls_cert_path=cert,
+        tls_key_path=key,
+        tls_ca_bundle=None,
+        bind_host="127.0.0.1",
+        port=8080,
+    )
+    https_settings = Settings(
+        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
+        keycloak_issuer="https://keycloak.test/realms/ads",
+        keycloak_client_id="ads",
+        keycloak_client_secret="test-secret",
+        keycloak_audience="ads",
+        keycloak_role="user",
+        session_secret="test-session-secret-32b!",
+        public_base_url="https://ads.example",
+        data_dir=tmp_path / "data",
+        tls_cert_path=cert,
+        tls_key_path=key,
+        tls_ca_bundle=None,
+        bind_host="127.0.0.1",
+        port=8080,
+    )
+    assert http_settings.cookie_secure() is False
+    assert https_settings.cookie_secure() is True
+
+
+def test_load_settings_requires_tls_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(
+        "ADS_KEYCLOAK_WELL_KNOWN_URL", "https://kc/realms/ads/.well-known/openid-configuration"
+    )
+    monkeypatch.setenv("ADS_KEYCLOAK_ISSUER", "https://kc/realms/ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_ID", "ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("ADS_SESSION_SECRET", "test-session-secret-32b!")
+    monkeypatch.setenv("ADS_PUBLIC_BASE_URL", "https://ads.example")
+    monkeypatch.setenv("ADS_TLS_CERT_PATH", str(tmp_path / "missing.crt"))
+    monkeypatch.setenv("ADS_TLS_KEY_PATH", str(tmp_path / "missing.key"))
+    with pytest.raises(RuntimeError, match="ADS_TLS_CERT_PATH must exist"):
+        load_settings()
+
+
+def test_load_tls_context_rejects_garbage_pem(tmp_path: Path) -> None:
+    cert = tmp_path / "tls.crt"
+    key = tmp_path / "tls.key"
+    cert.write_text("not-a-cert")
+    key.write_text("not-a-key")
+    settings = Settings(
+        keycloak_well_known_url="https://kc/realms/ads/.well-known/openid-configuration",
+        keycloak_issuer="https://kc/realms/ads",
+        keycloak_client_id="ads",
+        keycloak_client_secret="secret",
+        keycloak_audience="ads",
+        keycloak_role="user",
+        session_secret="test-session-secret-32b!",
+        public_base_url="https://ads.example",
+        data_dir=tmp_path / "data",
+        tls_cert_path=cert,
+        tls_key_path=key,
+        tls_ca_bundle=None,
+        bind_host="127.0.0.1",
+        port=8080,
+    )
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        load_tls_context(settings)
+
+
+@pytest.mark.skipif(not openssl_available(), reason="openssl required")
+def test_load_settings_accepts_ca_bundle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ca_crt, server_crt, server_key = issue_tls(tmp_path)
+    monkeypatch.setenv(
+        "ADS_KEYCLOAK_WELL_KNOWN_URL", "https://kc/realms/ads/.well-known/openid-configuration"
+    )
+    monkeypatch.setenv("ADS_KEYCLOAK_ISSUER", "https://kc/realms/ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_ID", "ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("ADS_SESSION_SECRET", "test-session-secret-32b!")
+    monkeypatch.setenv("ADS_PUBLIC_BASE_URL", "https://ads.example")
+    monkeypatch.setenv("ADS_TLS_CERT_PATH", str(server_crt))
+    monkeypatch.setenv("ADS_TLS_KEY_PATH", str(server_key))
+    monkeypatch.setenv("ADS_TLS_CA_BUNDLE", str(ca_crt))
+    monkeypatch.setenv("ADS_DATA_DIR", str(tmp_path / "data"))
+    settings = load_settings()
+    assert settings.tls_ca_bundle == ca_crt
+
+
+@pytest.mark.skipif(not openssl_available(), reason="openssl required")
+def test_load_settings_rejects_missing_ca_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, server_crt, server_key = issue_tls(tmp_path)
+    monkeypatch.setenv(
+        "ADS_KEYCLOAK_WELL_KNOWN_URL", "https://kc/realms/ads/.well-known/openid-configuration"
+    )
+    monkeypatch.setenv("ADS_KEYCLOAK_ISSUER", "https://kc/realms/ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_ID", "ads")
+    monkeypatch.setenv("ADS_KEYCLOAK_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("ADS_SESSION_SECRET", "test-session-secret-32b!")
+    monkeypatch.setenv("ADS_PUBLIC_BASE_URL", "https://ads.example")
+    monkeypatch.setenv("ADS_TLS_CERT_PATH", str(server_crt))
+    monkeypatch.setenv("ADS_TLS_KEY_PATH", str(server_key))
+    monkeypatch.setenv("ADS_TLS_CA_BUNDLE", str(tmp_path / "missing-ca.crt"))
+    with pytest.raises(RuntimeError, match="ADS_TLS_CA_BUNDLE must exist"):
+        load_settings()

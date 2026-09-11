@@ -28,7 +28,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
+            - name: https
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           envFrom:
@@ -41,27 +41,26 @@ spec:
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
             {{- end }}
-            {{- if .Values.tls.enabled }}
             - name: tls
               mountPath: /certs
+              readOnly: true
+            {{- if .Values.tls.caBundle.secretName }}
+            - name: ca
+              mountPath: /ca
               readOnly: true
             {{- end }}
           livenessProbe:
             httpGet:
               path: /health/live
-              port: http
-              {{- if .Values.tls.enabled }}
+              port: https
               scheme: HTTPS
-              {{- end }}
             initialDelaySeconds: 10
             periodSeconds: 20
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: http
-              {{- if .Values.tls.enabled }}
+              port: https
               scheme: HTTPS
-              {{- end }}
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
@@ -72,10 +71,16 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "ads.fullname" . }}
         {{- end }}
-        {{- if .Values.tls.enabled }}
         - name: tls
           secret:
             secretName: {{ include "ads.serviceSecretName" . }}
+        {{- if .Values.tls.caBundle.secretName }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.tls.caBundle.secretName }}
+            items:
+              - key: {{ .Values.tls.caBundle.key | default "ca.crt" }}
+                path: ca.crt
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

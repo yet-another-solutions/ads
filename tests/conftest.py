@@ -19,6 +19,10 @@ def _logging() -> None:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
+    cert = tmp_path / "tls.crt"
+    key = tmp_path / "tls.key"
+    cert.write_text("placeholder")
+    key.write_text("placeholder")
     return Settings(
         keycloak_well_known_url="http://keycloak.test/realms/ads/.well-known/openid-configuration",
         keycloak_issuer="http://keycloak.test/realms/ads",
@@ -29,9 +33,9 @@ def settings(tmp_path: Path) -> Settings:
         session_secret="test-session-secret-32b!",
         public_base_url="http://testserver",
         data_dir=tmp_path / "data",
-        tls_enabled=False,
-        tls_cert_path=None,
-        tls_key_path=None,
+        tls_cert_path=cert,
+        tls_key_path=key,
+        tls_ca_bundle=None,
         bind_host="127.0.0.1",
         port=8080,
     )

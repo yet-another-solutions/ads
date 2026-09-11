@@ -21,6 +21,7 @@ def build_session_config(settings: Settings) -> CookieBackendConfig:
     return CookieBackendConfig(
         secret=settings.session_secret_bytes(),
         httponly=True,
+        secure=settings.cookie_secure(),
         samesite="lax",
         exclude=["/health/live", "/health/ready"],
     )

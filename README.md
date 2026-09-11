@@ -17,10 +17,12 @@ The process reads `ADS_*` environment variables (Helm ConfigMap and Secret mount
 
 - Keycloak: `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_ID`, `ADS_KEYCLOAK_CLIENT_SECRET`, `ADS_KEYCLOAK_AUDIENCE`, `ADS_KEYCLOAK_ROLE`
 - Session: `ADS_SESSION_SECRET` (at least 16 bytes)
-- Public URL: `ADS_PUBLIC_BASE_URL`
+- Public URL: `ADS_PUBLIC_BASE_URL` (HTTPS)
 - Data directory: `ADS_DATA_DIR` (default `/data`)
-- TLS: `ADS_TLS_ENABLED`, `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`
+- TLS: `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`, optional `ADS_TLS_CA_BUNDLE`
 - Bind: `ADS_BIND_HOST`, `ADS_PORT`
+
+TLS is required. Invalid certificate, key, or CA bundle material fails process startup instead of leaving a listening zombie.
 
 Public probes: `/health/live`, `/health/ready`.
 
@@ -31,8 +33,8 @@ UV_DEFAULT_INDEX=https://pypi.org/simple uv sync --group test
 UV_DEFAULT_INDEX=https://pypi.org/simple uv run --group test pytest
 ```
 
-Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.
+Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is HTTPS. Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.
 
 ## Helm
 
-`charts/ads/values.yaml` covers Keycloak URLs, ingress class and hostname, cert-manager vs provided TLS secrets vs plain HTTP, and local-path PVC mounted at `/data`.
+`charts/ads/values.yaml` covers Keycloak URLs, ingress class and hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`.

@@ -4,9 +4,10 @@ import os
 import re
 import shutil
 import socket
-import subprocess
+import ssl
 import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -16,11 +17,11 @@ import uvicorn
 
 from ads.app import create_app
 from ads.config import Settings
+from tests.certs import issue_tls, openssl_available
 
 docker_ok = shutil.which("docker") is not None
-openssl_ok = shutil.which("openssl") is not None
 pytestmark = pytest.mark.skipif(
-    not docker_ok or not openssl_ok,
+    not docker_ok or not openssl_available(),
     reason="docker and openssl required for Keycloak TLS testcontainers",
 )
 
@@ -34,90 +35,29 @@ USER_NAME = "alice"
 USER_PASSWORD = "alice-pass"
 
 
+@dataclass(frozen=True)
+class KeycloakTls:
+    base: str
+    ca_crt: Path
+    server_crt: Path
+    server_key: Path
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 
 
-def _openssl(*args: str) -> None:
-    result = subprocess.run(["openssl", *args], check=False, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr or result.stdout or "openssl failed")
+def _ca_context(ca_crt: Path) -> ssl.SSLContext:
+    return ssl.create_default_context(cafile=str(ca_crt))
 
 
-def _issue_tls(cert_dir: Path) -> tuple[Path, Path, Path]:
-    ca_key = cert_dir / "ca.key"
-    ca_crt = cert_dir / "ca.crt"
-    server_key = cert_dir / "tls.key"
-    server_csr = cert_dir / "tls.csr"
-    server_crt = cert_dir / "tls.crt"
-    ext = cert_dir / "ext.cnf"
-    ext.write_text(
-        "[v3_req]\n"
-        "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
-        "keyUsage=critical,digitalSignature,keyEncipherment\n"
-        "extendedKeyUsage=serverAuth\n"
-        "basicConstraints=CA:FALSE\n"
-    )
-    _openssl(
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-sha256",
-        "-days",
-        "1",
-        "-nodes",
-        "-keyout",
-        str(ca_key),
-        "-out",
-        str(ca_crt),
-        "-subj",
-        "/CN=ads-test-ca",
-    )
-    _openssl(
-        "req",
-        "-newkey",
-        "rsa:2048",
-        "-sha256",
-        "-nodes",
-        "-keyout",
-        str(server_key),
-        "-out",
-        str(server_csr),
-        "-subj",
-        "/CN=127.0.0.1",
-    )
-    _openssl(
-        "x509",
-        "-req",
-        "-in",
-        str(server_csr),
-        "-CA",
-        str(ca_crt),
-        "-CAkey",
-        str(ca_key),
-        "-CAcreateserial",
-        "-out",
-        str(server_crt),
-        "-days",
-        "1",
-        "-sha256",
-        "-extfile",
-        str(ext),
-        "-extensions",
-        "v3_req",
-    )
-    for path in (ca_crt, server_crt, server_key):
-        path.chmod(0o644)
-    return ca_crt, server_crt, server_key
-
-
-def _http_client() -> httpx2.Client:
+def _http_client(*, verify: ssl.SSLContext) -> httpx2.Client:
     return httpx2.Client(
         follow_redirects=True,
         timeout=30.0,
+        verify=verify,
         headers={"User-Agent": "Mozilla/5.0 ads-integration-test"},
     )
 
@@ -145,13 +85,13 @@ def _html_form(html: str, form_id: str) -> tuple[str, dict[str, str]]:
 
 
 @pytest.fixture(scope="module")
-def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+def keycloak_tls(tmp_path_factory: pytest.TempPathFactory) -> Iterator[KeycloakTls]:
     pytest.importorskip("testcontainers")
     from testcontainers.core.container import DockerContainer
     from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
     cert_dir = tmp_path_factory.mktemp("kc-certs")
-    ca_crt, server_crt, server_key = _issue_tls(cert_dir)
+    ca_crt, server_crt, server_key = issue_tls(cert_dir)
     previous = os.environ.get("SSL_CERT_FILE")
     os.environ["SSL_CERT_FILE"] = str(ca_crt)
     container = (
@@ -188,7 +128,12 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         if host in {"localhost", "0.0.0.0"}:
             host = "127.0.0.1"
         port = container.get_exposed_port(8443)
-        yield f"https://{host}:{port}"
+        yield KeycloakTls(
+            base=f"https://{host}:{port}",
+            ca_crt=ca_crt,
+            server_crt=server_crt,
+            server_key=server_key,
+        )
     finally:
         try:
             container.stop()
@@ -200,7 +145,7 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             os.environ["SSL_CERT_FILE"] = previous
 
 
-def _admin_token(base: str) -> str:
+def _admin_token(base: str, verify: ssl.SSLContext) -> str:
     response = httpx2.post(
         f"{base}/realms/master/protocol/openid-connect/token",
         data={
@@ -210,19 +155,21 @@ def _admin_token(base: str) -> str:
             "password": ADMIN_PASSWORD,
         },
         timeout=30.0,
+        verify=verify,
     )
     response.raise_for_status()
     return str(response.json()["access_token"])
 
 
-def _provision_realm(base: str, redirect_uri: str) -> None:
-    token = _admin_token(base)
+def _provision_realm(base: str, redirect_uri: str, verify: ssl.SSLContext) -> None:
+    token = _admin_token(base, verify)
     headers = {"Authorization": f"Bearer {token}"}
     create = httpx2.post(
         f"{base}/admin/realms",
         headers=headers,
         json={"realm": REALM, "enabled": True, "sslRequired": "none"},
         timeout=30.0,
+        verify=verify,
     )
     if create.status_code not in {201, 409}:
         create.raise_for_status()
@@ -231,6 +178,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
         headers=headers,
         json={"name": "user"},
         timeout=30.0,
+        verify=verify,
     ).raise_for_status()
     client_resp = httpx2.post(
         f"{base}/admin/realms/{REALM}/clients",
@@ -273,6 +221,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
             ],
         },
         timeout=30.0,
+        verify=verify,
     )
     if client_resp.status_code not in {201, 409}:
         client_resp.raise_for_status()
@@ -289,6 +238,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
             "credentials": [{"type": "password", "value": USER_PASSWORD, "temporary": False}],
         },
         timeout=30.0,
+        verify=verify,
     )
     if user_resp.status_code not in {201, 409}:
         user_resp.raise_for_status()
@@ -297,6 +247,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
         headers=headers,
         params={"username": USER_NAME},
         timeout=30.0,
+        verify=verify,
     )
     users.raise_for_status()
     user_id = users.json()[0]["id"]
@@ -304,6 +255,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
         f"{base}/admin/realms/{REALM}/roles/user",
         headers=headers,
         timeout=30.0,
+        verify=verify,
     )
     role.raise_for_status()
     mapping = httpx2.post(
@@ -311,20 +263,24 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
         headers=headers,
         json=[role.json()],
         timeout=30.0,
+        verify=verify,
     )
     if mapping.status_code not in {204, 409}:
         mapping.raise_for_status()
 
 
 @pytest.fixture(scope="module")
-def running_app(keycloak_base: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+def running_app(
+    keycloak_tls: KeycloakTls, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[str]:
     app_port = _free_port()
-    public_base = f"http://127.0.0.1:{app_port}"
-    _provision_realm(keycloak_base, f"{public_base}/auth/callback")
+    public_base = f"https://127.0.0.1:{app_port}"
+    verify = _ca_context(keycloak_tls.ca_crt)
+    _provision_realm(keycloak_tls.base, f"{public_base}/auth/callback", verify)
     data_dir = tmp_path_factory.mktemp("data")
     settings = Settings(
-        keycloak_well_known_url=f"{keycloak_base}/realms/{REALM}/.well-known/openid-configuration",
-        keycloak_issuer=f"{keycloak_base}/realms/{REALM}",
+        keycloak_well_known_url=f"{keycloak_tls.base}/realms/{REALM}/.well-known/openid-configuration",
+        keycloak_issuer=f"{keycloak_tls.base}/realms/{REALM}",
         keycloak_client_id=CLIENT_ID,
         keycloak_client_secret=CLIENT_SECRET,
         keycloak_audience=CLIENT_ID,
@@ -332,20 +288,27 @@ def running_app(keycloak_base: str, tmp_path_factory: pytest.TempPathFactory) ->
         session_secret="integration-session-secret!",
         public_base_url=public_base,
         data_dir=Path(data_dir),
-        tls_enabled=False,
-        tls_cert_path=None,
-        tls_key_path=None,
+        tls_cert_path=keycloak_tls.server_crt,
+        tls_key_path=keycloak_tls.server_key,
+        tls_ca_bundle=keycloak_tls.ca_crt,
         bind_host="127.0.0.1",
         port=app_port,
     )
     server = uvicorn.Server(
-        uvicorn.Config(create_app(settings), host="127.0.0.1", port=app_port, log_level="warning")
+        uvicorn.Config(
+            create_app(settings),
+            host="127.0.0.1",
+            port=app_port,
+            ssl_certfile=str(keycloak_tls.server_crt),
+            ssl_keyfile=str(keycloak_tls.server_key),
+            log_level="warning",
+        )
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     for _ in range(50):
         try:
-            httpx2.get(f"{public_base}/health/live", timeout=0.2).raise_for_status()
+            httpx2.get(f"{public_base}/health/live", timeout=0.2, verify=verify).raise_for_status()
             break
         except httpx2.HTTPError:
             thread.join(timeout=0.1)
@@ -359,8 +322,8 @@ def running_app(keycloak_base: str, tmp_path_factory: pytest.TempPathFactory) ->
 
 
 @pytest.mark.integration
-def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
-    with _http_client() as client:
+def test_keycloak_login_hello_world_and_button(running_app: str, keycloak_tls: KeycloakTls) -> None:
+    with _http_client(verify=_ca_context(keycloak_tls.ca_crt)) as client:
         page = client.get(running_app + "/")
         assert page.status_code == 200
         action, fields = _html_form(page.text, "kc-form-login")
