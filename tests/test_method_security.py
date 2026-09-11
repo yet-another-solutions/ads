@@ -7,6 +7,7 @@ from litestar.exceptions import NotAuthorizedException, PermissionDeniedExceptio
 
 from ads.hello.service import HelloService
 from ads.security_context import SecurityContext
+from ads.security_holder import SecurityContextHolder
 
 
 def _ctx(*roles: str) -> SecurityContext:
@@ -14,21 +15,22 @@ def _ctx(*roles: str) -> SecurityContext:
 
 
 def test_greet_returns_hello_world() -> None:
-    assert HelloService().greet(security_context=_ctx()) == "hello world"
+    assert HelloService().greet() == "hello world"
 
 
 def test_press_button_requires_security_context() -> None:
     with pytest.raises(NotAuthorizedException):
-        HelloService().press_button()  # type: ignore[call-arg]
+        HelloService().press_button()
 
 
 def test_press_button_requires_user_role() -> None:
     with pytest.raises(PermissionDeniedException):
-        HelloService().press_button(security_context=_ctx("other"))
+        with SecurityContextHolder.bound(_ctx("other")):
+            HelloService().press_button()
 
 
 def test_press_button_logs_when_user_role_present(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO):
-        result = HelloService().press_button(security_context=_ctx("user"))
+    with caplog.at_level(logging.INFO), SecurityContextHolder.bound(_ctx("user")):
+        result = HelloService().press_button()
     assert result == "button was pressed"
     assert "button was pressed" in caplog.text

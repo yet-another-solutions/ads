@@ -10,7 +10,6 @@ from litestar.response import Redirect, Template
 from ads.authenticated import AuthenticatedController
 from ads.hello.service import HelloService
 from ads.identity import Identity
-from ads.security_context import SecurityContext
 
 
 class HelloController(AuthenticatedController):
@@ -23,9 +22,8 @@ class HelloController(AuthenticatedController):
         request: Request[Any, Any, Any],
         service: FromDishka[HelloService],
         identity: NamedDependency[Identity],
-        security_context: NamedDependency[SecurityContext],
     ) -> Template:
-        message = service.greet(security_context=security_context)
+        message = service.greet()
         flash = request.session.pop("flash", None)
         return Template(
             template_name="hello.html",
@@ -38,7 +36,6 @@ class HelloController(AuthenticatedController):
         self,
         request: Request[Any, Any, Any],
         service: FromDishka[HelloService],
-        security_context: NamedDependency[SecurityContext],
     ) -> Redirect:
-        request.session["flash"] = service.press_button(security_context=security_context)
+        request.session["flash"] = service.press_button()
         return Redirect("/")
