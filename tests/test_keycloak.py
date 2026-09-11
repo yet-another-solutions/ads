@@ -154,11 +154,10 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         .with_env("KC_BOOTSTRAP_ADMIN_USERNAME", ADMIN_USER)
         .with_env("KC_BOOTSTRAP_ADMIN_PASSWORD", ADMIN_PASSWORD)
         .with_env("KC_HOSTNAME_STRICT", "false")
+        .with_env("KC_HTTPS_CERTIFICATE_FILE", "/opt/keycloak/certs/tls.crt")
+        .with_env("KC_HTTPS_CERTIFICATE_KEY_FILE", "/opt/keycloak/certs/tls.key")
         .with_volume_mapping(str(cert_dir), "/opt/keycloak/certs", "ro")
-        .with_command(
-            "start-dev --https-certificate-file=/opt/keycloak/certs/tls.crt "
-            "--https-certificate-key-file=/opt/keycloak/certs/tls.key"
-        )
+        .with_command("start-dev")
         .waiting_for(LogMessageWaitStrategy("Listening on").with_startup_timeout(180))
     )
     try:
@@ -168,6 +167,12 @@ def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
                 host = "127.0.0.1"
             port = container.get_exposed_port(8443)
             yield f"https://{host}:{port}"
+    except Exception as exc:
+        stdout, stderr = container.get_logs()
+        raise RuntimeError(
+            f"keycloak failed: {exc}\nstdout={stdout.decode()[-2000:]}\n"
+            f"stderr={stderr.decode()[-2000:]}"
+        ) from exc
     finally:
         if previous is None:
             os.environ.pop("SSL_CERT_FILE", None)
