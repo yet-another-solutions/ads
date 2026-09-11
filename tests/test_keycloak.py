@@ -36,6 +36,9 @@ def _free_port() -> int:
 
 
 class _AllowHttpSecureCookies(DefaultCookiePolicy):
+    def set_ok_secure(self, cookie: object, request: object) -> bool:
+        return True
+
     def return_ok_secure(self, cookie: object, request: object) -> bool:
         return True
 
@@ -272,7 +275,9 @@ def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
             data=fields,
             headers={"Origin": origin, "Referer": str(page.url)},
         )
-        assert hello.status_code == 200, hello.text[:500]
+        assert hello.status_code == 200, (
+            f"cookies={list(client.cookies.keys())} body={hello.text[:800]}"
+        )
         assert "hello world" in hello.text
         pressed = client.post(running_app + "/hello/press", follow_redirects=True)
         assert pressed.status_code == 200
