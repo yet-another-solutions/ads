@@ -5,30 +5,24 @@ from typing import Any
 from litestar import Controller, Request
 from litestar.connection import ASGIConnection
 from litestar.di import NamedDependency, Provide
+from litestar.exceptions import NotAuthorizedException
 from litestar.handlers import BaseRouteHandler
-from litestar.response import Redirect
 
 from ads.identity import Identity, identity_from_session, security_context_from_identity
 from ads.security_context import SecurityContext
 
 
-class LoginRequired(Exception):
-    """No session identity; the request layer redirects to /login."""
-
-
-def handle_login_required(_request: Request[Any, Any, Any], _exc: LoginRequired) -> Redirect:
-    return Redirect("/login")
-
-
-def require_login(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
+def require_authenticated(
+    connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler
+) -> None:
     if identity_from_session(connection.session) is None:
-        raise LoginRequired
+        raise NotAuthorizedException(detail="authentication required")
 
 
 def provide_identity(request: Request[Any, Any, Any]) -> Identity:
     identity = identity_from_session(request.session)
     if identity is None:
-        raise LoginRequired
+        raise NotAuthorizedException(detail="authentication required")
     return identity
 
 
@@ -37,9 +31,9 @@ def provide_security_context(identity: NamedDependency[Identity]) -> SecurityCon
 
 
 class AuthenticatedController(Controller):
-    """Subclass this so handlers receive identity and security_context as arguments."""
+    """Backend (frontend-to-backend). 401 if not authenticated. Services may raise 403."""
 
-    guards = [require_login]
+    guards = [require_authenticated]
     dependencies = {
         "identity": Provide(provide_identity, sync_to_thread=False),
         "security_context": Provide(provide_security_context, sync_to_thread=False),
