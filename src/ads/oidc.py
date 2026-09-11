@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlencode
 
-import httpx
+import httpx2
 import jwt
 import stamina
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -20,9 +20,9 @@ class OidcClient:
         self._jwks_client: PyJWKClient | None = None
         self._jwks_uri: str | None = None
 
-    @stamina.retry(on=httpx.HTTPError, attempts=5, wait_initial=0.2)
+    @stamina.retry(on=httpx2.HTTPError, attempts=5, wait_initial=0.2)
     async def _get_json(self, url: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx2.AsyncClient(timeout=10.0) as client:
             response = await client.get(url)
             response.raise_for_status()
             payload = response.json()

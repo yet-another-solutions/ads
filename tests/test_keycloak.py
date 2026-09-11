@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import socket
+import subprocess
 import threading
 from collections.abc import Iterator
-from http.cookiejar import DefaultCookiePolicy
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2
 import pytest
 import uvicorn
 
@@ -17,7 +18,11 @@ from ads.app import create_app
 from ads.config import Settings
 
 docker_ok = shutil.which("docker") is not None
-pytestmark = pytest.mark.skipif(not docker_ok, reason="docker required for Keycloak testcontainers")
+openssl_ok = shutil.which("openssl") is not None
+pytestmark = pytest.mark.skipif(
+    not docker_ok or not openssl_ok,
+    reason="docker and openssl required for Keycloak TLS testcontainers",
+)
 
 KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.7.2"
 ADMIN_USER = "admin"
@@ -35,21 +40,78 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-class _AllowHttpSecureCookies(DefaultCookiePolicy):
-    def set_ok_secure(self, cookie: object, request: object) -> bool:
-        return True
-
-    def return_ok_secure(self, cookie: object, request: object) -> bool:
-        return True
+def _openssl(*args: str) -> None:
+    result = subprocess.run(["openssl", *args], check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or result.stdout or "openssl failed")
 
 
-def _http_client() -> httpx.Client:
-    cookies = httpx.Cookies()
-    cookies.jar.set_policy(_AllowHttpSecureCookies())
-    return httpx.Client(
+def _issue_tls(cert_dir: Path) -> Path:
+    ca_key = cert_dir / "ca.key"
+    ca_crt = cert_dir / "ca.crt"
+    server_key = cert_dir / "tls.key"
+    server_csr = cert_dir / "tls.csr"
+    server_crt = cert_dir / "tls.crt"
+    ext = cert_dir / "ext.cnf"
+    ext.write_text("[v3_req]\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n")
+    _openssl(
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-days",
+        "1",
+        "-nodes",
+        "-keyout",
+        str(ca_key),
+        "-out",
+        str(ca_crt),
+        "-subj",
+        "/CN=ads-test-ca",
+    )
+    _openssl(
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-sha256",
+        "-nodes",
+        "-keyout",
+        str(server_key),
+        "-out",
+        str(server_csr),
+        "-subj",
+        "/CN=127.0.0.1",
+    )
+    _openssl(
+        "x509",
+        "-req",
+        "-in",
+        str(server_csr),
+        "-CA",
+        str(ca_crt),
+        "-CAkey",
+        str(ca_key),
+        "-CAcreateserial",
+        "-out",
+        str(server_crt),
+        "-days",
+        "1",
+        "-sha256",
+        "-extfile",
+        str(ext),
+        "-extensions",
+        "v3_req",
+    )
+    for path in (ca_crt, server_crt, server_key):
+        path.chmod(0o644)
+    return ca_crt
+
+
+def _http_client() -> httpx2.Client:
+    return httpx2.Client(
         follow_redirects=True,
         timeout=30.0,
-        cookies=cookies,
         headers={"User-Agent": "Mozilla/5.0 ads-integration-test"},
     )
 
@@ -77,32 +139,44 @@ def _html_form(html: str, form_id: str) -> tuple[str, dict[str, str]]:
 
 
 @pytest.fixture(scope="module")
-def keycloak_base() -> Iterator[str]:
+def keycloak_base(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     pytest.importorskip("testcontainers")
     from testcontainers.core.container import DockerContainer
     from testcontainers.core.wait_strategies import LogMessageWaitStrategy
 
+    cert_dir = tmp_path_factory.mktemp("kc-certs")
+    ca_crt = _issue_tls(cert_dir)
+    previous = os.environ.get("SSL_CERT_FILE")
+    os.environ["SSL_CERT_FILE"] = str(ca_crt)
     container = (
         DockerContainer(KEYCLOAK_IMAGE)
-        .with_exposed_ports(8080)
+        .with_exposed_ports(8443)
         .with_env("KC_BOOTSTRAP_ADMIN_USERNAME", ADMIN_USER)
         .with_env("KC_BOOTSTRAP_ADMIN_PASSWORD", ADMIN_PASSWORD)
-        .with_env("KC_HTTP_ENABLED", "true")
         .with_env("KC_HOSTNAME_STRICT", "false")
-        .with_env("KC_HOSTNAME_STRICT_HTTPS", "false")
-        .with_command("start-dev")
+        .with_volume_mapping(str(cert_dir), "/opt/keycloak/certs", "ro")
+        .with_command(
+            "start-dev --https-certificate-file=/opt/keycloak/certs/tls.crt "
+            "--https-certificate-key-file=/opt/keycloak/certs/tls.key"
+        )
         .waiting_for(LogMessageWaitStrategy("Listening on").with_startup_timeout(180))
     )
-    with container:
-        host = container.get_container_host_ip()
-        if host in {"localhost", "0.0.0.0"}:
-            host = "127.0.0.1"
-        port = container.get_exposed_port(8080)
-        yield f"http://{host}:{port}"
+    try:
+        with container:
+            host = container.get_container_host_ip()
+            if host in {"localhost", "0.0.0.0"}:
+                host = "127.0.0.1"
+            port = container.get_exposed_port(8443)
+            yield f"https://{host}:{port}"
+    finally:
+        if previous is None:
+            os.environ.pop("SSL_CERT_FILE", None)
+        else:
+            os.environ["SSL_CERT_FILE"] = previous
 
 
 def _admin_token(base: str) -> str:
-    response = httpx.post(
+    response = httpx2.post(
         f"{base}/realms/master/protocol/openid-connect/token",
         data={
             "grant_type": "password",
@@ -119,7 +193,7 @@ def _admin_token(base: str) -> str:
 def _provision_realm(base: str, redirect_uri: str) -> None:
     token = _admin_token(base)
     headers = {"Authorization": f"Bearer {token}"}
-    create = httpx.post(
+    create = httpx2.post(
         f"{base}/admin/realms",
         headers=headers,
         json={"realm": REALM, "enabled": True, "sslRequired": "none"},
@@ -127,13 +201,13 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
     )
     if create.status_code not in {201, 409}:
         create.raise_for_status()
-    httpx.post(
+    httpx2.post(
         f"{base}/admin/realms/{REALM}/roles",
         headers=headers,
         json={"name": "user"},
         timeout=30.0,
     ).raise_for_status()
-    client_resp = httpx.post(
+    client_resp = httpx2.post(
         f"{base}/admin/realms/{REALM}/clients",
         headers=headers,
         json={
@@ -177,7 +251,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
     )
     if client_resp.status_code not in {201, 409}:
         client_resp.raise_for_status()
-    user_resp = httpx.post(
+    user_resp = httpx2.post(
         f"{base}/admin/realms/{REALM}/users",
         headers=headers,
         json={
@@ -193,7 +267,7 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
     )
     if user_resp.status_code not in {201, 409}:
         user_resp.raise_for_status()
-    users = httpx.get(
+    users = httpx2.get(
         f"{base}/admin/realms/{REALM}/users",
         headers=headers,
         params={"username": USER_NAME},
@@ -201,13 +275,13 @@ def _provision_realm(base: str, redirect_uri: str) -> None:
     )
     users.raise_for_status()
     user_id = users.json()[0]["id"]
-    role = httpx.get(
+    role = httpx2.get(
         f"{base}/admin/realms/{REALM}/roles/user",
         headers=headers,
         timeout=30.0,
     )
     role.raise_for_status()
-    mapping = httpx.post(
+    mapping = httpx2.post(
         f"{base}/admin/realms/{REALM}/users/{user_id}/role-mappings/realm",
         headers=headers,
         json=[role.json()],
@@ -246,9 +320,9 @@ def running_app(keycloak_base: str, tmp_path_factory: pytest.TempPathFactory) ->
     thread.start()
     for _ in range(50):
         try:
-            httpx.get(f"{public_base}/health/live", timeout=0.2).raise_for_status()
+            httpx2.get(f"{public_base}/health/live", timeout=0.2).raise_for_status()
             break
-        except httpx.HTTPError:
+        except httpx2.HTTPError:
             thread.join(timeout=0.1)
     else:
         raise RuntimeError("app did not start")
@@ -275,9 +349,7 @@ def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
             data=fields,
             headers={"Origin": origin, "Referer": str(page.url)},
         )
-        assert hello.status_code == 200, (
-            f"cookies={list(client.cookies.keys())} body={hello.text[:800]}"
-        )
+        assert hello.status_code == 200, hello.text[:800]
         assert "hello world" in hello.text
         pressed = client.post(running_app + "/hello/press", follow_redirects=True)
         assert pressed.status_code == 200
