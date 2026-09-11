@@ -6,6 +6,7 @@ import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -33,24 +34,26 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _tag_attrs(tag: str) -> dict[str, str]:
+    return {key.lower(): value for key, value in re.findall(r'([a-zA-Z0-9:_-]+)="([^"]*)"', tag)}
+
+
 def _html_form(html: str, form_id: str) -> tuple[str, dict[str, str]]:
-    form_match = re.search(
-        rf'<form[^>]*id="{form_id}"[^>]*action="([^"]+)"[^>]*>(.*?)</form>',
-        html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if form_match is None:
-        raise AssertionError(f"form {form_id} not found")
-    action = form_match.group(1).replace("&amp;", "&")
-    fields = {
-        match.group(1): match.group(2)
-        for match in re.finditer(
-            r'<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"',
-            form_match.group(2),
-            flags=re.IGNORECASE,
-        )
-    }
-    return action, fields
+    for match in re.finditer(r"<form\b([^>]*)>(.*?)</form>", html, flags=re.IGNORECASE | re.DOTALL):
+        attrs = _tag_attrs(match.group(1))
+        if attrs.get("id") != form_id:
+            continue
+        action = attrs.get("action", "").replace("&amp;", "&")
+        fields: dict[str, str] = {}
+        for tag in re.finditer(
+            r"<(?:input|button)\b([^>]*)/?>", match.group(2), flags=re.IGNORECASE
+        ):
+            tag_attrs = _tag_attrs(tag.group(1))
+            name = tag_attrs.get("name")
+            if name:
+                fields[name] = tag_attrs.get("value", "")
+        return action, fields
+    raise AssertionError(f"form {form_id} not found")
 
 
 @pytest.fixture(scope="module")
@@ -241,7 +244,13 @@ def test_keycloak_login_hello_world_and_button(running_app: str) -> None:
         action, fields = _html_form(page.text, "kc-form-login")
         fields["username"] = USER_NAME
         fields["password"] = USER_PASSWORD
-        hello = client.post(action, data=fields)
+        fields["login"] = fields.get("login") or "Sign In"
+        origin = f"{urlsplit(str(page.url)).scheme}://{urlsplit(str(page.url)).netloc}"
+        hello = client.post(
+            action,
+            data=fields,
+            headers={"Origin": origin, "Referer": str(page.url)},
+        )
         assert hello.status_code == 200
         assert "hello world" in hello.text
         pressed = client.post(running_app + "/hello/press", follow_redirects=True)
