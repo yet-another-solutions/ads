@@ -1,5 +1,6 @@
 {{/*
-Fail helm install/upgrade when the cluster is missing ADS topology.
+Fail helm install/upgrade when the cluster is missing ADS topology
+or Keycloak operator CRDs / Keycloak CR needed for realm bootstrap.
 lookup is empty during `helm template` / CI, so those runs skip the checks.
 */}}
 {{- define "ads.checkPrerequisites" -}}
@@ -53,6 +54,19 @@ lookup is empty during `helm template` / CI, so those runs skip the checks.
 {{- end -}}
 {{- if eq (len $kataNodes) 0 -}}
 {{- fail (printf "ADS requires sandbox nodes (%s=%s) to have Kata (%s runtime handler or katacontainers.io/kata-runtime=true)" $sbKey $sbVal $rcName) -}}
+{{- end -}}
+{{- if .Values.keycloak.bootstrap.enabled -}}
+{{- if not (lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "keycloaks.k8s.keycloak.org") -}}
+{{- fail "ADS Keycloak realm bootstrap requires CRD keycloaks.k8s.keycloak.org (install the Keycloak operator first)" -}}
+{{- end -}}
+{{- if not (lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "keycloakrealmimports.k8s.keycloak.org") -}}
+{{- fail "ADS Keycloak realm bootstrap requires CRD keycloakrealmimports.k8s.keycloak.org (install the Keycloak operator first)" -}}
+{{- end -}}
+{{- $kcNs := required "keycloak.bootstrap.namespace is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.namespace -}}
+{{- $kcName := required "keycloak.bootstrap.keycloakCRName is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.keycloakCRName -}}
+{{- if not (lookup "k8s.keycloak.org/v2beta1" "Keycloak" $kcNs $kcName) -}}
+{{- fail (printf "ADS Keycloak realm bootstrap requires Keycloak CR %s/%s" $kcNs $kcName) -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Values.persistence.enabled (not .Values.persistence.pv.enabled) .Values.persistence.storageClass -}}
 {{- $sc := lookup "storage.k8s.io/v1" "StorageClass" "" .Values.persistence.storageClass -}}

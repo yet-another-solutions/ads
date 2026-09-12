@@ -1,0 +1,61 @@
+{{- if .Values.keycloak.bootstrap.enabled }}
+{{- $kcNs := required "keycloak.bootstrap.namespace is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.namespace }}
+{{- $kcName := required "keycloak.bootstrap.keycloakCRName is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.keycloakCRName }}
+{{- $oidcSecret := printf "%s-oidc-client" (include "ads.fullname" .) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $oidcSecret }}
+  namespace: {{ $kcNs }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  client-secret: {{ .Values.secrets.keycloakClientSecret | quote }}
+---
+apiVersion: k8s.keycloak.org/v2beta1
+kind: KeycloakRealmImport
+metadata:
+  name: {{ include "ads.fullname" . }}-realm
+  namespace: {{ $kcNs }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  keycloakCRName: {{ $kcName }}
+  placeholders:
+    ADS_CLIENT_SECRET:
+      secret:
+        name: {{ $oidcSecret }}
+        key: client-secret
+  realm:
+    id: {{ .Values.keycloak.realm | quote }}
+    realm: {{ .Values.keycloak.realm }}
+    displayName: ADS
+    enabled: true
+    sslRequired: all
+    registrationAllowed: false
+    loginWithEmailAllowed: true
+    roles:
+      realm:
+        - name: {{ .Values.keycloak.role | quote }}
+    clients:
+      - clientId: {{ .Values.keycloak.clientId | quote }}
+        name: {{ .Values.keycloak.clientId | quote }}
+        enabled: true
+        protocol: openid-connect
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: "${ADS_CLIENT_SECRET}"
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        serviceAccountsEnabled: false
+        redirectUris:
+          - {{ printf "%s/auth/callback" (include "ads.publicBaseUrl" .) | quote }}
+        webOrigins:
+          - {{ include "ads.publicBaseUrl" . | quote }}
+        defaultClientScopes:
+          - profile
+          - email
+          - roles
+{{- end }}

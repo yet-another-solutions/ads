@@ -55,9 +55,14 @@ tls:
 keycloak:
   wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
   issuer: https://keycloak.interlab/realms/ads
+  realm: ads
   clientId: ads
   audience: ads
   role: user
+  bootstrap:
+    enabled: true
+    keycloakCRName: keycloak
+    namespace: keycloak
 
 secrets:
   keycloakClientSecret: change-me
