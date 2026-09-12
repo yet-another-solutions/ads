@@ -94,6 +94,15 @@ jobs:
           grep -q 'ADS_TLS_CERT_PATH' /tmp/ads-cm.yaml
           grep -q 'app.kubernetes.io/component: ads-egress-controlplane' /tmp/ads-cm.yaml
           grep -q 'ads.io/application-node: "true"' /tmp/ads-cm.yaml
+          grep -q 'kind: KeycloakRealmImport' /tmp/ads-cm.yaml
+          grep -q 'keycloakCRName: keycloak' /tmp/ads-cm.yaml
+          grep -q 'clientId: "ads"' /tmp/ads-cm.yaml
+          grep -q 'https://ads.interlab/auth/callback' /tmp/ads-cm.yaml
+          helm template ads charts/ads --set keycloak.bootstrap.enabled=false >/tmp/ads-noboot.yaml
+          if grep -q 'kind: KeycloakRealmImport' /tmp/ads-noboot.yaml; then
+            echo 'bootstrap disabled still rendered KeycloakRealmImport' >&2
+            exit 1
+          fi
           if grep -q 'ADS_TLS_ENABLED' /tmp/ads-cm.yaml; then
             echo 'plain HTTP toggle still present' >&2
             exit 1
