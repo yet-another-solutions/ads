@@ -5,6 +5,13 @@ image:
   tag: "0.0.1"
   pullPolicy: IfNotPresent
 
+egressControlplane:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-egress-controlplane
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -66,6 +73,15 @@ persistence:
     enabled: false
     hostPath: /storage/ads
     name: ""
+
+nodes:
+  application:
+    labelKey: ads.io/application-node
+    labelValue: "true"
+  sandbox:
+    labelKey: ads.io/sandbox-node
+    labelValue: "true"
+    runtimeClassName: kata-clh
 
 resources: {}
 

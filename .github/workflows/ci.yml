@@ -33,12 +33,17 @@ jobs:
 
   lint-image:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dockerfile:
+          - services/ads/Containerfile
+          - services/ads-egress-controlplane/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Hadolint
         uses: hadolint/hadolint-action@v3.5.0
         with:
-          dockerfile: Containerfile
+          dockerfile: ${{ matrix.dockerfile }}
           config: .hadolint.yaml
           failure-threshold: warning
 
@@ -46,6 +51,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: lint-image
+    strategy:
+      matrix:
+        include:
+          - image: ads
+            file: services/ads/Containerfile
+            smoke: "import ads; print(ads.__version__)"
+          - image: ads-egress-controlplane
+            file: services/ads-egress-controlplane/Containerfile
+            smoke: "import ads_egress_controlplane; print(ads_egress_controlplane.__version__)"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -53,15 +67,15 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Containerfile
+          file: ${{ matrix.file }}
           platforms: linux/amd64
           push: false
           load: true
-          tags: ads:ci
-          cache-from: type=gha,scope=ads
-          cache-to: type=gha,mode=max,scope=ads
+          tags: ${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
       - name: Smoke image
-        run: docker run --rm ads:ci python -c "import ads; print(ads.__version__)"
+        run: docker run --rm ${{ matrix.image }}:ci python -c "${{ matrix.smoke }}"
 
   helm:
     runs-on: ubuntu-latest
@@ -74,10 +88,12 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          grep -q 'kind: Deployment' /tmp/ads-cm.yaml
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 2
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'backend-protocol: "HTTPS"' /tmp/ads-cm.yaml
           grep -q 'ADS_TLS_CERT_PATH' /tmp/ads-cm.yaml
+          grep -q 'app.kubernetes.io/component: ads-egress-controlplane' /tmp/ads-cm.yaml
+          grep -q 'ads.io/application-node: "true"' /tmp/ads-cm.yaml
           if grep -q 'ADS_TLS_ENABLED' /tmp/ads-cm.yaml; then
             echo 'plain HTTP toggle still present' >&2
             exit 1

@@ -5,7 +5,7 @@
 .mypy_cache
 .pytest_cache
 .ruff_cache
-tests
+services/ads/tests
 charts
 dist
 noxfile.py

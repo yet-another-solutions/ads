@@ -1,43 +1,35 @@
 [project]
-name = "ads"
+name = "ads-workspace"
 version = "0.0.1"
-description = "Autonomous Development System"
-readme = "README.md"
+description = "Autonomous Development System workspace"
 requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
-    "authlib==1.8.0",
-    "dishka==1.10.1",
-    "httpx2==2.12.0",
-    "litestar[jinja]==2.24.0",
-    "msgspec==0.21.1",
-    "pyjwt[crypto]==2.14.0",
-    "stamina==26.1.0",
-    "structlog==26.1.0",
-    "uvicorn[standard]==0.52.4",
-    "wrapt==2.4.1",
+    "ads",
+    "ads-egress-controlplane",
 ]
 
-[project.scripts]
-ads = "ads.__main__:main"
+[tool.uv]
+package = false
+add-bounds = "exact"
+constraint-dependencies = []
+override-dependencies = []
+exclude-dependencies = []
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv.workspace]
+members = [
+    "services/ads",
+    "services/ads-egress-controlplane",
+]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/ads"]
+[tool.uv.sources]
+ads = { workspace = true }
+ads-egress-controlplane = { workspace = true }
 
 [[tool.uv.index]]
 name = "nexus"
 url = "https://nexus.interlab/repository/pypi-group/simple"
 default = true
-
-[tool.uv]
-add-bounds = "exact"
-constraint-dependencies = []
-override-dependencies = []
-exclude-dependencies = []
 
 [dependency-groups]
 lint = [
@@ -58,7 +50,11 @@ dev = [
 ]
 
 [tool.ruff]
-src = ["src", "tests"]
+src = [
+    "services/ads/src",
+    "services/ads/tests",
+    "services/ads-egress-controlplane/src",
+]
 line-length = 100
 target-version = "py312"
 
@@ -67,7 +63,9 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-packages = ["ads"]
+mypy_path = "services/ads/src:services/ads-egress-controlplane/src"
+packages = ["ads", "ads_egress_controlplane"]
+explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
 
@@ -76,11 +74,11 @@ module = ["authlib.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["services/ads/tests"]
 addopts = "-q"
 markers = [
   "integration: tests that start Keycloak via testcontainers",
 ]
 
 [tool.deptry]
-known_first_party = ["ads"]
+known_first_party = ["ads", "ads_egress_controlplane"]

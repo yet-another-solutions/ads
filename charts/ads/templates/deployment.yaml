@@ -4,15 +4,16 @@ metadata:
   name: {{ include "ads.fullname" . }}
   labels:
     {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "ads.selectorLabels" . | nindent 6 }}
+      {{- include "ads.adsSelectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "ads.selectorLabels" . | nindent 8 }}
+        {{- include "ads.adsSelectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -82,10 +83,11 @@ spec:
               - key: {{ .Values.tls.caBundle.key | default "ca.crt" }}
                 path: ca.crt
         {{- end }}
-      {{- with .Values.nodeSelector }}
       nodeSelector:
+        {{- include "ads.applicationNodeSelector" . | nindent 8 }}
+        {{- with .Values.nodeSelector }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}

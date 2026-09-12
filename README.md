@@ -1,19 +1,24 @@
 # ADS
 
-Autonomous Development System starter: a Litestar service with Keycloak OIDC login, a hello-world page, and a role-gated button.
+Autonomous Development System starter: a Litestar service with Keycloak OIDC login, a hello-world page, and a role-gated button, plus a stub egress control plane.
 
 Unauthenticated browsers are sent to Keycloak. After login, the page shows `hello world`. Submitting the button calls a controller that builds a `SecurityContext`, then a service method guarded with wrapt `@require_role("user")` that logs `button was pressed`.
 
 ## Layout
 
-- `src/ads` — Litestar controllers, Dishka services, OIDC, health
-- `charts/ads` — Helm chart (Deployment, Service, ConfigMap, Secret, Ingress, PV/PVC)
-- `Containerfile` — image published to `ghcr.io/yet-another-solutions/ads`
+- `services/ads` — Litestar controllers, Dishka services, OIDC, health
+- `services/ads-egress-controlplane` — dummy egress control plane (idle process)
+- `charts/ads` — Helm chart (ADS + egress-controlplane Deployments, Service, ConfigMap, Secret, Ingress, PV/PVC)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
+
+Images:
+
+- `ghcr.io/yet-another-solutions/ads`
+- `ghcr.io/yet-another-solutions/ads-egress-controlplane`
 
 ## Configuration
 
-The process reads `ADS_*` environment variables (Helm ConfigMap and Secret mount them):
+The ADS process reads `ADS_*` environment variables (Helm ConfigMap and Secret mount them):
 
 - Keycloak: `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_ID`, `ADS_KEYCLOAK_CLIENT_SECRET`, `ADS_KEYCLOAK_AUDIENCE`, `ADS_KEYCLOAK_ROLE`
 - Session: `ADS_SESSION_SECRET` (at least 16 bytes)
@@ -38,3 +43,11 @@ Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is
 ## Helm
 
 `charts/ads/values.yaml` covers Keycloak URLs, ingress class and hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`.
+
+Install requires:
+
+- StorageClass `local-path` (or the configured `persistence.storageClass`)
+- at least one node labeled `ads.io/application-node=true`
+- at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-clh`)
+
+Application pods (ADS and egress-controlplane) schedule on application nodes.

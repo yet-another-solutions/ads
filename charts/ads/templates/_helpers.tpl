@@ -37,6 +37,20 @@ app.kubernetes.io/name: {{ include "ads.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "ads.adsSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads
+{{- end }}
+
+{{- define "ads.egressSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-egress-controlplane
+{{- end }}
+
+{{- define "ads.applicationNodeSelector" -}}
+{{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
+{{- end }}
+
 {{- define "ads.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "ads.fullname" .) .Values.serviceAccount.name }}
