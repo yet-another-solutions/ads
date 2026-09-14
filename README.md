@@ -42,13 +42,13 @@ Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is
 
 ## Helm
 
-`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, ingress class and hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`.
+`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`.
 
 Install requires:
 
 - StorageClass `local-path` (or the configured `persistence.storageClass`)
 - at least one node labeled `ads.io/application-node=true`
 - at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-clh`)
-- Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<ingress.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
+- Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<httpRoute.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
 
 Application pods (ADS and egress-controlplane) schedule on application nodes.

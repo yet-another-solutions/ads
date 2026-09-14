@@ -60,15 +60,7 @@ app.kubernetes.io/component: ads-egress-controlplane
 {{- end }}
 
 {{- define "ads.publicBaseUrl" -}}
-https://{{ .Values.ingress.hostname }}
-{{- end }}
-
-{{- define "ads.ingressSecretName" -}}
-{{- if .Values.tls.certManager.enabled -}}
-{{ include "ads.fullname" . }}-ingress-tls
-{{- else -}}
-{{ required "tls.ingressSecretName is required when tls.certManager.enabled is false" .Values.tls.ingressSecretName }}
-{{- end -}}
+https://{{ .Values.httpRoute.hostname }}
 {{- end }}
 
 {{- define "ads.serviceSecretName" -}}
