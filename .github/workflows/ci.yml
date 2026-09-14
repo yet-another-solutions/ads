@@ -90,7 +90,13 @@ jobs:
           helm template ads charts/ads >/tmp/ads-cm.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 2
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
-          grep -q 'backend-protocol: "HTTPS"' /tmp/ads-cm.yaml
+          grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
+          grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
+          grep -q 'X-Forwarded-Proto' /tmp/ads-cm.yaml
+          if grep -q 'kind: Ingress$' /tmp/ads-cm.yaml; then
+            echo 'Ingress must not be rendered' >&2
+            exit 1
+          fi
           grep -q 'ADS_TLS_CERT_PATH' /tmp/ads-cm.yaml
           grep -q 'app.kubernetes.io/component: ads-egress-controlplane' /tmp/ads-cm.yaml
           grep -q 'ads.io/application-node: "true"' /tmp/ads-cm.yaml
@@ -109,15 +115,14 @@ jobs:
           fi
           helm template ads charts/ads \
             --set tls.certManager.enabled=false \
-            --set tls.ingressSecretName=byo-ingress \
             --set tls.serviceSecretName=byo-service \
             >/tmp/ads-byo.yaml
           if grep -q 'kind: Certificate' /tmp/ads-byo.yaml; then
             echo 'BYO template still issues Certificates' >&2
             exit 1
           fi
-          grep -q 'secretName: byo-ingress' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-service' /tmp/ads-byo.yaml
+          grep -q 'kind: HTTPRoute' /tmp/ads-byo.yaml
           if helm template ads charts/ads --set tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
             echo 'BYO without secrets should fail' >&2
             exit 1
