@@ -2,52 +2,48 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar, Token
+from contextvars import Token
 from typing import Any
 
 from litestar.exceptions import NotAuthorizedException
 
 from ads.identity import identity_from_session, security_context_from_identity
-from ads.security_context import SecurityContext
-
-_current: ContextVar[SecurityContext | None] = ContextVar("ads_security_context", default=None)
+from ads_commons.security import AuthenticationRequired, SecurityContext
+from ads_commons.security import SecurityContextHolder as CommonsHolder
 
 
 class SecurityContextHolder:
-    """Current SecurityContext for this HTTP request or detached work."""
+    """HTTP-facing holder. Maps missing context to Litestar 401."""
 
     @staticmethod
     def get() -> SecurityContext | None:
-        return _current.get()
+        return CommonsHolder.get()
 
     @staticmethod
     def require() -> SecurityContext:
-        context = _current.get()
-        if context is None:
-            raise NotAuthorizedException(detail="authentication required")
-        return context
+        try:
+            return CommonsHolder.require()
+        except AuthenticationRequired as exc:
+            raise NotAuthorizedException(detail=exc.detail) from exc
 
     @staticmethod
     def set(context: SecurityContext | None) -> Token[SecurityContext | None]:
-        return _current.set(context)
+        return CommonsHolder.set(context)
 
     @staticmethod
     def reset(token: Token[SecurityContext | None]) -> None:
-        _current.reset(token)
+        CommonsHolder.reset(token)
 
     @staticmethod
     @contextmanager
     def bound(context: SecurityContext) -> Iterator[SecurityContext]:
-        token = _current.set(context)
-        try:
-            yield context
-        finally:
-            _current.reset(token)
+        with CommonsHolder.bound(context) as bound_context:
+            yield bound_context
 
     @staticmethod
     def capture(session: Mapping[str, Any] | None = None) -> SecurityContext:
-        """Snapshot the holder, or the live session if the holder is empty."""
-        context = _current.get()
+        """Snapshot the holder, or session identity if the holder is empty."""
+        context = CommonsHolder.get()
         if context is not None:
             return context
         if session is not None:
@@ -59,6 +55,6 @@ class SecurityContextHolder:
     @staticmethod
     @contextmanager
     def detached(session: Mapping[str, Any] | None = None) -> Iterator[SecurityContext]:
-        """Fork: pick context while the session is alive, bind it for detached work."""
-        with SecurityContextHolder.bound(SecurityContextHolder.capture(session)) as context:
+        """Fork: pick context while the HTTP session is alive, bind it for detached work."""
+        with CommonsHolder.bound(SecurityContextHolder.capture(session)) as context:
             yield context

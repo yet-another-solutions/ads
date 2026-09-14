@@ -6,6 +6,7 @@ from litestar.exceptions import NotAuthorizedException
 from ads.hello.service import HelloService
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import SecurityContextHolder as CommonsHolder
 
 
 def _ctx(*roles: str) -> SecurityContext:
@@ -71,3 +72,11 @@ def test_detached_without_session_or_holder_is_unauthorized() -> None:
     with pytest.raises(NotAuthorizedException):
         with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
+
+
+def test_ads_holder_shares_commons_context_var() -> None:
+    context = _ctx("user")
+    with CommonsHolder.bound(context):
+        assert SecurityContextHolder.get() is context
+        assert SecurityContextHolder.require() is context
+    assert SecurityContextHolder.get() is None

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
+from typing import Any
+
+import jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from ads_commons.engine import (
     Authorization,
@@ -10,7 +17,12 @@ from ads_commons.engine import (
     OpenAiStreamAuthentication,
     OpenAiStreamModel,
 )
+from ads_commons.security import JwtVerifier
 from ads_engine.chat import StreamDelta
+
+ENGINE_ISSUER = "https://keycloak.test/realms/ads"
+ENGINE_AUDIENCE = "ads-engine"
+ENGINE_CLIENT_ID = "ads"
 
 
 def make_request(
@@ -34,6 +46,43 @@ def make_request(
             ),
         ),
         authorization=Authorization(token=authorization_token),
+    )
+
+
+def new_rsa_key() -> RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+class StaticJwks:
+    def __init__(self, private_key: RSAPrivateKey) -> None:
+        self._key = private_key
+
+    def get_signing_key_from_jwt(self, token: str) -> SimpleNamespace:
+        return SimpleNamespace(key=self._key.public_key())
+
+
+def encode_access_token(private_key: RSAPrivateKey, **claims: Any) -> str:
+    now = int(time.time())
+    payload: dict[str, Any] = {
+        "sub": "alice",
+        "name": "Alice",
+        "iss": ENGINE_ISSUER,
+        "aud": ENGINE_AUDIENCE,
+        "azp": ENGINE_CLIENT_ID,
+        "exp": now + 3600,
+        "iat": now,
+        "realm_access": {"roles": ["user"]},
+    }
+    payload.update(claims)
+    return jwt.encode(payload, private_key, algorithm="RS256")
+
+
+def make_verifier(private_key: RSAPrivateKey) -> JwtVerifier:
+    return JwtVerifier(
+        issuer=ENGINE_ISSUER,
+        audience=ENGINE_AUDIENCE,
+        client_id=ENGINE_CLIENT_ID,
+        jwks_client=StaticJwks(private_key),
     )
 
 

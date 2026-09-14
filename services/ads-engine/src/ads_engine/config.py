@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -22,9 +23,15 @@ class Settings:
     keycloak_well_known_url: str
     keycloak_issuer: str
     keycloak_audience: str
+    keycloak_client_id: str
+    tls_ca_bundle: Path | None
 
 
 def load_settings() -> Settings:
+    ca_raw = os.environ.get("ADS_ENGINE_TLS_CA_BUNDLE", "").strip()
+    tls_ca_bundle = Path(ca_raw) if ca_raw else None
+    if tls_ca_bundle is not None and not tls_ca_bundle.is_file():
+        raise RuntimeError("ADS_ENGINE_TLS_CA_BUNDLE must exist")
     return Settings(
         kafka_bootstrap_servers=_env("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS"),
         request_topic=_env("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request"),
@@ -35,4 +42,6 @@ def load_settings() -> Settings:
         keycloak_well_known_url=_env("ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL"),
         keycloak_issuer=_env("ADS_ENGINE_KEYCLOAK_ISSUER"),
         keycloak_audience=_env("ADS_ENGINE_KEYCLOAK_AUDIENCE", "ads-engine"),
+        keycloak_client_id=_env("ADS_ENGINE_KEYCLOAK_CLIENT_ID", "ads"),
+        tls_ca_bundle=tls_ca_bundle,
     )

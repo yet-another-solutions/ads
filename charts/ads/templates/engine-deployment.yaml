@@ -31,8 +31,23 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "ads.fullname" . }}-engine
+          {{- if .Values.tls.caBundle.secretName }}
+          volumeMounts:
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if .Values.tls.caBundle.secretName }}
+      volumes:
+        - name: ca
+          secret:
+            secretName: {{ .Values.tls.caBundle.secretName }}
+            items:
+              - key: {{ .Values.tls.caBundle.key | default "ca.crt" }}
+                path: ca.crt
+      {{- end }}
       nodeSelector:
         {{- include "ads.applicationNodeSelector" . | nindent 8 }}
         {{- with .Values.nodeSelector }}

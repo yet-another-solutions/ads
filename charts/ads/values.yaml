@@ -29,6 +29,7 @@ engine:
     wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
     issuer: https://keycloak.interlab/realms/ads
     audience: ads-engine
+    clientId: ads
   pingIntervalSeconds: 10
 
 imagePullSecrets: []

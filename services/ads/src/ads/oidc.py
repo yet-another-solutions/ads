@@ -5,21 +5,24 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx2
-import jwt
 import stamina
 from authlib.integrations.httpx_client import AsyncOAuth2Client
-from jwt import PyJWKClient
 
 from ads.config import Settings
-from ads.identity import Identity, identity_from_claims
+from ads.identity import Identity
+from ads_commons.security import JwtVerifier
 
 
 class OidcClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._metadata: dict[str, Any] | None = None
-        self._jwks_client: PyJWKClient | None = None
-        self._jwks_uri: str | None = None
+        self._verifier = JwtVerifier(
+            issuer=settings.keycloak_issuer,
+            audience=settings.keycloak_audience,
+            client_id=settings.keycloak_client_id,
+            ssl_context=self._ssl_context(),
+        )
 
     def _ssl_context(self) -> ssl.SSLContext | None:
         if self._settings.tls_ca_bundle is None:
@@ -86,22 +89,5 @@ class OidcClient:
     def decode_id_token(self, id_token: str, *, nonce: str) -> Identity:
         if self._metadata is None:
             raise RuntimeError("OIDC metadata has not been loaded")
-        jwks_uri = str(self._metadata["jwks_uri"])
-        if self._jwks_client is None or self._jwks_uri != jwks_uri:
-            self._jwks_client = PyJWKClient(jwks_uri, ssl_context=self._ssl_context())
-            self._jwks_uri = jwks_uri
-        signing_key = self._jwks_client.get_signing_key_from_jwt(id_token)
-        payload = jwt.decode(
-            id_token,
-            signing_key.key,
-            algorithms=["RS256"],
-            audience=self._settings.keycloak_audience,
-            issuer=self._settings.keycloak_issuer,
-            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
-        )
-        azp = payload.get("azp")
-        if azp is not None and azp != self._settings.keycloak_client_id:
-            raise jwt.InvalidTokenError("azp does not match client id")
-        if payload.get("nonce") != nonce:
-            raise jwt.InvalidTokenError("nonce mismatch")
-        return identity_from_claims(payload, self._settings.keycloak_client_id)
+        self._verifier.use_jwks_uri(str(self._metadata["jwks_uri"]))
+        return self._verifier.decode(id_token, nonce=nonce)

@@ -4,6 +4,8 @@ import asyncio
 import json
 import uuid
 
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+
 from ads_commons.engine import (
     Acknowledge,
     ErrorOutput,
@@ -12,19 +14,35 @@ from ads_commons.engine import (
     Ping,
     encode_request,
 )
+from ads_commons.security import JwtVerifier, SecurityContextHolder
 from ads_engine.chat import StreamDelta
 from ads_engine.service import EngineService
 from ads_engine.store import ActiveSessionStore
-from engine_fakes import RecordingPublisher, ScriptedChat, make_request
+from engine_fakes import RecordingPublisher, ScriptedChat, encode_access_token, make_request
 
 
 def _run(coro: object) -> None:
     asyncio.run(coro)  # type: ignore[arg-type]
 
 
-def test_missing_ids_are_dropped(store: ActiveSessionStore) -> None:
+def _service(
+    store: ActiveSessionStore,
+    publisher: RecordingPublisher,
+    chat: object,
+    jwt_verifier: JwtVerifier,
+) -> EngineService:
+    return EngineService(
+        store,
+        publisher,
+        chat,  # type: ignore[arg-type]
+        authenticator=jwt_verifier,
+        ping_interval_seconds=10,
+    )
+
+
+def test_missing_ids_are_dropped(store: ActiveSessionStore, jwt_verifier: JwtVerifier) -> None:
     publisher = RecordingPublisher()
-    service = EngineService(store, publisher, ScriptedChat(), ping_interval_seconds=10)
+    service = _service(store, publisher, ScriptedChat(), jwt_verifier)
 
     async def _body() -> None:
         await service.handle_raw(b"{}")
@@ -34,9 +52,11 @@ def test_missing_ids_are_dropped(store: ActiveSessionStore) -> None:
     assert publisher.messages == []
 
 
-def test_invalid_request_emits_error_without_ack(store: ActiveSessionStore) -> None:
+def test_invalid_request_emits_error_without_ack(
+    store: ActiveSessionStore, jwt_verifier: JwtVerifier
+) -> None:
     publisher = RecordingPublisher()
-    service = EngineService(store, publisher, ScriptedChat(), ping_interval_seconds=10)
+    service = _service(store, publisher, ScriptedChat(), jwt_verifier)
     raw = json.dumps(
         {
             "session_id": "11111111-1111-1111-1111-111111111111",
@@ -57,20 +77,52 @@ def test_invalid_request_emits_error_without_ack(store: ActiveSessionStore) -> N
     assert "invalid request" in error.text
 
 
-def test_garbage_authorization_is_accepted(store: ActiveSessionStore) -> None:
+def test_garbage_authorization_is_error_without_ack(
+    store: ActiveSessionStore, jwt_verifier: JwtVerifier
+) -> None:
     publisher = RecordingPublisher()
     chat = ScriptedChat([StreamDelta(kind="message", text="ok")])
-    service = EngineService(store, publisher, chat, ping_interval_seconds=10)
+    service = _service(store, publisher, chat, jwt_verifier)
     request = make_request(authorization_token="not-a-jwt")
 
     _run(service.handle(request))
+    assert len(publisher.messages) == 1
+    error = publisher.messages[0]
+    assert isinstance(error, ErrorOutput)
+    assert "invalid authorization" in error.text
+    assert not any(isinstance(message, Acknowledge) for message in publisher.messages)
+    assert chat.calls == 0
+
+
+def test_valid_authorization_binds_security_context(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
+) -> None:
+    seen: list[str] = []
+
+    class HolderChat:
+        def stream(self, request: object) -> object:
+            return self._stream(request)
+
+        async def _stream(self, request: object) -> object:
+            context = SecurityContextHolder.require()
+            seen.append(context.subject)
+            yield StreamDelta(kind="message", text="ok")
+
+    publisher = RecordingPublisher()
+    service = _service(store, publisher, HolderChat(), jwt_verifier)
+    _run(service.handle(make_request(authorization_token=access_token)))
+    assert seen == ["alice"]
+    assert SecurityContextHolder.get() is None
     types = [type(message).__name__ for message in publisher.messages]
     assert types == ["Acknowledge", "PartialResponse", "Finish"]
-    assert chat.requests[0].authorization.token == "not-a-jwt"
 
 
-def test_duplicate_session_errors_without_stopping_active_run(
+def test_invalid_authorization_does_not_stop_active_run(
     store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
 ) -> None:
     publisher = RecordingPublisher()
     started = asyncio.Event()
@@ -85,9 +137,62 @@ def test_duplicate_session_errors_without_stopping_active_run(
             await release.wait()
             yield StreamDelta(kind="message", text="done")
 
-    service = EngineService(store, publisher, SlowChat(), ping_interval_seconds=10)
-    first = make_request(message_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
-    second = make_request(message_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+    service = _service(store, publisher, SlowChat(), jwt_verifier)
+    first = make_request(
+        message_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        authorization_token=access_token,
+    )
+    second = make_request(
+        message_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        authorization_token="not-a-jwt",
+    )
+
+    async def _body() -> None:
+        task = asyncio.create_task(service.handle(first))
+        await started.wait()
+        await service.handle(second)
+        release.set()
+        await task
+
+    _run(_body())
+    errors = [message for message in publisher.messages if isinstance(message, ErrorOutput)]
+    acks = [message for message in publisher.messages if isinstance(message, Acknowledge)]
+    finishes = [message for message in publisher.messages if isinstance(message, Finish)]
+    assert len(errors) == 1
+    assert errors[0].message_id == second.message_id
+    assert "invalid authorization" in errors[0].text
+    assert len(acks) == 1
+    assert acks[0].message_id == first.message_id
+    assert len(finishes) == 1
+
+
+def test_duplicate_session_errors_without_stopping_active_run(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class SlowChat:
+        def stream(self, request: object) -> object:
+            return self._stream(request)
+
+        async def _stream(self, request: object) -> object:
+            started.set()
+            await release.wait()
+            yield StreamDelta(kind="message", text="done")
+
+    service = _service(store, publisher, SlowChat(), jwt_verifier)
+    first = make_request(
+        message_id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        authorization_token=access_token,
+    )
+    second = make_request(
+        message_id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        authorization_token=access_token,
+    )
 
     async def _body() -> None:
         task = asyncio.create_task(service.handle(first))
@@ -110,6 +215,8 @@ def test_duplicate_session_errors_without_stopping_active_run(
 
 def test_successful_chat_emits_ack_delta_partials_and_finish(
     store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
 ) -> None:
     publisher = RecordingPublisher()
     chat = ScriptedChat(
@@ -118,9 +225,9 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
             StreamDelta(kind="message", text="Hello"),
         ]
     )
-    service = EngineService(store, publisher, chat, ping_interval_seconds=10)
+    service = _service(store, publisher, chat, jwt_verifier)
 
-    _run(service.handle(make_request()))
+    _run(service.handle(make_request(authorization_token=access_token)))
     assert isinstance(publisher.messages[0], Acknowledge)
     first = publisher.messages[1]
     second = publisher.messages[2]
@@ -135,24 +242,30 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
     assert isinstance(publisher.messages[3], Finish)
 
 
-def test_openai_retries_before_partial_then_succeeds(store: ActiveSessionStore) -> None:
+def test_openai_retries_before_partial_then_succeeds(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
+) -> None:
     publisher = RecordingPublisher()
     chat = ScriptedChat([StreamDelta(kind="message", text="ok")], fail_times=2)
-    service = EngineService(store, publisher, chat, ping_interval_seconds=10)
+    service = _service(store, publisher, chat, jwt_verifier)
 
-    _run(service.handle(make_request()))
+    _run(service.handle(make_request(authorization_token=access_token)))
     assert chat.calls == 3
     assert isinstance(publisher.messages[-1], Finish)
 
 
 def test_openai_gives_up_after_three_failures_before_partial(
     store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
 ) -> None:
     publisher = RecordingPublisher()
     chat = ScriptedChat(fail_times=5)
-    service = EngineService(store, publisher, chat, ping_interval_seconds=10)
+    service = _service(store, publisher, chat, jwt_verifier)
 
-    _run(service.handle(make_request()))
+    _run(service.handle(make_request(authorization_token=access_token)))
     assert chat.calls == 3
     error = publisher.messages[-1]
     assert isinstance(error, ErrorOutput)
@@ -160,22 +273,28 @@ def test_openai_gives_up_after_three_failures_before_partial(
     assert not any(isinstance(message, Finish) for message in publisher.messages)
 
 
-def test_no_retry_after_partial_was_emitted(store: ActiveSessionStore) -> None:
+def test_no_retry_after_partial_was_emitted(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
+) -> None:
     publisher = RecordingPublisher()
     chat = ScriptedChat([StreamDelta(kind="message", text="Hel")], fail_after_partial=True)
-    service = EngineService(store, publisher, chat, ping_interval_seconds=10)
+    service = _service(store, publisher, chat, jwt_verifier)
 
-    _run(service.handle(make_request()))
+    _run(service.handle(make_request(authorization_token=access_token)))
     assert chat.calls == 1
     assert isinstance(publisher.messages[1], PartialResponse)
     assert isinstance(publisher.messages[-1], ErrorOutput)
     assert not any(isinstance(message, Finish) for message in publisher.messages)
 
 
-def test_empty_user_input_is_validation_error(store: ActiveSessionStore) -> None:
+def test_empty_user_input_is_validation_error(
+    store: ActiveSessionStore, jwt_verifier: JwtVerifier, access_token: str
+) -> None:
     publisher = RecordingPublisher()
-    service = EngineService(store, publisher, ScriptedChat(), ping_interval_seconds=10)
-    raw = encode_request(make_request(user_input=""))
+    service = _service(store, publisher, ScriptedChat(), jwt_verifier)
+    raw = encode_request(make_request(user_input="", authorization_token=access_token))
 
     _run(service.handle_raw(raw))
     error = publisher.messages[0]
@@ -184,7 +303,11 @@ def test_empty_user_input_is_validation_error(store: ActiveSessionStore) -> None
     assert not any(isinstance(message, Acknowledge) for message in publisher.messages)
 
 
-def test_ping_is_emitted_for_active_session(store: ActiveSessionStore) -> None:
+def test_ping_is_emitted_for_active_session(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    access_token: str,
+) -> None:
     pinged = asyncio.Event()
 
     class Publisher(RecordingPublisher):
@@ -205,10 +328,26 @@ def test_ping_is_emitted_for_active_session(store: ActiveSessionStore) -> None:
     service = EngineService(
         store,
         publisher,
-        OneDeltaChat(),
+        OneDeltaChat(),  # type: ignore[arg-type]
+        authenticator=jwt_verifier,
         ping_interval_seconds=0.01,
         sleep=lambda _seconds: asyncio.sleep(0),
     )
-    _run(service.handle(make_request()))
+    _run(service.handle(make_request(authorization_token=access_token)))
     assert any(isinstance(message, Ping) for message in publisher.messages)
     assert isinstance(publisher.messages[-1], Finish)
+
+
+def test_wrong_audience_token_is_rejected(
+    store: ActiveSessionStore,
+    jwt_verifier: JwtVerifier,
+    jwt_key: RSAPrivateKey,
+) -> None:
+    publisher = RecordingPublisher()
+    service = _service(store, publisher, ScriptedChat(), jwt_verifier)
+    token = encode_access_token(jwt_key, aud="ads")
+    _run(service.handle(make_request(authorization_token=token)))
+    error = publisher.messages[0]
+    assert isinstance(error, ErrorOutput)
+    assert "invalid authorization" in error.text
+    assert not any(isinstance(message, Acknowledge) for message in publisher.messages)

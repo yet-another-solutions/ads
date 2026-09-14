@@ -107,6 +107,7 @@ jobs:
           grep -q 'ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"' /tmp/ads-cm.yaml
           grep -q 'ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-cm.yaml
           grep -q 'ADS_ENGINE_KEYCLOAK_AUDIENCE: "ads-engine"' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KEYCLOAK_CLIENT_ID: "ads"' /tmp/ads-cm.yaml
           grep -q 'ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: "kafka.kafka.svc.cluster.local:9092"' /tmp/ads-cm.yaml
           grep -q 'ads.io/application-node: "true"' /tmp/ads-cm.yaml
           grep -q 'ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"' /tmp/ads-cm.yaml
@@ -140,3 +141,4 @@ jobs:
             --set tls.caBundle.secretName=lab-ca \
             >/tmp/ads-ca.yaml
           grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
+          grep -q 'ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
