@@ -1,0 +1,167 @@
+# Redis, RabbitMQ and PostgreSQL for a throwaway cluster. The chart requires these
+# Services to exist and does not install them; this is the smallest thing that
+# satisfies that requirement.
+#
+# Storage is emptyDir and credentials are in plain text: everything here dies with
+# the cluster and none of it belongs anywhere else.
+#
+#   kubectl apply -n ads -f deploy/local/dependencies.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-redis
+  labels:
+    app.kubernetes.io/name: ads-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--save", "", "--appendonly", "no"]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-redis
+spec:
+  selector:
+    app.kubernetes.io/name: ads-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-rabbitmq
+  labels:
+    app.kubernetes.io/name: ads-rabbitmq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads-rabbitmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads-rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4-management-alpine
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-rabbitmq
+spec:
+  selector:
+    app.kubernetes.io/name: ads-rabbitmq
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-postgres
+  labels:
+    app.kubernetes.io/name: ads-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: ads
+            - name: POSTGRES_PASSWORD
+              value: ads
+            - name: POSTGRES_DB
+              value: ads_audit
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "ads", "-d", "ads_audit"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-postgres
+spec:
+  selector:
+    app.kubernetes.io/name: ads-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

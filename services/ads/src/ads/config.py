@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import ssl
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -36,6 +37,8 @@ class Settings:
     tls_ca_bundle: Path | None
     bind_host: str
     port: int
+    policy_url: str = ""
+    policy_api_token: str = ""
 
     def session_secret_bytes(self) -> bytes:
         if not self.session_secret.strip():
@@ -63,6 +66,7 @@ def load_tls_context(settings: Settings) -> ssl.SSLContext:
     return context
 
 
+@lru_cache
 def load_settings() -> Settings:
     cert_path = _existing_file("ADS_TLS_CERT_PATH", _env("ADS_TLS_CERT_PATH").strip())
     key_path = _existing_file("ADS_TLS_KEY_PATH", _env("ADS_TLS_KEY_PATH").strip())
@@ -86,6 +90,8 @@ def load_settings() -> Settings:
         tls_ca_bundle=ca_bundle,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
+        policy_url=_env("ADS_POLICY_URL", "").rstrip("/"),
+        policy_api_token=_env("ADS_POLICY_API_TOKEN", ""),
     )
     load_tls_context(settings)
     return settings

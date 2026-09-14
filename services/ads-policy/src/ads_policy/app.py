@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+
+import structlog
+from dishka import AsyncContainer, make_async_container
+from dishka.integrations.litestar import LitestarProvider, setup_dishka
+from litestar import Litestar
+from redis.asyncio import Redis
+
+from ads_policy.api import PolicyController
+from ads_policy.audit import AuditSink, BufferedAuditSink
+from ads_policy.config import Settings
+from ads_policy.health import live, ready
+from ads_policy.ioc import AppProvider
+from ads_policy.logconfig import configure_logging
+
+logger = structlog.get_logger("ads.policy")
+
+
+def create_app(
+    settings: Settings, redis: Redis | None = None, sink: AuditSink | None = None
+) -> Litestar:
+    """``redis`` and ``sink`` let a caller bring their own, as tests do."""
+    configure_logging()
+    container = make_async_container(AppProvider(settings, redis, sink), LitestarProvider())
+    flusher: list[asyncio.Task[None]] = []
+
+    async def _start(app: Litestar) -> None:
+        del app
+        flusher.append(asyncio.create_task(_publish_audit(container, settings)))
+
+    async def _stop(app: Litestar) -> None:
+        del app
+        for task in flusher:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await (await container.get(BufferedAuditSink)).drain()
+        await container.close()
+
+    app = Litestar(
+        route_handlers=[PolicyController, live, ready],
+        state=None,
+        on_startup=[_start],
+        on_shutdown=[_stop],
+    )
+    app.state.api_token = settings.api_token
+    setup_dishka(container, app)
+    return app
+
+
+async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
+    """Decisions are answered at once and journalled just behind."""
+    audit = await container.get(BufferedAuditSink)
+    while True:
+        await asyncio.sleep(settings.audit_flush_seconds)
+        try:
+            await audit.drain()
+        except Exception:
+            logger.exception("audit backlog not drained", pending=len(audit.pending))

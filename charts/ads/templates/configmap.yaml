@@ -16,6 +16,7 @@ data:
   ADS_PORT: {{ .Values.service.port | quote }}
   ADS_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_TLS_KEY_PATH: "/certs/tls.key"
-  {{- if .Values.tls.caBundle.secretName }}
-  ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
+  {{- with include "ads.caBundlePath" . }}
+  ADS_TLS_CA_BUNDLE: {{ . | quote }}
   {{- end }}

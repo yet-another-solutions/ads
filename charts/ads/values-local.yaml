@@ -1,0 +1,79 @@
+# Overrides for a throwaway local cluster (kind / minikube).
+# See deploy/local/README.md for the order things have to happen in.
+#
+#   helm install ads charts/ads -n ads --create-namespace -f charts/ads/values-local.yaml
+
+# Images are built locally and loaded into the node, never pulled.
+image:
+  repository: ads
+  tag: local
+  pullPolicy: Never
+
+policy:
+  image:
+    repository: ads-policy
+    tag: local
+    pullPolicy: Never
+  # deploy/local/dependencies.yaml runs Redis without TLS.
+  redis:
+    url: redis://ads-redis:6379/0
+  # Short enough to watch a run expire without waiting an hour.
+  runTtlSeconds: 300
+
+audit:
+  image:
+    repository: ads-audit
+    tag: local
+    pullPolicy: Never
+  rabbitmq:
+    url: amqp://guest:guest@ads-rabbitmq:5672/
+  postgres:
+    url: postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit
+
+egressControlplane:
+  image:
+    repository: ads-egress-controlplane
+    tag: local
+    pullPolicy: Never
+
+# No Keycloak operator on a test cluster, so the realm import is skipped. Login will
+# not work; everything below the web app will.
+keycloak:
+  bootstrap:
+    enabled: false
+
+# No StorageClass either, and nothing writes to /data yet.
+persistence:
+  enabled: false
+
+# Ingress stays on deliberately: ingress.enabled=false also removes the serving
+# certificate of the ads pod, which then never starts. Without an ingress controller
+# the Ingress object is simply inert.
+ingress:
+  enabled: true
+  hostname: ads.local
+
+# cert-manager signs everything with the local CA from
+# deploy/local/cert-manager-issuer.yaml. The same CA is mounted into the pods so ads
+# can verify the policy service; without it every decision fails closed.
+tls:
+  certManager:
+    enabled: true
+    issuer:
+      name: testlab-ca
+      kind: ClusterIssuer
+      group: cert-manager.io
+  caBundle:
+    secretName: ads-ca
+    key: ca.crt
+
+secrets:
+  keycloakClientSecret: unused-on-a-local-cluster
+  sessionSecret: local-session-secret-32-bytes
+  policyApiToken: local-policy-token-32-bytes
+  auditApiToken: local-audit-token-32-bytes
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 96Mi

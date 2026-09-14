@@ -48,9 +48,11 @@ Install requires:
 
 - StorageClass `local-path` (or the configured `persistence.storageClass`)
 - at least one node labeled `ads.io/application-node=true`
-- at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-clh`)
+- Services `ads-redis`, `ads-rabbitmq` and `ads-postgres` (none of them installed by this chart)
 - Keycloak operator CRDs `keycloaks.k8s.keycloak.org` and `keycloakrealmimports.k8s.keycloak.org`
 - Keycloak CR `keycloak/keycloak` (the operator and instance are not installed by this chart)
+
+Sandbox nodes are not required to install. The chart looks for `RuntimeClass` `kata-clh` on nodes labeled `ads.io/sandbox-node=true` and tells the policy service what it found; without Kata no run is ever assigned the `vm` isolation level, and the capabilities the matrix grants only there stay out of reach.
 
 Helm applies a `KeycloakRealmImport` for realm `ads` and confidential client `ads` (`https://<ingress.hostname>/auth/callback`). That import creates a missing realm only; it does not update an existing one.
 

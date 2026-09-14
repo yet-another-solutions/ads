@@ -47,6 +47,76 @@ app.kubernetes.io/component: ads
 app.kubernetes.io/component: ads-egress-controlplane
 {{- end }}
 
+{{- define "ads.policySelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-policy
+{{- end }}
+
+{{- define "ads.supervisorSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-supervisor
+{{- end }}
+
+{{- define "ads.auditSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-audit
+{{- end }}
+
+{{/*
+Whether this cluster can actually run a sandbox: a RuntimeClass plus at least one
+sandbox node carrying Kata. Nobody sets this by hand — the chart looks it up and the
+policy service is told the answer, because no service may ask the cluster itself.
+
+lookup is blind during `helm template`, and there the documented topology is assumed.
+*/}}
+{{- define "ads.sandboxAvailable" -}}
+{{- $nodes := lookup "v1" "Node" "" "" -}}
+{{- if not $nodes -}}
+true
+{{- else -}}
+{{- $sbKey := .Values.nodes.sandbox.labelKey -}}
+{{- $sbVal := .Values.nodes.sandbox.labelValue | toString -}}
+{{- $rcName := .Values.nodes.sandbox.runtimeClassName -}}
+{{- $rc := lookup "node.k8s.io/v1" "RuntimeClass" "" $rcName -}}
+{{- $handler := $rcName -}}
+{{- if and $rc $rc.handler -}}
+{{- $handler = $rc.handler -}}
+{{- end -}}
+{{- $found := false -}}
+{{- if $rc -}}
+{{- range $nodes.items -}}
+{{- $labels := .metadata.labels | default dict -}}
+{{- if eq (dig $sbKey "" $labels | toString) $sbVal -}}
+{{- range (.status.runtimeHandlers | default list) -}}
+{{- if or (eq .name $handler) (eq .name $rcName) -}}
+{{- $found = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $found -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Where a pod finds the CA it must trust to call the other services. An explicit
+tls.caBundle wins; otherwise a cert-manager Certificate signed by a CA issuer already
+delivers ca.crt inside the pod's own TLS secret, so no second secret is needed.
+Empty means the system trust store, which will not contain a private CA.
+*/}}
+{{- define "ads.caBundlePath" -}}
+{{- if .Values.tls.caBundle.secretName -}}
+/ca/ca.crt
+{{- else if .Values.tls.certManager.enabled -}}
+/certs/ca.crt
+{{- end -}}
+{{- end }}
+
+{{- define "ads.policyUrl" -}}
+https://{{ include "ads.fullname" . }}-policy:{{ .Values.policy.service.port }}
+{{- end }}
+
 {{- define "ads.applicationNodeSelector" -}}
 {{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
 {{- end }}
@@ -68,6 +138,30 @@ https://{{ .Values.ingress.hostname }}
 {{ include "ads.fullname" . }}-ingress-tls
 {{- else -}}
 {{ required "tls.ingressSecretName is required when tls.certManager.enabled is false" .Values.tls.ingressSecretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.supervisorSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-supervisor-tls
+{{- else -}}
+{{ required "tls.supervisorSecretName is required when tls.certManager.enabled is false" .Values.tls.supervisorSecretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.auditSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-audit-tls
+{{- else -}}
+{{ required "tls.auditSecretName is required when tls.certManager.enabled is false" .Values.tls.auditSecretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.policySecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-policy-tls
+{{- else -}}
+{{ required "tls.policySecretName is required when tls.certManager.enabled is false" .Values.tls.policySecretName }}
 {{- end -}}
 {{- end }}
 

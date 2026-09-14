@@ -1,0 +1,37 @@
+{{- if .Values.supervisor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ads.fullname" . }}-supervisor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.supervisor.service.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "ads.supervisorSelectorLabels" . | nindent 4 }}
+---
+{{- if .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "ads.fullname" . }}-supervisor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "ads.supervisorSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ printf "%s-supervisor" (include "ads.fullname" .) | quote }}
+    - {{ printf "%s-supervisor.%s" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-supervisor.%s.svc" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-supervisor.%s.svc.cluster.local" (include "ads.fullname" .) .Release.Namespace | quote }}
+{{- end }}
+{{- end }}

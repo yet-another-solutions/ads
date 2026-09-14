@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ads.fullname" . }}-policy
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-policy
+spec:
+  replicas: {{ .Values.policy.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ads.policySelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.policySelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ads.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ads-policy
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.policy.image.repository }}:{{ .Values.policy.image.tag }}"
+          imagePullPolicy: {{ .Values.policy.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.policy.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ads.fullname" . }}-policy
+            - secretRef:
+                name: {{ include "ads.fullname" . }}-policy
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            - name: policy
+              mountPath: {{ .Values.policy.mountPath }}
+              readOnly: true
+            {{- if .Values.tls.caBundle.secretName }}
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ads.policySecretName" . }}
+        - name: policy
+          configMap:
+            name: {{ include "ads.fullname" . }}-policy-document
+            optional: true
+        {{- if .Values.tls.caBundle.secretName }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.tls.caBundle.secretName }}
+            items:
+              - key: {{ .Values.tls.caBundle.key | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
+      nodeSelector:
+        {{- include "ads.applicationNodeSelector" . | nindent 8 }}
+        {{- with .Values.nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

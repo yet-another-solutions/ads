@@ -1,0 +1,36 @@
+# One local CA that signs every certificate in the release, so the pods can verify
+# each other. Needs cert-manager installed first.
+#
+# The issuer is named testlab-ca to match tls.certManager.issuer.name in values.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ads-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-local-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: ads-local-ca
+  secretName: ads-local-ca
+  duration: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: ads-selfsigned
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: testlab-ca
+spec:
+  ca:
+    secretName: ads-local-ca

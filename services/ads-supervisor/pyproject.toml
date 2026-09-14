@@ -1,0 +1,29 @@
+[project]
+name = "ads-supervisor"
+version = "0.0.1"
+description = "ADS supervisor and run controller"
+requires-python = ">=3.12"
+authors = [{ name = "yet-another-solutions" }]
+dependencies = [
+    "ads-policy==0.0.1",
+    "aio-pika==10.0.1",
+    "anyio==4.12.0",
+    "dishka==1.10.1",
+    "litestar==2.24.0",
+    "msgspec==0.21.1",
+    "structlog==26.1.0",
+    "uvicorn[standard]==0.52.4",
+]
+
+[project.scripts]
+ads-supervisor = "ads_supervisor.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ads_supervisor"]
+
+[tool.deptry]
+known_first_party = ["ads_supervisor"]

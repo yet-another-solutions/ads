@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-audit
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.audit.service.port | quote }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  {{- with include "ads.caBundlePath" . }}
+  ADS_TLS_CA_BUNDLE: {{ . | quote }}
+  {{- end }}
+  ADS_AUDIT_PREFETCH: {{ .Values.audit.prefetch | quote }}
+  ADS_AUDIT_PARTITIONS_AHEAD: {{ .Values.audit.partitionsAhead | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "ads.fullname" . }}-audit
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  ADS_AUDIT_API_TOKEN: {{ .Values.secrets.auditApiToken | quote }}
+  ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
+  ADS_DATABASE_URL: {{ required "audit.postgres.url is required: the journal lives in PostgreSQL" .Values.audit.postgres.url | quote }}

@@ -1,0 +1,40 @@
+{{- if .Values.supervisor.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-supervisor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.supervisor.service.port | quote }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  {{- with include "ads.caBundlePath" . }}
+  ADS_TLS_CA_BUNDLE: {{ . | quote }}
+  {{- end }}
+  ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
+  ADS_SUBJECT: {{ required "supervisor.subject is required: a run is opened on behalf of someone" .Values.supervisor.subject | quote }}
+  ADS_PROJECT: {{ .Values.supervisor.project | quote }}
+  ADS_REPO: {{ .Values.supervisor.repo | quote }}
+  ADS_ENV: {{ .Values.supervisor.env | quote }}
+  ADS_RUN_WORKDIR: {{ .Values.policy.workdir | quote }}
+  ADS_PLACEMENT: "cluster"
+  # This pod is scheduled by supervisor-deployment.yaml onto an application node with
+  # no runtimeClassName, so that is the only placement it may describe. Claiming the
+  # sandbox here would hand an ordinary container the rules written for a Kata guest.
+  ADS_NODE_LABELS: {{ printf "%s=%s" .Values.nodes.application.labelKey (.Values.nodes.application.labelValue | toString) | quote }}
+  ADS_ATTRIBUTES: {{ join "," .Values.supervisor.attributes | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "ads.fullname" . }}-supervisor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  ADS_SUPERVISOR_API_TOKEN: {{ .Values.secrets.supervisorApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
+{{- end }}

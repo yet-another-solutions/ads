@@ -5,6 +5,72 @@ image:
   tag: "0.0.1"
   pullPolicy: IfNotPresent
 
+policy:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-policy
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8081
+  # Runs live in Redis, which the chart requires but does not install.
+  redis:
+    service: ads-redis
+    namespace: ""
+    url: rediss://ads-redis:6379/0
+  runTtlSeconds: 3600
+  mountPath: /policy
+  mode: enforce
+  denyOnPolicyError: true
+  workdir: /workspace
+  egressAllowlist:
+    - mirror.interlab
+    - llm-gateway.interlab
+    - tool-broker.interlab
+    - git-proxy.interlab
+  protectedBranches:
+    - main
+    - master
+    - release
+
+# One supervisor serves one run. Off by default: a real deployment creates these per
+# run, not as a standing Deployment, and this one exists to exercise the path.
+supervisor:
+  enabled: false
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-supervisor
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8083
+  subject: ""
+  project: ads
+  repo: yet-another-solutions/ads
+  env: dev
+  attributes:
+    - repo.write=true
+    - agent=true
+
+audit:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-audit
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8082
+  prefetch: 100
+  partitionsAhead: 2
+  # Both are required and neither is installed by this chart.
+  rabbitmq:
+    service: ads-rabbitmq
+    namespace: ""
+    url: amqps://ads:change-me@ads-rabbitmq:5671/
+  postgres:
+    service: ads-postgres
+    namespace: ""
+    url: postgresql+asyncpg://ads:change-me@ads-postgres:5432/ads_audit
+
 egressControlplane:
   replicaCount: 1
   image:
@@ -48,6 +114,9 @@ tls:
       group: cert-manager.io
   ingressSecretName: ""
   serviceSecretName: ""
+  policySecretName: ""
+  auditSecretName: ""
+  supervisorSecretName: ""
   caBundle:
     secretName: ""
     key: ca.crt
@@ -67,6 +136,9 @@ keycloak:
 secrets:
   keycloakClientSecret: change-me
   sessionSecret: change-me-change-me-32b
+  policyApiToken: change-me-change-me-32b
+  auditApiToken: change-me-change-me-32b
+  supervisorApiToken: change-me-change-me-32b
 
 persistence:
   enabled: true
