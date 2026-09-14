@@ -10,6 +10,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
 
 from ads_commons.engine import EngineOutput, encode_output
+from ads_commons.security import JwtVerifier
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
@@ -68,6 +69,7 @@ async def run(settings: Settings | None = None) -> None:
     container = make_container(AppProvider(resolved))
     store = container.get(ActiveSessionStore)
     chat = container.get(ChatStreamer)
+    authenticator = container.get(JwtVerifier)
     await store.reset()
     producer = AIOKafkaProducer(bootstrap_servers=resolved.kafka_bootstrap_servers)
     consumer = AIOKafkaConsumer(
@@ -86,6 +88,7 @@ async def run(settings: Settings | None = None) -> None:
         store=store,
         publisher=KafkaPublisher(producer, resolved.output_topic),
         chat=chat,
+        authenticator=authenticator,
         ping_interval_seconds=resolved.ping_interval_seconds,
     )
     tasks: set[asyncio.Task[None]] = set()

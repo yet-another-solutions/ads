@@ -15,3 +15,7 @@ data:
   ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.engine.keycloak.wellKnownUrl | quote }}
   ADS_ENGINE_KEYCLOAK_ISSUER: {{ .Values.engine.keycloak.issuer | quote }}
   ADS_ENGINE_KEYCLOAK_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
+  ADS_ENGINE_KEYCLOAK_CLIENT_ID: {{ .Values.engine.keycloak.clientId | quote }}
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}

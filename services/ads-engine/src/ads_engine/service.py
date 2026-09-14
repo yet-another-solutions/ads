@@ -20,6 +20,11 @@ from ads_commons.engine import (
     decode_request,
     peek_request_ids,
 )
+from ads_commons.security import (
+    InvalidAccessToken,
+    SecurityContext,
+    SecurityContextHolder,
+)
 from ads_engine.chat import ChatStreamer, StreamDelta
 from ads_engine.store import ActiveSessionStore
 
@@ -32,18 +37,24 @@ class OutputPublisher(Protocol):
     async def publish(self, session_id: uuid.UUID, message: EngineOutput) -> None: ...
 
 
+class TokenAuthenticator(Protocol):
+    def authenticate(self, token: str) -> SecurityContext: ...
+
+
 class EngineService:
     def __init__(
         self,
         store: ActiveSessionStore,
         publisher: OutputPublisher,
         chat: ChatStreamer,
+        authenticator: TokenAuthenticator,
         ping_interval_seconds: float,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._publisher = publisher
         self._chat = chat
+        self._authenticator = authenticator
         self._ping_interval_seconds = ping_interval_seconds
         self._sleep = sleep
 
@@ -68,6 +79,18 @@ class EngineService:
         await self.handle(request)
 
     async def handle(self, request: EngineRequest) -> None:
+        try:
+            context = self._authenticator.authenticate(request.authorization.token)
+        except InvalidAccessToken as exc:
+            await self._publisher.publish(
+                request.session_id,
+                ErrorOutput(
+                    session_id=request.session_id,
+                    message_id=request.message_id,
+                    text=f"invalid authorization: {exc.detail}",
+                ),
+            )
+            return
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
             await self._publisher.publish(
@@ -81,16 +104,17 @@ class EngineService:
             return
         ping_task = asyncio.create_task(self._ping(request.session_id))
         try:
-            await self._publisher.publish(
-                request.session_id,
-                Acknowledge(session_id=request.session_id, message_id=request.message_id),
-            )
-            await self._run_model(request)
-            await _cancel(ping_task)
-            await self._publisher.publish(
-                request.session_id,
-                Finish(session_id=request.session_id),
-            )
+            with SecurityContextHolder.bound(context):
+                await self._publisher.publish(
+                    request.session_id,
+                    Acknowledge(session_id=request.session_id, message_id=request.message_id),
+                )
+                await self._run_model(request)
+                await _cancel(ping_task)
+                await self._publisher.publish(
+                    request.session_id,
+                    Finish(session_id=request.session_id),
+                )
         except Exception as exc:
             await _cancel(ping_task)
             await self._publisher.publish(
