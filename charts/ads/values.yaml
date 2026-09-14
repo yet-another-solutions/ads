@@ -33,11 +33,15 @@ service:
   type: ClusterIP
   port: 8080
 
-ingress:
+httpRoute:
   enabled: true
-  className: nginx
   hostname: ads.interlab
-  annotations: {}
+  gateway:
+    name: testlab
+    namespace: gateway
+    sectionName: http
+  backendTLS:
+    caConfigMapName: testlab-ca
 
 tls:
   certManager:
@@ -46,7 +50,6 @@ tls:
       name: testlab-ca
       kind: ClusterIssuer
       group: cert-manager.io
-  ingressSecretName: ""
   serviceSecretName: ""
   caBundle:
     secretName: ""
