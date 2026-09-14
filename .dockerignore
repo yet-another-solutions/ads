@@ -6,6 +6,8 @@
 .pytest_cache
 .ruff_cache
 services/ads/tests
+services/ads-engine/tests
+libraries/ads-commons/tests
 charts
 dist
 noxfile.py

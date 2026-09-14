@@ -47,6 +47,11 @@ app.kubernetes.io/component: ads
 app.kubernetes.io/component: ads-egress-controlplane
 {{- end }}
 
+{{- define "ads.engineSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-engine
+{{- end }}
+
 {{- define "ads.applicationNodeSelector" -}}
 {{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
 {{- end }}

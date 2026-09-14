@@ -12,6 +12,25 @@ egressControlplane:
     tag: "0.0.1"
     pullPolicy: IfNotPresent
 
+engine:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-engine
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  kafka:
+    bootstrapServers: kafka.kafka.svc.cluster.local:9092
+    requestTopic: ads.engine.request
+    outputTopic: ads.engine.output
+    consumerGroup: ads-engine
+  database:
+    url: sqlite:////tmp/ads-engine.db
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-engine
+  pingIntervalSeconds: 10
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
