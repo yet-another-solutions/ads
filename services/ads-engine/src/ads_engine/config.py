@@ -27,10 +27,13 @@ class Settings:
     consumer_group: str
     database_url: str
     ping_interval_seconds: float
+    ack_timeout_seconds: float
     keycloak_well_known_url: str
     keycloak_issuer: str
     keycloak_audience: str
     keycloak_client_id: str
+    keycloak_client_secret: str
+    ack_audience: str
     allowed_callers: frozenset[str]
     tls_ca_bundle: Path | None
 
@@ -47,10 +50,13 @@ def load_settings() -> Settings:
         consumer_group=_env("ADS_ENGINE_CONSUMER_GROUP", "ads-engine"),
         database_url=_env("ADS_ENGINE_DATABASE_URL", "sqlite:////tmp/ads-engine.db"),
         ping_interval_seconds=float(_env("ADS_ENGINE_PING_INTERVAL_SECONDS", "10")),
+        ack_timeout_seconds=float(_env("ADS_ENGINE_ACK_TIMEOUT_SECONDS", "10")),
         keycloak_well_known_url=_env("ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL"),
         keycloak_issuer=_env("ADS_ENGINE_KEYCLOAK_ISSUER"),
         keycloak_audience=_env("ADS_ENGINE_KEYCLOAK_AUDIENCE", "ads-engine"),
         keycloak_client_id=_env("ADS_ENGINE_KEYCLOAK_CLIENT_ID", "ads"),
+        keycloak_client_secret=_env("ADS_ENGINE_KEYCLOAK_CLIENT_SECRET"),
+        ack_audience=_env("ADS_ENGINE_ACK_AUDIENCE", "ads"),
         allowed_callers=_callers(_env("ADS_ENGINE_ALLOWED_CALLERS", "ads")),
         tls_ca_bundle=tls_ca_bundle,
     )

@@ -41,10 +41,14 @@ def settings() -> Settings:
         consumer_group="ads-engine",
         database_url="sqlite:///:memory:",
         ping_interval_seconds=10,
+        ack_timeout_seconds=10,
         keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
         keycloak_issuer="https://keycloak.test/realms/ads",
         keycloak_audience="ads-engine",
         keycloak_client_id="ads",
+        keycloak_client_secret="engine-client-secret",
+        ack_audience="ads",
+        allowed_callers=frozenset({"ads"}),
         tls_ca_bundle=None,
     )
 

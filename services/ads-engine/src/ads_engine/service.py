@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from typing import Protocol
 
 import structlog
 
 from ads_commons.engine import (
     Acknowledge,
+    AckResponse,
     AssistantMessage,
     EngineOutput,
     EngineRequest,
@@ -16,14 +17,21 @@ from ads_commons.engine import (
     PartialResponse,
     Ping,
     Reasoning,
+    authorization_headers,
 )
-from ads_commons.security import require_caller
+from ads_commons.security import (
+    SecurityContext,
+    SecurityContextHolder,
+    TokenExchangeError,
+    require_caller,
+)
 from ads_engine.chat import ChatStreamer, StreamDelta
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
 
 OPENAI_ATTEMPTS = 3
+ACK_TIMEOUT_SECONDS = 10
 
 
 class SessionAlreadyActive(Exception):
@@ -31,8 +39,22 @@ class SessionAlreadyActive(Exception):
         super().__init__("session already active")
 
 
+class AckTimedOut(Exception):
+    def __init__(self) -> None:
+        super().__init__("ack-response timed out")
+
+
 class OutputPublisher(Protocol):
-    async def publish(self, session_id: uuid.UUID, message: EngineOutput) -> None: ...
+    async def publish(
+        self,
+        session_id: uuid.UUID,
+        message: EngineOutput,
+        headers: Sequence[tuple[str, bytes]] | None = None,
+    ) -> None: ...
+
+
+class TokenMinter(Protocol):
+    def mint(self, audience: str) -> SecurityContext: ...
 
 
 class EngineService:
@@ -43,14 +65,21 @@ class EngineService:
         chat: ChatStreamer,
         ping_interval_seconds: float,
         allowed_callers: Collection[str],
+        tokens: TokenMinter,
+        ack_timeout_seconds: float = ACK_TIMEOUT_SECONDS,
+        ack_audience: str = "ads",
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._publisher = publisher
         self._chat = chat
         self._ping_interval_seconds = ping_interval_seconds
+        self._ack_timeout_seconds = ack_timeout_seconds
+        self._tokens = tokens
+        self._ack_audience = ack_audience
         self.allowed_callers = frozenset(allowed_callers)
         self._sleep = sleep
+        self._ack_waiters: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Event]] = {}
 
     @require_caller()
     async def handle(self, request: EngineRequest) -> None:
@@ -58,21 +87,54 @@ class EngineService:
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
             raise SessionAlreadyActive()
-        ping_task = asyncio.create_task(self._ping(request.session_id))
+        ping_task: asyncio.Task[None] | None = None
         try:
-            await self._publisher.publish(
-                request.session_id,
-                Acknowledge(session_id=request.session_id, message_id=request.message_id),
+            minted = self._tokens.mint(self._ack_audience)
+            token = minted.access_token
+            if not token:
+                raise TokenExchangeError("exchanged token is missing")
+            minted = minted.with_attributes(
+                session_id=request.session_id,
+                message_id=request.message_id,
             )
-            await self._run_model(request)
-            await _cancel(ping_task)
-            await self._publisher.publish(
-                request.session_id,
-                Finish(session_id=request.session_id),
-            )
+            waiter = asyncio.Event()
+            self._ack_waiters[request.session_id] = (request.message_id, waiter)
+            ping_task = asyncio.create_task(self._ping(request.session_id))
+            with SecurityContextHolder.bound(minted):
+                await self._publisher.publish(
+                    request.session_id,
+                    Acknowledge(session_id=request.session_id, message_id=request.message_id),
+                    headers=authorization_headers(token),
+                )
+                await self._wait_for_ack_response(request.session_id, waiter)
+                self._ack_waiters.pop(request.session_id, None)
+                await self._run_model(request)
+                await _cancel(ping_task)
+                await self._publisher.publish(
+                    request.session_id,
+                    Finish(session_id=request.session_id),
+                )
         finally:
-            await _cancel(ping_task)
+            self._ack_waiters.pop(request.session_id, None)
+            if ping_task is not None:
+                await _cancel(ping_task)
             await self._store.release(request.session_id)
+
+    async def handle_ack_response(self, ack: AckResponse) -> None:
+        pending = self._ack_waiters.get(ack.session_id)
+        if pending is None:
+            return
+        message_id, waiter = pending
+        if message_id != ack.message_id:
+            return
+        waiter.set()
+
+    async def _wait_for_ack_response(self, session_id: uuid.UUID, waiter: asyncio.Event) -> None:
+        try:
+            await asyncio.wait_for(waiter.wait(), timeout=self._ack_timeout_seconds)
+        except TimeoutError:
+            log.info("ack_response_timeout", session_id=str(session_id))
+            raise AckTimedOut() from None
 
     async def _run_model(self, request: EngineRequest) -> None:
         order = 0

@@ -4,106 +4,128 @@ import json
 import uuid
 
 from ads_commons.engine import (
+    AUTHORIZATION_HEADER,
+    Acknowledge,
+    AckResponse,
     AssistantHistoryTurn,
     AssistantMessage,
     Authorization,
     EngineRequest,
     ErrorOutput,
+    Finish,
     OpenAiBearerToken,
     OpenAiStreamAuthentication,
     OpenAiStreamModel,
     PartialResponse,
+    Ping,
     Reasoning,
     UserHistoryTurn,
+    authorization_headers,
+    authorization_token,
+    decode_inbound,
     decode_request,
+    encode_ack_response,
     encode_output,
     encode_request,
     peek_request_ids,
 )
 
+SESSION = uuid.UUID("11111111-1111-1111-1111-111111111111")
+MESSAGE = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
-def _request() -> EngineRequest:
-    return EngineRequest(
-        session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-        message_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+
+def test_request_round_trip() -> None:
+    request = EngineRequest(
+        session_id=SESSION,
+        message_id=MESSAGE,
         history=[
             UserHistoryTurn(text="hi"),
             AssistantHistoryTurn(text="hello"),
         ],
         user_input="next",
-        instructions="be brief",
+        instructions="stay short",
         model=OpenAiStreamModel(
-            name="test-model",
+            name="gpt-test",
             url="https://llm.example/v1",
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
         ),
-        authorization=Authorization(token="jwt-test"),
+        authorization=Authorization(token="jwt-token"),
     )
-
-
-def test_request_round_trip_uses_openai_stream_and_authorization_fields() -> None:
-    raw = encode_request(_request())
+    raw = encode_request(request)
     payload = json.loads(raw)
+    assert payload["type"] == "request"
     assert payload["model"]["type"] == "openai-stream"
-    assert payload["model"]["authentication"]["openai-bearer"]["token"] == "sk-test"
-    assert payload["authorization"]["token"] == "jwt-test"
+    assert payload["model"]["authentication"]["openai-bearer"] == {"token": "sk-test"}
     assert payload["history"][0] == {"type": "user", "text": "hi"}
     decoded = decode_request(raw)
-    assert decoded.user_input == "next"
-    assert decoded.model.name == "test-model"
+    assert decoded == request
+    assert decode_inbound(raw) == request
 
 
-def test_peek_ids_drops_when_session_or_message_id_missing() -> None:
-    assert peek_request_ids(b"{}") is None
-    assert peek_request_ids(b'{"session_id": "11111111-1111-1111-1111-111111111111"}') is None
+def test_ack_response_round_trip() -> None:
+    ack = AckResponse(session_id=SESSION, message_id=MESSAGE)
+    raw = encode_ack_response(ack)
+    assert json.loads(raw) == {
+        "type": "ack-response",
+        "session_id": str(SESSION),
+        "message_id": str(MESSAGE),
+    }
+    decoded = decode_inbound(raw)
+    assert decoded == ack
+    assert peek_request_ids(raw) == (SESSION, MESSAGE)
+
+
+def test_output_tags() -> None:
+    acknowledge = json.loads(encode_output(Acknowledge(session_id=SESSION, message_id=MESSAGE)))
+    assert acknowledge["type"] == "acknowledge"
+    assert json.loads(encode_output(Ping(session_id=SESSION)))["type"] == "ping"
+    assert json.loads(encode_output(Finish(session_id=SESSION))) == {
+        "type": "finish",
+        "session_id": str(SESSION),
+    }
+    partial = json.loads(
+        encode_output(
+            PartialResponse(
+                session_id=SESSION,
+                order=0,
+                reasoning=Reasoning(text="thinking"),
+            )
+        )
+    )
+    assert partial["type"] == "partial-response"
+    assert "message" not in partial
+    message_partial = json.loads(
+        encode_output(
+            PartialResponse(
+                session_id=SESSION,
+                order=1,
+                message=AssistantMessage(text="hi"),
+            )
+        )
+    )
+    assert message_partial["message"] == {"type": "assistant", "text": "hi"}
+    error = json.loads(
+        encode_output(ErrorOutput(session_id=SESSION, message_id=MESSAGE, text="boom"))
+    )
+    assert error["type"] == "error"
+
+
+def test_peek_request_ids_ignores_incomplete_payloads() -> None:
     assert peek_request_ids(b"not-json") is None
-    ids = peek_request_ids(
+    assert peek_request_ids(b'{"session_id": "11111111-1111-1111-1111-111111111111"}') is None
+    assert peek_request_ids(
         b'{"session_id": "11111111-1111-1111-1111-111111111111",'
         b' "message_id": "22222222-2222-2222-2222-222222222222"}'
-    )
-    assert ids is not None
-    assert ids[0] == uuid.UUID("11111111-1111-1111-1111-111111111111")
+    ) == (SESSION, MESSAGE)
 
 
-def test_partial_response_omits_unused_primitive() -> None:
-    reasoning = encode_output(
-        PartialResponse(
-            session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-            order=0,
-            reasoning=Reasoning(text="think"),
-        )
-    )
-    payload = json.loads(reasoning)
-    assert payload["type"] == "partial-response"
-    assert payload["reasoning"] == {"text": "think"}
-    assert "message" not in payload
-
-    message = encode_output(
-        PartialResponse(
-            session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-            order=1,
-            message=AssistantMessage(text="Hello"),
-        )
-    )
-    payload = json.loads(message)
-    assert payload["message"] == {"type": "assistant", "text": "Hello"}
-    assert "reasoning" not in payload
-
-
-def test_error_output_carries_message_id_and_text() -> None:
-    raw = encode_output(
-        ErrorOutput(
-            session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
-            message_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
-            text="duplicate session",
-        )
-    )
-    payload = json.loads(raw)
-    assert payload == {
-        "type": "error",
-        "session_id": "11111111-1111-1111-1111-111111111111",
-        "message_id": "22222222-2222-2222-2222-222222222222",
-        "text": "duplicate session",
-    }
+def test_authorization_headers_encode_raw_jwt() -> None:
+    headers = authorization_headers("jwt-token")
+    assert headers == [(AUTHORIZATION_HEADER, b"jwt-token")]
+    assert authorization_token(headers) == "jwt-token"
+    assert authorization_token([(b"Authorization", b"jwt-token")]) == "jwt-token"
+    assert authorization_token([("x-other", b"jwt-token")]) is None
+    assert authorization_token([("authorization", None)]) is None
+    assert authorization_token(None) is None

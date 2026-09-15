@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Literal
 
 import msgspec
+
+AUTHORIZATION_HEADER = "authorization"
 
 
 class OpenAiBearerToken(msgspec.Struct, frozen=True):
@@ -37,7 +40,7 @@ class AssistantHistoryTurn(msgspec.Struct, frozen=True, tag="assistant", tag_fie
 HistoryTurn = UserHistoryTurn | AssistantHistoryTurn
 
 
-class EngineRequest(msgspec.Struct, frozen=True):
+class EngineRequest(msgspec.Struct, frozen=True, tag="request", tag_field="type"):
     session_id: uuid.UUID
     message_id: uuid.UUID
     history: list[HistoryTurn]
@@ -45,6 +48,14 @@ class EngineRequest(msgspec.Struct, frozen=True):
     instructions: str
     model: OpenAiStreamModel
     authorization: Authorization
+
+
+class AckResponse(msgspec.Struct, frozen=True, tag="ack-response", tag_field="type"):
+    session_id: uuid.UUID
+    message_id: uuid.UUID
+
+
+EngineInbound = EngineRequest | AckResponse
 
 
 class Acknowledge(msgspec.Struct, frozen=True, tag="acknowledge", tag_field="type"):
@@ -106,6 +117,11 @@ def peek_request_ids(raw: bytes) -> tuple[uuid.UUID, uuid.UUID] | None:
     return peek.session_id, peek.message_id
 
 
+def decode_inbound(raw: bytes) -> EngineInbound:
+    inbound: EngineInbound = msgspec.json.decode(raw, type=EngineInbound)
+    return inbound
+
+
 def decode_request(raw: bytes) -> EngineRequest:
     return msgspec.json.decode(raw, type=EngineRequest)
 
@@ -116,3 +132,29 @@ def encode_output(message: EngineOutput) -> bytes:
 
 def encode_request(request: EngineRequest) -> bytes:
     return msgspec.json.encode(request)
+
+
+def encode_ack_response(message: AckResponse) -> bytes:
+    return msgspec.json.encode(message)
+
+
+def authorization_headers(token: str) -> list[tuple[str, bytes]]:
+    if not token.strip():
+        raise ValueError("authorization token is required")
+    return [(AUTHORIZATION_HEADER, token.encode("utf-8"))]
+
+
+def authorization_token(
+    headers: Sequence[tuple[str | bytes, bytes | None]] | None,
+) -> str | None:
+    if not headers:
+        return None
+    for key, value in headers:
+        name = key.decode("utf-8") if isinstance(key, bytes) else key
+        if name.lower() != AUTHORIZATION_HEADER:
+            continue
+        if not value:
+            return None
+        text = value.decode("utf-8")
+        return text or None
+    return None

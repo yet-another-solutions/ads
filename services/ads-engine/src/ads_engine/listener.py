@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import Protocol
 
-from ads_commons.engine import EngineRequest, ErrorOutput, decode_request, peek_request_ids
+from ads_commons.engine import (
+    AckResponse,
+    EngineRequest,
+    ErrorOutput,
+    authorization_token,
+    decode_inbound,
+    peek_request_ids,
+)
 from ads_commons.security import (
     AccessDenied,
     AuthenticationRequired,
@@ -38,17 +45,39 @@ class EngineListener:
         self._authenticator = authenticator
         self._allowed_callers = frozenset(allowed_callers)
 
-    async def on_message(self, raw: bytes) -> None:
+    async def on_message(
+        self,
+        raw: bytes,
+        headers: Sequence[tuple[str | bytes, bytes | None]] | None = None,
+    ) -> None:
         ids = peek_request_ids(raw)
         if ids is None:
             return
         session_id, message_id = ids
         try:
-            request = decode_request(raw)
+            inbound = decode_inbound(raw)
         except Exception as exc:
             await self.emit_error(session_id, message_id, f"invalid request: {exc}")
             return
-        await self._bind_and_run(request)
+        if isinstance(inbound, AckResponse):
+            await self._accept_ack_response(inbound, headers)
+            return
+        await self._bind_and_run(inbound)
+
+    async def _accept_ack_response(
+        self,
+        inbound: AckResponse,
+        headers: Sequence[tuple[str | bytes, bytes | None]] | None,
+    ) -> None:
+        token = authorization_token(headers)
+        if token is None:
+            return
+        try:
+            context = self._authenticator.authenticate(token)
+            ensure_caller(context, *self._allowed_callers)
+        except (InvalidAccessToken, AccessDenied):
+            return
+        await self._service.handle_ack_response(inbound)
 
     async def _bind_and_run(self, request: EngineRequest) -> None:
         try:

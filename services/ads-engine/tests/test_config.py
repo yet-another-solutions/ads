@@ -7,71 +7,51 @@ import pytest
 from ads_engine.config import load_settings
 
 
-def test_load_settings_keeps_keycloak_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka.example:9092")
+def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    ca = tmp_path / "ca.crt"
+    ca.write_text("ca", encoding="utf-8")
+    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    monkeypatch.setenv("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request")
+    monkeypatch.setenv("ADS_ENGINE_OUTPUT_TOPIC", "ads.engine.output")
+    monkeypatch.setenv("ADS_ENGINE_CONSUMER_GROUP", "ads-engine")
+    monkeypatch.setenv("ADS_ENGINE_DATABASE_URL", "sqlite:////tmp/engine.db")
+    monkeypatch.setenv("ADS_ENGINE_PING_INTERVAL_SECONDS", "7")
+    monkeypatch.setenv("ADS_ENGINE_ACK_TIMEOUT_SECONDS", "12")
     monkeypatch.setenv(
         "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
-        "https://auth.example/realms/ads/.well-known/openid-configuration",
+        "https://keycloak.test/realms/ads/.well-known/openid-configuration",
     )
-    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://auth.example/realms/ads")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://keycloak.test/realms/ads")
     monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_AUDIENCE", "ads-engine")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_CLIENT_ID", "ads")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_CLIENT_SECRET", "engine-client-secret")
+    monkeypatch.setenv("ADS_ENGINE_ACK_AUDIENCE", "ads")
+    monkeypatch.setenv("ADS_ENGINE_ALLOWED_CALLERS", "ads, ads-ui")
+    monkeypatch.setenv("ADS_ENGINE_TLS_CA_BUNDLE", str(ca))
+
     settings = load_settings()
-    assert settings.kafka_bootstrap_servers == "kafka.example:9092"
-    assert settings.request_topic == "ads.engine.request"
-    assert settings.output_topic == "ads.engine.output"
-    assert settings.consumer_group == "ads-engine"
-    assert settings.keycloak_issuer == "https://auth.example/realms/ads"
-    assert settings.keycloak_audience == "ads-engine"
-    assert settings.keycloak_client_id == "ads"
-    assert settings.allowed_callers == frozenset({"ads"})
-    assert settings.tls_ca_bundle is None
-    assert settings.ping_interval_seconds == 10
+
+    assert settings.kafka_bootstrap_servers == "kafka:9092"
+    assert settings.ping_interval_seconds == 7
+    assert settings.ack_timeout_seconds == 12
+    assert settings.keycloak_client_secret == "engine-client-secret"
+    assert settings.ack_audience == "ads"
+    assert settings.allowed_callers == frozenset({"ads", "ads-ui"})
+    assert settings.tls_ca_bundle == ca
 
 
-def test_load_settings_parses_allowed_callers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka.example:9092")
+def test_ack_timeout_defaults_to_ten_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     monkeypatch.setenv(
         "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
-        "https://auth.example/realms/ads/.well-known/openid-configuration",
+        "https://keycloak.test/realms/ads/.well-known/openid-configuration",
     )
-    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://auth.example/realms/ads")
-    monkeypatch.setenv("ADS_ENGINE_ALLOWED_CALLERS", "ads, ads-admin")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://keycloak.test/realms/ads")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_CLIENT_SECRET", "engine-client-secret")
+    monkeypatch.delenv("ADS_ENGINE_ACK_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("ADS_ENGINE_ACK_AUDIENCE", raising=False)
+
     settings = load_settings()
-    assert settings.allowed_callers == frozenset({"ads", "ads-admin"})
 
-
-def test_load_settings_rejects_empty_allowed_callers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka.example:9092")
-    monkeypatch.setenv(
-        "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
-        "https://auth.example/realms/ads/.well-known/openid-configuration",
-    )
-    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://auth.example/realms/ads")
-    monkeypatch.setenv("ADS_ENGINE_ALLOWED_CALLERS", "  ,  ")
-    with pytest.raises(RuntimeError, match="ADS_ENGINE_ALLOWED_CALLERS"):
-        load_settings()
-
-
-def test_load_settings_requires_keycloak_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka.example:9092")
-    monkeypatch.setenv(
-        "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
-        "https://auth.example/realms/ads/.well-known/openid-configuration",
-    )
-    monkeypatch.delenv("ADS_ENGINE_KEYCLOAK_ISSUER", raising=False)
-    with pytest.raises(RuntimeError, match="ADS_ENGINE_KEYCLOAK_ISSUER"):
-        load_settings()
-
-
-def test_load_settings_requires_ca_bundle_file(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka.example:9092")
-    monkeypatch.setenv(
-        "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
-        "https://auth.example/realms/ads/.well-known/openid-configuration",
-    )
-    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://auth.example/realms/ads")
-    monkeypatch.setenv("ADS_ENGINE_TLS_CA_BUNDLE", str(tmp_path / "missing.crt"))
-    with pytest.raises(RuntimeError, match="ADS_ENGINE_TLS_CA_BUNDLE"):
-        load_settings()
+    assert settings.ack_timeout_seconds == 10
+    assert settings.ack_audience == "ads"

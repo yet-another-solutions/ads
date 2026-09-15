@@ -31,6 +31,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "ads.fullname" . }}-engine
+            - secretRef:
+                name: {{ include "ads.fullname" . }}-engine
           {{- if .Values.tls.caBundle.secretName }}
           volumeMounts:
             - name: ca

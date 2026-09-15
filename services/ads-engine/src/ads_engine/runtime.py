@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import Any, Protocol
 
 import structlog
@@ -10,7 +10,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
 
 from ads_commons.engine import EngineOutput, encode_output
-from ads_commons.security import JwtVerifier
+from ads_commons.security import JwtVerifier, TokenExchange
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
@@ -33,11 +33,17 @@ class KafkaPublisher:
         self._producer = producer
         self._topic = topic
 
-    async def publish(self, session_id: uuid.UUID, message: EngineOutput) -> None:
+    async def publish(
+        self,
+        session_id: uuid.UUID,
+        message: EngineOutput,
+        headers: Sequence[tuple[str, bytes]] | None = None,
+    ) -> None:
         await self._producer.send_and_wait(
             self._topic,
             key=str(session_id).encode("utf-8"),
             value=encode_output(message),
+            headers=list(headers or ()),
         )
 
 
@@ -71,6 +77,7 @@ async def run(settings: Settings | None = None) -> None:
     store = container.get(ActiveSessionStore)
     chat = container.get(ChatStreamer)
     authenticator = container.get(JwtVerifier)
+    tokens = container.get(TokenExchange)
     await store.reset()
     producer = AIOKafkaProducer(bootstrap_servers=resolved.kafka_bootstrap_servers)
     consumer = AIOKafkaConsumer(
@@ -92,6 +99,9 @@ async def run(settings: Settings | None = None) -> None:
         chat=chat,
         ping_interval_seconds=resolved.ping_interval_seconds,
         allowed_callers=resolved.allowed_callers,
+        tokens=tokens,
+        ack_timeout_seconds=resolved.ack_timeout_seconds,
+        ack_audience=resolved.ack_audience,
     )
     listener = EngineListener(
         service=service,
@@ -107,7 +117,7 @@ async def run(settings: Settings | None = None) -> None:
     )
     try:
         async for record in consumer:
-            task = asyncio.create_task(listener.on_message(record.value))
+            task = asyncio.create_task(listener.on_message(record.value, record.headers))
             tasks.add(task)
             task.add_done_callback(tasks.discard)
     finally:
