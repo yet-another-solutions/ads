@@ -104,7 +104,7 @@ nodes:
   sandbox:
     labelKey: ads.io/sandbox-node
     labelValue: "true"
-    runtimeClassName: kata-clh
+    runtimeClassName: kata-qemu
 
 resources: {}
 
