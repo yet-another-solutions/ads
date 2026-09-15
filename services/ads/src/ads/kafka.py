@@ -41,7 +41,7 @@ class OffsetSeeker(Protocol):
     def seek(self, partition: Any, offset: int) -> None: ...
 
 
-class SeekToEndListener(ConsumerRebalanceListener):
+class SeekToEndListener(ConsumerRebalanceListener):  # type: ignore[misc]
     """On assign, skip everything already in the topic. No replay."""
 
     def __init__(self, consumer: OffsetSeeker) -> None:

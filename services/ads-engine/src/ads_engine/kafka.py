@@ -12,7 +12,7 @@ class OffsetSeeker(Protocol):
     def seek(self, partition: Any, offset: int) -> None: ...
 
 
-class SeekToEndListener(ConsumerRebalanceListener):
+class SeekToEndListener(ConsumerRebalanceListener):  # type: ignore[misc]
     def __init__(self, consumer: OffsetSeeker) -> None:
         self._consumer = consumer
 
