@@ -13,6 +13,7 @@ from ads.engine_output_service import EngineOutputService
 from ads.kafka import EngineRequests
 from ads.live import LiveHub
 from ads.oidc import OidcClient
+from ads.preferences_client import PreferencesClient
 from ads.project_service import ProjectService
 from ads.repository import (
     ProjectRepository,
@@ -75,7 +76,7 @@ class AppProvider(Provider):
         self,
         settings: Settings,
         engine: Engine,
-        preferences: PreferencesApi,
+        preferences: PreferencesApi | None,
         kafka: EngineRequests,
         hub: LiveHub,
         tokens: TokenMinter,
@@ -105,8 +106,10 @@ class AppProvider(Provider):
         return OidcClient(settings, verifier)
 
     @provide(scope=Scope.APP)
-    def preferences(self) -> PreferencesApi:
-        return self._preferences
+    def preferences(self, settings: Settings, tokens: TokenMinter) -> PreferencesApi:
+        if self._preferences is not None:
+            return self._preferences
+        return PreferencesClient(settings, tokens)
 
     @provide(scope=Scope.APP)
     def kafka(self) -> EngineRequests:

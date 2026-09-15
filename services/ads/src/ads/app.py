@@ -29,7 +29,6 @@ from ads.live_controller import live_socket
 from ads.logconfig import configure_logging
 from ads.models import Project
 from ads.models_controller import ModelsController
-from ads.preferences_client import PreferencesClient
 from ads.project_controller import ProjectController
 from ads.security_middleware import SecurityContextMiddleware
 from ads.session_controller import SessionController
@@ -99,9 +98,6 @@ def create_app(
             minter = tokens if tokens is not None else security_container.get(TokenExchange)
         finally:
             security_container.close()
-    catalog: PreferencesApi = (
-        preferences if preferences is not None else PreferencesClient(settings, minter)
-    )
     requests: EngineRequests = kafka if kafka is not None else AiokafkaEngineRequests(settings)
     live_hub = hub if hub is not None else LiveHub()
     subjects = AbortSubjects()
@@ -109,7 +105,7 @@ def create_app(
     app_provider = AppProvider(
         settings=settings,
         engine=db_engine,
-        preferences=catalog,
+        preferences=preferences,
         kafka=requests,
         hub=live_hub,
         tokens=minter,
