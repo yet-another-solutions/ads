@@ -106,15 +106,21 @@ def create_app(
     live_hub = hub if hub is not None else LiveHub()
     subjects = AbortSubjects()
     session_factory = session_factory_for(db_engine)
-    engine_output = EngineOutputService(
-        session_factory=session_factory,
+    app_provider = AppProvider(
+        settings=settings,
+        engine=db_engine,
+        preferences=catalog,
         kafka=requests,
         hub=live_hub,
         tokens=minter,
         authenticator=authenticator,
-        settings=settings,
         subjects=subjects,
     )
+    app_container = make_container(app_provider, skip_validation=True)
+    try:
+        engine_output = app_container.get(EngineOutputService)
+    finally:
+        app_container.close()
     watchdog = Watchdog(session_factory, engine_output, settings)
     output_controller = EngineOutputController(engine_output)
     consumer = (
@@ -124,17 +130,7 @@ def create_app(
     )
     session_config = build_session_config(settings)
     container = make_async_container(
-        AppProvider(
-            settings=settings,
-            engine=db_engine,
-            preferences=catalog,
-            kafka=requests,
-            hub=live_hub,
-            tokens=minter,
-            authenticator=authenticator,
-            engine_output=engine_output,
-            subjects=subjects,
-        ),
+        app_provider,
         CommonsBeansProvider(),
         SecuritySettingsProvider(settings),
         *((_JwtVerifierOverrideProvider(oidc_verifier),) if oidc_verifier is not None else ()),

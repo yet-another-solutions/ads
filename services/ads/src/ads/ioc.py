@@ -79,7 +79,6 @@ class AppProvider(Provider):
         hub: LiveHub,
         tokens: TokenMinter,
         authenticator: TokenAuthenticator,
-        engine_output: EngineOutputService,
         subjects: AbortSubjects,
     ) -> None:
         super().__init__()
@@ -90,7 +89,6 @@ class AppProvider(Provider):
         self._hub = hub
         self._tokens = tokens
         self._authenticator = authenticator
-        self._engine_output = engine_output
         self._subjects = subjects
 
     @provide(scope=Scope.APP)
@@ -126,8 +124,25 @@ class AppProvider(Provider):
         return self._authenticator
 
     @provide(scope=Scope.APP)
-    def engine_output(self) -> EngineOutputService:
-        return self._engine_output
+    def engine_output(
+        self,
+        engine: Engine,
+        kafka: EngineRequests,
+        hub: LiveHub,
+        tokens: TokenMinter,
+        authenticator: TokenAuthenticator,
+        settings: Settings,
+        subjects: AbortSubjects,
+    ) -> EngineOutputService:
+        return EngineOutputService(
+            session_factory=session_factory_for(engine),
+            kafka=kafka,
+            hub=hub,
+            tokens=tokens,
+            authenticator=authenticator,
+            settings=settings,
+            subjects=subjects,
+        )
 
     @provide(scope=Scope.APP)
     def abort_subjects(self) -> AbortSubjects:
