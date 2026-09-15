@@ -44,6 +44,11 @@ class AckTimedOut(Exception):
         super().__init__("ack-response timed out")
 
 
+class NoPartialResponse(Exception):
+    def __init__(self) -> None:
+        super().__init__("no partial-response")
+
+
 class OutputPublisher(Protocol):
     async def publish(
         self,
@@ -108,11 +113,11 @@ class EngineService:
                 )
                 await self._wait_for_ack_response(request.session_id, waiter)
                 self._ack_waiters.pop(request.session_id, None)
-                await self._run_model(request)
+                last_order = await self._run_model(request)
                 await _cancel(ping_task)
                 await self._publisher.publish(
                     request.session_id,
-                    Finish(session_id=request.session_id),
+                    Finish(session_id=request.session_id, last_order=last_order),
                 )
         finally:
             self._ack_waiters.pop(request.session_id, None)
@@ -136,7 +141,7 @@ class EngineService:
             log.info("ack_response_timeout", session_id=str(session_id))
             raise AckTimedOut() from None
 
-    async def _run_model(self, request: EngineRequest) -> None:
+    async def _run_model(self, request: EngineRequest) -> int:
         order = 0
         emitted_partial = False
         last_error: Exception | None = None
@@ -149,7 +154,7 @@ class EngineService:
                     )
                     order += 1
                     emitted_partial = True
-                return
+                break
             except Exception as exc:
                 last_error = exc
                 if emitted_partial:
@@ -159,7 +164,13 @@ class EngineService:
                     session_id=str(request.session_id),
                     attempt=attempt + 1,
                 )
-        raise RuntimeError(str(last_error) if last_error is not None else "openai request failed")
+        else:
+            raise RuntimeError(
+                str(last_error) if last_error is not None else "openai request failed"
+            )
+        if not emitted_partial:
+            raise NoPartialResponse()
+        return order - 1
 
     async def _ping(self, session_id: uuid.UUID) -> None:
         while True:

@@ -91,6 +91,7 @@ class Ping(msgspec.Struct, frozen=True, tag="ping", tag_field="type"):
 
 class Finish(msgspec.Struct, frozen=True, tag="finish", tag_field="type"):
     session_id: uuid.UUID
+    last_order: int
 
 
 class ErrorOutput(msgspec.Struct, frozen=True, tag="error", tag_field="type"):
