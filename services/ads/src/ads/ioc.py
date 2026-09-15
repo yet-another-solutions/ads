@@ -81,7 +81,6 @@ class AppProvider(Provider):
         hub: LiveHub | None,
         tokens: TokenMinter,
         authenticator: TokenAuthenticator,
-        subjects: AbortSubjects,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -91,7 +90,6 @@ class AppProvider(Provider):
         self._hub = hub
         self._tokens = tokens
         self._authenticator = authenticator
-        self._subjects = subjects
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -163,7 +161,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def abort_subjects(self) -> AbortSubjects:
-        return self._subjects
+        return AbortSubjects()
 
     @provide(scope=Scope.REQUEST)
     def session(self, engine: Engine) -> Iterator[Session]:

@@ -13,7 +13,6 @@ from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from sqlalchemy import Engine
 
-from ads.abort_subjects import AbortSubjects
 from ads.auth import AuthController
 from ads.config import Settings
 from ads.db import Base, create_db_engine
@@ -98,7 +97,6 @@ def create_app(
             minter = tokens if tokens is not None else security_container.get(TokenExchange)
         finally:
             security_container.close()
-    subjects = AbortSubjects()
     session_factory = session_factory_for(db_engine)
     app_provider = AppProvider(
         settings=settings,
@@ -108,23 +106,7 @@ def create_app(
         hub=hub,
         tokens=minter,
         authenticator=authenticator,
-        subjects=subjects,
     )
-    app_container = make_container(app_provider, skip_validation=True)
-    try:
-        requests = app_container.get(EngineRequests)
-        live_hub = app_container.get(LiveHub)
-        engine_output = app_container.get(EngineOutputService)
-        watchdog = app_container.get(Watchdog)
-    finally:
-        app_container.close()
-    output_controller = EngineOutputController(engine_output)
-    consumer = (
-        EngineOutputConsumer(settings, output_controller.on_record)
-        if settings.kafka_bootstrap_servers.strip()
-        else None
-    )
-    session_config = build_session_config(settings)
     container = make_async_container(
         app_provider,
         CommonsBeansProvider(),
@@ -132,6 +114,17 @@ def create_app(
         *((_JwtVerifierOverrideProvider(oidc_verifier),) if oidc_verifier is not None else ()),
         LitestarProvider(),
     )
+    requests = container.get_sync(EngineRequests)
+    live_hub = container.get_sync(LiveHub)
+    engine_output = container.get_sync(EngineOutputService)
+    watchdog = container.get_sync(Watchdog)
+    output_controller = EngineOutputController(engine_output)
+    consumer = (
+        EngineOutputConsumer(settings, output_controller.on_record)
+        if settings.kafka_bootstrap_servers.strip()
+        else None
+    )
+    session_config = build_session_config(settings)
 
     async def _startup() -> None:
         await watchdog.start()
