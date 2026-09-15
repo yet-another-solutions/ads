@@ -11,7 +11,7 @@ from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService
-from ads.kafka import AiokafkaEngineRequests, EngineRequests
+from ads.kafka import AiokafkaEngineRequests, EngineOutputConsumer, EngineRequests
 from ads.live import LiveHub
 from ads.oidc import OidcClient
 from ads.preferences_client import PreferencesClient
@@ -157,6 +157,14 @@ class AppProvider(Provider):
         engine_output: EngineOutputService,
     ) -> EngineOutputController:
         return EngineOutputController(engine_output)
+
+    @provide(scope=Scope.APP)
+    def engine_output_consumer(
+        self,
+        settings: Settings,
+        controller: EngineOutputController,
+    ) -> EngineOutputConsumer:
+        return EngineOutputConsumer(settings, controller.on_record)
 
     @provide(scope=Scope.APP)
     def watchdog(

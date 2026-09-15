@@ -120,7 +120,7 @@ def create_app(
     watchdog = container.get_sync(Watchdog)
     output_controller = container.get_sync(EngineOutputController)
     consumer = (
-        EngineOutputConsumer(settings, output_controller.on_record)
+        container.get_sync(EngineOutputConsumer)
         if settings.kafka_bootstrap_servers.strip()
         else None
     )
