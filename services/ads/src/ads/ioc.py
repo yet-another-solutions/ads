@@ -24,6 +24,7 @@ from ads.repository import (
 from ads.send_service import SendService
 from ads.session_service import SessionService
 from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
+from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
 from ads_commons.security import (
     jwks_uri_from_well_known,
@@ -143,6 +144,15 @@ class AppProvider(Provider):
             settings=settings,
             subjects=subjects,
         )
+
+    @provide(scope=Scope.APP)
+    def watchdog(
+        self,
+        engine: Engine,
+        engine_output: EngineOutputService,
+        settings: Settings,
+    ) -> Watchdog:
+        return Watchdog(session_factory_for(engine), engine_output, settings)
 
     @provide(scope=Scope.APP)
     def abort_subjects(self) -> AbortSubjects:

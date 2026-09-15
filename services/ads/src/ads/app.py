@@ -119,9 +119,9 @@ def create_app(
     app_container = make_container(app_provider, skip_validation=True)
     try:
         engine_output = app_container.get(EngineOutputService)
+        watchdog = app_container.get(Watchdog)
     finally:
         app_container.close()
-    watchdog = Watchdog(session_factory, engine_output, settings)
     output_controller = EngineOutputController(engine_output)
     consumer = (
         EngineOutputConsumer(settings, output_controller.on_record)
