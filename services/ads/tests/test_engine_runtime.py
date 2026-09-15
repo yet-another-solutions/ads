@@ -5,7 +5,7 @@ import uuid
 from datetime import timedelta
 from typing import cast
 
-from aiokafka import AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.abc import ConsumerRebalanceListener
 from litestar import Litestar
 from litestar.testing import TestClient
@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from ads.config import Settings
 from ads.domain import utc_now
 from ads.ioc import session_factory_for
-from ads.kafka import AiokafkaEngineRequests, SeekToEndListener, seek_assigned_to_end
+from ads.kafka import (
+    AiokafkaEngineRequests,
+    EngineOutputConsumer,
+    SeekToEndListener,
+    seek_assigned_to_end,
+)
 from ads.models import STATUS_PENDING
 from ads.repository import SessionRunRepository
 from ads.watchdog import Watchdog
@@ -42,6 +47,49 @@ def test_engine_requests_start_does_not_construct_producer(settings: Settings) -
     asyncio.run(requests.start())
     asyncio.run(requests.start())
     assert producer.starts == 1
+
+
+class _FakeOutputConsumer:
+    def __init__(self) -> None:
+        self.starts = 0
+        self.stops = 0
+        self.subscribes: list[tuple[list[str], object]] = []
+
+    def subscribe(self, topics: list[str], listener: object = None) -> None:
+        self.subscribes.append((list(topics), listener))
+
+    async def start(self) -> None:
+        self.starts += 1
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+    def __aiter__(self) -> _FakeOutputConsumer:
+        return self
+
+    async def __anext__(self) -> object:
+        raise StopAsyncIteration
+
+
+def test_output_consumer_start_does_not_construct_consumer(settings: Settings) -> None:
+    consumer = _FakeOutputConsumer()
+
+    async def on_record(*_args: object) -> None:
+        return None
+
+    async def run() -> None:
+        output = EngineOutputConsumer(settings, on_record, cast(AIOKafkaConsumer, consumer))
+        await output.start()
+        await output.start()
+        assert consumer.starts == 1
+        assert len(consumer.subscribes) == 1
+        topics, listener = consumer.subscribes[0]
+        assert topics == [settings.engine_output_topic]
+        assert isinstance(listener, SeekToEndListener)
+        await output.stop()
+        assert consumer.stops == 1
+
+    asyncio.run(run())
 
 
 class _FakeConsumer:

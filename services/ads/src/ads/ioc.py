@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 
-from aiokafka import AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import Provider, Scope, provide
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
@@ -169,7 +169,16 @@ class AppProvider(Provider):
         settings: Settings,
         controller: EngineOutputController,
     ) -> EngineOutputConsumer:
-        return EngineOutputConsumer(settings, controller.on_record)
+        return EngineOutputConsumer(
+            settings,
+            controller.on_record,
+            AIOKafkaConsumer(
+                bootstrap_servers=settings.kafka_bootstrap_servers,
+                group_id=settings.engine_consumer_group,
+                enable_auto_commit=False,
+                auto_offset_reset="latest",
+            ),
+        )
 
     @provide(scope=Scope.APP)
     def watchdog(

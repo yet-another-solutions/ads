@@ -111,40 +111,33 @@ class AiokafkaEngineRequests:
 class EngineOutputConsumer:
     """Consume ``ads.engine.output``, seek to end on assign, commit after the service."""
 
-    def __init__(self, settings: Settings, on_record: Any) -> None:
+    def __init__(self, settings: Settings, on_record: Any, consumer: AIOKafkaConsumer) -> None:
         self._settings = settings
         self._on_record = on_record
-        self._consumer: AIOKafkaConsumer | None = None
+        self._consumer = consumer
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None:
             return
-        consumer = AIOKafkaConsumer(
-            bootstrap_servers=self._settings.kafka_bootstrap_servers,
-            group_id=self._settings.engine_consumer_group,
-            enable_auto_commit=False,
-            auto_offset_reset="latest",
-        )
+        consumer = self._consumer
         consumer.subscribe(
             topics=[self._settings.engine_output_topic],
             listener=SeekToEndListener(consumer),
         )
         await consumer.start()
-        self._consumer = consumer
         self._task = asyncio.create_task(self._loop(consumer))
 
     async def stop(self) -> None:
-        task, consumer = self._task, self._consumer
-        self._task, self._consumer = None, None
+        task = self._task
+        self._task = None
         if task is not None:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        if consumer is not None:
-            await consumer.stop()
+        await self._consumer.stop()
 
     async def _loop(self, consumer: AIOKafkaConsumer) -> None:
         log.info("ads_engine_output_consumer_started", topic=self._settings.engine_output_topic)
