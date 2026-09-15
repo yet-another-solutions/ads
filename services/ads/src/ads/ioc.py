@@ -29,7 +29,7 @@ from ads_commons.security import (
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifierSettings, TokenExchangeSettings
+from ads_commons_beans import JwtVerifier, JwtVerifierSettings, TokenExchangeSettings
 
 
 class SecuritySettingsProvider(Provider):
@@ -102,8 +102,8 @@ class AppProvider(Provider):
         return self._engine
 
     @provide(scope=Scope.APP)
-    def oidc_client(self, settings: Settings) -> OidcClient:
-        return OidcClient(settings)
+    def oidc_client(self, settings: Settings, verifier: JwtVerifier) -> OidcClient:
+        return OidcClient(settings, verifier)
 
     @provide(scope=Scope.APP)
     def preferences(self) -> PreferencesApi:

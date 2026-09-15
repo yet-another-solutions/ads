@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from litestar import Litestar
@@ -11,13 +12,26 @@ from sqlalchemy import Engine
 from ads.app import build_session_config, create_app, create_schema
 from ads.config import Settings
 from ads.db import create_db_engine
+from ads.identity import Identity
 from ads.logconfig import configure_logging
+from ads_commons_beans import JwtVerifier
 from tests.threadline_fakes import (
     FakeAuthenticator,
     FakePreferences,
     FakeTokens,
     RecordingKafka,
 )
+
+
+class FakeOidcVerifier:
+    def decode(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+    ) -> Identity:
+        raise AssertionError("unit tests must not decode an OIDC token")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -79,6 +93,11 @@ def authenticator() -> FakeAuthenticator:
 
 
 @pytest.fixture
+def oidc_verifier() -> JwtVerifier:
+    return cast(JwtVerifier, FakeOidcVerifier())
+
+
+@pytest.fixture
 def app(
     settings: Settings,
     db_engine: Engine,
@@ -86,6 +105,7 @@ def app(
     kafka: RecordingKafka,
     tokens: FakeTokens,
     authenticator: FakeAuthenticator,
+    oidc_verifier: JwtVerifier,
 ) -> Litestar:
     return create_app(
         settings,
@@ -94,6 +114,7 @@ def app(
         kafka=kafka,
         tokens=tokens,
         jwt_verifier=authenticator,
+        oidc_verifier=oidc_verifier,
     )
 
 

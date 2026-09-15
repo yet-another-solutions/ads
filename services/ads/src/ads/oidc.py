@@ -7,7 +7,6 @@ from urllib.parse import urlencode
 import httpx2
 import stamina
 from authlib.integrations.httpx_client import AsyncOAuth2Client
-from jwt import PyJWKClient
 
 from ads.config import Settings
 from ads.identity import Identity
@@ -15,10 +14,10 @@ from ads_commons_beans import JwtVerifier
 
 
 class OidcClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, verifier: JwtVerifier) -> None:
         self._settings = settings
         self._metadata: dict[str, Any] | None = None
-        self._verifier: JwtVerifier | None = None
+        self._verifier = verifier
 
     def _ssl_context(self) -> ssl.SSLContext | None:
         if self._settings.tls_ca_bundle is None:
@@ -85,15 +84,4 @@ class OidcClient:
     def decode_id_token(self, id_token: str, *, nonce: str) -> Identity:
         if self._metadata is None:
             raise RuntimeError("OIDC metadata has not been loaded")
-        if self._verifier is None:
-            ssl_context = self._ssl_context()
-            self._verifier = JwtVerifier(
-                issuer=self._settings.keycloak_issuer,
-                audience=self._settings.keycloak_audience,
-                client_id=self._settings.keycloak_client_id,
-                jwks_client=PyJWKClient(
-                    str(self._metadata["jwks_uri"]),
-                    ssl_context=ssl_context,
-                ),
-            )
         return self._verifier.decode(id_token, nonce=nonce)

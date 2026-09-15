@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from dishka import make_async_container, make_container
+from dishka import Provider, Scope, make_async_container, make_container, provide
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from litestar.middleware.session.client_side import CookieBackendConfig
@@ -44,6 +44,16 @@ _ = Project
 log = structlog.get_logger("ads")
 
 
+class _JwtVerifierOverrideProvider(Provider):
+    def __init__(self, verifier: JwtVerifier) -> None:
+        super().__init__()
+        self._verifier = verifier
+
+    @provide(scope=Scope.APP, override=True)
+    def jwt_verifier(self) -> JwtVerifier:
+        return self._verifier
+
+
 def build_session_config(settings: Settings) -> CookieBackendConfig:
     return CookieBackendConfig(
         secret=settings.session_secret_bytes(),
@@ -67,6 +77,7 @@ def create_app(
     hub: LiveHub | None = None,
     tokens: TokenMinter | None = None,
     jwt_verifier: TokenAuthenticator | None = None,
+    oidc_verifier: JwtVerifier | None = None,
 ) -> Litestar:
     configure_logging()
     root = Path(__file__).resolve().parent
@@ -124,6 +135,9 @@ def create_app(
             engine_output=engine_output,
             subjects=subjects,
         ),
+        CommonsBeansProvider(),
+        SecuritySettingsProvider(settings),
+        *((_JwtVerifierOverrideProvider(oidc_verifier),) if oidc_verifier is not None else ()),
         LitestarProvider(),
     )
 
