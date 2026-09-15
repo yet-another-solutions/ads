@@ -4,7 +4,7 @@ import ssl
 import uuid
 from collections.abc import Sequence
 
-from aiokafka import AIOKafkaProducer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import Provider, Scope, provide
 
 from ads_commons.engine import EngineOutput, encode_output
@@ -20,6 +20,7 @@ from ads_commons_beans import (
 )
 from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
+from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener
 from ads_engine.service import EngineService, OutputPublisher
 from ads_engine.store import ActiveSessionStore
@@ -64,6 +65,22 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
         return AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
+
+    @provide(scope=Scope.APP)
+    def consumer(self, settings: Settings) -> AIOKafkaConsumer:
+        return AIOKafkaConsumer(
+            bootstrap_servers=settings.kafka_bootstrap_servers,
+            group_id=settings.consumer_group,
+            enable_auto_commit=False,
+            auto_offset_reset="latest",
+        )
+
+    @provide(scope=Scope.APP)
+    def seek_to_end_listener(
+        self,
+        consumer: AIOKafkaConsumer,
+    ) -> SeekToEndListener:
+        return SeekToEndListener(consumer)
 
     @provide(scope=Scope.APP, provides=OutputPublisher)
     def publisher(

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection
-from typing import Any, Protocol
 
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -11,40 +9,12 @@ from dishka import make_container
 from ads_commons_beans import CommonsBeansProvider
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
+from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener
 from ads_engine.logconfig import configure_logging
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
-
-
-class OffsetSeeker(Protocol):
-    async def end_offsets(self, partitions: list[Any]) -> dict[Any, int]: ...
-
-    def seek(self, partition: Any, offset: int) -> None: ...
-
-
-class SeekToEndListener:
-    def __init__(self, consumer: OffsetSeeker) -> None:
-        self._consumer = consumer
-
-    async def on_partitions_revoked(self, revoked: Collection[Any]) -> None:
-        return None
-
-    async def on_partitions_assigned(self, assigned: Collection[Any]) -> None:
-        await seek_assigned_to_end(self._consumer, assigned)
-
-
-async def seek_assigned_to_end(
-    consumer: OffsetSeeker,
-    assigned: Collection[Any],
-) -> None:
-    if not assigned:
-        return
-    partitions = list(assigned)
-    end_offsets = await consumer.end_offsets(partitions)
-    for partition, offset in end_offsets.items():
-        consumer.seek(partition, offset)
 
 
 async def run(settings: Settings | None = None) -> None:
@@ -54,15 +24,11 @@ async def run(settings: Settings | None = None) -> None:
     store = container.get(ActiveSessionStore)
     await store.reset()
     producer = container.get(AIOKafkaProducer)
-    consumer = AIOKafkaConsumer(
-        bootstrap_servers=resolved.kafka_bootstrap_servers,
-        group_id=resolved.consumer_group,
-        enable_auto_commit=False,
-        auto_offset_reset="latest",
-    )
+    consumer = container.get(AIOKafkaConsumer)
+    seek_to_end_listener = container.get(SeekToEndListener)
     consumer.subscribe(
         topics=[resolved.request_topic],
-        listener=SeekToEndListener(consumer),
+        listener=seek_to_end_listener,
     )
     await producer.start()
     await consumer.start()
