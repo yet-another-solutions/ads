@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from dishka import make_async_container
+from dishka import make_async_container, make_container
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from litestar.middleware.session.client_side import CookieBackendConfig
@@ -22,7 +22,7 @@ from ads.engine_output_service import EngineOutputService
 from ads.exceptions import EXCEPTION_HANDLERS
 from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
-from ads.ioc import AppProvider, session_factory_for
+from ads.ioc import AppProvider, SecuritySettingsProvider, session_factory_for
 from ads.kafka import AiokafkaEngineRequests, EngineOutputConsumer, EngineRequests
 from ads.live import LiveHub
 from ads.live_controller import live_socket
@@ -34,9 +34,10 @@ from ads.project_controller import ProjectController
 from ads.security_middleware import SecurityContextMiddleware
 from ads.session_controller import SessionController
 from ads.shell_controller import ShellController
-from ads.tokens import KeycloakJwtVerifier, KeycloakTokenExchange, TokenAuthenticator, TokenMinter
+from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
+from ads_commons_beans import CommonsBeansProvider, JwtVerifier, TokenExchange
 
 _ = Project
 
@@ -70,16 +71,23 @@ def create_app(
     configure_logging()
     root = Path(__file__).resolve().parent
     db_engine = engine if engine is not None else create_db_engine(settings.database_url)
-    authenticator: TokenAuthenticator = (
-        jwt_verifier if jwt_verifier is not None else KeycloakJwtVerifier(settings)
-    )
+    authenticator: TokenAuthenticator
     minter: TokenMinter
-    if tokens is not None:
+    if jwt_verifier is not None and tokens is not None:
+        authenticator = jwt_verifier
         minter = tokens
-    elif isinstance(authenticator, KeycloakJwtVerifier):
-        minter = KeycloakTokenExchange(settings, authenticator)
     else:
-        minter = KeycloakTokenExchange(settings, KeycloakJwtVerifier(settings))
+        security_container = make_container(
+            CommonsBeansProvider(),
+            SecuritySettingsProvider(settings),
+        )
+        try:
+            authenticator = (
+                jwt_verifier if jwt_verifier is not None else security_container.get(JwtVerifier)
+            )
+            minter = tokens if tokens is not None else security_container.get(TokenExchange)
+        finally:
+            security_container.close()
     catalog: PreferencesApi = (
         preferences if preferences is not None else PreferencesClient(settings, minter)
     )

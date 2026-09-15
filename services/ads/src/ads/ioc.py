@@ -23,8 +23,48 @@ from ads.repository import (
 )
 from ads.send_service import SendService
 from ads.session_service import SessionService
-from ads.tokens import TokenAuthenticator, TokenMinter
+from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
 from ads_commons.preferences import PreferencesApi
+from ads_commons.security import (
+    jwks_uri_from_well_known,
+    token_endpoint_from_well_known,
+)
+from ads_commons_beans import JwtVerifierSettings, TokenExchangeSettings
+
+
+class SecuritySettingsProvider(Provider):
+    """Adapt ads settings for the shared security beans."""
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__()
+        self._settings = settings
+
+    @provide(scope=Scope.APP)
+    def jwt_verifier_settings(self) -> JwtVerifierSettings:
+        ssl_context = ssl_context_for(self._settings)
+        return JwtVerifierSettings(
+            issuer=self._settings.keycloak_issuer,
+            audience=self._settings.keycloak_audience,
+            client_id=self._settings.keycloak_client_id,
+            jwks_uri=jwks_uri_from_well_known(
+                self._settings.keycloak_well_known_url,
+                ssl_context,
+            ),
+            ssl_context=ssl_context,
+        )
+
+    @provide(scope=Scope.APP)
+    def token_exchange_settings(self) -> TokenExchangeSettings:
+        ssl_context = ssl_context_for(self._settings)
+        return TokenExchangeSettings(
+            token_endpoint=token_endpoint_from_well_known(
+                self._settings.keycloak_well_known_url,
+                ssl_context,
+            ),
+            client_id=self._settings.keycloak_client_id,
+            client_secret=self._settings.keycloak_client_secret,
+            ssl_context=ssl_context,
+        )
 
 
 class AppProvider(Provider):
