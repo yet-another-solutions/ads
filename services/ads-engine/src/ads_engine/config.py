@@ -48,7 +48,7 @@ def load_settings() -> Settings:
         request_topic=_env("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request"),
         output_topic=_env("ADS_ENGINE_OUTPUT_TOPIC", "ads.engine.output"),
         consumer_group=_env("ADS_ENGINE_CONSUMER_GROUP", "ads-engine"),
-        database_url=_env("ADS_ENGINE_DATABASE_URL", "sqlite:////tmp/ads-engine.db"),
+        database_url=_env("ADS_ENGINE_DATABASE_URL"),
         ping_interval_seconds=float(_env("ADS_ENGINE_PING_INTERVAL_SECONDS", "10")),
         ack_timeout_seconds=float(_env("ADS_ENGINE_ACK_TIMEOUT_SECONDS", "10")),
         keycloak_well_known_url=_env("ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL"),

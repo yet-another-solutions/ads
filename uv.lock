@@ -87,6 +87,7 @@ dependencies = [
     { name = "dishka" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
     { name = "structlog" },
 ]
@@ -98,6 +99,7 @@ requires-dist = [
     { name = "dishka", specifier = "==1.10.1" },
     { name = "langchain-core", specifier = "==1.6.3" },
     { name = "langchain-openai", specifier = "==1.6.2" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
     { name = "structlog", specifier = "==26.1.0" },
 ]
