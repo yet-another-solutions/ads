@@ -118,7 +118,7 @@ def create_app(
     live_hub = container.get_sync(LiveHub)
     engine_output = container.get_sync(EngineOutputService)
     watchdog = container.get_sync(Watchdog)
-    output_controller = EngineOutputController(engine_output)
+    output_controller = container.get_sync(EngineOutputController)
     consumer = (
         EngineOutputConsumer(settings, output_controller.on_record)
         if settings.kafka_bootstrap_servers.strip()

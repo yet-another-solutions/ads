@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ads.abort_subjects import AbortSubjects
 from ads.catalog_service import CatalogService
 from ads.config import Settings
+from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService
 from ads.kafka import AiokafkaEngineRequests, EngineRequests
 from ads.live import LiveHub
@@ -149,6 +150,13 @@ class AppProvider(Provider):
             settings=settings,
             subjects=subjects,
         )
+
+    @provide(scope=Scope.APP)
+    def engine_output_controller(
+        self,
+        engine_output: EngineOutputService,
+    ) -> EngineOutputController:
+        return EngineOutputController(engine_output)
 
     @provide(scope=Scope.APP)
     def watchdog(
