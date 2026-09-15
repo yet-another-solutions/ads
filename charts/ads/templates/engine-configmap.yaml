@@ -12,11 +12,13 @@ data:
   ADS_ENGINE_CONSUMER_GROUP: {{ .Values.engine.kafka.consumerGroup | quote }}
   ADS_ENGINE_DATABASE_URL: {{ .Values.engine.database.url | quote }}
   ADS_ENGINE_PING_INTERVAL_SECONDS: {{ .Values.engine.pingIntervalSeconds | quote }}
+  ADS_ENGINE_ACK_TIMEOUT_SECONDS: {{ .Values.engine.ackTimeoutSeconds | quote }}
   ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.engine.keycloak.wellKnownUrl | quote }}
   ADS_ENGINE_KEYCLOAK_ISSUER: {{ .Values.engine.keycloak.issuer | quote }}
   ADS_ENGINE_KEYCLOAK_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
   ADS_ENGINE_KEYCLOAK_CLIENT_ID: {{ .Values.engine.keycloak.clientId | quote }}
   ADS_ENGINE_ALLOWED_CALLERS: {{ .Values.engine.keycloak.allowedCallers | join "," | quote }}
+  ADS_ENGINE_ACK_AUDIENCE: {{ .Values.engine.keycloak.ackAudience | quote }}
   {{- if .Values.tls.caBundle.secretName }}
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}

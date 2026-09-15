@@ -32,7 +32,9 @@ engine:
     clientId: ads
     allowedCallers:
       - ads
+    ackAudience: ads
   pingIntervalSeconds: 10
+  ackTimeoutSeconds: 10
 
 imagePullSecrets: []
 nameOverride: ""
@@ -87,6 +89,7 @@ keycloak:
 secrets:
   keycloakClientSecret: change-me
   sessionSecret: change-me-change-me-32b
+  engineKeycloakClientSecret: change-me
 
 persistence:
   enabled: true
