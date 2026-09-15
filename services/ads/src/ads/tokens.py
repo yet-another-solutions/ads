@@ -5,14 +5,16 @@ from __future__ import annotations
 import ssl
 from typing import Protocol
 
+from jwt import PyJWKClient
+
 from ads.config import Settings
 from ads_commons.security import (
-    JwtVerifier,
     SecurityContext,
     TokenExchange,
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
+from ads_commons_beans import JwtVerifier
 
 
 class TokenMinter(Protocol):
@@ -47,9 +49,11 @@ class KeycloakJwtVerifier:
                 issuer=self._settings.keycloak_issuer,
                 audience=self._settings.keycloak_audience,
                 client_id=self._settings.keycloak_client_id,
-                ssl_context=ssl_context,
-                jwks_uri=jwks_uri_from_well_known(
-                    self._settings.keycloak_well_known_url,
+                jwks_client=PyJWKClient(
+                    jwks_uri_from_well_known(
+                        self._settings.keycloak_well_known_url,
+                        ssl_context=ssl_context,
+                    ),
                     ssl_context=ssl_context,
                 ),
             )

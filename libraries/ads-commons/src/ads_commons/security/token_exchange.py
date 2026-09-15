@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 
 from ads_commons.security.context import SecurityContext
 from ads_commons.security.holder import AuthenticationRequired, SecurityContextHolder
-from ads_commons.security.jwt import InvalidAccessToken, JwtVerifier
+from ads_commons.security.jwt import AccessTokenVerifier, InvalidAccessToken
 
 GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
@@ -47,7 +47,7 @@ class TokenExchange:
         token_endpoint: str,
         client_id: str,
         client_secret: str,
-        verifier: JwtVerifier,
+        verifier: AccessTokenVerifier,
         ssl_context: ssl.SSLContext | None = None,
     ) -> None:
         self._token_endpoint = token_endpoint

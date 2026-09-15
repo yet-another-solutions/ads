@@ -6,7 +6,6 @@ requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "msgspec==0.21.1",
-    "pyjwt[crypto]==2.14.0",
 ]
 
 [build-system]

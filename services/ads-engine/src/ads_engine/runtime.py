@@ -10,7 +10,8 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
 
 from ads_commons.engine import EngineOutput, encode_output
-from ads_commons.security import JwtVerifier, TokenExchange
+from ads_commons.security import TokenExchange
+from ads_commons_beans import CommonsBeansProvider, JwtVerifier
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
@@ -73,7 +74,7 @@ async def seek_assigned_to_end(
 async def run(settings: Settings | None = None) -> None:
     configure_logging()
     resolved = settings if settings is not None else load_settings()
-    container = make_container(AppProvider(resolved))
+    container = make_container(CommonsBeansProvider(), AppProvider(resolved))
     store = container.get(ActiveSessionStore)
     chat = container.get(ChatStreamer)
     authenticator = container.get(JwtVerifier)

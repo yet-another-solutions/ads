@@ -8,7 +8,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from ads_commons.security import JwtVerifier
+from ads_commons_beans import JwtVerifier
 
 ISSUER = "https://keycloak.test/realms/ads"
 AUDIENCE = "ads"

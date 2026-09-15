@@ -5,7 +5,7 @@ from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from sqlalchemy import Engine
 
-from ads_commons.security import JwtVerifier
+from ads_commons_beans import JwtVerifier
 from ads_preferences.config import Settings
 from ads_preferences.controller import ModelsController
 from ads_preferences.db import Base, create_db_engine

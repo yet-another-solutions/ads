@@ -4,6 +4,7 @@ import json
 import ssl
 from typing import Any
 
+from jwt import PyJWKClient
 from litestar.enums import ScopeType
 from litestar.types import (
     ASGIApp,
@@ -17,11 +18,11 @@ from litestar.types import (
 from ads_commons.security import (
     AccessDenied,
     InvalidAccessToken,
-    JwtVerifier,
     SecurityContextHolder,
     ensure_caller,
     jwks_uri_from_well_known,
 )
+from ads_commons_beans import JwtVerifier
 from ads_preferences.config import Settings
 
 
@@ -80,8 +81,7 @@ class JwtCallerMiddleware:
                 issuer=self._settings.keycloak_issuer,
                 audience=self._settings.keycloak_audience,
                 client_id=self._settings.keycloak_client_id,
-                ssl_context=ssl_context,
-                jwks_uri=jwks_uri,
+                jwks_client=PyJWKClient(jwks_uri, ssl_context=ssl_context),
             )
         return self._loaded
 

@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-commons",
+    "ads-commons-beans",
     "advanced-alchemy==1.8.1",
     "aiokafka==0.14.0",
     "alembic==1.16.5",
@@ -14,6 +15,7 @@ dependencies = [
     "httpx2==2.12.0",
     "litestar[jinja,htmx]==2.24.0",
     "msgspec==0.21.1",
+    "pyjwt[crypto]==2.14.0",
     "psycopg[binary]==3.2.12",
     "sqlalchemy==2.0.43",
     "stamina==26.1.0",
@@ -36,6 +38,7 @@ known_first_party = ["ads"]
 
 [tool.deptry.package_module_name_map]
 ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
 advanced-alchemy = ["advanced_alchemy"]
 
 [tool.deptry.per_rule_ignores]

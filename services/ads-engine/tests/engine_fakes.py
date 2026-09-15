@@ -20,7 +20,8 @@ from ads_commons.engine import (
     OpenAiStreamModel,
     OpenAiStreamOptions,
 )
-from ads_commons.security import JwtVerifier, SecurityContext
+from ads_commons.security import SecurityContext
+from ads_commons_beans import JwtVerifier
 from ads_engine.chat import StreamDelta
 
 ENGINE_ISSUER = "https://keycloak.test/realms/ads"

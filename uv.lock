@@ -23,6 +23,7 @@ version = "0.0.1"
 source = { editable = "services/ads" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "advanced-alchemy" },
     { name = "aiokafka" },
     { name = "alembic" },
@@ -32,6 +33,7 @@ dependencies = [
     { name = "litestar", extra = ["jinja"] },
     { name = "msgspec" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy" },
     { name = "stamina" },
     { name = "structlog" },
@@ -41,6 +43,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "alembic", specifier = "==1.16.5" },
@@ -50,6 +53,7 @@ requires-dist = [
     { name = "litestar", extras = ["jinja", "htmx"], specifier = "==2.24.0" },
     { name = "msgspec", specifier = "==0.21.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
     { name = "stamina", specifier = "==26.1.0" },
     { name = "structlog", specifier = "==26.1.0" },
@@ -62,25 +66,27 @@ version = "0.0.1"
 source = { editable = "libraries/ads-commons" }
 dependencies = [
     { name = "msgspec" },
-    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "msgspec", specifier = "==0.21.1" },
-    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
-]
+requires-dist = [{ name = "msgspec", specifier = "==0.21.1" }]
 
 [[package]]
 name = "ads-commons-beans"
 version = "0.0.1"
 source = { editable = "libraries/ads-commons-beans" }
 dependencies = [
+    { name = "ads-commons" },
     { name = "dishka" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "dishka", specifier = "==1.10.1" }]
+requires-dist = [
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "dishka", specifier = "==1.10.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
+]
 
 [[package]]
 name = "ads-egress-controlplane"
@@ -93,6 +99,7 @@ version = "0.0.1"
 source = { editable = "services/ads-engine" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "aiokafka" },
     { name = "dishka" },
     { name = "langchain-core" },
@@ -105,6 +112,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "langchain-core", specifier = "==1.6.3" },
@@ -120,12 +128,14 @@ version = "0.0.1"
 source = { editable = "services/ads-preferences" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "advanced-alchemy" },
     { name = "alembic" },
     { name = "dishka" },
     { name = "litestar" },
     { name = "msgspec" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -134,12 +144,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "alembic", specifier = "==1.16.5" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "litestar", specifier = "==2.24.0" },
     { name = "msgspec", specifier = "==0.21.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
     { name = "structlog", specifier = "==26.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },

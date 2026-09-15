@@ -5,7 +5,9 @@ description = "ADS shared Dishka beans"
 requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
+    "ads-commons",
     "dishka==1.10.1",
+    "pyjwt[crypto]==2.14.0",
 ]
 
 [build-system]
@@ -17,3 +19,6 @@ packages = ["src/ads_commons_beans"]
 
 [tool.deptry]
 known_first_party = ["ads_commons_beans"]
+
+[tool.deptry.package_module_name_map]
+ads-commons = ["ads_commons"]

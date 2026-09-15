@@ -8,13 +8,13 @@ import pytest
 
 from ads_commons.security import (
     AuthenticationRequired,
+    InvalidAccessToken,
     SecurityContext,
     SecurityContextHolder,
     TokenExchange,
     TokenExchangeError,
     token_endpoint_from_well_known,
 )
-from jwt_support import encode_token, new_rsa_key, verifier
 
 INBOUND = "inbound-user-token"
 EXCHANGED_SUBJECT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -36,12 +36,31 @@ class _Response:
         return None
 
 
-def _exchanger(key: Any) -> TokenExchange:
+class _Verifier:
+    def __init__(
+        self,
+        context: SecurityContext | None = None,
+        error: InvalidAccessToken | None = None,
+    ) -> None:
+        self._context = context
+        self._error = error
+        self.calls: list[tuple[str, str | None]] = []
+
+    def authenticate(self, token: str, *, audience: str | None = None) -> SecurityContext:
+        self.calls.append((token, audience))
+        if self._error is not None:
+            raise self._error
+        if self._context is None:
+            raise AssertionError("authenticate was not expected")
+        return self._context
+
+
+def _exchanger(verifier: _Verifier | None = None) -> TokenExchange:
     return TokenExchange(
         token_endpoint=TOKEN_URL,
         client_id="ads",
         client_secret="ads-secret",
-        verifier=verifier(key),
+        verifier=verifier or _Verifier(),
     )
 
 
@@ -56,7 +75,6 @@ def _bound(token: str | None = INBOUND, **kwargs: Any) -> SecurityContext:
 
 
 def test_exchange_posts_ste_v2_and_returns_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
     captured: list[Any] = []
 
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
@@ -65,7 +83,7 @@ def test_exchange_posts_ste_v2_and_returns_access_token(monkeypatch: pytest.Monk
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
     with SecurityContextHolder.bound(_bound()):
-        token = _exchanger(key).exchange("ads-preferences")
+        token = _exchanger().exchange("ads-preferences")
     assert token == "exchanged-token"
     assert len(captured) == 1
     request = captured[0]
@@ -82,7 +100,6 @@ def test_exchange_posts_ste_v2_and_returns_access_token(monkeypatch: pytest.Monk
 
 
 def test_exchange_accepts_explicit_subject_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
     captured: list[Any] = []
 
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
@@ -90,7 +107,7 @@ def test_exchange_accepts_explicit_subject_token(monkeypatch: pytest.MonkeyPatch
         return _Response({"access_token": "exchanged-token"})
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
-    token = _exchanger(key).exchange("ads-engine", "acknowledge-header-jwt")
+    token = _exchanger().exchange("ads-engine", "acknowledge-header-jwt")
     assert token == "exchanged-token"
     form = parse_qs(captured[0].data.decode())
     assert form["subject_token"] == ["acknowledge-header-jwt"]
@@ -98,7 +115,6 @@ def test_exchange_accepts_explicit_subject_token(monkeypatch: pytest.MonkeyPatch
 
 
 def test_exchange_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
     calls = {"n": 0}
 
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
@@ -106,7 +122,7 @@ def test_exchange_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
         return _Response({"access_token": f"token-{calls['n']}"})
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
-    exchanger = _exchanger(key)
+    exchanger = _exchanger()
     with SecurityContextHolder.bound(_bound()):
         first = exchanger.exchange("ads-engine")
         second = exchanger.exchange("ads-engine")
@@ -116,13 +132,11 @@ def test_exchange_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_helper_does_not_keep_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
-
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
         return _Response({"access_token": "exchanged-token"})
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
-    exchanger = _exchanger(key)
+    exchanger = _exchanger()
     with SecurityContextHolder.bound(_bound()):
         exchanger.exchange("ads-preferences")
     stored = " ".join(str(value) for value in vars(exchanger).values())
@@ -132,14 +146,15 @@ def test_helper_does_not_keep_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_mint_builds_context_from_exchanged_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
-    exchanged = encode_token(
-        key,
-        sub=EXCHANGED_SUBJECT,
-        aud="ads-preferences",
-        azp="ads",
-        name="FromToken",
-        realm_access={"roles": ["admin"]},
+    exchanged = "exchanged-token"
+    authenticator = _Verifier(
+        SecurityContext(
+            subject=EXCHANGED_SUBJECT,
+            name="FromToken",
+            roles=frozenset({"admin"}),
+            authorized_party="ads",
+            access_token=exchanged,
+        )
     )
 
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
@@ -148,7 +163,7 @@ def test_mint_builds_context_from_exchanged_token(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
     original = _bound()
     with SecurityContextHolder.bound(original):
-        minted = _exchanger(key).mint("ads-preferences")
+        minted = _exchanger(authenticator).mint("ads-preferences")
         assert SecurityContextHolder.require() is original
         assert original.subject == "alice"
         assert original.has_role("user")
@@ -160,60 +175,53 @@ def test_mint_builds_context_from_exchanged_token(monkeypatch: pytest.MonkeyPatc
     assert minted.authorized_party == "ads"
     assert minted.access_token == exchanged
     assert minted.subject != original.subject
+    assert authenticator.calls == [(exchanged, "ads-preferences")]
 
 
 def test_mint_rejects_invalid_exchanged_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
-
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
         return _Response({"access_token": "not-a-jwt"})
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
     with SecurityContextHolder.bound(_bound()):
         with pytest.raises(TokenExchangeError, match="invalid"):
-            _exchanger(key).mint("ads-preferences")
+            _exchanger(_Verifier(error=InvalidAccessToken())).mint("ads-preferences")
 
 
 def test_exchange_requires_bound_access_token() -> None:
-    key = new_rsa_key()
     with pytest.raises(AuthenticationRequired):
-        _exchanger(key).exchange("ads-preferences")
+        _exchanger().exchange("ads-preferences")
     with SecurityContextHolder.bound(_bound(token=None)):
         with pytest.raises(AuthenticationRequired, match="access token"):
-            _exchanger(key).exchange("ads-preferences")
+            _exchanger().exchange("ads-preferences")
 
 
 def test_exchange_requires_audience() -> None:
-    key = new_rsa_key()
     with SecurityContextHolder.bound(_bound()):
         with pytest.raises(TokenExchangeError, match="audience"):
-            _exchanger(key).exchange("  ")
+            _exchanger().exchange("  ")
 
 
 def test_token_endpoint_error_does_not_include_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
-
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
         raise TimeoutError("slow")
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
     with SecurityContextHolder.bound(_bound()):
         with pytest.raises(TokenExchangeError, match="token exchange failed") as caught:
-            _exchanger(key).exchange("ads-preferences")
+            _exchanger().exchange("ads-preferences")
     assert INBOUND not in str(caught.value)
     assert INBOUND not in repr(caught.value)
 
 
 def test_missing_access_token_in_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    key = new_rsa_key()
-
     def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
         return _Response({"token_type": "Bearer"})
 
     monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
     with SecurityContextHolder.bound(_bound()):
         with pytest.raises(TokenExchangeError, match="no access_token"):
-            _exchanger(key).exchange("ads-preferences")
+            _exchanger().exchange("ads-preferences")
 
 
 def test_token_endpoint_from_well_known(monkeypatch: pytest.MonkeyPatch) -> None:
