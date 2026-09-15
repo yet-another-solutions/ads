@@ -10,6 +10,7 @@ from litestar.response import Redirect
 from msgspec import structs
 
 from ads.frontend import pop_return_to
+from ads.identity import ACCESS_TOKEN_SESSION_KEY
 from ads.oidc import OidcClient
 from ads_commons.security import InvalidAccessToken
 
@@ -49,6 +50,9 @@ class AuthController(Controller):
         except InvalidAccessToken as exc:
             raise NotAuthorizedException(detail="invalid id_token") from exc
         request.session["identity"] = structs.asdict(identity)
+        access_token = token.get("access_token")
+        if isinstance(access_token, str) and access_token.strip():
+            request.session[ACCESS_TOKEN_SESSION_KEY] = access_token
         return Redirect(pop_return_to(request.session))
 
     @get("/logout")

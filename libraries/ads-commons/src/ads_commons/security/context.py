@@ -20,6 +20,7 @@ class SecurityContext:
     email: str | None = None
     authorized_party: str | None = None
     attributes: Mapping[str, object] = field(default_factory=_empty_attributes)
+    access_token: str | None = field(default=None, repr=False)
 
     @property
     def user_id(self) -> UUID:
@@ -44,3 +45,8 @@ class SecurityContext:
             merged.update(extra)
         merged.update(values)
         return replace(self, attributes=MappingProxyType(merged))
+
+    def with_access_token(self, access_token: str) -> SecurityContext:
+        if not access_token.strip():
+            raise ValueError("access token is required")
+        return replace(self, access_token=access_token)

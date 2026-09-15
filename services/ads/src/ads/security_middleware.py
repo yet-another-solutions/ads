@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from litestar.enums import ScopeType
 from litestar.types import ASGIApp, Receive, Scope, Send
 
-from ads.identity import identity_from_session, security_context_from_identity
+from ads.identity import security_context_from_session
 from ads.security_holder import SecurityContextHolder
 
 
@@ -20,8 +20,7 @@ class SecurityContextMiddleware:
             await self.app(scope, receive, send)
             return
         session = scope.get("session")
-        identity = identity_from_session(session) if isinstance(session, Mapping) else None
-        context = security_context_from_identity(identity) if identity is not None else None
+        context = security_context_from_session(session) if isinstance(session, Mapping) else None
         token = SecurityContextHolder.set(context)
         try:
             await self.app(scope, receive, send)

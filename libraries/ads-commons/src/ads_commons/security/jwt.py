@@ -72,7 +72,13 @@ class JwtVerifier:
         self._jwks_uri = jwks_uri
         self._jwks_client = PyJWKClient(jwks_uri, ssl_context=self._ssl_context)
 
-    def decode(self, token: str, *, nonce: str | None = None) -> Identity:
+    def decode(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+    ) -> Identity:
         if not token.strip():
             raise InvalidAccessToken("token is required")
         client = self._jwks_client
@@ -84,7 +90,7 @@ class JwtVerifier:
                 token,
                 signing_key.key,
                 algorithms=["RS256"],
-                audience=self._audience,
+                audience=self._audience if audience is None else audience,
                 issuer=self._issuer,
                 options={"require": _REQUIRED_CLAIMS},
             )
@@ -99,5 +105,7 @@ class JwtVerifier:
         except ValueError as exc:
             raise InvalidAccessToken(str(exc)) from exc
 
-    def authenticate(self, token: str) -> SecurityContext:
-        return security_context_from_identity(self.decode(token))
+    def authenticate(self, token: str, *, audience: str | None = None) -> SecurityContext:
+        return security_context_from_identity(
+            self.decode(token, audience=audience)
+        ).with_access_token(token)

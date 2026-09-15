@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from contextvars import Token
 from typing import Any
 
-from ads.identity import identity_from_session, security_context_from_identity
+from ads.identity import security_context_from_session
 from ads_commons.security import AuthenticationRequired, SecurityContext
 from ads_commons.security import SecurityContextHolder as CommonsHolder
 
@@ -42,9 +42,9 @@ class SecurityContextHolder:
         if context is not None:
             return context
         if session is not None:
-            identity = identity_from_session(session)
-            if identity is not None:
-                return security_context_from_identity(identity)
+            from_session = security_context_from_session(session)
+            if from_session is not None:
+                return from_session
         raise AuthenticationRequired()
 
     @staticmethod

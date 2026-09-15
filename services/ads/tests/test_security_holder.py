@@ -32,11 +32,13 @@ def test_capture_from_live_session_when_holder_empty() -> None:
             "name": "Alice",
             "roles": ["user"],
             "email": "alice@example.com",
-        }
+        },
+        "access_token": "user-access-token",
     }
     captured = SecurityContextHolder.capture(session)
     assert captured.subject == "alice"
     assert captured.has_role("user")
+    assert captured.access_token == "user-access-token"
 
 
 def test_capture_prefers_holder_over_session() -> None:

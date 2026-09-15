@@ -161,13 +161,14 @@ def test_valid_authorization_binds_security_context(
             seen.append(context.subject)
             seen.append(context.attribute("session_id"))
             seen.append(context.attribute("message_id"))
+            seen.append(context.access_token)
             yield StreamDelta(kind="message", text="ok")
 
     publisher = RecordingPublisher()
     listener = _listener(store, publisher, HolderChat(), jwt_verifier)
     request = make_request(authorization_token=access_token)
     _handle(listener, request)
-    assert seen == [ENGINE_SUBJECT, request.session_id, request.message_id]
+    assert seen == [ENGINE_SUBJECT, request.session_id, request.message_id, access_token]
     assert SecurityContextHolder.get() is None
     types = [type(message).__name__ for message in publisher.messages]
     assert types == ["Acknowledge", "PartialResponse", "Finish"]

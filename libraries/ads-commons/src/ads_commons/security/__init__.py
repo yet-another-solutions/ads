@@ -10,6 +10,11 @@ from ads_commons.security.identity import (
     security_context_from_identity,
 )
 from ads_commons.security.jwt import InvalidAccessToken, JwtVerifier, jwks_uri_from_well_known
+from ads_commons.security.token_exchange import (
+    TokenExchange,
+    TokenExchangeError,
+    token_endpoint_from_well_known,
+)
 
 __all__ = [
     "AccessDenied",
@@ -19,6 +24,8 @@ __all__ = [
     "JwtVerifier",
     "SecurityContext",
     "SecurityContextHolder",
+    "TokenExchange",
+    "TokenExchangeError",
     "check_caller",
     "ensure_caller",
     "identity_from_claims",
@@ -26,4 +33,5 @@ __all__ = [
     "require_caller",
     "roles_from_claims",
     "security_context_from_identity",
+    "token_endpoint_from_well_known",
 ]

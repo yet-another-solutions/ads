@@ -9,7 +9,12 @@ from litestar.handlers import BaseRouteHandler
 from litestar.response import Response
 from litestar.types import ExceptionHandlersMap
 
-from ads.identity import Identity, identity_from_session, security_context_from_identity
+from ads.identity import (
+    Identity,
+    access_token_from_session,
+    identity_from_session,
+    security_context_from_identity,
+)
 from ads.security_context import SecurityContext
 from ads_commons.security import AccessDenied, AuthenticationRequired
 
@@ -28,8 +33,15 @@ def provide_identity(request: Request[Any, Any, Any]) -> Identity:
     return identity
 
 
-def provide_security_context(identity: NamedDependency[Identity]) -> SecurityContext:
-    return security_context_from_identity(identity)
+def provide_security_context(
+    identity: NamedDependency[Identity],
+    request: Request[Any, Any, Any],
+) -> SecurityContext:
+    context = security_context_from_identity(identity)
+    token = access_token_from_session(request.session)
+    if token is None:
+        return context
+    return context.with_access_token(token)
 
 
 def handle_authentication_required(

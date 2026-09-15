@@ -66,9 +66,13 @@ def test_provide_identity_and_security_context_from_session() -> None:
         roles=("user",),
         email="alice@example.com",
     )
-    context = provide_security_context(identity)
+    context = provide_security_context(identity, request)
     assert context.subject == "alice"
     assert context.has_role("user")
+    assert context.access_token is None
+    request.session["access_token"] = "user-access-token"
+    with_token = provide_security_context(identity, request)
+    assert with_token.access_token == "user-access-token"
 
 
 def test_authenticated_controller_returns_401_without_session(settings: Settings) -> None:

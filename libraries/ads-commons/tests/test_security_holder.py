@@ -7,8 +7,13 @@ import pytest
 from ads_commons.security import AuthenticationRequired, SecurityContext, SecurityContextHolder
 
 
-def _ctx(*roles: str) -> SecurityContext:
-    return SecurityContext(subject="alice", name="Alice", roles=frozenset(roles))
+def _ctx(*roles: str, access_token: str | None = None) -> SecurityContext:
+    return SecurityContext(
+        subject="alice",
+        name="Alice",
+        roles=frozenset(roles),
+        access_token=access_token,
+    )
 
 
 def test_require_without_bind_raises_authentication_required() -> None:
@@ -56,3 +61,16 @@ def test_attributes_survive_capture_and_detach() -> None:
             assert context.attribute("session_id") == session_id
             assert SecurityContextHolder.require().attribute("message_id") == message_id
     assert SecurityContextHolder.get() is None
+
+
+def test_with_access_token_mints_new_context() -> None:
+    original = _ctx("user")
+    minted = original.with_access_token("secret-token")
+    assert minted is not original
+    assert minted.subject == original.subject
+    assert minted.roles == original.roles
+    assert minted.access_token == "secret-token"
+    assert original.access_token is None
+    assert "secret-token" not in repr(minted)
+    with pytest.raises(ValueError, match="access token"):
+        original.with_access_token("  ")
