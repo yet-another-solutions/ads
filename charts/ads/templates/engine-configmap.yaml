@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-engine
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-engine
+data:
+  ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.engine.kafka.bootstrapServers | quote }}
+  ADS_ENGINE_REQUEST_TOPIC: {{ .Values.engine.kafka.requestTopic | quote }}
+  ADS_ENGINE_OUTPUT_TOPIC: {{ .Values.engine.kafka.outputTopic | quote }}
+  ADS_ENGINE_CONSUMER_GROUP: {{ .Values.engine.kafka.consumerGroup | quote }}
+  ADS_ENGINE_DATABASE_URL: {{ .Values.engine.database.url | quote }}
+  ADS_ENGINE_PING_INTERVAL_SECONDS: {{ .Values.engine.pingIntervalSeconds | quote }}
+  ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.engine.keycloak.wellKnownUrl | quote }}
+  ADS_ENGINE_KEYCLOAK_ISSUER: {{ .Values.engine.keycloak.issuer | quote }}
+  ADS_ENGINE_KEYCLOAK_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
+  ADS_ENGINE_KEYCLOAK_CLIENT_ID: {{ .Values.engine.keycloak.clientId | quote }}
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}

@@ -82,6 +82,8 @@ jobs:
             file: services/ads-audit/Containerfile
           - image: ads-supervisor
             file: services/ads-supervisor/Containerfile
+          - image: ads-engine
+            file: services/ads-engine/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner

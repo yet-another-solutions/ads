@@ -78,6 +78,26 @@ egressControlplane:
     tag: "0.0.1"
     pullPolicy: IfNotPresent
 
+engine:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-engine
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  kafka:
+    bootstrapServers: kafka.kafka.svc.cluster.local:9092
+    requestTopic: ads.engine.request
+    outputTopic: ads.engine.output
+    consumerGroup: ads-engine
+  database:
+    url: sqlite:////tmp/ads-engine.db
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-engine
+    clientId: ads
+  pingIntervalSeconds: 10
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -99,11 +119,15 @@ service:
   type: ClusterIP
   port: 8080
 
-ingress:
+httpRoute:
   enabled: true
-  className: nginx
   hostname: ads.interlab
-  annotations: {}
+  gateway:
+    name: testlab
+    namespace: gateway
+    sectionName: http
+  backendTLS:
+    caConfigMapName: testlab-ca
 
 tls:
   certManager:
@@ -112,7 +136,6 @@ tls:
       name: testlab-ca
       kind: ClusterIssuer
       group: cert-manager.io
-  ingressSecretName: ""
   serviceSecretName: ""
   policySecretName: ""
   auditSecretName: ""
@@ -124,14 +147,9 @@ tls:
 keycloak:
   wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
   issuer: https://keycloak.interlab/realms/ads
-  realm: ads
   clientId: ads
   audience: ads
   role: user
-  bootstrap:
-    enabled: true
-    keycloakCRName: keycloak
-    namespace: keycloak
 
 secrets:
   keycloakClientSecret: change-me
@@ -158,7 +176,7 @@ nodes:
   sandbox:
     labelKey: ads.io/sandbox-node
     labelValue: "true"
-    runtimeClassName: kata-clh
+    runtimeClassName: kata-qemu
 
 resources: {}
 

@@ -1,6 +1,5 @@
 {{/*
-Fail helm install/upgrade when the cluster is missing ADS topology
-or Keycloak operator CRDs / Keycloak CR needed for realm bootstrap.
+Fail helm install/upgrade when the cluster is missing ADS topology.
 lookup is empty during `helm template` / CI, so those runs skip the checks.
 
 Sandbox nodes are not checked here. Whether Kata is present decides which isolation
@@ -20,19 +19,6 @@ levels exist, not whether ADS can be installed: see ads.sandboxAvailable.
 {{- end -}}
 {{- if eq (len $appNodes) 0 -}}
 {{- fail (printf "ADS requires at least one node labeled %s=%s (application)" $appKey $appVal) -}}
-{{- end -}}
-{{- if .Values.keycloak.bootstrap.enabled -}}
-{{- if not (lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "keycloaks.k8s.keycloak.org") -}}
-{{- fail "ADS Keycloak realm bootstrap requires CRD keycloaks.k8s.keycloak.org (install the Keycloak operator first)" -}}
-{{- end -}}
-{{- if not (lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "keycloakrealmimports.k8s.keycloak.org") -}}
-{{- fail "ADS Keycloak realm bootstrap requires CRD keycloakrealmimports.k8s.keycloak.org (install the Keycloak operator first)" -}}
-{{- end -}}
-{{- $kcNs := required "keycloak.bootstrap.namespace is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.namespace -}}
-{{- $kcName := required "keycloak.bootstrap.keycloakCRName is required when keycloak.bootstrap.enabled is true" .Values.keycloak.bootstrap.keycloakCRName -}}
-{{- if not (lookup "k8s.keycloak.org/v2beta1" "Keycloak" $kcNs $kcName) -}}
-{{- fail (printf "ADS Keycloak realm bootstrap requires Keycloak CR %s/%s" $kcNs $kcName) -}}
-{{- end -}}
 {{- end -}}
 {{- $redisNs := .Values.policy.redis.namespace | default .Release.Namespace -}}
 {{- $redisSvc := required "policy.redis.service is required: the policy service keeps runs in Redis" .Values.policy.redis.service -}}

@@ -117,6 +117,11 @@ Empty means the system trust store, which will not contain a private CA.
 https://{{ include "ads.fullname" . }}-policy:{{ .Values.policy.service.port }}
 {{- end }}
 
+{{- define "ads.engineSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-engine
+{{- end }}
+
 {{- define "ads.applicationNodeSelector" -}}
 {{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
 {{- end }}
@@ -130,15 +135,7 @@ https://{{ include "ads.fullname" . }}-policy:{{ .Values.policy.service.port }}
 {{- end }}
 
 {{- define "ads.publicBaseUrl" -}}
-https://{{ .Values.ingress.hostname }}
-{{- end }}
-
-{{- define "ads.ingressSecretName" -}}
-{{- if .Values.tls.certManager.enabled -}}
-{{ include "ads.fullname" . }}-ingress-tls
-{{- else -}}
-{{ required "tls.ingressSecretName is required when tls.certManager.enabled is false" .Values.tls.ingressSecretName }}
-{{- end -}}
+https://{{ .Values.httpRoute.hostname }}
 {{- end }}
 
 {{- define "ads.supervisorSecretName" -}}

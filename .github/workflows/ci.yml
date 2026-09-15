@@ -41,6 +41,7 @@ jobs:
           - services/ads-egress-controlplane/Containerfile
           - services/ads-policy/Containerfile
           - services/ads-supervisor/Containerfile
+          - services/ads-engine/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Hadolint
@@ -72,6 +73,9 @@ jobs:
           - image: ads-supervisor
             file: services/ads-supervisor/Containerfile
             smoke: "import ads_supervisor; print(ads_supervisor.__version__)"
+          - image: ads-engine
+            file: services/ads-engine/Containerfile
+            smoke: "import ads_engine; print(ads_engine.__version__)"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -100,9 +104,15 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 4
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 5
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
-          grep -q 'backend-protocol: "HTTPS"' /tmp/ads-cm.yaml
+          grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
+          grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
+          grep -q 'X-Forwarded-Proto' /tmp/ads-cm.yaml
+          if grep -q 'kind: Ingress$' /tmp/ads-cm.yaml; then
+            echo 'Ingress must not be rendered' >&2
+            exit 1
+          fi
           grep -q 'ADS_TLS_CERT_PATH' /tmp/ads-cm.yaml
           grep -q 'app.kubernetes.io/component: ads-egress-controlplane' /tmp/ads-cm.yaml
           grep -q 'app.kubernetes.io/component: ads-policy' /tmp/ads-cm.yaml
@@ -129,7 +139,7 @@ jobs:
           fi
           helm template ads charts/ads \
             --set supervisor.enabled=true --set supervisor.subject=alice >/tmp/ads-sup.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 5
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 6
           grep -q 'app.kubernetes.io/component: ads-supervisor' /tmp/ads-sup.yaml
           grep -q 'ADS_PLACEMENT: "cluster"' /tmp/ads-sup.yaml
           if helm template ads charts/ads --set supervisor.enabled=true >/tmp/ads-sup-bad.yaml; then
@@ -137,14 +147,20 @@ jobs:
             exit 1
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml
+          grep -q 'app.kubernetes.io/component: ads-engine' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KEYCLOAK_AUDIENCE: "ads-engine"' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KEYCLOAK_CLIENT_ID: "ads"' /tmp/ads-cm.yaml
+          grep -q 'ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: "kafka.kafka.svc.cluster.local:9092"' /tmp/ads-cm.yaml
           grep -q 'ads.io/application-node: "true"' /tmp/ads-cm.yaml
-          grep -q 'kind: KeycloakRealmImport' /tmp/ads-cm.yaml
-          grep -q 'keycloakCRName: keycloak' /tmp/ads-cm.yaml
-          grep -q 'clientId: "ads"' /tmp/ads-cm.yaml
-          grep -q 'https://ads.interlab/auth/callback' /tmp/ads-cm.yaml
-          helm template ads charts/ads --set keycloak.bootstrap.enabled=false >/tmp/ads-noboot.yaml
-          if grep -q 'kind: KeycloakRealmImport' /tmp/ads-noboot.yaml; then
-            echo 'bootstrap disabled still rendered KeycloakRealmImport' >&2
+          grep -q 'ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"' /tmp/ads-cm.yaml
+          grep -q 'ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-cm.yaml
+          grep -q 'ADS_KEYCLOAK_CLIENT_ID: "ads"' /tmp/ads-cm.yaml
+          grep -q 'ADS_KEYCLOAK_AUDIENCE: "ads"' /tmp/ads-cm.yaml
+          grep -q 'ADS_KEYCLOAK_ROLE: "user"' /tmp/ads-cm.yaml
+          if grep -qE 'kind: Keycloak(RealmImport)?$|k8s\.keycloak\.org' /tmp/ads-cm.yaml; then
+            echo 'Keycloak CRDs must not be rendered' >&2
             exit 1
           fi
           if grep -q 'ADS_TLS_ENABLED' /tmp/ads-cm.yaml; then
@@ -153,7 +169,6 @@ jobs:
           fi
           helm template ads charts/ads \
             --set tls.certManager.enabled=false \
-            --set tls.ingressSecretName=byo-ingress \
             --set tls.serviceSecretName=byo-service \
             --set tls.policySecretName=byo-policy \
             --set tls.auditSecretName=byo-audit \
@@ -162,10 +177,10 @@ jobs:
             echo 'BYO template still issues Certificates' >&2
             exit 1
           fi
-          grep -q 'secretName: byo-ingress' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-service' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-policy' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-audit' /tmp/ads-byo.yaml
+          grep -q 'kind: HTTPRoute' /tmp/ads-byo.yaml
           if helm template ads charts/ads --set tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
             echo 'BYO without secrets should fail' >&2
             exit 1
@@ -174,3 +189,4 @@ jobs:
             --set tls.caBundle.secretName=lab-ca \
             >/tmp/ads-ca.yaml
           grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
+          grep -q 'ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml

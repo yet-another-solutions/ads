@@ -12,7 +12,7 @@ dependencies = [
     "dishka==1.10.1",
     "litestar==2.24.0",
     "msgspec==0.21.1",
-    "sqlalchemy[asyncio]==2.0.52",
+    "sqlalchemy[asyncio]==2.0.43",
     "structlog==26.1.0",
     "uvicorn[standard]==0.52.4",
 ]

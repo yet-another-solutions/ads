@@ -9,6 +9,8 @@ services/ads/tests
 services/ads-audit/tests
 services/ads-policy/tests
 services/ads-supervisor/tests
+services/ads-engine/tests
+libraries/ads-commons/tests
 charts
 dist
 noxfile.py

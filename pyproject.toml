@@ -7,6 +7,8 @@ authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads",
     "ads-audit",
+    "ads-commons",
+    "ads-engine",
     "ads-egress-controlplane",
     "ads-policy",
     "ads-supervisor",
@@ -21,8 +23,10 @@ exclude-dependencies = []
 
 [tool.uv.workspace]
 members = [
+    "libraries/ads-commons",
     "services/ads",
     "services/ads-audit",
+    "services/ads-engine",
     "services/ads-egress-controlplane",
     "services/ads-policy",
     "services/ads-supervisor",
@@ -31,6 +35,8 @@ members = [
 [tool.uv.sources]
 ads = { workspace = true }
 ads-audit = { workspace = true }
+ads-commons = { workspace = true }
+ads-engine = { workspace = true }
 ads-egress-controlplane = { workspace = true }
 ads-policy = { workspace = true }
 ads-supervisor = { workspace = true }
@@ -61,10 +67,14 @@ dev = [
 
 [tool.ruff]
 src = [
+    "libraries/ads-commons/src",
+    "libraries/ads-commons/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-audit/src",
     "services/ads-audit/tests",
+    "services/ads-engine/src",
+    "services/ads-engine/tests",
     "services/ads-egress-controlplane/src",
     "services/ads-policy/src",
     "services/ads-policy/tests",
@@ -79,8 +89,16 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "services/ads/src:services/ads-audit/src:services/ads-egress-controlplane/src:services/ads-policy/src:services/ads-supervisor/src"
-packages = ["ads", "ads_audit", "ads_egress_controlplane", "ads_policy", "ads_supervisor"]
+mypy_path = "libraries/ads-commons/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-policy/src:services/ads-supervisor/src"
+packages = [
+    "ads_commons",
+    "ads",
+    "ads_audit",
+    "ads_engine",
+    "ads_egress_controlplane",
+    "ads_policy",
+    "ads_supervisor",
+]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
@@ -89,10 +107,16 @@ warn_unused_ignores = true
 module = ["authlib.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["aiokafka", "aiokafka.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = [
+  "libraries/ads-commons/tests",
   "services/ads/tests",
   "services/ads-audit/tests",
+  "services/ads-engine/tests",
   "services/ads-policy/tests",
   "services/ads-supervisor/tests",
 ]
@@ -108,4 +132,6 @@ known_first_party = [
   "ads_egress_controlplane",
   "ads_policy",
   "ads_supervisor",
+  "ads_commons",
+  "ads_engine",
 ]

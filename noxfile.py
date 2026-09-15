@@ -10,10 +10,14 @@ nox.options.default_venv_backend = "uv"
 nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 
 _SRC = (
+    "libraries/ads-commons/src",
+    "libraries/ads-commons/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-audit/src",
     "services/ads-audit/tests",
+    "services/ads-engine/src",
+    "services/ads-engine/tests",
     "services/ads-egress-controlplane/src",
     "services/ads-policy/src",
     "services/ads-policy/tests",
@@ -22,8 +26,10 @@ _SRC = (
     "noxfile.py",
 )
 
-_DEPTRY_PACKAGES = (
+_PACKAGES = (
     "services/ads",
+    "services/ads-engine",
+    "libraries/ads-commons",
     "services/ads-audit",
     "services/ads-policy",
     "services/ads-supervisor",
@@ -45,7 +51,7 @@ def lint(session: nox.Session) -> None:
 def deps(session: nox.Session) -> None:
     session.run("uv", "sync", "--group", "deps", external=True)
     root = os.getcwd()
-    for package in _DEPTRY_PACKAGES:
+    for package in _PACKAGES:
         session.chdir(package)
         session.run(
             "uv",
@@ -76,6 +82,8 @@ def test(session: nox.Session) -> None:
 @nox.session
 def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads", external=True)
+    session.run("uv", "build", "--package", "ads-commons", external=True)
+    session.run("uv", "build", "--package", "ads-engine", external=True)
     session.run("uv", "build", "--package", "ads-egress-controlplane", external=True)
     session.run("uv", "build", "--package", "ads-policy", external=True)
     session.run("uv", "build", "--package", "ads-audit", external=True)

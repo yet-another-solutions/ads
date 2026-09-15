@@ -56,14 +56,16 @@ kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' \
 kubectl -n ads create secret generic ads-ca --from-file=ca.crt=/tmp/ads-ca.crt
 ```
 
-## 4. Redis, RabbitMQ, PostgreSQL
+## 4. Redis, RabbitMQ, PostgreSQL, Kafka
 
-These must exist **before** `helm install`: the chart looks the Services up and
-refuses to install if they are missing.
+Redis, RabbitMQ and PostgreSQL must exist **before** `helm install`: the chart looks
+the Services up and refuses to install if they are missing. Kafka is not looked up,
+but the engine pod crashloops without it.
 
 ```sh
 kubectl apply -n ads -f deploy/local/dependencies.yaml
-kubectl -n ads rollout status deploy/ads-redis deploy/ads-rabbitmq deploy/ads-postgres
+kubectl -n ads rollout status \
+  deploy/ads-redis deploy/ads-rabbitmq deploy/ads-postgres deploy/ads-kafka
 ```
 
 ## 5. Install

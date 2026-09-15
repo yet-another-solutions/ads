@@ -11,6 +11,7 @@ from msgspec import structs
 
 from ads.frontend import pop_return_to
 from ads.oidc import OidcClient
+from ads_commons.security import InvalidAccessToken
 
 
 class AuthController(Controller):
@@ -43,7 +44,10 @@ class AuthController(Controller):
         id_token = token.get("id_token")
         if not isinstance(id_token, str):
             raise NotAuthorizedException(detail="token response missing id_token")
-        identity = oidc.decode_id_token(id_token, nonce=nonce)
+        try:
+            identity = oidc.decode_id_token(id_token, nonce=nonce)
+        except InvalidAccessToken as exc:
+            raise NotAuthorizedException(detail="invalid id_token") from exc
         request.session["identity"] = structs.asdict(identity)
         return Redirect(pop_return_to(request.session))
 
