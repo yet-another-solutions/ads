@@ -12,6 +12,8 @@ nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 _SRC = (
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",
+    "libraries/ads-commons-beans/src",
+    "libraries/ads-commons-beans/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-engine/src",
@@ -26,6 +28,7 @@ _PACKAGES = (
     "services/ads",
     "services/ads-engine",
     "libraries/ads-commons",
+    "libraries/ads-commons-beans",
     "services/ads-preferences",
 )
 
@@ -77,6 +80,7 @@ def test(session: nox.Session) -> None:
 def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads", external=True)
     session.run("uv", "build", "--package", "ads-commons", external=True)
+    session.run("uv", "build", "--package", "ads-commons-beans", external=True)
     session.run("uv", "build", "--package", "ads-engine", external=True)
     session.run("uv", "build", "--package", "ads-egress-controlplane", external=True)
     session.run("uv", "build", "--package", "ads-preferences", external=True)
