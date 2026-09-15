@@ -13,6 +13,7 @@ class Identity(msgspec.Struct, frozen=True):
     name: str
     roles: tuple[str, ...]
     email: str | None = None
+    azp: str | None = None
 
 
 def roles_from_claims(payload: Mapping[str, Any], client_id: str) -> tuple[str, ...]:
@@ -38,11 +39,13 @@ def identity_from_claims(payload: Mapping[str, Any], client_id: str) -> Identity
         raise ValueError("token missing sub")
     name = payload.get("name") or payload.get("preferred_username") or subject
     email = payload.get("email")
+    azp = payload.get("azp")
     return Identity(
         sub=subject,
         name=str(name),
         roles=roles_from_claims(payload, client_id),
         email=str(email) if isinstance(email, str) else None,
+        azp=azp if isinstance(azp, str) and azp else None,
     )
 
 
@@ -52,4 +55,5 @@ def security_context_from_identity(identity: Identity) -> SecurityContext:
         name=identity.name,
         roles=frozenset(identity.roles),
         email=identity.email,
+        authorized_party=identity.azp,
     )

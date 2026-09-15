@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from ads_commons.security import AuthenticationRequired, SecurityContext, SecurityContextHolder
@@ -40,3 +42,17 @@ def test_detached_without_holder_raises() -> None:
     with pytest.raises(AuthenticationRequired):
         with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
+
+
+def test_attributes_survive_capture_and_detach() -> None:
+    session_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+    bound = _ctx("user").with_attributes(session_id=session_id, message_id=message_id)
+    with SecurityContextHolder.bound(bound):
+        captured = SecurityContextHolder.capture()
+        assert captured.attribute("session_id") == session_id
+        assert captured.attribute("message_id") == message_id
+        with SecurityContextHolder.detached() as context:
+            assert context.attribute("session_id") == session_id
+            assert SecurityContextHolder.require().attribute("message_id") == message_id
+    assert SecurityContextHolder.get() is None

@@ -16,6 +16,7 @@ def test_valid_access_token_authenticates() -> None:
     context = verifier(key).authenticate(token)
     assert context.subject == "alice"
     assert context.has_role("user")
+    assert context.authorized_party == "ads"
 
 
 def test_garbage_token_is_rejected() -> None:
@@ -44,11 +45,11 @@ def test_expired_token_is_rejected() -> None:
         verifier(key).authenticate(token)
 
 
-def test_wrong_azp_is_rejected() -> None:
+def test_wrong_azp_is_kept_for_caller_check() -> None:
     key = new_rsa_key()
     token = encode_token(key, azp="other-client")
-    with pytest.raises(InvalidAccessToken, match="azp"):
-        verifier(key).authenticate(token)
+    context = verifier(key).authenticate(token)
+    assert context.authorized_party == "other-client"
 
 
 def test_id_token_nonce_must_match() -> None:

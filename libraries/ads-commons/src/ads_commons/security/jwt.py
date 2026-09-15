@@ -45,7 +45,7 @@ def jwks_uri_from_well_known(url: str, ssl_context: ssl.SSLContext | None = None
 
 
 class JwtVerifier:
-    """Verify RS256 Keycloak JWTs against JWKS (iss / aud / exp / azp)."""
+    """Verify RS256 Keycloak JWTs against JWKS (iss / aud / exp / signature)."""
 
     def __init__(
         self,
@@ -92,9 +92,6 @@ class JwtVerifier:
             raise
         except Exception as exc:
             raise InvalidAccessToken(str(exc)) from exc
-        azp = payload.get("azp")
-        if azp is not None and azp != self._client_id:
-            raise InvalidAccessToken("azp does not match client id")
         if nonce is not None and payload.get("nonce") != nonce:
             raise InvalidAccessToken("nonce mismatch")
         try:
