@@ -1,13 +1,13 @@
 # ADS
 
-Autonomous Development System starter: a Litestar service with Keycloak OIDC login, a hello-world page, and a role-gated button, plus a stub egress control plane and a Kafka ads-engine worker.
+Autonomous Development System: a Litestar service with Keycloak OIDC login serving Threadline (projects, sessions, streaming transcript), plus a stub egress control plane, an S2S model catalog, and a Kafka ads-engine worker.
 
-Unauthenticated browsers are sent to Keycloak. After login, the page shows `hello world`. Submitting the button calls a controller that builds a `SecurityContext`, then a service method guarded with wrapt `@require_role("user")` that logs `button was pressed`.
+Unauthenticated browsers are sent to Keycloak. After login the shell renders the project/session rail, the transcript, and the composer. Mutating routes are `AuthenticatedController` POST/PATCH/DELETE; services are guarded with wrapt `@require_role("user")` reading `SecurityContextHolder`. v1 is a chat wrapper: `ads` owns memory and streaming, `ads-engine` wraps the model.
 
 ## Layout
 
 - `libraries/ads-commons` — shared Kafka DTOs and common types
-- `services/ads` — Litestar controllers, Dishka services, OIDC, health
+- `services/ads` — Threadline UI, domain memory (SQLAlchemy + Alembic), engine request/output, preferences facade
 - `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)

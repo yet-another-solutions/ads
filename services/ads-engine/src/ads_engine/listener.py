@@ -5,6 +5,7 @@ from collections.abc import Collection, Sequence
 from typing import Protocol
 
 from ads_commons.engine import (
+    Abort,
     AckResponse,
     EngineRequest,
     ErrorOutput,
@@ -58,6 +59,10 @@ class EngineListener:
             inbound = decode_inbound(raw)
         except Exception as exc:
             await self.emit_error(session_id, message_id, f"invalid request: {exc}")
+            return
+        if isinstance(inbound, Abort):
+            # ADS aborts a dead run. Engine handles abort in a later update; ignore it here
+            # and never treat it as a request.
             return
         if isinstance(inbound, AckResponse):
             await self._accept_ack_response(inbound, headers)

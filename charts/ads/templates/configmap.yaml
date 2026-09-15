@@ -14,6 +14,14 @@ data:
   ADS_DATA_DIR: {{ .Values.persistence.mountPath | quote }}
   ADS_BIND_HOST: "0.0.0.0"
   ADS_PORT: {{ .Values.service.port | quote }}
+  ADS_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.kafka.bootstrapServers | quote }}
+  ADS_ENGINE_REQUEST_TOPIC: {{ .Values.kafka.requestTopic | quote }}
+  ADS_ENGINE_OUTPUT_TOPIC: {{ .Values.kafka.outputTopic | quote }}
+  ADS_ENGINE_CONSUMER_GROUP: {{ .Values.kafka.consumerGroup | quote }}
+  ADS_PREFERENCES_BASE_URL: {{ .Values.preferences.baseUrl | quote }}
+  ADS_PREFERENCES_AUDIENCE: {{ .Values.preferences.audience | quote }}
+  ADS_ENGINE_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
+  ADS_ENGINE_ALLOWED_AZP: {{ .Values.engine.keycloak.allowedAzp | quote }}
   ADS_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_TLS_KEY_PATH: "/certs/tls.key"
   {{- if .Values.tls.caBundle.secretName }}

@@ -1,36 +1,70 @@
 from __future__ import annotations
 
-import logging
+import uuid
 
 import pytest
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session
 
-from ads.hello.service import HelloService
+from ads.project_service import ProjectService
+from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
 
+USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+
 
 def _ctx(*roles: str) -> SecurityContext:
-    return SecurityContext(subject="alice", name="Alice", roles=frozenset(roles))
+    return SecurityContext(subject=str(USER_ID), name="Alice", roles=frozenset(roles))
 
 
-def test_greet_returns_hello_world() -> None:
-    assert HelloService().greet() == "hello world"
+def _service(engine: Engine, session: Session) -> ProjectService:
+    del engine
+    return ProjectService(
+        session=session,
+        projects=ProjectRepository(session=session),
+        sessions=SessionRepository(session=session),
+        runs=SessionRunRepository(session=session),
+    )
 
 
-def test_press_button_requires_security_context() -> None:
-    with pytest.raises(AuthenticationRequired):
-        HelloService().press_button()
+def test_create_project_requires_a_security_context(db_engine: Engine) -> None:
+    with Session(db_engine) as session:
+        with pytest.raises(AuthenticationRequired):
+            _run(_service(db_engine, session).create("P", "D"))
 
 
-def test_press_button_requires_user_role() -> None:
-    with pytest.raises(AccessDenied, match="role user required"):
-        with SecurityContextHolder.bound(_ctx("other")):
-            HelloService().press_button()
+def test_create_project_requires_the_user_role(db_engine: Engine) -> None:
+    with Session(db_engine) as session:
+        with pytest.raises(AccessDenied, match="role user required"):
+            with SecurityContextHolder.bound(_ctx("other")):
+                _run(_service(db_engine, session).create("P", "D"))
 
 
-def test_press_button_logs_when_user_role_present(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO), SecurityContextHolder.bound(_ctx("user")):
-        result = HelloService().press_button()
-    assert result == "button was pressed"
-    assert "button was pressed" in caplog.text
+def test_create_project_stores_the_row_for_the_bound_user(db_engine: Engine) -> None:
+    with Session(db_engine) as session:
+        with SecurityContextHolder.bound(_ctx("user")):
+            created = _run(_service(db_engine, session).create("Harness", "Design work"))
+            assert created.name == "Harness"
+            tree = _run(_service(db_engine, session).list_tree(None))
+    assert [project.name for project in tree] == ["Harness"]
+
+
+def test_list_tree_is_scoped_to_the_bound_user(db_engine: Engine) -> None:
+    other = SecurityContext(
+        subject="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        name="Bob",
+        roles=frozenset({"user"}),
+    )
+    with Session(db_engine) as session:
+        with SecurityContextHolder.bound(_ctx("user")):
+            _run(_service(db_engine, session).create("Mine", "d"))
+        with SecurityContextHolder.bound(other):
+            assert _run(_service(db_engine, session).list_tree(None)) == []
+
+
+def _run(coro: object) -> object:
+    import asyncio
+
+    return asyncio.run(coro)  # type: ignore[arg-type]

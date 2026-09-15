@@ -81,6 +81,22 @@ def test_exchange_posts_ste_v2_and_returns_access_token(monkeypatch: pytest.Monk
     assert form["audience"] == ["ads-preferences"]
 
 
+def test_exchange_accepts_explicit_subject_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = new_rsa_key()
+    captured: list[Any] = []
+
+    def _urlopen(request: Any, context: Any = None, timeout: int = 10) -> _Response:
+        captured.append(request)
+        return _Response({"access_token": "exchanged-token"})
+
+    monkeypatch.setattr("ads_commons.security.token_exchange.urlopen", _urlopen)
+    token = _exchanger(key).exchange("ads-engine", "acknowledge-header-jwt")
+    assert token == "exchanged-token"
+    form = parse_qs(captured[0].data.decode())
+    assert form["subject_token"] == ["acknowledge-header-jwt"]
+    assert form["audience"] == ["ads-engine"]
+
+
 def test_exchange_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     key = new_rsa_key()
     calls = {"n": 0}

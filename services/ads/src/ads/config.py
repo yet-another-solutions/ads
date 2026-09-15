@@ -36,6 +36,18 @@ class Settings:
     tls_ca_bundle: Path | None
     bind_host: str
     port: int
+    database_url: str = "sqlite:///:memory:"
+    kafka_bootstrap_servers: str = ""
+    engine_request_topic: str = "ads.engine.request"
+    engine_output_topic: str = "ads.engine.output"
+    engine_consumer_group: str = "ads"
+    preferences_base_url: str = "https://ads-preferences.invalid"
+    preferences_audience: str = "ads-preferences"
+    engine_audience: str = "ads-engine"
+    engine_allowed_azp: str = "ads-engine"
+    ping_death_seconds: float = 30.0
+    finish_gap_seconds: float = 10.0
+    watchdog_tick_seconds: float = 1.0
 
     def session_secret_bytes(self) -> bytes:
         if not self.session_secret.strip():
@@ -86,6 +98,15 @@ def load_settings() -> Settings:
         tls_ca_bundle=ca_bundle,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
+        database_url=_env("ADS_DATABASE_URL"),
+        kafka_bootstrap_servers=_env("ADS_KAFKA_BOOTSTRAP_SERVERS"),
+        engine_request_topic=_env("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request"),
+        engine_output_topic=_env("ADS_ENGINE_OUTPUT_TOPIC", "ads.engine.output"),
+        engine_consumer_group=_env("ADS_ENGINE_CONSUMER_GROUP", "ads"),
+        preferences_base_url=_env("ADS_PREFERENCES_BASE_URL").rstrip("/"),
+        preferences_audience=_env("ADS_PREFERENCES_AUDIENCE", "ads-preferences"),
+        engine_audience=_env("ADS_ENGINE_AUDIENCE", "ads-engine"),
+        engine_allowed_azp=_env("ADS_ENGINE_ALLOWED_AZP", "ads-engine"),
     )
     load_tls_context(settings)
     return settings

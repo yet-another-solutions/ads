@@ -15,8 +15,9 @@ import httpx2
 import pytest
 import uvicorn
 
-from ads.app import create_app
+from ads.app import create_app, create_schema
 from ads.config import Settings
+from ads.db import create_db_engine
 from tests.certs import issue_tls, openssl_available
 
 docker_ok = shutil.which("docker") is not None
@@ -294,9 +295,11 @@ def running_app(
         bind_host="127.0.0.1",
         port=app_port,
     )
+    db_engine = create_db_engine(settings.database_url)
+    create_schema(db_engine)
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(settings),
+            create_app(settings, engine=db_engine),
             host="127.0.0.1",
             port=app_port,
             ssl_certfile=str(keycloak_tls.server_crt),
@@ -322,7 +325,9 @@ def running_app(
 
 
 @pytest.mark.integration
-def test_keycloak_login_hello_world_and_button(running_app: str, keycloak_tls: KeycloakTls) -> None:
+def test_keycloak_login_shows_the_threadline_shell(
+    running_app: str, keycloak_tls: KeycloakTls
+) -> None:
     with _http_client(verify=_ca_context(keycloak_tls.ca_crt)) as client:
         page = client.get(running_app + "/")
         assert page.status_code == 200
@@ -332,13 +337,12 @@ def test_keycloak_login_hello_world_and_button(running_app: str, keycloak_tls: K
         fields.setdefault("credentialId", "")
         fields["login"] = fields.get("login") or "Sign In"
         origin = f"{urlsplit(str(page.url)).scheme}://{urlsplit(str(page.url)).netloc}"
-        hello = client.post(
+        shell = client.post(
             action,
             data=fields,
             headers={"Origin": origin, "Referer": str(page.url)},
         )
-        assert hello.status_code == 200, hello.text[:800]
-        assert "hello world" in hello.text
-        pressed = client.post(running_app + "/hello/press", follow_redirects=True)
-        assert pressed.status_code == 200
-        assert "button was pressed" in pressed.text
+        assert shell.status_code == 200, shell.text[:800]
+        assert "<b>ADS</b>" in shell.text
+        assert "Projects" in shell.text
+        assert 'id="composer"' in shell.text

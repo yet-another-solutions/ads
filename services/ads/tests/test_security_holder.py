@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import pytest
 
-from ads.hello.service import HelloService
+from ads.method_security import require_role
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AuthenticationRequired
 from ads_commons.security import SecurityContextHolder as CommonsHolder
+
+
+class _MutatingService:
+    """Stand-in for any ads service that mutates on behalf of a user."""
+
+    @require_role("user")
+    def touch(self) -> str:
+        return "touched"
 
 
 def _ctx(*roles: str) -> SecurityContext:
@@ -66,7 +74,7 @@ def test_detached_picks_session_and_stores_in_work_context() -> None:
     }
     with SecurityContextHolder.detached(session) as context:
         assert SecurityContextHolder.require() is context
-        assert HelloService().press_button() == "button was pressed"
+        assert _MutatingService().touch() == "touched"
     assert SecurityContextHolder.get() is None
 
 

@@ -55,7 +55,12 @@ class AckResponse(msgspec.Struct, frozen=True, tag="ack-response", tag_field="ty
     message_id: uuid.UUID
 
 
-EngineInbound = EngineRequest | AckResponse
+class Abort(msgspec.Struct, frozen=True, tag="abort", tag_field="type"):
+    session_id: uuid.UUID
+    message_id: uuid.UUID
+
+
+EngineInbound = EngineRequest | AckResponse | Abort
 
 
 class Acknowledge(msgspec.Struct, frozen=True, tag="acknowledge", tag_field="type"):
@@ -136,6 +141,10 @@ def encode_request(request: EngineRequest) -> bytes:
 
 
 def encode_ack_response(message: AckResponse) -> bytes:
+    return msgspec.json.encode(message)
+
+
+def encode_abort(message: Abort) -> bytes:
     return msgspec.json.encode(message)
 
 
