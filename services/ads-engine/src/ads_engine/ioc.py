@@ -1,17 +1,41 @@
 from __future__ import annotations
 
 import ssl
+import uuid
+from collections.abc import Sequence
 
+from aiokafka import AIOKafkaProducer
 from dishka import Provider, Scope, provide
 
+from ads_commons.engine import EngineOutput, encode_output
 from ads_commons.security import (
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifierSettings, TokenExchangeSettings
+from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeSettings
 from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
+from ads_engine.service import EngineService, OutputPublisher
 from ads_engine.store import ActiveSessionStore
+
+
+class KafkaPublisher:
+    def __init__(self, producer: AIOKafkaProducer, topic: str) -> None:
+        self._producer = producer
+        self._topic = topic
+
+    async def publish(
+        self,
+        session_id: uuid.UUID,
+        message: EngineOutput,
+        headers: Sequence[tuple[str, bytes]] | None = None,
+    ) -> None:
+        await self._producer.send_and_wait(
+            self._topic,
+            key=str(session_id).encode("utf-8"),
+            value=encode_output(message),
+            headers=list(headers or ()),
+        )
 
 
 class AppProvider(Provider):
@@ -30,6 +54,38 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def chat(self) -> ChatStreamer:
         return LangChainChatStreamer()
+
+    @provide(scope=Scope.APP)
+    def producer(self, settings: Settings) -> AIOKafkaProducer:
+        return AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
+
+    @provide(scope=Scope.APP, provides=OutputPublisher)
+    def publisher(
+        self,
+        producer: AIOKafkaProducer,
+        settings: Settings,
+    ) -> KafkaPublisher:
+        return KafkaPublisher(producer, settings.output_topic)
+
+    @provide(scope=Scope.APP)
+    def engine_service(
+        self,
+        store: ActiveSessionStore,
+        publisher: OutputPublisher,
+        chat: ChatStreamer,
+        tokens: TokenExchange,
+        settings: Settings,
+    ) -> EngineService:
+        return EngineService(
+            store=store,
+            publisher=publisher,
+            chat=chat,
+            ping_interval_seconds=settings.ping_interval_seconds,
+            allowed_callers=settings.allowed_callers,
+            tokens=tokens,
+            ack_timeout_seconds=settings.ack_timeout_seconds,
+            ack_audience=settings.ack_audience,
+        )
 
     @provide(scope=Scope.APP)
     def jwt_verifier_settings(self, settings: Settings) -> JwtVerifierSettings:
