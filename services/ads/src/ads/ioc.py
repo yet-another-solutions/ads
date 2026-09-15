@@ -78,7 +78,7 @@ class AppProvider(Provider):
         engine: Engine,
         preferences: PreferencesApi | None,
         kafka: EngineRequests | None,
-        hub: LiveHub,
+        hub: LiveHub | None,
         tokens: TokenMinter,
         authenticator: TokenAuthenticator,
         subjects: AbortSubjects,
@@ -119,7 +119,9 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def hub(self) -> LiveHub:
-        return self._hub
+        if self._hub is not None:
+            return self._hub
+        return LiveHub()
 
     @provide(scope=Scope.APP)
     def tokens(self) -> TokenMinter:

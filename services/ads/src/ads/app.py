@@ -98,7 +98,6 @@ def create_app(
             minter = tokens if tokens is not None else security_container.get(TokenExchange)
         finally:
             security_container.close()
-    live_hub = hub if hub is not None else LiveHub()
     subjects = AbortSubjects()
     session_factory = session_factory_for(db_engine)
     app_provider = AppProvider(
@@ -106,7 +105,7 @@ def create_app(
         engine=db_engine,
         preferences=preferences,
         kafka=kafka,
-        hub=live_hub,
+        hub=hub,
         tokens=minter,
         authenticator=authenticator,
         subjects=subjects,
@@ -114,6 +113,7 @@ def create_app(
     app_container = make_container(app_provider, skip_validation=True)
     try:
         requests = app_container.get(EngineRequests)
+        live_hub = app_container.get(LiveHub)
         engine_output = app_container.get(EngineOutputService)
         watchdog = app_container.get(Watchdog)
     finally:
