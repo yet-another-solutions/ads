@@ -17,6 +17,18 @@ def test_valid_access_token_authenticates() -> None:
     assert context.subject == SUBJECT
     assert context.has_role("user")
     assert context.authorized_party == "ads"
+    assert context.access_token == token
+    assert token not in repr(context)
+
+
+def test_authenticate_uses_explicit_audience() -> None:
+    key = new_rsa_key()
+    token = encode_token(key, aud="ads-preferences")
+    context = verifier(key).authenticate(token, audience="ads-preferences")
+    assert context.subject == SUBJECT
+    assert context.access_token == token
+    with pytest.raises(InvalidAccessToken):
+        verifier(key).authenticate(token)
 
 
 def test_garbage_token_is_rejected() -> None:
