@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from dishka import make_async_container
+from dishka import make_async_container, make_container
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from sqlalchemy import Engine
 
-from ads_commons_beans import JwtVerifier
+from ads_commons_beans import CommonsBeansProvider, JwtVerifier
 from ads_preferences.config import Settings
 from ads_preferences.controller import ModelsController
 from ads_preferences.db import Base, create_db_engine
 from ads_preferences.exceptions import EXCEPTION_HANDLERS
 from ads_preferences.health import live, ready
-from ads_preferences.ioc import AppProvider
+from ads_preferences.ioc import AppProvider, SecuritySettingsProvider
 from ads_preferences.logconfig import configure_logging
 from ads_preferences.middleware import jwt_caller_middleware
 from ads_preferences.models import UserModel
@@ -27,10 +27,21 @@ def create_app(
 ) -> Litestar:
     configure_logging()
     db_engine = engine if engine is not None else create_db_engine(settings.database_url)
+    verifier = jwt_verifier
+    if verifier is None:
+        security_container = make_container(
+            CommonsBeansProvider(),
+            SecuritySettingsProvider(settings),
+            skip_validation=True,
+        )
+        try:
+            verifier = security_container.get(JwtVerifier)
+        finally:
+            security_container.close()
     container = make_async_container(AppProvider(settings, db_engine), LitestarProvider())
     app = Litestar(
         route_handlers=[ModelsController, live, ready],
-        middleware=[jwt_caller_middleware(settings, jwt_verifier)],
+        middleware=[jwt_caller_middleware(settings, verifier)],
         exception_handlers=EXCEPTION_HANDLERS,
         on_shutdown=[container.close],
     )

@@ -29,13 +29,12 @@ def _base_env(
     key: Path,
     port: int,
     ca: Path | None = None,
+    keycloak_well_known_url: str = "https://kc/realms/ads/.well-known/openid-configuration",
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL": (
-                "https://kc/realms/ads/.well-known/openid-configuration"
-            ),
+            "ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL": keycloak_well_known_url,
             "ADS_PREFERENCES_KEYCLOAK_ISSUER": "https://kc/realms/ads",
             "ADS_PREFERENCES_DATABASE_URL": "sqlite:///:memory:",
             "ADS_PREFERENCES_TLS_CERT_PATH": str(cert),
@@ -100,12 +99,21 @@ def test_uvicorn_exits_on_garbage_ca_bundle(tmp_path: Path) -> None:
 @pytest.mark.skipif(not openssl_available(), reason="openssl required")
 def test_uvicorn_serves_https_health_then_exits(tmp_path: Path) -> None:
     ca_crt, server_crt, server_key = issue_tls(tmp_path)
+    well_known = tmp_path / "openid-configuration.json"
+    well_known.write_text('{"jwks_uri":"https://kc/realms/ads/protocol/openid-connect/certs"}')
     port = _free_port()
     log_path = tmp_path / "uvicorn.log"
     with log_path.open("w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
             [sys.executable, "-m", "ads_preferences"],
-            env=_base_env(tmp_path, cert=server_crt, key=server_key, port=port, ca=ca_crt),
+            env=_base_env(
+                tmp_path,
+                cert=server_crt,
+                key=server_key,
+                port=port,
+                ca=ca_crt,
+                keycloak_well_known_url=well_known.as_uri(),
+            ),
             stdout=log_file,
             stderr=log_file,
             text=True,
