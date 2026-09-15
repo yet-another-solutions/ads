@@ -12,9 +12,15 @@ from ads_commons.security import (
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeSettings
+from ads_commons_beans import (
+    JwtVerifier,
+    JwtVerifierSettings,
+    TokenExchange,
+    TokenExchangeSettings,
+)
 from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
+from ads_engine.listener import EngineListener
 from ads_engine.service import EngineService, OutputPublisher
 from ads_engine.store import ActiveSessionStore
 
@@ -85,6 +91,21 @@ class AppProvider(Provider):
             tokens=tokens,
             ack_timeout_seconds=settings.ack_timeout_seconds,
             ack_audience=settings.ack_audience,
+        )
+
+    @provide(scope=Scope.APP)
+    def engine_listener(
+        self,
+        service: EngineService,
+        publisher: OutputPublisher,
+        authenticator: JwtVerifier,
+        settings: Settings,
+    ) -> EngineListener:
+        return EngineListener(
+            service=service,
+            publisher=publisher,
+            authenticator=authenticator,
+            allowed_callers=settings.allowed_callers,
         )
 
     @provide(scope=Scope.APP)

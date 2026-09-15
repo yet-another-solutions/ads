@@ -8,12 +8,11 @@ import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
 
-from ads_commons_beans import CommonsBeansProvider, JwtVerifier
+from ads_commons_beans import CommonsBeansProvider
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
 from ads_engine.listener import EngineListener
 from ads_engine.logconfig import configure_logging
-from ads_engine.service import EngineService, OutputPublisher
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
@@ -53,7 +52,6 @@ async def run(settings: Settings | None = None) -> None:
     resolved = settings if settings is not None else load_settings()
     container = make_container(CommonsBeansProvider(), AppProvider(resolved))
     store = container.get(ActiveSessionStore)
-    authenticator = container.get(JwtVerifier)
     await store.reset()
     producer = container.get(AIOKafkaProducer)
     consumer = AIOKafkaConsumer(
@@ -67,15 +65,8 @@ async def run(settings: Settings | None = None) -> None:
         listener=SeekToEndListener(consumer),
     )
     await producer.start()
-    service = container.get(EngineService)
-    publisher = container.get(OutputPublisher)
     await consumer.start()
-    listener = EngineListener(
-        service=service,
-        publisher=publisher,
-        authenticator=authenticator,
-        allowed_callers=resolved.allowed_callers,
-    )
+    listener = container.get(EngineListener)
     tasks: set[asyncio.Task[None]] = set()
     log.info(
         "ads_engine_started",
