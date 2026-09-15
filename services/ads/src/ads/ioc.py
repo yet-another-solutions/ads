@@ -12,7 +12,12 @@ from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService
-from ads.kafka import AiokafkaEngineRequests, EngineOutputConsumer, EngineRequests
+from ads.kafka import (
+    AiokafkaEngineRequests,
+    EngineOutputConsumer,
+    EngineRequests,
+    SeekToEndListener,
+)
 from ads.live import LiveHub
 from ads.oidc import OidcClient
 from ads.preferences_client import PreferencesClient
@@ -169,15 +174,18 @@ class AppProvider(Provider):
         settings: Settings,
         controller: EngineOutputController,
     ) -> EngineOutputConsumer:
+        consumer = AIOKafkaConsumer(
+            bootstrap_servers=settings.kafka_bootstrap_servers,
+            group_id=settings.engine_consumer_group,
+            enable_auto_commit=False,
+            auto_offset_reset="latest",
+        )
+        listener = SeekToEndListener(consumer)
         return EngineOutputConsumer(
             settings,
             controller.on_record,
-            AIOKafkaConsumer(
-                bootstrap_servers=settings.kafka_bootstrap_servers,
-                group_id=settings.engine_consumer_group,
-                enable_auto_commit=False,
-                auto_offset_reset="latest",
-            ),
+            consumer,
+            listener,
         )
 
     @provide(scope=Scope.APP)

@@ -111,10 +111,17 @@ class AiokafkaEngineRequests:
 class EngineOutputConsumer:
     """Consume ``ads.engine.output``, seek to end on assign, commit after the service."""
 
-    def __init__(self, settings: Settings, on_record: Any, consumer: AIOKafkaConsumer) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        on_record: Any,
+        consumer: AIOKafkaConsumer,
+        listener: SeekToEndListener,
+    ) -> None:
         self._settings = settings
         self._on_record = on_record
         self._consumer = consumer
+        self._listener = listener
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -123,7 +130,7 @@ class EngineOutputConsumer:
         consumer = self._consumer
         consumer.subscribe(
             topics=[self._settings.engine_output_topic],
-            listener=SeekToEndListener(consumer),
+            listener=self._listener,
         )
         await consumer.start()
         self._task = asyncio.create_task(self._loop(consumer))

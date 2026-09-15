@@ -78,14 +78,17 @@ def test_output_consumer_start_does_not_construct_consumer(settings: Settings) -
         return None
 
     async def run() -> None:
-        output = EngineOutputConsumer(settings, on_record, cast(AIOKafkaConsumer, consumer))
+        kafka_consumer = cast(AIOKafkaConsumer, consumer)
+        listener = SeekToEndListener(kafka_consumer)
+        output = EngineOutputConsumer(settings, on_record, kafka_consumer, listener)
         await output.start()
         await output.start()
         assert consumer.starts == 1
         assert len(consumer.subscribes) == 1
-        topics, listener = consumer.subscribes[0]
+        topics, subscribed = consumer.subscribes[0]
         assert topics == [settings.engine_output_topic]
-        assert isinstance(listener, SeekToEndListener)
+        assert isinstance(subscribed, SeekToEndListener)
+        assert subscribed is listener
         await output.stop()
         assert consumer.stops == 1
 
