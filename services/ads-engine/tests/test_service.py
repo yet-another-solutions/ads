@@ -392,7 +392,7 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
         order=1,
         message=AssistantMessage(text="answer"),
     )
-    assert publisher.messages[3] == Finish(session_id=request.session_id)
+    assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
     assert chat.calls == 1
     assert chat.requests[0].authorization.token == access_token
 
@@ -408,7 +408,8 @@ def test_openai_retries_before_partial_then_succeeds(
     request = make_request(authorization_token=access_token)
     _handle_accepted(listener, publisher, request, access_token)
     assert chat.calls == 3
-    assert any(isinstance(item, Finish) for item in publisher.messages)
+    finish = next(item for item in publisher.messages if isinstance(item, Finish))
+    assert finish == Finish(session_id=request.session_id, last_order=0)
 
 
 def test_openai_gives_up_after_three_failures_before_partial(
@@ -426,6 +427,25 @@ def test_openai_gives_up_after_three_failures_before_partial(
     assert isinstance(error, ErrorOutput)
     assert error.text == "openai unavailable"
     assert not any(isinstance(item, Finish) for item in publisher.messages)
+
+
+def test_empty_stream_is_error_not_finish(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    chat = ScriptedChat([])
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    _handle_accepted(listener, publisher, request, access_token)
+    assert chat.calls == 1
+    error = publisher.messages[-1]
+    assert isinstance(error, ErrorOutput)
+    assert error.text == "no partial-response"
+    assert error.message_id == request.message_id
+    assert not any(isinstance(item, Finish) for item in publisher.messages)
+    assert not any(isinstance(item, PartialResponse) for item in publisher.messages)
 
 
 def test_no_retry_after_partial_was_emitted(
@@ -582,7 +602,7 @@ def test_duplicate_ack_response_after_start_is_ignored(
     _run(_body())
     assert chat.calls == 1
     finishes = [item for item in publisher.messages if isinstance(item, Finish)]
-    assert len(finishes) == 1
+    assert finishes == [Finish(session_id=request.session_id, last_order=0)]
     assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
 
 

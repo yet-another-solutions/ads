@@ -81,9 +81,10 @@ def test_output_tags() -> None:
     acknowledge = json.loads(encode_output(Acknowledge(session_id=SESSION, message_id=MESSAGE)))
     assert acknowledge["type"] == "acknowledge"
     assert json.loads(encode_output(Ping(session_id=SESSION)))["type"] == "ping"
-    assert json.loads(encode_output(Finish(session_id=SESSION))) == {
+    assert json.loads(encode_output(Finish(session_id=SESSION, last_order=1))) == {
         "type": "finish",
         "session_id": str(SESSION),
+        "last_order": 1,
     }
     partial = json.loads(
         encode_output(
