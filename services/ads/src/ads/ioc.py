@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 
+from aiokafka import AIOKafkaProducer
 from dishka import Provider, Scope, provide
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
@@ -115,7 +116,10 @@ class AppProvider(Provider):
     def kafka(self, settings: Settings) -> EngineRequests:
         if self._kafka is not None:
             return self._kafka
-        return AiokafkaEngineRequests(settings)
+        return AiokafkaEngineRequests(
+            settings,
+            AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers),
+        )
 
     @provide(scope=Scope.APP)
     def hub(self) -> LiveHub:

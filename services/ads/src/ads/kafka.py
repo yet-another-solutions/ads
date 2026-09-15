@@ -66,22 +66,22 @@ async def seek_assigned_to_end(consumer: OffsetSeeker, assigned: Collection[Any]
 class AiokafkaEngineRequests:
     """aiokafka producer for ``ads.engine.request``, keyed by session id."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, producer: AIOKafkaProducer) -> None:
         self._settings = settings
-        self._producer: AIOKafkaProducer | None = None
+        self._producer = producer
+        self._started = False
 
     async def start(self) -> None:
-        if self._producer is not None:
+        if self._started:
             return
-        producer = AIOKafkaProducer(bootstrap_servers=self._settings.kafka_bootstrap_servers)
-        await producer.start()
-        self._producer = producer
+        await self._producer.start()
+        self._started = True
 
     async def stop(self) -> None:
-        producer = self._producer
-        self._producer = None
-        if producer is not None:
-            await producer.stop()
+        if not self._started:
+            return
+        self._started = False
+        await self._producer.stop()
 
     async def _send(
         self,
@@ -90,11 +90,8 @@ class AiokafkaEngineRequests:
         token: str | None = None,
     ) -> None:
         await self.start()
-        producer = self._producer
-        if producer is None:  # pragma: no cover - start() always assigns
-            raise RuntimeError("kafka producer is not started")
         headers = authorization_headers(token) if token is not None else []
-        await producer.send_and_wait(
+        await self._producer.send_and_wait(
             self._settings.engine_request_topic,
             key=str(session_id).encode("utf-8"),
             value=value,

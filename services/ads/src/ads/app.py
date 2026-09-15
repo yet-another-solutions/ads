@@ -121,19 +121,35 @@ def create_app(
         *overrides,
         LitestarProvider(),
     )
-    requests = container.get_sync(EngineRequests)
     live_hub = container.get_sync(LiveHub)
-    engine_output = container.get_sync(EngineOutputService)
-    watchdog = container.get_sync(Watchdog)
-    output_controller = container.get_sync(EngineOutputController)
+    # AIOKafkaProducer.__init__ needs a running loop. Test overrides skip it and
+    # can resolve now; production constructs the producer on startup.
+    eager_kafka = kafka is not None
+    requests = container.get_sync(EngineRequests) if eager_kafka else None
+    engine_output = container.get_sync(EngineOutputService) if eager_kafka else None
+    watchdog = container.get_sync(Watchdog) if eager_kafka else None
+    output_controller = container.get_sync(EngineOutputController) if eager_kafka else None
     consumer = (
         container.get_sync(EngineOutputConsumer)
-        if settings.kafka_bootstrap_servers.strip()
+        if eager_kafka and settings.kafka_bootstrap_servers.strip()
         else None
     )
     session_config = build_session_config(settings)
 
     async def _startup() -> None:
+        nonlocal requests, engine_output, watchdog, output_controller, consumer
+        if not eager_kafka:
+            requests = await container.get(EngineRequests)
+            engine_output = await container.get(EngineOutputService)
+            watchdog = await container.get(Watchdog)
+            output_controller = await container.get(EngineOutputController)
+            if settings.kafka_bootstrap_servers.strip():
+                consumer = await container.get(EngineOutputConsumer)
+            app.state.kafka = requests
+            app.state.engine_output = engine_output
+            app.state.watchdog = watchdog
+            app.state.engine_output_controller = output_controller
+        assert watchdog is not None
         await watchdog.start()
         if consumer is not None:
             await consumer.start()
@@ -141,7 +157,8 @@ def create_app(
     async def _shutdown() -> None:
         if consumer is not None:
             await consumer.stop()
-        await watchdog.stop()
+        if watchdog is not None:
+            await watchdog.stop()
         await container.close()
 
     app = Litestar(

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import timedelta
+from typing import cast
 
+from aiokafka import AIOKafkaProducer
 from aiokafka.abc import ConsumerRebalanceListener
 from litestar import Litestar
 from litestar.testing import TestClient
@@ -13,7 +15,7 @@ from sqlalchemy.orm import Session
 from ads.config import Settings
 from ads.domain import utc_now
 from ads.ioc import session_factory_for
-from ads.kafka import SeekToEndListener, seek_assigned_to_end
+from ads.kafka import AiokafkaEngineRequests, SeekToEndListener, seek_assigned_to_end
 from ads.models import STATUS_PENDING
 from ads.repository import SessionRunRepository
 from ads.watchdog import Watchdog
@@ -21,6 +23,25 @@ from ads_commons.engine import AssistantMessage, PartialResponse, Ping, encode_o
 from tests.threadline_db import emit_raw, parts_of, run_of, runs_of
 from tests.threadline_fakes import FakePreferences, RecordingKafka, login
 from tests.threadline_flows import create_project, create_session, send
+
+
+class _FakeProducer:
+    def __init__(self) -> None:
+        self.starts = 0
+
+    async def start(self) -> None:
+        self.starts += 1
+
+    async def stop(self) -> None:
+        return None
+
+
+def test_engine_requests_start_does_not_construct_producer(settings: Settings) -> None:
+    producer = _FakeProducer()
+    requests = AiokafkaEngineRequests(settings, cast(AIOKafkaProducer, producer))
+    asyncio.run(requests.start())
+    asyncio.run(requests.start())
+    assert producer.starts == 1
 
 
 class _FakeConsumer:
