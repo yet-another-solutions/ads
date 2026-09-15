@@ -18,6 +18,7 @@ data:
   ADS_SANDBOX_AVAILABLE: {{ include "ads.sandboxAvailable" . | trim | quote }}
   ADS_RUN_WORKDIR: {{ .Values.policy.workdir | quote }}
   ADS_RUN_TTL_SECONDS: {{ .Values.policy.runTtlSeconds | quote }}
+  ADS_POLICY_RELOAD_SECONDS: {{ .Values.policy.reloadSeconds | quote }}
   ADS_EGRESS_ALLOWLIST: {{ join "," .Values.policy.egressAllowlist | quote }}
   ADS_PROTECTED_BRANCHES: {{ join "," .Values.policy.protectedBranches | quote }}
 ---

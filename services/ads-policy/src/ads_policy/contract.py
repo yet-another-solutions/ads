@@ -66,6 +66,21 @@ class Effect(StrEnum):
     TRANSFORM = "transform"
 
 
+class InterceptionPoint(StrEnum):
+    """Where a decision was taken, so the journal can tell a boundary from a signal.
+
+    One tool call can produce two of these — the matrix permitted it and the payload
+    check refused it — and they mean different things. ``call`` is deterministic and
+    is the only one that guarantees anything; the other two read a payload with
+    heuristics. They are also not symmetric: a secret on its way out is a leak and is
+    refused, the same secret on its way back is redacted and passed on.
+    """
+
+    CALL = "call"
+    REQUEST = "request"
+    RESPONSE = "response"
+
+
 class Mode(StrEnum):
     """Whether decisions are applied or only recorded."""
 
@@ -196,6 +211,7 @@ class PolicyDecision(msgspec.Struct, frozen=True):
     weight: int = 0
     policy_hash: str = ""
     mode: Mode = Mode.ENFORCE
+    point: InterceptionPoint = InterceptionPoint.CALL
 
     @property
     def enforced(self) -> bool:
@@ -236,6 +252,7 @@ class AuditEvent(msgspec.Struct, frozen=True):
     weight: int
     policy_hash: str
     content: str | None = None
+    point: InterceptionPoint = InterceptionPoint.CALL
     event_id: str = msgspec.field(default_factory=lambda: uuid.uuid4().hex)
     recorded_at: datetime = msgspec.field(default_factory=lambda: datetime.now(UTC))
 

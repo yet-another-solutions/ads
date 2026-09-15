@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     weight      integer NOT NULL,
     policy_hash varchar(64) NOT NULL,
     content     text,
+    point       varchar(16) NOT NULL DEFAULT 'call',
     PRIMARY KEY (recorded_at, id)
 ) PARTITION BY RANGE (recorded_at)
 """

@@ -220,7 +220,7 @@ def test_the_service_reads_a_mounted_policy(tmp_path: Path, redis: Redis) -> Non
     key.write_text("placeholder")
     policy_dir = tmp_path / "policy"
     policy_dir.mkdir()
-    (policy_dir / "policy.json").write_text('{"version": "org-mounted", "rules": []}')
+    (policy_dir / "policy.yaml").write_text("version: org-mounted\nrules: []\n")
     settings = Settings(
         api_token=TOKEN,
         tls_cert_path=cert,

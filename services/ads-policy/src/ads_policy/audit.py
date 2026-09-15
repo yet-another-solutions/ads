@@ -33,6 +33,7 @@ def record(
         weight=decision.weight,
         policy_hash=decision.policy_hash,
         content=content if include_content else None,
+        point=decision.point,
     )
 
 

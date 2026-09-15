@@ -63,13 +63,6 @@ DEFAULT_EGRESS_ALLOWLIST = (
 
 DEFAULT_PROTECTED_BRANCHES = ("main", "master", "release")
 
-DEFAULT_SECRET_PATTERNS = (
-    ("aws-access-key", r"AKIA[0-9A-Z]{16}"),
-    ("private-key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    ("bearer-token", r"(?i)\bbearer\s+[A-Za-z0-9._-]{20,}"),
-    ("assignment", r"(?i)\b(?:password|secret|token|api[_-]?key)\s*[=:]\s*\S+"),
-)
-
 DEFAULT_INJECTION_MARKERS = (
     "ignore previous instructions",
     "ignore all previous",
@@ -85,11 +78,13 @@ class GovernanceSettings:
 
     workdir: str = "/workspace"
     policy_dir: Path = Path("/policy")
+    policy_document_name: str = "policy.yaml"
     schema_version: str = "ads.governance/v1"
     policy_version: str = "org-1"
     mode: Mode = Mode.ENFORCE
     deny_on_policy_error: bool = True
     default_weight: int = 1
+    leak_weight: int = 5
     deny_repeat_multiplier: int = 3
     run_ttl_seconds: int = 3600
     audit_backlog: int = 10000
@@ -109,7 +104,6 @@ class GovernanceSettings:
     write_roles: frozenset[str] = frozenset({"developer", "maintainer"})
     agent_roles: frozenset[str] = frozenset({"agent"})
     rules: tuple[Rule, ...] = DEFAULT_RULES
-    secret_patterns: tuple[tuple[str, str], ...] = DEFAULT_SECRET_PATTERNS
     injection_markers: tuple[str, ...] = DEFAULT_INJECTION_MARKERS
 
 
@@ -169,6 +163,7 @@ class Settings:
     redis_url: str = ""
     amqp_url: str = ""
     audit_flush_seconds: float = 1.0
+    policy_reload_seconds: float = 10.0
     tls_ca_bundle: Path | None = None
     bind_host: str = "0.0.0.0"
     port: int = 8080
@@ -225,6 +220,7 @@ def load_settings() -> Settings:
         tls_ca_bundle=_existing_file("ADS_TLS_CA_BUNDLE", ca_raw) if ca_raw else None,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
+        policy_reload_seconds=_seconds("ADS_POLICY_RELOAD_SECONDS", 10),
         governance=load_governance_settings(),
     )
     load_tls_context(settings)

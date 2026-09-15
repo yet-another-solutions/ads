@@ -1,0 +1,19 @@
+{{- if .Values.policy.document }}
+{{/*
+The policy the PDP actually applies. Absent by default, and the Deployment mounts it
+with optional: true, so a release without one runs the matrix built into the image.
+
+The hash is taken by the PDP over what it parsed, never declared here: a label put on
+by hand lies exactly when it matters most.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-policy-document
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-policy
+data:
+  policy.yaml: |
+    {{- toYaml .Values.policy.document | nindent 4 }}
+{{- end }}

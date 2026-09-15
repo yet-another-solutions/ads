@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_audit.models import audit_decisions
-from ads_policy.contract import AuditEvent, Capability, Effect
+from ads_policy.contract import AuditEvent, Capability, Effect, InterceptionPoint
 
 
 class AuditRepository(Protocol):
@@ -65,6 +65,7 @@ class SqlAuditRepository:
             weight=event.weight,
             policy_hash=event.policy_hash,
             content=event.content,
+            point=event.point.value,
         )
         await self.session.execute(statement.on_conflict_do_nothing())
 
@@ -118,6 +119,7 @@ def _event(row: Mapping[str, Any]) -> AuditEvent:
         weight=int(str(row["weight"])),
         policy_hash=str(row["policy_hash"]),
         content=None if row["content"] is None else str(row["content"]),
+        point=InterceptionPoint(str(row["point"])),
         event_id=str(row["event_id"]),
         recorded_at=row["recorded_at"],
     )

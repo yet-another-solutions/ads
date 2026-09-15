@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -187,20 +186,15 @@ def test_missing_attributes_deny_the_capability(pdp: PolicyDecisionPoint) -> Non
 def test_the_delivered_policy_is_read_from_the_mounted_directory(tmp_path: Path) -> None:
     settings = GovernanceSettings(policy_dir=tmp_path)
     assert read_policy_document(settings) is None
-    (tmp_path / "policy.json").write_text(
-        json.dumps(
-            {
-                "version": "org-2",
-                "rules": [
-                    {
-                        "id": "process.exec",
-                        "capability": "process.exec",
-                        "scope": "any",
-                        "levels": ["vm"],
-                    }
-                ],
-            }
-        )
+    (tmp_path / "policy.yaml").write_text(
+        """
+        version: org-2
+        rules:
+          - id: process.exec
+            capability: process.exec
+            scope: any
+            levels: [vm]
+        """
     )
     document = read_policy_document(settings)
     assert document is not None

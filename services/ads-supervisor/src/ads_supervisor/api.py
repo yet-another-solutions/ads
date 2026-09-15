@@ -18,10 +18,15 @@ BEARER = "Bearer "
 
 
 class PermissionRequest(msgspec.Struct, frozen=True):
-    """What opencode asks before it executes a tool, named in our own vocabulary."""
+    """What opencode asks before it executes a tool, named in our own vocabulary.
+
+    ``arguments`` is required and may be empty: a call that sends nothing outbound
+    says so, rather than leaving "not checked" and "nothing to check" the same state.
+    """
 
     capability: Capability
     resource: str
+    arguments: dict[str, str]
 
 
 def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
@@ -54,6 +59,8 @@ class SupervisorController(Controller):
         try:
             # The policy client is synchronous, and a hung policy service must not
             # take the event loop down with it — health probes answer from here too.
-            return await anyio.to_thread.run_sync(supervisor.permit, data.capability, data.resource)
+            return await anyio.to_thread.run_sync(
+                supervisor.permit, data.capability, data.resource, data.arguments
+            )
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc

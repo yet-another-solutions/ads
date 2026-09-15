@@ -63,4 +63,11 @@ def test_the_table_carries_what_the_event_carries() -> None:
         "weight",
         "policy_hash",
         "content",
+        "point",
     } <= columns
+
+
+def test_the_journal_says_which_check_produced_the_row() -> None:
+    """One call can leave two rows — the matrix permitted it, the payload refused it."""
+    assert "point" in CREATE_TABLE
+    assert "DEFAULT 'call'" in CREATE_TABLE

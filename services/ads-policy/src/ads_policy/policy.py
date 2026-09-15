@@ -8,6 +8,7 @@ import msgspec
 
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import Capability, IsolationLevel, Mode, Policy, Rule, Scope
+from ads_policy.pdp import PolicyDecisionPoint
 
 
 def org_policy(settings: GovernanceSettings | None = None) -> Policy:
@@ -28,12 +29,16 @@ def org_policy(settings: GovernanceSettings | None = None) -> Policy:
 def read_policy_document(
     settings: GovernanceSettings | None = None,
 ) -> dict[str, Any] | None:
-    """Read the delivered policy. The source sits behind this call and may change."""
+    """Read the delivered policy. The source sits behind this call and may change.
+
+    YAML because a policy is read and edited by people. The ConfigMap is mounted as
+    a directory, never through ``subPath``, so the file changes under a running pod.
+    """
     config = settings or GovernanceSettings()
-    document = config.policy_dir / "policy.json"
+    document = config.policy_dir / config.policy_document_name
     if not document.is_file():
         return None
-    return msgspec.json.decode(document.read_bytes(), type=dict[str, Any])
+    return msgspec.yaml.decode(document.read_bytes(), type=dict[str, Any])
 
 
 def load_policy(document: Mapping[str, Any], settings: GovernanceSettings | None = None) -> Policy:
@@ -75,6 +80,26 @@ def _load_rule(raw: Mapping[str, Any]) -> Rule:
 
 def _known_level(level: object) -> bool:
     return str(level) in {item.value for item in IsolationLevel}
+
+
+def reload_policy(
+    pdp: PolicyDecisionPoint, settings: GovernanceSettings | None = None
+) -> str | None:
+    """Publish the delivered document if it says something new. Returns the new hash.
+
+    Nothing is published until the document parses, so a broken edit raises and
+    leaves the running version in place rather than disarming the policy. The
+    caller decides what to say about it; runs pinned to an older version are
+    unaffected either way.
+    """
+    config = settings or GovernanceSettings()
+    document = read_policy_document(config)
+    if document is None:
+        return None
+    candidate = load_policy(document, config)
+    if candidate.digest() == pdp.policy_hash:
+        return None
+    return pdp.reload(candidate)
 
 
 def compose(org: Policy, dev: Policy | None = None) -> Policy:

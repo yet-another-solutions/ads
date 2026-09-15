@@ -23,10 +23,19 @@ def api(settings: Settings, policy_client: PolicyClient) -> Iterator[TestClient]
         yield client
 
 
-def _permit(api: TestClient, capability: Capability, resource: str) -> dict[str, object]:
+def _permit(
+    api: TestClient,
+    capability: Capability,
+    resource: str,
+    arguments: dict[str, str] | None = None,
+) -> dict[str, object]:
     response = api.post(
         "/supervisor/permissions",
-        json={"capability": capability.value, "resource": resource},
+        json={
+            "capability": capability.value,
+            "resource": resource,
+            "arguments": arguments or {},
+        },
     )
     assert response.status_code == 201
     return dict(response.json())
@@ -58,6 +67,27 @@ def test_an_unknown_capability_is_refused(api: TestClient) -> None:
     """The vocabulary is closed: opencode tool names do not reach the policy service."""
     response = api.post(
         "/supervisor/permissions",
-        json={"capability": "bash", "resource": "uv sync"},
+        json={"capability": "bash", "resource": "uv sync", "arguments": {}},
     )
     assert response.status_code == 400
+
+
+def test_arguments_are_required(api: TestClient) -> None:
+    """Otherwise "nothing to check" and "never checked" arrive as the same request."""
+    response = api.post(
+        "/supervisor/permissions",
+        json={"capability": Capability.FS_READ.value, "resource": "/workspace/app.py"},
+    )
+    assert response.status_code == 400
+
+
+def test_a_credential_in_the_arguments_is_refused_over_http(api: TestClient) -> None:
+    denied = _permit(
+        api,
+        Capability.NET_EGRESS,
+        "mirror.interlab",
+        {"body": "AWS_KEY=AKIAQYLPMN5HHHFPZAM2"},
+    )
+    assert denied["effect"] == Effect.DENY.value
+    assert denied["rule_id"] == "payload.leak"
+    assert denied["message"] == GOVERNANCE.denied_message

@@ -23,6 +23,9 @@ policy:
   mode: enforce
   denyOnPolicyError: true
   workdir: /workspace
+  # How often the mounted document is re-read. The kubelet takes up to a minute to
+  # publish an edited ConfigMap, so polling faster than that buys nothing.
+  reloadSeconds: 10
   egressAllowlist:
     - mirror.interlab
     - llm-gateway.interlab
@@ -32,6 +35,10 @@ policy:
     - main
     - master
     - release
+  # The delivered policy. Empty means the built-in matrix compiled into the image;
+  # anything here replaces it wholesale and is what the policy hash is taken over.
+  # Mounted as a directory, never through subPath, so edits reach a running pod.
+  document: {}
 
 # One supervisor serves one run. Off by default: a real deployment creates these per
 # run, not as a standing Deployment, and this one exists to exercise the path.

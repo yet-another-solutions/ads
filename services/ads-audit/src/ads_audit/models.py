@@ -16,8 +16,6 @@ TABLE = "audit_decisions"
 
 metadata = MetaData()
 
-#: Rows are inserted and never updated. The partition column is part of the key so
-#: retention can drop whole partitions instead of deleting rows.
 audit_decisions = Table(
     TABLE,
     metadata,
@@ -33,4 +31,5 @@ audit_decisions = Table(
     Column("weight", Integer, nullable=False),
     Column("policy_hash", String(64), nullable=False),
     Column("content", Text, nullable=True),
+    Column("point", String(16), nullable=False, server_default="call"),
 )

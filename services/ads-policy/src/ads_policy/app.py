@@ -15,6 +15,8 @@ from ads_policy.config import Settings
 from ads_policy.health import live, ready
 from ads_policy.ioc import AppProvider
 from ads_policy.logconfig import configure_logging
+from ads_policy.pdp import PolicyDecisionPoint
+from ads_policy.policy import reload_policy
 
 logger = structlog.get_logger("ads.policy")
 
@@ -30,6 +32,7 @@ def create_app(
     async def _start(app: Litestar) -> None:
         del app
         flusher.append(asyncio.create_task(_publish_audit(container, settings)))
+        flusher.append(asyncio.create_task(_watch_policy(container, settings)))
 
     async def _stop(app: Litestar) -> None:
         del app
@@ -60,3 +63,22 @@ async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
             await audit.drain()
         except Exception:
             logger.exception("audit backlog not drained", pending=len(audit.pending))
+
+
+async def _watch_policy(container: AsyncContainer, settings: Settings) -> None:
+    """Pick up an edited ConfigMap without a restart.
+
+    Reading is a file stat and a parse, so polling is enough and needs no inotify
+    on a volume the kubelet updates by swapping a symlink. Runs already pinned to
+    an older version keep deciding under it.
+    """
+    pdp = await container.get(PolicyDecisionPoint)
+    while True:
+        await asyncio.sleep(settings.policy_reload_seconds)
+        try:
+            published = await asyncio.to_thread(reload_policy, pdp, settings.governance)
+        except Exception:
+            logger.exception("delivered policy not readable, keeping the current version")
+            continue
+        if published is not None:
+            logger.info("policy reloaded", policy_hash=published, version=pdp.policy.version)

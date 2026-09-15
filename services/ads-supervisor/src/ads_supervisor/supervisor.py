@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 import structlog
@@ -7,10 +8,28 @@ import structlog
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
 from ads_policy.config import GovernanceSettings
-from ads_policy.contract import Capability, DecisionRequest, PolicyDecision, Run, RunRequest
+from ads_policy.contract import (
+    Capability,
+    DecisionRequest,
+    Effect,
+    InterceptionPoint,
+    PolicyDecision,
+    Run,
+    RunRequest,
+)
+from ads_policy.output import inspect_payload
 from ads_supervisor.config import Settings
 
 logger = structlog.get_logger("ads.supervisor")
+
+
+def _payload(arguments: Mapping[str, str]) -> str:
+    """What the call actually sends. Values only: an argument name is never a secret.
+
+    Newline-joined so that two harmless values cannot run together into something that
+    looks like one credential.
+    """
+    return "\n".join(arguments.values())
 
 
 class RunNotOpen(RuntimeError):
@@ -50,8 +69,15 @@ class Supervisor:
         logger.info("run opened", run_id=started.id, isolation_level=started.isolation_level.value)
         return started
 
-    def permit(self, capability: Capability, resource: str) -> PolicyDecision:
-        """What answering opencode's ``permission.asked`` comes down to."""
+    def permit(
+        self, capability: Capability, resource: str, arguments: Mapping[str, str]
+    ) -> PolicyDecision:
+        """What answering opencode's ``permission.asked`` comes down to.
+
+        The matrix decides first. Only a call it permits is going to happen, so only
+        then is there an outbound payload worth reading — and a credential in it turns
+        the permission into a refusal.
+        """
         if self.run is None:
             raise RunNotOpen("no run has been opened")
         request = DecisionRequest(
@@ -62,10 +88,19 @@ class Supervisor:
             attributes=dict(self.settings.attributes or {}),
         )
         decision = self.client.decide(request)
-        if decision.rule_id != UNREACHABLE:
-            # The policy service journalled its own answer; a second copy would read
-            # as a second attempt and charge the budget twice.
+        if decision.rule_id == UNREACHABLE:
+            return self._journal(request, decision)
+        # The policy service journalled its own answer; a second copy would read as a
+        # second attempt and charge the budget twice.
+        if not decision.permitted:
             return decision
+        leak = inspect_payload(_payload(arguments), InterceptionPoint.REQUEST, self.governance)
+        if leak.effect is Effect.DENY:
+            # This one the policy service never saw, so nobody else will record it.
+            return self._journal(request, leak)
+        return decision
+
+    def _journal(self, request: DecisionRequest, decision: PolicyDecision) -> PolicyDecision:
         try:
             self.audit.enqueue(record(request, decision))
         except AuditBacklogFull as exc:
