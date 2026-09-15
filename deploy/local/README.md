@@ -11,9 +11,10 @@ kind create cluster --name ads
 docker build -f services/ads/Containerfile -t ads:local .
 docker build -f services/ads-policy/Containerfile -t ads-policy:local .
 docker build -f services/ads-audit/Containerfile -t ads-audit:local .
+docker build -f services/ads-engine/Containerfile -t ads-engine:local .
 docker build -f services/ads-egress-controlplane/Containerfile -t ads-egress-controlplane:local .
 
-for image in ads ads-policy ads-audit ads-egress-controlplane; do
+for image in ads ads-policy ads-audit ads-engine ads-egress-controlplane; do
   kind load docker-image "$image:local" --name ads
 done
 ```
@@ -72,8 +73,15 @@ kubectl -n ads rollout status \
 
 ```sh
 helm install ads charts/ads -n ads -f charts/ads/values-local.yaml
-kubectl -n ads rollout status deploy/ads deploy/ads-policy deploy/ads-audit
+kubectl -n ads rollout status \
+  deploy/ads deploy/ads-policy deploy/ads-audit deploy/ads-engine
 ```
+
+`values-local.yaml` turns the HTTPRoute off: the Gateway API CRDs are not on a bare
+kind cluster, and helm refuses an unknown kind outright rather than rendering
+something inert. The pods still get their certificates, so everything below works
+over port-forward. Install the Gateway API CRDs and drop that override if you want
+to exercise the route itself.
 
 ## 6. Poke it
 

@@ -49,11 +49,12 @@ egressControlplane:
 persistence:
   enabled: false
 
-# The route stays on deliberately: httpRoute.enabled=false also removes the serving
-# certificate of the ads pod, which then never starts. Without a Gateway controller
-# the HTTPRoute object is simply inert.
+# A throwaway cluster has no Gateway API CRDs, and helm install fails outright on an
+# unknown kind rather than leaving the route inert. The serving certificates do not
+# depend on it, so the pods still come up with TLS; there is simply no way in from
+# outside, which is what port-forward is for.
 httpRoute:
-  enabled: true
+  enabled: false
   hostname: ads.local
 
 # cert-manager signs everything with the local CA from
