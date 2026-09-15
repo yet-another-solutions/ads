@@ -40,7 +40,6 @@ def settings(tmp_path: Path) -> Settings:
         keycloak_role="user",
         session_secret="test-session-secret-32b!",
         public_base_url="http://testserver",
-        data_dir=tmp_path / "data",
         tls_cert_path=cert,
         tls_key_path=key,
         tls_ca_bundle=None,

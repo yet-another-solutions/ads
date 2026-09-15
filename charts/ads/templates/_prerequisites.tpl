@@ -54,11 +54,5 @@ lookup is empty during `helm template` / CI, so those runs skip the checks.
 {{- if eq (len $kataNodes) 0 -}}
 {{- fail (printf "ADS requires sandbox nodes (%s=%s) to have Kata (%s runtime handler or katacontainers.io/kata-runtime=true)" $sbKey $sbVal $rcName) -}}
 {{- end -}}
-{{- if and .Values.persistence.enabled (not .Values.persistence.pv.enabled) .Values.persistence.storageClass -}}
-{{- $sc := lookup "storage.k8s.io/v1" "StorageClass" "" .Values.persistence.storageClass -}}
-{{- if not $sc -}}
-{{- fail (printf "ADS requires StorageClass %s" .Values.persistence.storageClass) -}}
-{{- end -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}

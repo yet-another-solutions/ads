@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ads.fullname" . }}
+  name: {{ include "ads.fullname" . }}-preferences
   labels:
     {{- include "ads.labels" . | nindent 4 }}
-    app.kubernetes.io/component: ads
+    app.kubernetes.io/component: ads-preferences
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.preferences.replicaCount }}
   selector:
     matchLabels:
-      {{- include "ads.adsSelectorLabels" . | nindent 6 }}
+      {{- include "ads.preferencesSelectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "ads.adsSelectorLabels" . | nindent 8 }}
+        {{- include "ads.preferencesSelectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -23,20 +23,20 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: ads
+        - name: ads-preferences
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: "{{ .Values.preferences.image.repository }}:{{ .Values.preferences.image.tag }}"
+          imagePullPolicy: {{ .Values.preferences.image.pullPolicy }}
           ports:
             - name: https
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ .Values.preferences.service.port }}
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: {{ include "ads.fullname" . }}
+                name: {{ include "ads.fullname" . }}-preferences
             - secretRef:
-                name: {{ include "ads.fullname" . }}
+                name: {{ include "ads.fullname" . }}-preferences
           volumeMounts:
             - name: tls
               mountPath: /certs
@@ -65,7 +65,7 @@ spec:
       volumes:
         - name: tls
           secret:
-            secretName: {{ include "ads.serviceSecretName" . }}
+            secretName: {{ include "ads.preferencesServiceSecretName" . }}
         {{- if .Values.tls.caBundle.secretName }}
         - name: ca
           secret:
