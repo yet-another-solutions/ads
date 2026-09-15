@@ -1,0 +1,36 @@
+{% set session = transcript.session if transcript else None %}
+{% set inflight = true if (transcript and transcript.run) else false %}
+{% set can_send = true if (session and models and not inflight) else false %}
+<div class="composer-wrap" id="composer"{% if oob %} hx-swap-oob="true"{% endif %}
+     data-session="{{ 'true' if session else 'false' }}"
+     data-session-id="{{ session.id if session else '' }}"
+     data-inflight="{{ 'true' if inflight else 'false' }}">
+  <p class="composer-warn" id="composer-warn" aria-live="polite">{{ warn or '' }}</p>
+  {% if session %}
+  <form class="composer" method="post"
+        action="/projects/{{ session.project_id }}/sessions/{{ session.id }}/messages"
+        hx-post="/projects/{{ session.project_id }}/sessions/{{ session.id }}/messages"
+        hx-target="#main-pane" hx-swap="outerHTML"
+        aria-disabled="{{ 'false' if can_send else 'true' }}">
+    <textarea class="scroll" name="user_input" id="user-input" aria-label="Message ADS"
+              placeholder="Message ADS" rows="1"></textarea>
+    <select class="model" name="model_id" aria-label="Model">
+      <option value=""></option>
+      {% for model in models %}
+      <option value="{{ model.id }}"{% if selected_model_id and model.id == selected_model_id %} selected{% endif %}>{{ model.description }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% else %}
+  <form class="composer" aria-disabled="true">
+    <textarea class="scroll" name="user_input" id="user-input" aria-label="Message ADS"
+              placeholder="Open a session to write" rows="1"></textarea>
+    <select class="model" name="model_id" aria-label="Model">
+      <option value=""></option>
+      {% for model in models %}
+      <option value="{{ model.id }}">{{ model.description }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>

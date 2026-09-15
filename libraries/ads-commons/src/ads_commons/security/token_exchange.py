@@ -56,10 +56,12 @@ class TokenExchange:
         self._verifier = verifier
         self._ssl_context = ssl_context
 
-    def exchange(self, audience: str) -> str:
+    def exchange(self, audience: str, subject_token: str | None = None) -> str:
+        """Exchange ``subject_token``, or the bound holder access token when omitted."""
         if not audience.strip():
             raise TokenExchangeError("audience is required")
-        subject_token = SecurityContextHolder.require().access_token
+        if subject_token is None:
+            subject_token = SecurityContextHolder.require().access_token
         if not subject_token or not subject_token.strip():
             raise AuthenticationRequired("access token required")
         body = urlencode(
@@ -86,9 +88,9 @@ class TokenExchange:
             raise TokenExchangeError("token exchange returned no access_token")
         return token
 
-    def mint(self, audience: str) -> SecurityContext:
+    def mint(self, audience: str, subject_token: str | None = None) -> SecurityContext:
         """Exchange, then wrap the new JWT. Claims come from that token, not the inbound context."""
-        token = self.exchange(audience)
+        token = self.exchange(audience, subject_token)
         try:
             return self._verifier.authenticate(token, audience=audience)
         except InvalidAccessToken as exc:

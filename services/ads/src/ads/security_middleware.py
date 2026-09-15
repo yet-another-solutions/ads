@@ -8,15 +8,17 @@ from litestar.types import ASGIApp, Receive, Scope, Send
 from ads.identity import security_context_from_session
 from ads.security_holder import SecurityContextHolder
 
+_BOUND_SCOPES = frozenset({ScopeType.HTTP, ScopeType.WEBSOCKET})
+
 
 class SecurityContextMiddleware:
-    """Bind SecurityContextHolder from the session for the request, then clear it."""
+    """Bind SecurityContextHolder from the cookie session for HTTP and WebSocket work."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != ScopeType.HTTP:
+        if scope["type"] not in _BOUND_SCOPES:
             await self.app(scope, receive, send)
             return
         session = scope.get("session")

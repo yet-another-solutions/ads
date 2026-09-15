@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from ads_commons.engine import (
+    Abort,
     Acknowledge,
     AckResponse,
     AssistantMessage,
@@ -20,6 +21,7 @@ from ads_commons.engine import (
     Ping,
     Reasoning,
     authorization_headers,
+    encode_abort,
     encode_ack_response,
     encode_request,
 )
@@ -163,6 +165,28 @@ def test_missing_ids_are_dropped(store: ActiveSessionStore, jwt_verifier: Any) -
     listener = _listener(store, publisher, jwt_verifier)
     _run(listener.on_message(b'{"user_input": "hi"}'))
     assert publisher.messages == []
+
+
+def test_abort_is_ignored_without_error_or_handle(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+) -> None:
+    publisher = RecordingPublisher()
+    service = _service(store, publisher, ScriptedChat())
+    handled: list[EngineRequest] = []
+
+    async def _record(request: EngineRequest) -> None:
+        handled.append(request)
+
+    service.handle = _record  # type: ignore[method-assign]
+    listener = _listener(store, publisher, jwt_verifier, service=service)
+    abort = Abort(
+        session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        message_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+    )
+    _run(listener.on_message(encode_abort(abort)))
+    assert publisher.messages == []
+    assert handled == []
 
 
 def test_invalid_request_emits_error_without_ack(

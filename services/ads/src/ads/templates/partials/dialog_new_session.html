@@ -1,0 +1,30 @@
+<dialog id="new-session" aria-labelledby="new-session-title">
+  <div class="dlg-head">
+    <h2 id="new-session-title">New session</h2>
+  </div>
+  <form class="fields" id="new-session-form" method="post"
+        hx-post="/projects/{{ project_id or '' }}/sessions"
+        hx-target="#main-pane" hx-swap="outerHTML"
+        hx-include="#new-session-form">
+    <label>Project
+      <select name="project_id" required {% if fixed_project %}data-fixed="true"{% endif %}
+              hx-on:change="this.form.setAttribute('hx-post', '/projects/' + this.value + '/sessions')">
+        {% if not fixed_project %}<option value=""></option>{% endif %}
+        {% for project in projects %}
+        <option value="{{ project.id }}"{% if project_id and project.id == project_id %} selected{% endif %}>{{ project.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Name
+      <input name="name" required autocomplete="off">
+    </label>
+    <label>Description
+      <input name="description" required autocomplete="off">
+    </label>
+    <p class="note">A session always belongs to one project. No orphans.</p>
+  </form>
+  <div class="dlg-foot">
+    <button class="ghost" type="button" data-close-dialog>Cancel</button>
+    <button class="primary" type="submit" form="new-session-form">Create</button>
+  </div>
+</dialog>

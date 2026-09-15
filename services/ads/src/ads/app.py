@@ -2,22 +2,45 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import structlog
 from dishka import make_async_container
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from litestar.middleware.session.client_side import CookieBackendConfig
+from litestar.plugins.htmx import HTMXPlugin
 from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
+from sqlalchemy import Engine
 
+from ads.abort_subjects import AbortSubjects
 from ads.auth import AuthController
-from ads.authenticated import AUTH_EXCEPTION_HANDLERS
 from ads.config import Settings
+from ads.db import Base, create_db_engine
+from ads.engine_output_controller import EngineOutputController
+from ads.engine_output_service import EngineOutputService
+from ads.exceptions import EXCEPTION_HANDLERS
 from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
-from ads.hello.controller import HelloApiController, HelloController
-from ads.ioc import AppProvider
+from ads.ioc import AppProvider, session_factory_for
+from ads.kafka import AiokafkaEngineRequests, EngineOutputConsumer, EngineRequests
+from ads.live import LiveHub
+from ads.live_controller import live_socket
 from ads.logconfig import configure_logging
+from ads.models import Project
+from ads.models_controller import ModelsController
+from ads.preferences_client import PreferencesClient
+from ads.project_controller import ProjectController
 from ads.security_middleware import SecurityContextMiddleware
+from ads.session_controller import SessionController
+from ads.shell_controller import ShellController
+from ads.tokens import KeycloakJwtVerifier, KeycloakTokenExchange, TokenAuthenticator, TokenMinter
+from ads.watchdog import Watchdog
+from ads_commons.preferences import PreferencesApi
+
+_ = Project
+
+log = structlog.get_logger("ads")
 
 
 def build_session_config(settings: Settings) -> CookieBackendConfig:
@@ -30,22 +53,115 @@ def build_session_config(settings: Settings) -> CookieBackendConfig:
     )
 
 
-def create_app(settings: Settings) -> Litestar:
+def create_schema(engine: Engine) -> None:
+    Base.metadata.create_all(engine)
+
+
+def create_app(
+    settings: Settings,
+    *,
+    engine: Engine | None = None,
+    preferences: PreferencesApi | None = None,
+    kafka: EngineRequests | None = None,
+    hub: LiveHub | None = None,
+    tokens: TokenMinter | None = None,
+    jwt_verifier: TokenAuthenticator | None = None,
+) -> Litestar:
     configure_logging()
-    templates = Path(__file__).resolve().parent / "templates"
+    root = Path(__file__).resolve().parent
+    db_engine = engine if engine is not None else create_db_engine(settings.database_url)
+    authenticator: TokenAuthenticator = (
+        jwt_verifier if jwt_verifier is not None else KeycloakJwtVerifier(settings)
+    )
+    minter: TokenMinter
+    if tokens is not None:
+        minter = tokens
+    elif isinstance(authenticator, KeycloakJwtVerifier):
+        minter = KeycloakTokenExchange(settings, authenticator)
+    else:
+        minter = KeycloakTokenExchange(settings, KeycloakJwtVerifier(settings))
+    catalog: PreferencesApi = (
+        preferences if preferences is not None else PreferencesClient(settings, minter)
+    )
+    requests: EngineRequests = kafka if kafka is not None else AiokafkaEngineRequests(settings)
+    live_hub = hub if hub is not None else LiveHub()
+    subjects = AbortSubjects()
+    session_factory = session_factory_for(db_engine)
+    engine_output = EngineOutputService(
+        session_factory=session_factory,
+        kafka=requests,
+        hub=live_hub,
+        tokens=minter,
+        authenticator=authenticator,
+        settings=settings,
+        subjects=subjects,
+    )
+    watchdog = Watchdog(session_factory, engine_output, settings)
+    output_controller = EngineOutputController(engine_output)
+    consumer = (
+        EngineOutputConsumer(settings, output_controller.on_record)
+        if settings.kafka_bootstrap_servers.strip()
+        else None
+    )
     session_config = build_session_config(settings)
-    container = make_async_container(AppProvider(settings), LitestarProvider())
+    container = make_async_container(
+        AppProvider(
+            settings=settings,
+            engine=db_engine,
+            preferences=catalog,
+            kafka=requests,
+            hub=live_hub,
+            tokens=minter,
+            authenticator=authenticator,
+            engine_output=engine_output,
+            subjects=subjects,
+        ),
+        LitestarProvider(),
+    )
+
+    async def _startup() -> None:
+        await watchdog.start()
+        if consumer is not None:
+            await consumer.start()
+
+    async def _shutdown() -> None:
+        if consumer is not None:
+            await consumer.stop()
+        await watchdog.stop()
+        await container.close()
+
     app = Litestar(
-        route_handlers=[HelloController, HelloApiController, AuthController, live, ready],
+        route_handlers=[
+            ShellController,
+            ProjectController,
+            SessionController,
+            ModelsController,
+            AuthController,
+            live_socket,
+            live,
+            ready,
+            create_static_files_router(
+                path="/static", directories=[root / "static"], name="static"
+            ),
+        ],
+        plugins=[HTMXPlugin()],
         template_config=TemplateConfig(
-            engine=JinjaTemplateEngine(directory=templates),
+            engine=JinjaTemplateEngine(directory=root / "templates"),
         ),
         middleware=[session_config.middleware, SecurityContextMiddleware],
         exception_handlers={
             LoginRequired: handle_login_required,
-            **AUTH_EXCEPTION_HANDLERS,
+            **EXCEPTION_HANDLERS,
         },
-        on_shutdown=[container.close],
+        on_startup=[_startup],
+        on_shutdown=[_shutdown],
     )
     setup_dishka(container, app)
+    app.state.db_engine = db_engine
+    app.state.db_session_factory = session_factory
+    app.state.live_hub = live_hub
+    app.state.engine_output = engine_output
+    app.state.engine_output_controller = output_controller
+    app.state.watchdog = watchdog
+    app.state.kafka = requests
     return app

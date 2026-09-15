@@ -5,6 +5,7 @@ import uuid
 
 from ads_commons.engine import (
     AUTHORIZATION_HEADER,
+    Abort,
     Acknowledge,
     AckResponse,
     AssistantHistoryTurn,
@@ -24,6 +25,7 @@ from ads_commons.engine import (
     authorization_token,
     decode_inbound,
     decode_request,
+    encode_abort,
     encode_ack_response,
     encode_output,
     encode_request,
@@ -74,6 +76,20 @@ def test_ack_response_round_trip() -> None:
     }
     decoded = decode_inbound(raw)
     assert decoded == ack
+    assert peek_request_ids(raw) == (SESSION, MESSAGE)
+
+
+def test_abort_round_trip() -> None:
+    abort = Abort(session_id=SESSION, message_id=MESSAGE)
+    raw = encode_abort(abort)
+    assert json.loads(raw) == {
+        "type": "abort",
+        "session_id": str(SESSION),
+        "message_id": str(MESSAGE),
+    }
+    decoded = decode_inbound(raw)
+    assert decoded == abort
+    assert isinstance(decoded, Abort)
     assert peek_request_ids(raw) == (SESSION, MESSAGE)
 
 

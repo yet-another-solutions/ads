@@ -43,6 +43,9 @@ def _base_env(
             "ADS_BIND_HOST": "127.0.0.1",
             "ADS_PORT": str(port),
             "ADS_DATA_DIR": str(tmp_path / "data"),
+            "ADS_DATABASE_URL": f"sqlite:///{tmp_path / 'ads.db'}",
+            "ADS_KAFKA_BOOTSTRAP_SERVERS": "",
+            "ADS_PREFERENCES_BASE_URL": "https://ads-preferences.invalid",
         }
     )
     if ca is None:

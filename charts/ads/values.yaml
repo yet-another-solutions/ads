@@ -33,8 +33,20 @@ engine:
     allowedCallers:
       - ads
     ackAudience: ads
+    allowedAzp: ads-engine
   pingIntervalSeconds: 10
   ackTimeoutSeconds: 10
+
+# ads consumes ads.engine.output and produces ads.engine.request.
+kafka:
+  bootstrapServers: kafka.kafka.svc.cluster.local:9092
+  requestTopic: ads.engine.request
+  outputTopic: ads.engine.output
+  consumerGroup: ads
+
+preferences:
+  baseUrl: https://ads-preferences.interlab
+  audience: ads-preferences
 
 imagePullSecrets: []
 nameOverride: ""
