@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 
 import pytest
-from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
 from ads.hello.service import HelloService
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AccessDenied, AuthenticationRequired
 
 
 def _ctx(*roles: str) -> SecurityContext:
@@ -19,12 +19,12 @@ def test_greet_returns_hello_world() -> None:
 
 
 def test_press_button_requires_security_context() -> None:
-    with pytest.raises(NotAuthorizedException):
+    with pytest.raises(AuthenticationRequired):
         HelloService().press_button()
 
 
 def test_press_button_requires_user_role() -> None:
-    with pytest.raises(PermissionDeniedException):
+    with pytest.raises(AccessDenied, match="role user required"):
         with SecurityContextHolder.bound(_ctx("other")):
             HelloService().press_button()
 

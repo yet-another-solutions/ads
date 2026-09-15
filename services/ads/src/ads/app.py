@@ -10,6 +10,7 @@ from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.template.config import TemplateConfig
 
 from ads.auth import AuthController
+from ads.authenticated import AUTH_EXCEPTION_HANDLERS
 from ads.config import Settings
 from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
@@ -40,7 +41,10 @@ def create_app(settings: Settings) -> Litestar:
             engine=JinjaTemplateEngine(directory=templates),
         ),
         middleware=[session_config.middleware, SecurityContextMiddleware],
-        exception_handlers={LoginRequired: handle_login_required},
+        exception_handlers={
+            LoginRequired: handle_login_required,
+            **AUTH_EXCEPTION_HANDLERS,
+        },
         on_shutdown=[container.close],
     )
     setup_dishka(container, app)
