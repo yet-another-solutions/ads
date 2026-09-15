@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from datetime import timedelta
 
+from aiokafka.abc import ConsumerRebalanceListener
 from litestar import Litestar
 from litestar.testing import TestClient
 from sqlalchemy import Engine
@@ -35,7 +36,9 @@ class _FakeConsumer:
 
 def test_output_consumer_seeks_assigned_partitions_to_end() -> None:
     consumer = _FakeConsumer()
-    asyncio.run(SeekToEndListener(consumer).on_partitions_assigned(["p0", "p1"]))
+    listener = SeekToEndListener(consumer)
+    assert isinstance(listener, ConsumerRebalanceListener)
+    asyncio.run(listener.on_partitions_assigned(["p0", "p1"]))
     assert sorted(consumer.seeks) == [("p0", 42), ("p1", 42)]
     asyncio.run(seek_assigned_to_end(consumer, []))
     assert len(consumer.seeks) == 2

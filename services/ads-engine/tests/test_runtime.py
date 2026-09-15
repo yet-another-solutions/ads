@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from aiokafka import AIOKafkaConsumer
+from aiokafka.abc import ConsumerRebalanceListener
 from dishka import make_container
 
 from ads_commons_beans import CommonsBeansProvider
@@ -41,6 +42,7 @@ def test_provider_constructs_consumer_and_seek_listener(
     try:
         assert container.get(AIOKafkaConsumer) is consumer
         listener = container.get(SeekToEndListener)
+        assert isinstance(listener, ConsumerRebalanceListener)
         asyncio.run(listener.on_partitions_assigned([("ads.engine.request", 0)]))
     finally:
         container.close()

@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Any, Protocol
 
+from aiokafka.abc import ConsumerRebalanceListener
+
 
 class OffsetSeeker(Protocol):
     async def end_offsets(self, partitions: list[Any]) -> dict[Any, int]: ...
@@ -10,7 +12,7 @@ class OffsetSeeker(Protocol):
     def seek(self, partition: Any, offset: int) -> None: ...
 
 
-class SeekToEndListener:
+class SeekToEndListener(ConsumerRebalanceListener):
     def __init__(self, consumer: OffsetSeeker) -> None:
         self._consumer = consumer
 

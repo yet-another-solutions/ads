@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka.abc import ConsumerRebalanceListener
 
 from ads.config import Settings
 from ads_commons.engine import (
@@ -40,7 +41,7 @@ class OffsetSeeker(Protocol):
     def seek(self, partition: Any, offset: int) -> None: ...
 
 
-class SeekToEndListener:
+class SeekToEndListener(ConsumerRebalanceListener):
     """On assign, skip everything already in the topic. No replay."""
 
     def __init__(self, consumer: OffsetSeeker) -> None:
