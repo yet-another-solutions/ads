@@ -61,28 +61,44 @@ class EngineListener:
             await self.emit_error(session_id, message_id, f"invalid request: {exc}")
             return
         if isinstance(inbound, Abort):
-            # ADS aborts a dead run. Engine handles abort in a later update; ignore it here
-            # and never treat it as a request.
+            await self._accept_abort(inbound, headers)
             return
         if isinstance(inbound, AckResponse):
             await self._accept_ack_response(inbound, headers)
             return
         await self._bind_and_run(inbound)
 
+    async def _accept_abort(
+        self,
+        inbound: Abort,
+        headers: Sequence[tuple[str | bytes, bytes | None]] | None,
+    ) -> None:
+        if not self._authorized_control(headers):
+            return
+        await self._service.handle_abort(inbound)
+
     async def _accept_ack_response(
         self,
         inbound: AckResponse,
         headers: Sequence[tuple[str | bytes, bytes | None]] | None,
     ) -> None:
+        if not self._authorized_control(headers):
+            return
+        await self._service.handle_ack_response(inbound)
+
+    def _authorized_control(
+        self,
+        headers: Sequence[tuple[str | bytes, bytes | None]] | None,
+    ) -> bool:
         token = authorization_token(headers)
         if token is None:
-            return
+            return False
         try:
             context = self._authenticator.authenticate(token)
             ensure_caller(context, *self._allowed_callers)
         except (InvalidAccessToken, AccessDenied):
-            return
-        await self._service.handle_ack_response(inbound)
+            return False
+        return True
 
     async def _bind_and_run(self, request: EngineRequest) -> None:
         try:

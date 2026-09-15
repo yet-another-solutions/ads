@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
 import structlog
 
 from ads_commons.engine import (
+    Abort,
     Acknowledge,
     AckResponse,
     AssistantMessage,
@@ -85,6 +86,8 @@ class EngineService:
         self.allowed_callers = frozenset(allowed_callers)
         self._sleep = sleep
         self._ack_waiters: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Event]] = {}
+        self._runs: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Task[Any]]] = {}
+        self._aborted: set[uuid.UUID] = set()
 
     @require_caller()
     async def handle(self, request: EngineRequest) -> None:
@@ -92,6 +95,10 @@ class EngineService:
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
             raise SessionAlreadyActive()
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("engine handle requires a running task")
+        self._runs[request.session_id] = (request.message_id, task)
         ping_task: asyncio.Task[None] | None = None
         try:
             minted = self._tokens.mint(self._ack_audience)
@@ -119,7 +126,12 @@ class EngineService:
                     request.session_id,
                     Finish(session_id=request.session_id, last_order=last_order),
                 )
+        except asyncio.CancelledError:
+            if request.session_id not in self._aborted:
+                raise
         finally:
+            self._runs.pop(request.session_id, None)
+            self._aborted.discard(request.session_id)
             self._ack_waiters.pop(request.session_id, None)
             if ping_task is not None:
                 await _cancel(ping_task)
@@ -133,6 +145,20 @@ class EngineService:
         if message_id != ack.message_id:
             return
         waiter.set()
+
+    async def handle_abort(self, abort: Abort) -> None:
+        run = self._runs.get(abort.session_id)
+        if run is None:
+            return
+        message_id, task = run
+        if message_id != abort.message_id:
+            return
+        self._aborted.add(abort.session_id)
+        current = asyncio.current_task()
+        task.cancel()
+        if task is current:
+            return
+        await asyncio.gather(task, return_exceptions=True)
 
     async def _wait_for_ack_response(self, session_id: uuid.UUID, waiter: asyncio.Event) -> None:
         try:
