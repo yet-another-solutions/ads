@@ -21,7 +21,13 @@ from ads_engine.chat import StreamDelta
 from ads_engine.listener import EngineListener
 from ads_engine.service import EngineService
 from ads_engine.store import ActiveSessionStore
-from engine_fakes import RecordingPublisher, ScriptedChat, encode_access_token, make_request
+from engine_fakes import (
+    ENGINE_SUBJECT,
+    RecordingPublisher,
+    ScriptedChat,
+    encode_access_token,
+    make_request,
+)
 
 ALLOWED = frozenset({"ads"})
 
@@ -161,7 +167,7 @@ def test_valid_authorization_binds_security_context(
     listener = _listener(store, publisher, HolderChat(), jwt_verifier)
     request = make_request(authorization_token=access_token)
     _handle(listener, request)
-    assert seen == ["alice", request.session_id, request.message_id]
+    assert seen == [ENGINE_SUBJECT, request.session_id, request.message_id]
     assert SecurityContextHolder.get() is None
     types = [type(message).__name__ for message in publisher.messages]
     assert types == ["Acknowledge", "PartialResponse", "Finish"]

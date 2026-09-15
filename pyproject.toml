@@ -9,6 +9,7 @@ dependencies = [
     "ads-commons",
     "ads-engine",
     "ads-egress-controlplane",
+    "ads-preferences",
 ]
 
 [tool.uv]
@@ -24,6 +25,7 @@ members = [
     "services/ads",
     "services/ads-engine",
     "services/ads-egress-controlplane",
+    "services/ads-preferences",
 ]
 
 [tool.uv.sources]
@@ -31,6 +33,7 @@ ads = { workspace = true }
 ads-commons = { workspace = true }
 ads-engine = { workspace = true }
 ads-egress-controlplane = { workspace = true }
+ads-preferences = { workspace = true }
 
 [[tool.uv.index]]
 name = "nexus"
@@ -64,6 +67,8 @@ src = [
     "services/ads-engine/src",
     "services/ads-engine/tests",
     "services/ads-egress-controlplane/src",
+    "services/ads-preferences/src",
+    "services/ads-preferences/tests",
 ]
 line-length = 100
 target-version = "py312"
@@ -73,8 +78,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src"
-packages = ["ads_commons", "ads", "ads_engine", "ads_egress_controlplane"]
+mypy_path = "libraries/ads-commons/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src"
+packages = ["ads_commons", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences"]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
@@ -87,11 +92,16 @@ ignore_missing_imports = true
 module = ["aiokafka", "aiokafka.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["advanced_alchemy", "advanced_alchemy.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = [
     "libraries/ads-commons/tests",
     "services/ads/tests",
     "services/ads-engine/tests",
+    "services/ads-preferences/tests",
 ]
 addopts = "-q"
 markers = [
@@ -99,4 +109,4 @@ markers = [
 ]
 
 [tool.deptry]
-known_first_party = ["ads", "ads_commons", "ads_engine", "ads_egress_controlplane"]
+known_first_party = ["ads", "ads_commons", "ads_engine", "ads_egress_controlplane", "ads_preferences"]

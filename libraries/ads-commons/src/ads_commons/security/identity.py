@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any
+from uuid import UUID
 
 import msgspec
 
@@ -37,6 +38,10 @@ def identity_from_claims(payload: Mapping[str, Any], client_id: str) -> Identity
     subject = payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise ValueError("token missing sub")
+    try:
+        UUID(subject)
+    except ValueError as exc:
+        raise ValueError("sub must be a UUID") from exc
     name = payload.get("name") or payload.get("preferred_username") or subject
     email = payload.get("email")
     azp = payload.get("azp")
