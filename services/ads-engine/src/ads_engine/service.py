@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from typing import Protocol
 
 import structlog
@@ -12,19 +12,12 @@ from ads_commons.engine import (
     AssistantMessage,
     EngineOutput,
     EngineRequest,
-    ErrorOutput,
     Finish,
     PartialResponse,
     Ping,
     Reasoning,
-    decode_request,
-    peek_request_ids,
 )
-from ads_commons.security import (
-    InvalidAccessToken,
-    SecurityContext,
-    SecurityContextHolder,
-)
+from ads_commons.security import require_caller
 from ads_engine.chat import ChatStreamer, StreamDelta
 from ads_engine.store import ActiveSessionStore
 
@@ -33,12 +26,13 @@ log = structlog.get_logger("ads_engine")
 OPENAI_ATTEMPTS = 3
 
 
+class SessionAlreadyActive(Exception):
+    def __init__(self) -> None:
+        super().__init__("session already active")
+
+
 class OutputPublisher(Protocol):
     async def publish(self, session_id: uuid.UUID, message: EngineOutput) -> None: ...
-
-
-class TokenAuthenticator(Protocol):
-    def authenticate(self, token: str) -> SecurityContext: ...
 
 
 class EngineService:
@@ -47,83 +41,34 @@ class EngineService:
         store: ActiveSessionStore,
         publisher: OutputPublisher,
         chat: ChatStreamer,
-        authenticator: TokenAuthenticator,
         ping_interval_seconds: float,
+        allowed_callers: Collection[str],
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._publisher = publisher
         self._chat = chat
-        self._authenticator = authenticator
         self._ping_interval_seconds = ping_interval_seconds
+        self.allowed_callers = frozenset(allowed_callers)
         self._sleep = sleep
 
-    async def handle_raw(self, raw: bytes) -> None:
-        ids = peek_request_ids(raw)
-        if ids is None:
-            return
-        session_id, message_id = ids
-        try:
-            request = decode_request(raw)
-            _validate_request(request)
-        except Exception as exc:
-            await self._publisher.publish(
-                session_id,
-                ErrorOutput(
-                    session_id=session_id,
-                    message_id=message_id,
-                    text=f"invalid request: {exc}",
-                ),
-            )
-            return
-        await self.handle(request)
-
+    @require_caller()
     async def handle(self, request: EngineRequest) -> None:
-        try:
-            context = self._authenticator.authenticate(request.authorization.token)
-        except InvalidAccessToken as exc:
-            await self._publisher.publish(
-                request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text=f"invalid authorization: {exc.detail}",
-                ),
-            )
-            return
+        _validate_request(request)
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
-            await self._publisher.publish(
-                request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text="session already active",
-                ),
-            )
-            return
+            raise SessionAlreadyActive()
         ping_task = asyncio.create_task(self._ping(request.session_id))
         try:
-            with SecurityContextHolder.bound(context):
-                await self._publisher.publish(
-                    request.session_id,
-                    Acknowledge(session_id=request.session_id, message_id=request.message_id),
-                )
-                await self._run_model(request)
-                await _cancel(ping_task)
-                await self._publisher.publish(
-                    request.session_id,
-                    Finish(session_id=request.session_id),
-                )
-        except Exception as exc:
+            await self._publisher.publish(
+                request.session_id,
+                Acknowledge(session_id=request.session_id, message_id=request.message_id),
+            )
+            await self._run_model(request)
             await _cancel(ping_task)
             await self._publisher.publish(
                 request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text=str(exc),
-                ),
+                Finish(session_id=request.session_id),
             )
         finally:
             await _cancel(ping_task)
@@ -193,5 +138,3 @@ def _validate_request(request: EngineRequest) -> None:
         raise ValueError("model.url is required")
     if not request.model.authentication.openai_bearer.token.strip():
         raise ValueError("model authentication token is required")
-    if not request.authorization.token.strip():
-        raise ValueError("authorization.token is required")

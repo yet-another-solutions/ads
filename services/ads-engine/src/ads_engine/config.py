@@ -12,6 +12,13 @@ def _env(name: str, default: str | None = None) -> str:
     return value
 
 
+def _callers(raw: str) -> frozenset[str]:
+    parties = frozenset(part.strip() for part in raw.split(",") if part.strip())
+    if not parties:
+        raise RuntimeError("ADS_ENGINE_ALLOWED_CALLERS must list at least one caller")
+    return parties
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     kafka_bootstrap_servers: str
@@ -24,6 +31,7 @@ class Settings:
     keycloak_issuer: str
     keycloak_audience: str
     keycloak_client_id: str
+    allowed_callers: frozenset[str]
     tls_ca_bundle: Path | None
 
 
@@ -43,5 +51,6 @@ def load_settings() -> Settings:
         keycloak_issuer=_env("ADS_ENGINE_KEYCLOAK_ISSUER"),
         keycloak_audience=_env("ADS_ENGINE_KEYCLOAK_AUDIENCE", "ads-engine"),
         keycloak_client_id=_env("ADS_ENGINE_KEYCLOAK_CLIENT_ID", "ads"),
+        allowed_callers=_callers(_env("ADS_ENGINE_ALLOWED_CALLERS", "ads")),
         tls_ca_bundle=tls_ca_bundle,
     )

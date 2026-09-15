@@ -14,6 +14,7 @@ from ads_commons.security import JwtVerifier
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider
+from ads_engine.listener import EngineListener
 from ads_engine.logconfig import configure_logging
 from ads_engine.service import EngineService
 from ads_engine.store import ActiveSessionStore
@@ -84,12 +85,19 @@ async def run(settings: Settings | None = None) -> None:
     )
     await producer.start()
     await consumer.start()
+    publisher = KafkaPublisher(producer, resolved.output_topic)
     service = EngineService(
         store=store,
-        publisher=KafkaPublisher(producer, resolved.output_topic),
+        publisher=publisher,
         chat=chat,
-        authenticator=authenticator,
         ping_interval_seconds=resolved.ping_interval_seconds,
+        allowed_callers=resolved.allowed_callers,
+    )
+    listener = EngineListener(
+        service=service,
+        publisher=publisher,
+        authenticator=authenticator,
+        allowed_callers=resolved.allowed_callers,
     )
     tasks: set[asyncio.Task[None]] = set()
     log.info(
@@ -99,7 +107,7 @@ async def run(settings: Settings | None = None) -> None:
     )
     try:
         async for record in consumer:
-            task = asyncio.create_task(service.handle_raw(record.value))
+            task = asyncio.create_task(listener.on_message(record.value))
             tasks.add(task)
             task.add_done_callback(tasks.discard)
     finally:

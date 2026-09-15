@@ -30,6 +30,8 @@ engine:
     issuer: https://keycloak.interlab/realms/ads
     audience: ads-engine
     clientId: ads
+    allowedCallers:
+      - ads
   pingIntervalSeconds: 10
 
 imagePullSecrets: []

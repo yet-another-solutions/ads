@@ -16,6 +16,7 @@ data:
   ADS_ENGINE_KEYCLOAK_ISSUER: {{ .Values.engine.keycloak.issuer | quote }}
   ADS_ENGINE_KEYCLOAK_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
   ADS_ENGINE_KEYCLOAK_CLIENT_ID: {{ .Values.engine.keycloak.clientId | quote }}
+  ADS_ENGINE_ALLOWED_CALLERS: {{ .Values.engine.keycloak.allowedCallers | join "," | quote }}
   {{- if .Values.tls.caBundle.secretName }}
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}
