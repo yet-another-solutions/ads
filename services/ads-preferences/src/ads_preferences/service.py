@@ -8,11 +8,10 @@ from typing import Any
 import msgspec
 from sqlalchemy.orm import Session
 
-from ads_commons.engine import OpenAiStreamAuthentication
+from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
 from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelSummary, ModelWrite
-from ads_commons.security import SecurityContextHolder
+from ads_commons.security import SecurityContextHolder, require_role
 from ads_preferences.exceptions import InvalidModel, ModelNotFound
-from ads_preferences.method_security import require_role
 from ads_preferences.models import UserModel
 from ads_preferences.repository import UserModelRepository
 
@@ -37,6 +36,18 @@ def _authentication_from_row(payload: dict[str, Any]) -> OpenAiStreamAuthenticat
     return msgspec.convert(payload, type=OpenAiStreamAuthentication)
 
 
+def _options_payload(options: OpenAiStreamOptions) -> dict[str, Any]:
+    model_name = _require_text(options.model_name, "options.model-name")
+    payload = json.loads(msgspec.json.encode(OpenAiStreamOptions(model_name=model_name)))
+    if not isinstance(payload, dict):
+        raise InvalidModel("options is invalid")
+    return payload
+
+
+def _options_from_row(payload: dict[str, Any]) -> OpenAiStreamOptions:
+    return msgspec.convert(payload, type=OpenAiStreamOptions)
+
+
 class PreferencesService:
     def __init__(self, session: Session, repository: UserModelRepository) -> None:
         self._session = session
@@ -52,6 +63,7 @@ class PreferencesService:
             type="openai-stream",
             url=row.url,
             authentication=_authentication_from_row(row.authentication),
+            options=_options_from_row(row.options),
         )
 
     @require_role("user")
@@ -84,6 +96,7 @@ class PreferencesService:
             type=body.type,
             url=_require_text(body.url, "url"),
             authentication=_authentication_payload(body.authentication),
+            options=_options_payload(body.options),
             created_at=now,
             updated_at=now,
         )
@@ -100,6 +113,7 @@ class PreferencesService:
             and body.type is None
             and body.url is None
             and body.authentication is None
+            and body.options is None
         ):
             raise InvalidModel("patch must include at least one field")
         with self._session.begin():
@@ -116,6 +130,8 @@ class PreferencesService:
                 row.url = _require_text(body.url, "url")
             if body.authentication is not None:
                 row.authentication = _authentication_payload(body.authentication)
+            if body.options is not None:
+                row.options = _options_payload(body.options)
             row.updated_at = datetime.now(UTC)
             stored = self._repository.update_for_user(row)
             return self._to_info(stored)

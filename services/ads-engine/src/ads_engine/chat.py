@@ -86,7 +86,7 @@ class LangChainChatStreamer:
     async def _stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
         token = request.model.authentication.openai_bearer.token
         model = ChatOpenAI(
-            model=request.model.name,
+            model=request.model.options.model_name,
             base_url=request.model.url,
             api_key=lambda: token,
             streaming=True,

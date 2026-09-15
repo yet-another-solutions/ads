@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from ads.domain import turns_from_entries, utc_now
 from ads.exceptions import InvalidInput, NotFound, SessionForbidden
-from ads.method_security import require_role
 from ads.models import (
     KIND_MESSAGE,
     KIND_REASONING,
@@ -22,7 +21,7 @@ from ads.repository import (
     SessionRunRepository,
 )
 from ads.views import PartView, RunView, SessionView, TranscriptView
-from ads_commons.security import SecurityContextHolder
+from ads_commons.security import SecurityContextHolder, require_role
 
 
 def _require_text(value: str, field: str) -> str:

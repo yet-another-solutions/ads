@@ -5,7 +5,7 @@ from uuid import UUID
 import msgspec
 import pytest
 
-from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication
+from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication, OpenAiStreamOptions
 from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelWrite, PreferencesApi
 
 
@@ -19,12 +19,16 @@ def test_model_info_json_uses_openai_bearer_key() -> None:
         authentication=OpenAiStreamAuthentication(
             openai_bearer=OpenAiBearerToken(token="sk-secret"),
         ),
+        options=OpenAiStreamOptions(model_name="gpt-4o"),
     )
     payload = msgspec.json.decode(msgspec.json.encode(info))
     assert payload["authentication"] == {"openai-bearer": {"token": "sk-secret"}}
     assert "openai_bearer" not in payload["authentication"]
+    assert payload["options"] == {"model-name": "gpt-4o"}
+    assert "model_name" not in payload["options"]
     restored = msgspec.json.decode(msgspec.json.encode(info), type=ModelInfo)
     assert restored.authentication.openai_bearer.token == "sk-secret"
+    assert restored.options.model_name == "gpt-4o"
 
 
 def test_model_write_rejects_id_and_user_id() -> None:
@@ -34,6 +38,7 @@ def test_model_write_rejects_id_and_user_id() -> None:
         "type": "openai-stream",
         "url": "https://example.invalid/v1",
         "authentication": {"openai-bearer": {"token": "sk-secret"}},
+        "options": {"model-name": "gpt-4o"},
         "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     }
     with pytest.raises(msgspec.ValidationError):
@@ -42,6 +47,24 @@ def test_model_write_rejects_id_and_user_id() -> None:
     body["user_id"] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     with pytest.raises(msgspec.ValidationError):
         msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
+
+
+def test_model_write_requires_openai_stream_options() -> None:
+    body = {
+        "description": "Work chat",
+        "name": "work",
+        "type": "openai-stream",
+        "url": "https://example.invalid/v1",
+        "authentication": {"openai-bearer": {"token": "sk-secret"}},
+    }
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
+    body["options"] = {"model-name": "gpt-4o", "temperature": 0.2}
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
+    body["options"] = {"model-name": "gpt-4o"}
+    decoded = msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
+    assert decoded.options.model_name == "gpt-4o"
 
 
 def test_model_list_and_patch_round_trip() -> None:

@@ -74,6 +74,8 @@ def test_golden_cycle_then_next_send(
     assert request.instructions == ""
     assert request.authorization.token == "ste-ads-engine"
     assert request.model.authentication.openai_bearer.token == STORED_BEARER
+    assert request.model.options.model_name == "gpt-test"
+    assert request.model.url == "https://llm.example/v1"
 
     run = run_of(db_engine, session_id)
     assert run is not None and run.status == STATUS_PENDING and run.watermark == -1

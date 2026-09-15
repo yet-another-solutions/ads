@@ -7,8 +7,8 @@ from ads_commons.security import (
     AuthenticationRequired,
     SecurityContext,
     SecurityContextHolder,
+    require_role,
 )
-from ads_preferences.method_security import require_role
 from ads_preferences.service import PreferencesService
 
 

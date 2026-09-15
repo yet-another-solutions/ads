@@ -231,8 +231,8 @@ def _partial(session_id: uuid.UUID, order: int, delta: StreamDelta) -> PartialRe
 def _validate_request(request: EngineRequest) -> None:
     if not request.user_input:
         raise ValueError("user_input is required")
-    if not request.model.name.strip():
-        raise ValueError("model.name is required")
+    if not request.model.options.model_name.strip():
+        raise ValueError("model.options.model-name is required")
     if not request.model.url.strip():
         raise ValueError("model.url is required")
     if not request.model.authentication.openai_bearer.token.strip():

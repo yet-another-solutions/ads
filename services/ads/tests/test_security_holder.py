@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from ads.method_security import require_role
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
-from ads_commons.security import AuthenticationRequired
+from ads_commons.security import AuthenticationRequired, require_role
 from ads_commons.security import SecurityContextHolder as CommonsHolder
 
 
