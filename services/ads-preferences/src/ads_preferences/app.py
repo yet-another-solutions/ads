@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dishka import make_async_container, make_container
+from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from sqlalchemy import Engine
@@ -19,6 +19,16 @@ from ads_preferences.models import UserModel
 _ = UserModel
 
 
+class _JwtVerifierOverrideProvider(Provider):
+    def __init__(self, verifier: JwtVerifier) -> None:
+        super().__init__()
+        self._verifier = verifier
+
+    @provide(scope=Scope.APP, override=True)
+    def jwt_verifier(self) -> JwtVerifier:
+        return self._verifier
+
+
 def create_app(
     settings: Settings,
     *,
@@ -27,18 +37,18 @@ def create_app(
 ) -> Litestar:
     configure_logging()
     db_engine = engine if engine is not None else create_db_engine(settings.database_url)
-    verifier = jwt_verifier
-    if verifier is None:
-        security_container = make_container(
-            CommonsBeansProvider(),
-            SecuritySettingsProvider(settings),
-            skip_validation=True,
-        )
-        try:
-            verifier = security_container.get(JwtVerifier)
-        finally:
-            security_container.close()
-    container = make_async_container(AppProvider(settings, db_engine), LitestarProvider())
+    overrides: list[Provider] = []
+    if jwt_verifier is not None:
+        overrides.append(_JwtVerifierOverrideProvider(jwt_verifier))
+    container = make_async_container(
+        AppProvider(settings, db_engine),
+        CommonsBeansProvider(),
+        SecuritySettingsProvider(settings),
+        *overrides,
+        LitestarProvider(),
+        skip_validation=True,
+    )
+    verifier = container.get_sync(JwtVerifier)
     app = Litestar(
         route_handlers=[ModelsController, live, ready],
         middleware=[jwt_caller_middleware(settings, verifier)],

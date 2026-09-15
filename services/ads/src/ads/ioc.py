@@ -32,7 +32,12 @@ from ads_commons.security import (
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifier, JwtVerifierSettings, TokenExchangeSettings
+from ads_commons_beans import (
+    JwtVerifier,
+    JwtVerifierSettings,
+    TokenExchange,
+    TokenExchangeSettings,
+)
 
 
 class SecuritySettingsProvider(Provider):
@@ -77,11 +82,9 @@ class AppProvider(Provider):
         self,
         settings: Settings,
         engine: Engine,
-        preferences: PreferencesApi | None,
-        kafka: EngineRequests | None,
-        hub: LiveHub | None,
-        tokens: TokenMinter,
-        authenticator: TokenAuthenticator,
+        preferences: PreferencesApi | None = None,
+        kafka: EngineRequests | None = None,
+        hub: LiveHub | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -89,8 +92,6 @@ class AppProvider(Provider):
         self._preferences = preferences
         self._kafka = kafka
         self._hub = hub
-        self._tokens = tokens
-        self._authenticator = authenticator
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -123,12 +124,12 @@ class AppProvider(Provider):
         return LiveHub()
 
     @provide(scope=Scope.APP)
-    def tokens(self) -> TokenMinter:
-        return self._tokens
+    def tokens(self, exchange: TokenExchange) -> TokenMinter:
+        return exchange
 
     @provide(scope=Scope.APP)
-    def authenticator(self) -> TokenAuthenticator:
-        return self._authenticator
+    def authenticator(self, verifier: JwtVerifier) -> TokenAuthenticator:
+        return verifier
 
     @provide(scope=Scope.APP)
     def engine_output(

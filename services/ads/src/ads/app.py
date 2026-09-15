@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from dishka import Provider, Scope, make_async_container, make_container, provide
+from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 from litestar.middleware.session.client_side import CookieBackendConfig
@@ -35,7 +35,7 @@ from ads.shell_controller import ShellController
 from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
-from ads_commons_beans import CommonsBeansProvider, JwtVerifier, TokenExchange
+from ads_commons_beans import CommonsBeansProvider, JwtVerifier
 
 _ = Project
 
@@ -50,6 +50,26 @@ class _JwtVerifierOverrideProvider(Provider):
     @provide(scope=Scope.APP, override=True)
     def jwt_verifier(self) -> JwtVerifier:
         return self._verifier
+
+
+class _TokenMinterOverrideProvider(Provider):
+    def __init__(self, tokens: TokenMinter) -> None:
+        super().__init__()
+        self._tokens = tokens
+
+    @provide(scope=Scope.APP, override=True)
+    def tokens(self) -> TokenMinter:
+        return self._tokens
+
+
+class _TokenAuthenticatorOverrideProvider(Provider):
+    def __init__(self, authenticator: TokenAuthenticator) -> None:
+        super().__init__()
+        self._authenticator = authenticator
+
+    @provide(scope=Scope.APP, override=True)
+    def authenticator(self) -> TokenAuthenticator:
+        return self._authenticator
 
 
 def build_session_config(settings: Settings) -> CookieBackendConfig:
@@ -80,38 +100,25 @@ def create_app(
     configure_logging()
     root = Path(__file__).resolve().parent
     db_engine = engine if engine is not None else create_db_engine(settings.database_url)
-    authenticator: TokenAuthenticator
-    minter: TokenMinter
-    if jwt_verifier is not None and tokens is not None:
-        authenticator = jwt_verifier
-        minter = tokens
-    else:
-        security_container = make_container(
-            CommonsBeansProvider(),
-            SecuritySettingsProvider(settings),
-        )
-        try:
-            authenticator = (
-                jwt_verifier if jwt_verifier is not None else security_container.get(JwtVerifier)
-            )
-            minter = tokens if tokens is not None else security_container.get(TokenExchange)
-        finally:
-            security_container.close()
     session_factory = session_factory_for(db_engine)
-    app_provider = AppProvider(
-        settings=settings,
-        engine=db_engine,
-        preferences=preferences,
-        kafka=kafka,
-        hub=hub,
-        tokens=minter,
-        authenticator=authenticator,
-    )
+    overrides: list[Provider] = []
+    if tokens is not None:
+        overrides.append(_TokenMinterOverrideProvider(tokens))
+    if jwt_verifier is not None:
+        overrides.append(_TokenAuthenticatorOverrideProvider(jwt_verifier))
+    if oidc_verifier is not None:
+        overrides.append(_JwtVerifierOverrideProvider(oidc_verifier))
     container = make_async_container(
-        app_provider,
+        AppProvider(
+            settings=settings,
+            engine=db_engine,
+            preferences=preferences,
+            kafka=kafka,
+            hub=hub,
+        ),
         CommonsBeansProvider(),
         SecuritySettingsProvider(settings),
-        *((_JwtVerifierOverrideProvider(oidc_verifier),) if oidc_verifier is not None else ()),
+        *overrides,
         LitestarProvider(),
     )
     requests = container.get_sync(EngineRequests)
