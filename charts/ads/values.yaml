@@ -24,7 +24,7 @@ engine:
     outputTopic: ads.engine.output
     consumerGroup: ads-engine
   database:
-    url: sqlite:////tmp/ads-engine.db
+    url: postgresql+psycopg://ads_engine:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_engine
   keycloak:
     wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
     issuer: https://keycloak.interlab/realms/ads

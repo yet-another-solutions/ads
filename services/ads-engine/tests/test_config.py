@@ -14,7 +14,10 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setenv("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request")
     monkeypatch.setenv("ADS_ENGINE_OUTPUT_TOPIC", "ads.engine.output")
     monkeypatch.setenv("ADS_ENGINE_CONSUMER_GROUP", "ads-engine")
-    monkeypatch.setenv("ADS_ENGINE_DATABASE_URL", "sqlite:////tmp/engine.db")
+    monkeypatch.setenv(
+        "ADS_ENGINE_DATABASE_URL",
+        "postgresql+psycopg://ads_engine@db/ads_engine",
+    )
     monkeypatch.setenv("ADS_ENGINE_PING_INTERVAL_SECONDS", "7")
     monkeypatch.setenv("ADS_ENGINE_ACK_TIMEOUT_SECONDS", "12")
     monkeypatch.setenv(
@@ -32,6 +35,7 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     settings = load_settings()
 
     assert settings.kafka_bootstrap_servers == "kafka:9092"
+    assert settings.database_url == "postgresql+psycopg://ads_engine@db/ads_engine"
     assert settings.ping_interval_seconds == 7
     assert settings.ack_timeout_seconds == 12
     assert settings.keycloak_client_secret == "engine-client-secret"
@@ -42,6 +46,10 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 def test_ack_timeout_defaults_to_ten_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    monkeypatch.setenv(
+        "ADS_ENGINE_DATABASE_URL",
+        "postgresql+psycopg://ads_engine@db/ads_engine",
+    )
     monkeypatch.setenv(
         "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
         "https://keycloak.test/realms/ads/.well-known/openid-configuration",
@@ -55,3 +63,16 @@ def test_ack_timeout_defaults_to_ten_seconds(monkeypatch: pytest.MonkeyPatch) ->
 
     assert settings.ack_timeout_seconds == 10
     assert settings.ack_audience == "ads"
+
+
+def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    monkeypatch.setenv(
+        "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
+        "https://keycloak.test/realms/ads/.well-known/openid-configuration",
+    )
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://keycloak.test/realms/ads")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_CLIENT_SECRET", "engine-client-secret")
+    monkeypatch.delenv("ADS_ENGINE_DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="ADS_ENGINE_DATABASE_URL is required"):
+        load_settings()

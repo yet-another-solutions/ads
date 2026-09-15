@@ -38,7 +38,7 @@ Public probes: `/health/live`, `/health/ready`.
 ads-engine is a Kafka worker (no HTTP). It reads `ADS_ENGINE_*`:
 
 - Kafka: `ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS`, `ADS_ENGINE_REQUEST_TOPIC`, `ADS_ENGINE_OUTPUT_TOPIC`, `ADS_ENGINE_CONSUMER_GROUP`
-- Store: `ADS_ENGINE_DATABASE_URL` (sqlite is enough for the in-flight session table)
+- Store: `ADS_ENGINE_DATABASE_URL` (required; `postgresql+psycopg://` in production for the in-flight session table)
 - Ping: `ADS_ENGINE_PING_INTERVAL_SECONDS` (default 10)
 - Keycloak (loaded, unused until JWT verification): `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`
 
@@ -67,7 +67,7 @@ ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON
 
 ## Helm
 
-`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`. Engine Kafka bootstrap, topics, sqlite URL, and unused Keycloak issuer/audience live under `engine.*`. The chart does not install Kafka or Postgres.
+`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname, TLS via cert-manager or bring-your-own secrets (optional CA bundle), and local-path PVC mounted at `/data`. Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The chart does not install Kafka or Postgres.
 
 Install requires:
 
