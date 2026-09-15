@@ -83,6 +83,10 @@ def _ack_bytes(request: EngineRequest) -> bytes:
     )
 
 
+def _abort_bytes(session_id: uuid.UUID, message_id: uuid.UUID) -> bytes:
+    return encode_abort(Abort(session_id=session_id, message_id=message_id))
+
+
 async def _accept(
     listener: EngineListener,
     publisher: RecordingPublisher,
@@ -710,3 +714,155 @@ def test_ack_response_with_invalid_authorization_header_times_out(
     error = publisher.messages[-1]
     assert isinstance(error, ErrorOutput)
     assert error.text == "ack-response timed out"
+
+
+def test_unmatched_abort_is_consumed_silently(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    listener = _listener(store, publisher, jwt_verifier)
+    abort = Abort(
+        session_id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+        message_id=uuid.UUID("22222222-2222-2222-2222-222222222222"),
+    )
+    _run(listener.on_message(encode_abort(abort), headers=authorization_headers(access_token)))
+    assert publisher.messages == []
+
+
+def test_abort_stops_active_run_without_error_or_finish(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    listener = _listener(store, publisher, jwt_verifier, chat=SlowChat(started, release))
+    request = make_request(authorization_token=access_token)
+
+    async def _body() -> None:
+        task = asyncio.create_task(listener.on_message(encode_request(request)))
+        await publisher.acknowledged.wait()
+        await listener.on_message(_ack_bytes(request), headers=authorization_headers(access_token))
+        await started.wait()
+        await listener.on_message(
+            _abort_bytes(request.session_id, request.message_id),
+            headers=authorization_headers(access_token),
+        )
+        await task
+        assert await store.claim(request.session_id, request.message_id)
+
+    _run(_body())
+    assert not any(isinstance(item, Finish) for item in publisher.messages)
+    assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
+
+
+def test_abort_during_ack_wait_emits_nothing_further(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    chat = ScriptedChat([StreamDelta(kind="message", text="ok")])
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+
+    async def _body() -> None:
+        task = asyncio.create_task(listener.on_message(encode_request(request)))
+        await publisher.acknowledged.wait()
+        await listener.on_message(
+            _abort_bytes(request.session_id, request.message_id),
+            headers=authorization_headers(access_token),
+        )
+        await task
+        assert await store.claim(request.session_id, request.message_id)
+
+    _run(_body())
+    assert chat.calls == 0
+    assert publisher.messages == [
+        Acknowledge(session_id=request.session_id, message_id=request.message_id)
+    ]
+
+
+def test_abort_wrong_message_id_does_not_stop_run(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    listener = _listener(store, publisher, jwt_verifier, chat=SlowChat(started, release))
+    request = make_request(authorization_token=access_token)
+    other = uuid.UUID("33333333-3333-3333-3333-333333333333")
+
+    async def _body() -> None:
+        task = asyncio.create_task(listener.on_message(encode_request(request)))
+        await publisher.acknowledged.wait()
+        await listener.on_message(_ack_bytes(request), headers=authorization_headers(access_token))
+        await started.wait()
+        await listener.on_message(
+            _abort_bytes(request.session_id, other),
+            headers=authorization_headers(access_token),
+        )
+        release.set()
+        await task
+
+    _run(_body())
+    assert any(isinstance(item, Finish) for item in publisher.messages)
+    assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
+
+
+def test_abort_without_authorization_header_does_not_stop_run(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    listener = _listener(store, publisher, jwt_verifier, chat=SlowChat(started, release))
+    request = make_request(authorization_token=access_token)
+
+    async def _body() -> None:
+        task = asyncio.create_task(listener.on_message(encode_request(request)))
+        await publisher.acknowledged.wait()
+        await listener.on_message(_ack_bytes(request), headers=authorization_headers(access_token))
+        await started.wait()
+        await listener.on_message(_abort_bytes(request.session_id, request.message_id))
+        release.set()
+        await task
+
+    _run(_body())
+    assert any(isinstance(item, Finish) for item in publisher.messages)
+    assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
+
+
+def test_abort_with_invalid_authorization_header_does_not_stop_run(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    listener = _listener(store, publisher, jwt_verifier, chat=SlowChat(started, release))
+    request = make_request(authorization_token=access_token)
+
+    async def _body() -> None:
+        task = asyncio.create_task(listener.on_message(encode_request(request)))
+        await publisher.acknowledged.wait()
+        await listener.on_message(_ack_bytes(request), headers=authorization_headers(access_token))
+        await started.wait()
+        await listener.on_message(
+            _abort_bytes(request.session_id, request.message_id),
+            headers=authorization_headers("not-a-jwt"),
+        )
+        release.set()
+        await task
+
+    _run(_body())
+    assert any(isinstance(item, Finish) for item in publisher.messages)
+    assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
