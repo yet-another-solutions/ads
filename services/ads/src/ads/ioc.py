@@ -10,7 +10,7 @@ from ads.abort_subjects import AbortSubjects
 from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_service import EngineOutputService
-from ads.kafka import EngineRequests
+from ads.kafka import AiokafkaEngineRequests, EngineRequests
 from ads.live import LiveHub
 from ads.oidc import OidcClient
 from ads.preferences_client import PreferencesClient
@@ -77,7 +77,7 @@ class AppProvider(Provider):
         settings: Settings,
         engine: Engine,
         preferences: PreferencesApi | None,
-        kafka: EngineRequests,
+        kafka: EngineRequests | None,
         hub: LiveHub,
         tokens: TokenMinter,
         authenticator: TokenAuthenticator,
@@ -112,8 +112,10 @@ class AppProvider(Provider):
         return PreferencesClient(settings, tokens)
 
     @provide(scope=Scope.APP)
-    def kafka(self) -> EngineRequests:
-        return self._kafka
+    def kafka(self, settings: Settings) -> EngineRequests:
+        if self._kafka is not None:
+            return self._kafka
+        return AiokafkaEngineRequests(settings)
 
     @provide(scope=Scope.APP)
     def hub(self) -> LiveHub:

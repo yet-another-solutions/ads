@@ -23,7 +23,7 @@ from ads.exceptions import EXCEPTION_HANDLERS
 from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
 from ads.ioc import AppProvider, SecuritySettingsProvider, session_factory_for
-from ads.kafka import AiokafkaEngineRequests, EngineOutputConsumer, EngineRequests
+from ads.kafka import EngineOutputConsumer, EngineRequests
 from ads.live import LiveHub
 from ads.live_controller import live_socket
 from ads.logconfig import configure_logging
@@ -98,7 +98,6 @@ def create_app(
             minter = tokens if tokens is not None else security_container.get(TokenExchange)
         finally:
             security_container.close()
-    requests: EngineRequests = kafka if kafka is not None else AiokafkaEngineRequests(settings)
     live_hub = hub if hub is not None else LiveHub()
     subjects = AbortSubjects()
     session_factory = session_factory_for(db_engine)
@@ -106,7 +105,7 @@ def create_app(
         settings=settings,
         engine=db_engine,
         preferences=preferences,
-        kafka=requests,
+        kafka=kafka,
         hub=live_hub,
         tokens=minter,
         authenticator=authenticator,
@@ -114,6 +113,7 @@ def create_app(
     )
     app_container = make_container(app_provider, skip_validation=True)
     try:
+        requests = app_container.get(EngineRequests)
         engine_output = app_container.get(EngineOutputService)
         watchdog = app_container.get(Watchdog)
     finally:
