@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
+from uuid import UUID
 
 
 def _empty_attributes() -> Mapping[str, object]:
@@ -19,6 +20,10 @@ class SecurityContext:
     email: str | None = None
     authorized_party: str | None = None
     attributes: Mapping[str, object] = field(default_factory=_empty_attributes)
+
+    @property
+    def user_id(self) -> UUID:
+        return UUID(self.subject)
 
     def has_role(self, role: str) -> bool:
         return role in self.roles

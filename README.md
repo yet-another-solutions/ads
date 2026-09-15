@@ -9,6 +9,7 @@ Unauthenticated browsers are sent to Keycloak. After login, the page shows `hell
 - `libraries/ads-commons` — shared Kafka DTOs and common types
 - `services/ads` — Litestar controllers, Dishka services, OIDC, health
 - `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
+- `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
 - `charts/ads` — Helm chart (ADS + engine + egress-controlplane Deployments, Service, ConfigMap, Secret, HTTPRoute, PV/PVC)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
@@ -41,7 +42,15 @@ ads-engine is a Kafka worker (no HTTP). It reads `ADS_ENGINE_*`:
 - Ping: `ADS_ENGINE_PING_INTERVAL_SECONDS` (default 10)
 - Keycloak (loaded, unused until JWT verification): `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`
 
-The request `authorization` field is required on the wire. This turn does not verify the JWT.
+The request `authorization` field is required on the wire.
+
+ads-preferences is a TLS-only JSON resource server (`python -m ads_preferences`). It does not import ads-engine. It reads `ADS_PREFERENCES_*`:
+
+- Keycloak: `ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL`, `ADS_PREFERENCES_KEYCLOAK_ISSUER`, `ADS_PREFERENCES_KEYCLOAK_AUDIENCE` (default `ads-preferences`), `ADS_PREFERENCES_KEYCLOAK_CLIENT_ID` (default `ads`)
+- Callers: `ADS_PREFERENCES_ALLOWED_CALLERS` (default `ads`)
+- Database: `ADS_PREFERENCES_DATABASE_URL` (`postgresql+psycopg://` in production)
+- TLS: `ADS_PREFERENCES_TLS_CERT_PATH`, `ADS_PREFERENCES_TLS_KEY_PATH`, optional `ADS_PREFERENCES_TLS_CA_BUNDLE`
+- Bind: `ADS_PREFERENCES_BIND_HOST`, `ADS_PREFERENCES_PORT`
 
 ## Tests
 
@@ -53,6 +62,8 @@ UV_DEFAULT_INDEX=https://pypi.org/simple uv run --group test pytest
 Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is HTTPS. Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.
 
 ads-engine tests mock Kafka and the LLM. They do not start a broker.
+
+ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON on SQLite so this sandbox can run `nox -s test` without Docker. GitHub CI has Docker.
 
 ## Helm
 

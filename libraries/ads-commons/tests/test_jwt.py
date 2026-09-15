@@ -7,14 +7,14 @@ from typing import Any
 import pytest
 
 from ads_commons.security import InvalidAccessToken, jwks_uri_from_well_known
-from jwt_support import encode_token, new_rsa_key, verifier
+from jwt_support import SUBJECT, encode_token, new_rsa_key, verifier
 
 
 def test_valid_access_token_authenticates() -> None:
     key = new_rsa_key()
     token = encode_token(key)
     context = verifier(key).authenticate(token)
-    assert context.subject == "alice"
+    assert context.subject == SUBJECT
     assert context.has_role("user")
     assert context.authorized_party == "ads"
 
@@ -45,6 +45,13 @@ def test_expired_token_is_rejected() -> None:
         verifier(key).authenticate(token)
 
 
+def test_non_uuid_sub_is_rejected() -> None:
+    key = new_rsa_key()
+    token = encode_token(key, sub="alice")
+    with pytest.raises(InvalidAccessToken, match="UUID"):
+        verifier(key).authenticate(token)
+
+
 def test_wrong_azp_is_kept_for_caller_check() -> None:
     key = new_rsa_key()
     token = encode_token(key, azp="other-client")
@@ -56,7 +63,7 @@ def test_id_token_nonce_must_match() -> None:
     key = new_rsa_key()
     token = encode_token(key, nonce="expected")
     identity = verifier(key).decode(token, nonce="expected")
-    assert identity.sub == "alice"
+    assert identity.sub == SUBJECT
     with pytest.raises(InvalidAccessToken, match="nonce"):
         verifier(key).decode(token, nonce="other")
 

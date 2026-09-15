@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 from typing import Any
+from uuid import UUID
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -11,9 +12,10 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from ads_commons.security import JwtVerifier
 
 ISSUER = "https://keycloak.test/realms/ads"
-AUDIENCE = "ads"
+AUDIENCE = "ads-preferences"
 CLIENT_ID = "ads"
-SUBJECT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+USER_ID = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+OTHER_USER_ID = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 
 
 def new_rsa_key() -> RSAPrivateKey:
@@ -31,7 +33,7 @@ class StaticJwks:
 def encode_token(private_key: RSAPrivateKey, **claims: Any) -> str:
     now = int(time.time())
     payload: dict[str, Any] = {
-        "sub": SUBJECT,
+        "sub": str(USER_ID),
         "name": "Alice",
         "iss": ISSUER,
         "aud": AUDIENCE,
@@ -44,10 +46,10 @@ def encode_token(private_key: RSAPrivateKey, **claims: Any) -> str:
     return jwt.encode(payload, private_key, algorithm="RS256")
 
 
-def verifier(private_key: RSAPrivateKey, **kwargs: Any) -> JwtVerifier:
+def make_verifier(private_key: RSAPrivateKey) -> JwtVerifier:
     return JwtVerifier(
-        issuer=kwargs.get("issuer", ISSUER),
-        audience=kwargs.get("audience", AUDIENCE),
-        client_id=kwargs.get("client_id", CLIENT_ID),
+        issuer=ISSUER,
+        audience=AUDIENCE,
+        client_id=CLIENT_ID,
         jwks_client=StaticJwks(private_key),
     )

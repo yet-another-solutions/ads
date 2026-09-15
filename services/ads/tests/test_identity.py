@@ -6,7 +6,7 @@ from ads.identity import identity_from_claims, identity_from_session, security_c
 def test_roles_from_realm_and_client() -> None:
     identity = identity_from_claims(
         {
-            "sub": "u1",
+            "sub": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             "preferred_username": "alice",
             "email": "alice@example.com",
             "realm_access": {"roles": ["user", "offline_access"]},
@@ -14,7 +14,7 @@ def test_roles_from_realm_and_client() -> None:
         },
         "ads",
     )
-    assert identity.sub == "u1"
+    assert identity.sub == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     assert identity.name == "alice"
     assert "user" in identity.roles
     context = security_context_from_identity(identity)

@@ -23,6 +23,7 @@ from ads_engine.chat import StreamDelta
 ENGINE_ISSUER = "https://keycloak.test/realms/ads"
 ENGINE_AUDIENCE = "ads-engine"
 ENGINE_CLIENT_ID = "ads"
+ENGINE_SUBJECT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
 
 def make_request(
@@ -64,7 +65,7 @@ class StaticJwks:
 def encode_access_token(private_key: RSAPrivateKey, **claims: Any) -> str:
     now = int(time.time())
     payload: dict[str, Any] = {
-        "sub": "alice",
+        "sub": ENGINE_SUBJECT,
         "name": "Alice",
         "iss": ENGINE_ISSUER,
         "aud": ENGINE_AUDIENCE,
