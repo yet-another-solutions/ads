@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import pytest
-from litestar.exceptions import NotAuthorizedException
 
 from ads.hello.service import HelloService
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AuthenticationRequired
 from ads_commons.security import SecurityContextHolder as CommonsHolder
 
 
@@ -14,7 +14,7 @@ def _ctx(*roles: str) -> SecurityContext:
 
 
 def test_require_without_bind_is_unauthorized() -> None:
-    with pytest.raises(NotAuthorizedException):
+    with pytest.raises(AuthenticationRequired):
         SecurityContextHolder.require()
 
 
@@ -69,7 +69,7 @@ def test_detached_picks_session_and_stores_in_work_context() -> None:
 
 
 def test_detached_without_session_or_holder_is_unauthorized() -> None:
-    with pytest.raises(NotAuthorizedException):
+    with pytest.raises(AuthenticationRequired):
         with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
 

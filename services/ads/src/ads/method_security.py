@@ -4,9 +4,9 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 import wrapt
-from litestar.exceptions import PermissionDeniedException
 
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AccessDenied
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -24,7 +24,7 @@ def require_role(role: str) -> Callable[[F], F]:
         del instance
         context = SecurityContextHolder.require()
         if not context.has_role(role):
-            raise PermissionDeniedException(detail=f"role {role} required")
+            raise AccessDenied(f"role {role} required")
         return wrapped(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]
