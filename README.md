@@ -62,7 +62,7 @@ Install requires:
 
 - StorageClass `local-path` (or the configured `persistence.storageClass`)
 - at least one node labeled `ads.io/application-node=true`
-- at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-clh`)
+- at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-qemu`)
 - Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<httpRoute.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
 
 Application pods (ADS, engine, and egress-controlplane) schedule on application nodes.
