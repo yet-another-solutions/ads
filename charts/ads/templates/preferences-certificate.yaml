@@ -1,0 +1,21 @@
+{{- if .Values.tls.certManager.enabled }}
+{{- $svc := printf "%s-preferences" (include "ads.fullname" .) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-preferences
+spec:
+  secretName: {{ include "ads.preferencesServiceSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ $svc | quote }}
+    - {{ printf "%s.%s" $svc .Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc" $svc .Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc .Release.Namespace | quote }}
+{{- end }}

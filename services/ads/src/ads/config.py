@@ -30,7 +30,6 @@ class Settings:
     keycloak_role: str
     session_secret: str
     public_base_url: str
-    data_dir: Path
     tls_cert_path: Path
     tls_key_path: Path
     tls_ca_bundle: Path | None
@@ -92,7 +91,6 @@ def load_settings() -> Settings:
         keycloak_role=_env("ADS_KEYCLOAK_ROLE", "user"),
         session_secret=session_secret,
         public_base_url=_env("ADS_PUBLIC_BASE_URL").rstrip("/"),
-        data_dir=Path(_env("ADS_DATA_DIR", "/data")),
         tls_cert_path=cert_path,
         tls_key_path=key_path,
         tls_ca_bundle=ca_bundle,

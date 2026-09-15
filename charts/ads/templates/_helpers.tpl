@@ -52,6 +52,11 @@ app.kubernetes.io/component: ads-egress-controlplane
 app.kubernetes.io/component: ads-engine
 {{- end }}
 
+{{- define "ads.preferencesSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-preferences
+{{- end }}
+
 {{- define "ads.applicationNodeSelector" -}}
 {{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
 {{- end }}
@@ -73,5 +78,22 @@ https://{{ .Values.httpRoute.hostname }}
 {{ include "ads.fullname" . }}-service-tls
 {{- else -}}
 {{ required "tls.serviceSecretName is required when tls.certManager.enabled is false" .Values.tls.serviceSecretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.preferencesServiceSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-preferences-service-tls
+{{- else -}}
+{{ required "preferences.tls.serviceSecretName is required when tls.certManager.enabled is false" .Values.preferences.tls.serviceSecretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.preferencesBaseUrl" -}}
+{{- $explicit := .Values.preferences.baseUrl | default "" | toString | trimSuffix "/" -}}
+{{- if $explicit -}}
+{{ $explicit }}
+{{- else -}}
+https://{{ include "ads.fullname" . }}-preferences:{{ .Values.preferences.service.port }}
 {{- end -}}
 {{- end }}

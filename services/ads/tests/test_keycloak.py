@@ -272,13 +272,12 @@ def _provision_realm(base: str, redirect_uri: str, verify: ssl.SSLContext) -> No
 
 @pytest.fixture(scope="module")
 def running_app(
-    keycloak_tls: KeycloakTls, tmp_path_factory: pytest.TempPathFactory
+    keycloak_tls: KeycloakTls,
 ) -> Iterator[str]:
     app_port = _free_port()
     public_base = f"https://127.0.0.1:{app_port}"
     verify = _ca_context(keycloak_tls.ca_crt)
     _provision_realm(keycloak_tls.base, f"{public_base}/auth/callback", verify)
-    data_dir = tmp_path_factory.mktemp("data")
     settings = Settings(
         keycloak_well_known_url=f"{keycloak_tls.base}/realms/{REALM}/.well-known/openid-configuration",
         keycloak_issuer=f"{keycloak_tls.base}/realms/{REALM}",
@@ -288,7 +287,6 @@ def running_app(
         keycloak_role="user",
         session_secret="integration-session-secret!",
         public_base_url=public_base,
-        data_dir=Path(data_dir),
         tls_cert_path=keycloak_tls.server_crt,
         tls_key_path=keycloak_tls.server_key,
         tls_ca_bundle=keycloak_tls.ca_crt,

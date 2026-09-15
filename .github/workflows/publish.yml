@@ -78,6 +78,8 @@ jobs:
             file: services/ads-egress-controlplane/Containerfile
           - image: ads-engine
             file: services/ads-engine/Containerfile
+          - image: ads-preferences
+            file: services/ads-preferences/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner

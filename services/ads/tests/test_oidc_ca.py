@@ -17,7 +17,7 @@ from tests.certs import issue_tls, openssl_available
 pytestmark = pytest.mark.skipif(not openssl_available(), reason="openssl required")
 
 
-def _settings(tmp_path: Path, *, cert: Path, key: Path, ca: Path, well_known: str) -> Settings:
+def _settings(*, cert: Path, key: Path, ca: Path, well_known: str) -> Settings:
     return Settings(
         keycloak_well_known_url=well_known,
         keycloak_issuer="https://kc/realms/ads",
@@ -27,7 +27,6 @@ def _settings(tmp_path: Path, *, cert: Path, key: Path, ca: Path, well_known: st
         keycloak_role="user",
         session_secret="test-session-secret-32b!",
         public_base_url="https://ads.example",
-        data_dir=tmp_path / "data",
         tls_cert_path=cert,
         tls_key_path=key,
         tls_ca_bundle=ca,
@@ -70,7 +69,7 @@ def test_oidc_accepts_configured_ca_bundle(tmp_path: Path) -> None:
     ).encode()
     httpd, url = _serve_https(server_crt, server_key, payload)
     try:
-        settings = _settings(tmp_path, cert=server_crt, key=server_key, ca=ca_crt, well_known=url)
+        settings = _settings(cert=server_crt, key=server_key, ca=ca_crt, well_known=url)
         metadata = asyncio.run(OidcClient(settings).metadata())
         assert metadata["jwks_uri"] == "https://kc/jwks"
     finally:
@@ -87,9 +86,7 @@ def test_oidc_rejects_unknown_ca_bundle(tmp_path: Path) -> None:
     payload = b'{"issuer":"https://kc/realms/ads"}'
     httpd, url = _serve_https(other_cert, other_key, payload)
     try:
-        settings = _settings(
-            tmp_path, cert=other_cert, key=other_key, ca=trusted_ca, well_known=url
-        )
+        settings = _settings(cert=other_cert, key=other_key, ca=trusted_ca, well_known=url)
         with pytest.raises(httpx2.HTTPError):
             asyncio.run(OidcClient(settings).metadata())
     finally:
