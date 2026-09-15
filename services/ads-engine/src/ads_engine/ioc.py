@@ -5,11 +5,10 @@ import ssl
 from dishka import Provider, Scope, provide
 
 from ads_commons.security import (
-    TokenExchange,
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifier, JwtVerifierSettings
+from ads_commons_beans import JwtVerifierSettings, TokenExchangeSettings
 from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
 from ads_engine.store import ActiveSessionStore
@@ -45,17 +44,16 @@ class AppProvider(Provider):
         )
 
     @provide(scope=Scope.APP)
-    def token_exchange(self, settings: Settings, jwt_verifier: JwtVerifier) -> TokenExchange:
+    def token_exchange_settings(self, settings: Settings) -> TokenExchangeSettings:
         ssl_context = _ssl_context(settings)
         token_endpoint = token_endpoint_from_well_known(
             settings.keycloak_well_known_url,
             ssl_context,
         )
-        return TokenExchange(
+        return TokenExchangeSettings(
             token_endpoint=token_endpoint,
             client_id=settings.keycloak_audience,
             client_secret=settings.keycloak_client_secret,
-            verifier=jwt_verifier,
             ssl_context=ssl_context,
         )
 

@@ -10,8 +10,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
 
 from ads_commons.engine import EngineOutput, encode_output
-from ads_commons.security import TokenExchange
-from ads_commons_beans import CommonsBeansProvider, JwtVerifier
+from ads_commons_beans import CommonsBeansProvider, JwtVerifier, TokenExchange
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings, load_settings
 from ads_engine.ioc import AppProvider

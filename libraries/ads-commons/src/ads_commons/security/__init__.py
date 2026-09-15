@@ -16,7 +16,6 @@ from ads_commons.security.jwt import (
 )
 from ads_commons.security.role import check_role, ensure_role, require_role
 from ads_commons.security.token_exchange import (
-    TokenExchange,
     TokenExchangeError,
     token_endpoint_from_well_known,
 )
@@ -29,7 +28,6 @@ __all__ = [
     "InvalidAccessToken",
     "SecurityContext",
     "SecurityContextHolder",
-    "TokenExchange",
     "TokenExchangeError",
     "check_caller",
     "check_role",

@@ -10,11 +10,10 @@ from jwt import PyJWKClient
 from ads.config import Settings
 from ads_commons.security import (
     SecurityContext,
-    TokenExchange,
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
-from ads_commons_beans import JwtVerifier
+from ads_commons_beans import JwtVerifier, TokenExchange
 
 
 class TokenMinter(Protocol):
