@@ -24,6 +24,7 @@ def test_settings_dialog_never_renders_a_stored_bearer(
     assert STORED_BEARER not in selected.text
     assert 'placeholder="Write only. Leave blank to keep."' in selected.text
     assert 'value="openai-stream" readonly' in selected.text
+    assert 'name="model-name"' in selected.text
 
 
 def test_composer_options_never_contain_a_bearer(
@@ -47,6 +48,7 @@ def test_add_model_forwards_the_typed_bearer_once(
         data={
             "description": "Lab vLLM",
             "name": "qwen",
+            "model-name": "qwen-api",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
         },
@@ -57,6 +59,8 @@ def test_add_model_forwards_the_typed_bearer_once(
     assert len(preferences.writes) == 1
     assert preferences.writes[0].authentication.openai_bearer.token == "sk-typed-now"
     assert preferences.writes[0].type == "openai-stream"
+    assert preferences.writes[0].name == "qwen"
+    assert preferences.writes[0].options.model_name == "qwen-api"
 
 
 def test_edit_without_a_bearer_patches_without_authentication(
@@ -70,6 +74,7 @@ def test_edit_without_a_bearer_patches_without_authentication(
         data={
             "description": "Renamed",
             "name": "gpt-test",
+            "model-name": "gpt-test",
             "url": "https://llm.example/v1",
             "bearer": "",
         },

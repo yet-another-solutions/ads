@@ -5,9 +5,8 @@ from __future__ import annotations
 import uuid
 
 from ads.exceptions import InvalidInput, NotFound
-from ads.method_security import require_role
 from ads.views import ModelOption, ModelView
-from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication
+from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication, OpenAiStreamOptions
 from ads_commons.preferences import (
     ModelInfo,
     ModelPatch,
@@ -15,6 +14,7 @@ from ads_commons.preferences import (
     OpenAiStreamType,
     PreferencesApi,
 )
+from ads_commons.security import require_role
 
 OPENAI_STREAM: OpenAiStreamType = "openai-stream"
 
@@ -27,6 +27,7 @@ def _view(info: ModelInfo) -> ModelView:
         name=info.name,
         type=info.type,
         url=info.url,
+        model_name=info.options.model_name,
     )
 
 
@@ -64,6 +65,7 @@ class CatalogService:
         name: str,
         url: str,
         bearer: str,
+        model_name: str,
     ) -> ModelView:
         """The typed bearer is forwarded once and never echoed back."""
         info = await self._preferences.add_model(
@@ -74,6 +76,9 @@ class CatalogService:
                 url=_require_text(url, "URL"),
                 authentication=OpenAiStreamAuthentication(
                     openai_bearer=OpenAiBearerToken(token=_require_text(bearer, "Bearer token")),
+                ),
+                options=OpenAiStreamOptions(
+                    model_name=_require_text(model_name, "Model name"),
                 ),
             )
         )
@@ -87,6 +92,7 @@ class CatalogService:
         name: str | None,
         url: str | None,
         bearer: str | None,
+        model_name: str | None,
     ) -> ModelView:
         """An omitted or blank bearer patches without ``authentication``: the stored one stays."""
         authentication = None
@@ -94,17 +100,22 @@ class CatalogService:
             authentication = OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token=bearer.strip()),
             )
+        options = None
+        if model_name is not None:
+            options = OpenAiStreamOptions(model_name=model_name.strip())
         patch = ModelPatch(
             description=description.strip() if description is not None else None,
             name=name.strip() if name is not None else None,
             url=url.strip() if url is not None else None,
             authentication=authentication,
+            options=options,
         )
         if (
             patch.description is None
             and patch.name is None
             and patch.url is None
             and patch.authentication is None
+            and patch.options is None
         ):
             raise InvalidInput("nothing to change")
         return _view(await self._preferences.edit_model(model_id, patch))

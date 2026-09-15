@@ -19,10 +19,10 @@ from ads_commons.security import (
     InvalidAccessToken,
     JwtVerifier,
     SecurityContextHolder,
+    ensure_caller,
     jwks_uri_from_well_known,
 )
 from ads_preferences.config import Settings
-from ads_preferences.method_security import require_caller
 
 
 def _header_map(scope: Scope) -> dict[str, str]:
@@ -105,7 +105,7 @@ class JwtCallerMiddleware:
             await _send_json(send, 401, "unauthorized")
             return
         try:
-            require_caller(context, *self._settings.allowed_callers)
+            ensure_caller(context, *self._settings.allowed_callers)
         except AccessDenied:
             await _send_json(send, 403, "forbidden")
             return

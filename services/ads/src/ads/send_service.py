@@ -17,7 +17,6 @@ from ads.exceptions import (
     SessionForbidden,
 )
 from ads.kafka import EngineRequests
-from ads.method_security import require_role
 from ads.models import (
     KIND_MESSAGE,
     ROLE_USER,
@@ -38,7 +37,7 @@ from ads_commons.engine import (
     OpenAiStreamModel,
 )
 from ads_commons.preferences import ModelInfo, PreferencesApi
-from ads_commons.security import SecurityContextHolder
+from ads_commons.security import SecurityContextHolder, require_role
 
 log = structlog.get_logger("ads.send")
 
@@ -148,9 +147,9 @@ class SendService:
             user_input=text,
             instructions="",
             model=OpenAiStreamModel(
-                name=model.name,
                 url=model.url,
                 authentication=model.authentication,
+                options=model.options,
             ),
             authorization=Authorization(
                 token=self._tokens.exchange(self._settings.engine_audience),

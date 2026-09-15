@@ -15,9 +15,8 @@ from ads.authenticated import (
 )
 from ads.config import Settings
 from ads.identity import Identity
-from ads.method_security import require_role
 from ads.security_middleware import SecurityContextMiddleware
-from ads_commons.security import AccessDenied, AuthenticationRequired
+from ads_commons.security import AccessDenied, AuthenticationRequired, require_role
 
 
 class _ProbeController(AuthenticatedController):

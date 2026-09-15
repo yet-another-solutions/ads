@@ -40,6 +40,7 @@ class ModelsController(AuthenticatedController):
             data.get("name", ""),
             data.get("url", ""),
             data.get("bearer", ""),
+            data.get("model-name", ""),
         )
         return await _dialog(catalog, created)
 
@@ -57,6 +58,7 @@ class ModelsController(AuthenticatedController):
             data.get("name"),
             data.get("url"),
             data.get("bearer"),
+            data.get("model-name"),
         )
         return await _dialog(catalog, edited)
 

@@ -17,6 +17,7 @@ from ads_commons.engine import (
     OpenAiBearerToken,
     OpenAiStreamAuthentication,
     OpenAiStreamModel,
+    OpenAiStreamOptions,
     PartialResponse,
     Ping,
     Reasoning,
@@ -47,11 +48,11 @@ def test_request_round_trip() -> None:
         user_input="next",
         instructions="stay short",
         model=OpenAiStreamModel(
-            name="gpt-test",
             url="https://llm.example/v1",
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
+            options=OpenAiStreamOptions(model_name="gpt-test"),
         ),
         authorization=Authorization(token="jwt-token"),
     )
@@ -60,6 +61,8 @@ def test_request_round_trip() -> None:
     assert payload["type"] == "request"
     assert payload["model"]["type"] == "openai-stream"
     assert payload["model"]["authentication"]["openai-bearer"] == {"token": "sk-test"}
+    assert payload["model"]["options"] == {"model-name": "gpt-test"}
+    assert "name" not in payload["model"]
     assert payload["history"][0] == {"type": "user", "text": "hi"}
     decoded = decode_request(raw)
     assert decoded == request

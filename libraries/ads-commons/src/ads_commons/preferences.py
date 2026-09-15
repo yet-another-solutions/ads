@@ -7,7 +7,7 @@ from uuid import UUID
 
 import msgspec
 
-from ads_commons.engine import OpenAiStreamAuthentication
+from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
 
 OpenAiStreamType = Literal["openai-stream"]
 
@@ -28,6 +28,7 @@ class ModelInfo(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     type: OpenAiStreamType
     url: str
     authentication: OpenAiStreamAuthentication
+    options: OpenAiStreamOptions
 
 
 class ModelWrite(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -36,6 +37,7 @@ class ModelWrite(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     type: OpenAiStreamType
     url: str
     authentication: OpenAiStreamAuthentication
+    options: OpenAiStreamOptions
 
 
 class ModelPatch(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
@@ -44,6 +46,7 @@ class ModelPatch(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_d
     type: OpenAiStreamType | None = None
     url: str | None = None
     authentication: OpenAiStreamAuthentication | None = None
+    options: OpenAiStreamOptions | None = None
 
 
 @runtime_checkable

@@ -11,6 +11,7 @@ from ads_commons.engine import (
     EngineRequest,
     OpenAiBearerToken,
     OpenAiStreamAuthentication,
+    OpenAiStreamOptions,
 )
 from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelSummary, ModelWrite
 from ads_commons.security import InvalidAccessToken, SecurityContext
@@ -65,6 +66,7 @@ class FakePreferences:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token=bearer),
             ),
+            options=OpenAiStreamOptions(model_name="gpt-test"),
         )
         self.models[model_id] = info
         return info
@@ -95,6 +97,7 @@ class FakePreferences:
             type=body.type,
             url=body.url,
             authentication=body.authentication,
+            options=body.options,
         )
         self.models[model_id] = info
         return info
@@ -111,6 +114,7 @@ class FakePreferences:
             authentication=(
                 body.authentication if body.authentication is not None else current.authentication
             ),
+            options=body.options if body.options is not None else current.options,
         )
         self.models[model_id] = info
         return info

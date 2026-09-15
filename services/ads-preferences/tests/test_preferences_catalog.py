@@ -11,6 +11,7 @@ MODEL_BODY = {
     "type": "openai-stream",
     "url": "https://example.invalid/v1",
     "authentication": {"openai-bearer": {"token": "sk-secret"}},
+    "options": {"model-name": "gpt-4o"},
 }
 
 
@@ -77,6 +78,7 @@ def test_info_returns_invoke_fields_and_bearer(client: TestClient, user_token: s
     assert payload["type"] == "openai-stream"
     assert payload["url"] == "https://example.invalid/v1"
     assert payload["authentication"] == {"openai-bearer": {"token": "sk-secret"}}
+    assert payload["options"] == {"model-name": "gpt-4o"}
 
 
 def test_post_rejects_id_user_id_and_wrong_type(client: TestClient, user_token: str) -> None:
@@ -96,8 +98,11 @@ def test_post_rejects_empty_fields(client: TestClient, user_token: str) -> None:
         **MODEL_BODY,
         "authentication": {"openai-bearer": {"token": ""}},
     }
-    assert client.post("/v1/models", json=empty_name, headers=_auth(user_token)).status_code == 400
-    assert client.post("/v1/models", json=empty_token, headers=_auth(user_token)).status_code == 400
+    empty_model_name = {**MODEL_BODY, "options": {"model-name": "  "}}
+    headers = _auth(user_token)
+    assert client.post("/v1/models", json=empty_name, headers=headers).status_code == 400
+    assert client.post("/v1/models", json=empty_token, headers=headers).status_code == 400
+    assert client.post("/v1/models", json=empty_model_name, headers=headers).status_code == 400
 
 
 def test_patch_label_keeps_bearer_and_auth_replaces(client: TestClient, user_token: str) -> None:
@@ -122,6 +127,21 @@ def test_patch_label_keeps_bearer_and_auth_replaces(client: TestClient, user_tok
     assert rotated.status_code == 200
     assert rotated.json()["url"] == "https://example.invalid/v2"
     assert rotated.json()["authentication"]["openai-bearer"]["token"] == "sk-new"
+    assert rotated.json()["options"] == {"model-name": "gpt-4o"}
+
+
+def test_patch_options_replaces_model_name(client: TestClient, user_token: str) -> None:
+    created = client.post("/v1/models", json=MODEL_BODY, headers=_auth(user_token))
+    model_id = created.json()["id"]
+    patched = client.patch(
+        f"/v1/models/{model_id}",
+        json={"options": {"model-name": "gpt-4o-mini"}},
+        headers=_auth(user_token),
+    )
+    assert patched.status_code == 200
+    assert patched.json()["options"] == {"model-name": "gpt-4o-mini"}
+    assert patched.json()["name"] == "gpt-4o"
+    assert patched.json()["authentication"]["openai-bearer"]["token"] == "sk-secret"
 
 
 def test_empty_patch_is_400(client: TestClient, user_token: str) -> None:

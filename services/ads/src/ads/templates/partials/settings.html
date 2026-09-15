@@ -27,6 +27,9 @@
       <label>Type
         <input name="type" value="{{ selected.type }}" readonly>
       </label>
+      <label>Model name
+        <input name="model-name" value="{{ selected.model_name }}">
+      </label>
       <label>URL
         <input name="url" value="{{ selected.url }}">
       </label>
@@ -35,7 +38,7 @@
                placeholder="Write only. Leave blank to keep.">
       </label>
       <p class="note">ads-preferences is S2S. This page never receives the stored bearer.
-        No default model in v1.</p>
+        No default model in v1. Model name is the openai-stream API id.</p>
     </form>
     {% else %}
     <form class="fields" id="model-form"
@@ -49,6 +52,9 @@
       <label>Type
         <input name="type" value="openai-stream" readonly>
       </label>
+      <label>Model name
+        <input name="model-name" required autocomplete="off">
+      </label>
       <label>URL
         <input name="url" required autocomplete="off">
       </label>
@@ -57,7 +63,7 @@
                placeholder="Write only. Stored by ads-preferences.">
       </label>
       <p class="note">v1 supports openai-stream only. The bearer is forwarded once and never
-        rendered back.</p>
+        rendered back. Model name is the openai-stream API id.</p>
     </form>
     {% endif %}
   </div>

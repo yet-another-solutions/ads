@@ -19,10 +19,14 @@ class OpenAiStreamAuthentication(msgspec.Struct, frozen=True):
     openai_bearer: OpenAiBearerToken = msgspec.field(name="openai-bearer")
 
 
+class OpenAiStreamOptions(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    model_name: str = msgspec.field(name="model-name")
+
+
 class OpenAiStreamModel(msgspec.Struct, frozen=True, tag="openai-stream", tag_field="type"):
-    name: str
     url: str
     authentication: OpenAiStreamAuthentication
+    options: OpenAiStreamOptions
 
 
 class Authorization(msgspec.Struct, frozen=True):

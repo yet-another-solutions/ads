@@ -6,11 +6,10 @@ from sqlalchemy.orm import Session
 
 from ads.domain import utc_now
 from ads.exceptions import InvalidInput, NotFound
-from ads.method_security import require_role
 from ads.models import Project
 from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
 from ads.views import ProjectView, SessionView
-from ads_commons.security import SecurityContextHolder
+from ads_commons.security import SecurityContextHolder, require_role
 
 
 def _require_text(value: str, field: str) -> str:

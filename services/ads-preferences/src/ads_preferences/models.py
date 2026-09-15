@@ -26,5 +26,9 @@ class UserModel(Base):
         JSONB().with_variant(JSON(), "sqlite"),
         nullable=False,
     )
+    options: Mapped[dict[str, Any]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

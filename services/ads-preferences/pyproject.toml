@@ -15,7 +15,6 @@ dependencies = [
     "sqlalchemy==2.0.43",
     "structlog==26.1.0",
     "uvicorn[standard]==0.52.4",
-    "wrapt==2.4.1",
 ]
 
 [project.scripts]

@@ -35,7 +35,6 @@ dependencies = [
     { name = "stamina" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "wrapt" },
 ]
 
 [package.metadata]
@@ -54,7 +53,6 @@ requires-dist = [
     { name = "stamina", specifier = "==26.1.0" },
     { name = "structlog", specifier = "==26.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
-    { name = "wrapt", specifier = "==2.4.1" },
 ]
 
 [[package]]
@@ -119,7 +117,6 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "wrapt" },
 ]
 
 [package.metadata]
@@ -134,7 +131,6 @@ requires-dist = [
     { name = "sqlalchemy", specifier = "==2.0.43" },
     { name = "structlog", specifier = "==26.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
-    { name = "wrapt", specifier = "==2.4.1" },
 ]
 
 [[package]]

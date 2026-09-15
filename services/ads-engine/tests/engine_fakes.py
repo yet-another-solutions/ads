@@ -18,6 +18,7 @@ from ads_commons.engine import (
     OpenAiBearerToken,
     OpenAiStreamAuthentication,
     OpenAiStreamModel,
+    OpenAiStreamOptions,
 )
 from ads_commons.security import JwtVerifier, SecurityContext
 from ads_engine.chat import StreamDelta
@@ -43,11 +44,11 @@ def make_request(
         user_input=user_input,
         instructions="be brief",
         model=OpenAiStreamModel(
-            name="test-model",
             url="https://llm.example/v1",
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
+            options=OpenAiStreamOptions(model_name="test-model"),
         ),
         authorization=Authorization(token=authorization_token),
     )

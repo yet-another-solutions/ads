@@ -69,3 +69,4 @@ class ModelView:
     name: str
     type: str
     url: str
+    model_name: str
