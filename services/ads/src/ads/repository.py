@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ads.models import (
     IN_FLIGHT_STATUSES,
     ChatSession,
+    OidcRefreshToken,
     Project,
     SessionEntry,
     SessionRun,
@@ -207,4 +208,30 @@ class SessionRunBufferRepository(SQLAlchemySyncRepository[SessionRunBuffer]):
 
     def delete_for_run(self, run_id: uuid.UUID) -> None:
         self.session.execute(delete(SessionRunBuffer).where(SessionRunBuffer.run_id == run_id))
+        self.session.flush()
+
+
+class OidcRefreshTokenRepository(SQLAlchemySyncRepository[OidcRefreshToken]):
+    """Data layer. Requires an open transaction and never begins one."""
+
+    model_type = OidcRefreshToken
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
+
+    def get_by_sid(self, sid: str) -> OidcRefreshToken | None:
+        return self.session.get(OidcRefreshToken, sid)
+
+    def put(self, row: OidcRefreshToken) -> None:
+        existing = self.get_by_sid(row.sid)
+        if existing is None:
+            self.session.add(row)
+        else:
+            existing.user_id = row.user_id
+            existing.refresh_token = row.refresh_token
+            existing.updated_at = row.updated_at
+        self.session.flush()
+
+    def delete_sid(self, sid: str) -> None:
+        self.session.execute(delete(OidcRefreshToken).where(OidcRefreshToken.sid == sid))
         self.session.flush()

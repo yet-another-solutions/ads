@@ -43,13 +43,14 @@ class JwtVerifier:
         self._client_id = settings.client_id
         self._jwks_client = jwks_client
 
-    def decode(
+    def verified_claims(
         self,
         token: str,
         *,
         nonce: str | None = None,
         audience: str | None = None,
-    ) -> Identity:
+        verify_exp: bool = True,
+    ) -> dict[str, Any]:
         if not token.strip():
             raise InvalidAccessToken("token is required")
         try:
@@ -60,7 +61,7 @@ class JwtVerifier:
                 algorithms=["RS256"],
                 audience=self._audience if audience is None else audience,
                 issuer=self._issuer,
-                options={"require": _REQUIRED_CLAIMS},
+                options={"require": _REQUIRED_CLAIMS, "verify_exp": verify_exp},
             )
         except InvalidAccessToken:
             raise
@@ -68,8 +69,22 @@ class JwtVerifier:
             raise InvalidAccessToken(str(exc)) from exc
         if nonce is not None and payload.get("nonce") != nonce:
             raise InvalidAccessToken("nonce mismatch")
+        if not isinstance(payload, dict):
+            raise InvalidAccessToken("JWT payload is not an object")
+        return payload
+
+    def decode(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+    ) -> Identity:
         try:
-            return identity_from_claims(payload, self._client_id)
+            return identity_from_claims(
+                self.verified_claims(token, nonce=nonce, audience=audience),
+                self._client_id,
+            )
         except ValueError as exc:
             raise InvalidAccessToken(str(exc)) from exc
 

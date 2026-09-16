@@ -4,45 +4,37 @@ from typing import Any
 
 from litestar import Controller, Request
 from litestar.connection import ASGIConnection
-from litestar.di import NamedDependency, Provide
+from litestar.di import Provide
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Response
 from litestar.types import ExceptionHandlersMap
 
-from ads.identity import (
-    Identity,
-    access_token_from_session,
-    identity_from_session,
-    security_context_from_identity,
-    session_is_authenticated,
-)
+from ads.identity import Identity, identity_from_security_context
 from ads.security_context import SecurityContext
+from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
+
+
+def _bound_context() -> SecurityContext:
+    context = SecurityContextHolder.get()
+    if context is None or not context.access_token:
+        raise AuthenticationRequired()
+    return context
 
 
 def require_authenticated(
     connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler
 ) -> None:
-    if not session_is_authenticated(connection.session):
-        raise AuthenticationRequired()
+    del connection
+    _bound_context()
 
 
-def provide_identity(request: Request[Any, Any, Any]) -> Identity:
-    identity = identity_from_session(request.session)
-    if identity is None:
-        raise AuthenticationRequired()
-    return identity
+def provide_identity() -> Identity:
+    return identity_from_security_context(_bound_context())
 
 
-def provide_security_context(
-    identity: NamedDependency[Identity],
-    request: Request[Any, Any, Any],
-) -> SecurityContext:
-    context = security_context_from_identity(identity)
-    token = access_token_from_session(request.session)
-    if token is None:
-        return context
-    return context.with_access_token(token)
+def provide_security_context() -> SecurityContext:
+    return _bound_context()
 
 
 def handle_authentication_required(

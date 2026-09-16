@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import msgspec
-
 from ads_commons.security import (
     Identity,
     SecurityContext,
@@ -20,24 +18,10 @@ __all__ = [
     "Identity",
     "access_token_from_session",
     "identity_from_claims",
-    "identity_from_session",
+    "identity_from_security_context",
     "roles_from_claims",
     "security_context_from_identity",
-    "security_context_from_session",
-    "session_is_authenticated",
 ]
-
-
-def identity_from_session(session: Mapping[str, Any] | None) -> Identity | None:
-    if not session:
-        return None
-    raw = session.get("identity")
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return msgspec.convert(raw, type=Identity)
-    except (msgspec.ValidationError, TypeError, ValueError):
-        return None
 
 
 def access_token_from_session(session: Mapping[str, Any] | None) -> str | None:
@@ -49,18 +33,11 @@ def access_token_from_session(session: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-def session_is_authenticated(session: Mapping[str, Any] | None) -> bool:
-    return (
-        identity_from_session(session) is not None
-        and access_token_from_session(session) is not None
+def identity_from_security_context(context: SecurityContext) -> Identity:
+    return Identity(
+        sub=context.subject,
+        name=context.name,
+        roles=tuple(sorted(context.roles)),
+        email=context.email,
+        azp=context.authorized_party,
     )
-
-
-def security_context_from_session(session: Mapping[str, Any] | None) -> SecurityContext | None:
-    identity = identity_from_session(session)
-    if identity is None:
-        return None
-    token = access_token_from_session(session)
-    if token is None:
-        return None
-    return security_context_from_identity(identity).with_access_token(token)

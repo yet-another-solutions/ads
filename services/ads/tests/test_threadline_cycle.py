@@ -35,6 +35,7 @@ from tests.threadline_db import (
 from tests.threadline_fakes import (
     ENGINE_TOKEN,
     STORED_BEARER,
+    FakeOidcVerifier,
     FakePreferences,
     FakeTokens,
     RecordingKafka,
@@ -410,6 +411,7 @@ def test_produce_failure_leaves_the_run_pending_until_the_timeout(
         kafka=broken,
         tokens=tokens,
         jwt_verifier=authenticator,  # type: ignore[arg-type]
+        oidc_verifier=FakeOidcVerifier(),
     )
     model = preferences.seed()
     with TestClient(app=app, session_config=build_session_config(settings)) as client:
@@ -567,6 +569,7 @@ def test_abort_produce_failure_still_unwinds_locally(
         kafka=kafka,
         tokens=FakeTokens(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]
+        oidc_verifier=FakeOidcVerifier(),
     )
     model = preferences.seed()
     with TestClient(app=app, session_config=build_session_config(settings)) as client:
@@ -604,6 +607,7 @@ def test_token_exchange_failure_on_abort_still_unwinds(
         kafka=kafka,
         tokens=_OnlySendWorks(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]
+        oidc_verifier=FakeOidcVerifier(),
     )
     model = preferences.seed()
     with TestClient(app=app, session_config=build_session_config(settings)) as client:

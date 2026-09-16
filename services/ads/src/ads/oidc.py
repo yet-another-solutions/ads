@@ -81,6 +81,22 @@ class OidcClient:
             raise ValueError("token endpoint returned a non-object")
         return token
 
+    async def refresh_tokens(self, refresh_token: str) -> dict[str, Any]:
+        metadata = await self.metadata()
+        async with AsyncOAuth2Client(
+            client_id=self._settings.keycloak_client_id,
+            client_secret=self._settings.keycloak_client_secret,
+            token_endpoint_auth_method="client_secret_post",
+            verify=self._verify(),
+        ) as client:
+            token = await client.refresh_token(
+                metadata["token_endpoint"],
+                refresh_token=refresh_token,
+            )
+        if not isinstance(token, dict):
+            raise ValueError("token endpoint returned a non-object")
+        return token
+
     def decode_id_token(self, id_token: str, *, nonce: str) -> Identity:
         if self._metadata is None:
             raise RuntimeError("OIDC metadata has not been loaded")

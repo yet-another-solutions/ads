@@ -16,6 +16,8 @@ from ads.frontend import (
     require_frontend_login,
     safe_return_to,
 )
+from ads.security_middleware import SecurityContextMiddleware
+from tests.threadline_fakes import attach_fake_session_binder, login
 
 
 class _PageController(FrontendController):
@@ -94,14 +96,7 @@ def test_identity_only_session_redirects_to_login(client: TestClient) -> None:
 
 def test_require_frontend_login_rejects_post() -> None:
     request = RequestFactory().post("/")
-    request.scope["session"] = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        }
-    }
+    request.scope["session"] = {}
     with pytest.raises(MethodNotAllowedException):
         require_frontend_login(request, None)  # type: ignore[arg-type]
 
@@ -110,20 +105,11 @@ def test_frontend_controller_rejects_post_even_when_logged_in(settings: Settings
     session_config = build_session_config(settings)
     app = Litestar(
         route_handlers=[_PageController],
-        middleware=[session_config.middleware],
+        middleware=[session_config.middleware, SecurityContextMiddleware],
     )
+    attach_fake_session_binder(app)
     with TestClient(app=app, session_config=session_config) as client:
-        client.set_session_data(
-            {
-                "identity": {
-                    "sub": "alice",
-                    "name": "Alice",
-                    "roles": ["user"],
-                    "email": "alice@example.com",
-                },
-                "access_token": "user-access-token",
-            }
-        )
+        login(client)
         denied = client.post("/page/submit")
         assert denied.status_code == 405
         allowed = client.get("/page/")
