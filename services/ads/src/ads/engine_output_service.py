@@ -59,7 +59,7 @@ class EngineOutputService:
         tokens: TokenMinter,
         authenticator: TokenAuthenticator,
         settings: Settings,
-        subjects: AbortSubjects | None = None,
+        subjects: AbortSubjects,
     ) -> None:
         self._session_factory = session_factory
         self._kafka = kafka
@@ -67,7 +67,7 @@ class EngineOutputService:
         self._tokens = tokens
         self._authenticator = authenticator
         self._settings = settings
-        self._subjects = subjects if subjects is not None else AbortSubjects()
+        self._subjects = subjects
 
     # ------------------------------------------------------------------ output
 

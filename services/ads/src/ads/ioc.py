@@ -11,7 +11,7 @@ from ads.abort_subjects import AbortSubjects
 from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_controller import EngineOutputController
-from ads.engine_output_service import EngineOutputService
+from ads.engine_output_service import EngineOutputService, SessionFactory
 from ads.kafka import (
     AiokafkaEngineRequests,
     EngineOutputConsumer,
@@ -107,9 +107,7 @@ class AppProvider(Provider):
     def db_engine(self) -> Engine:
         return self._engine
 
-    @provide(scope=Scope.APP)
-    def oidc_client(self, settings: Settings, verifier: JwtVerifier) -> OidcClient:
-        return OidcClient(settings, verifier)
+    oidc_client = provide(OidcClient, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def preferences(self, settings: Settings, tokens: TokenMinter) -> PreferencesApi:
@@ -141,32 +139,11 @@ class AppProvider(Provider):
         return verifier
 
     @provide(scope=Scope.APP)
-    def engine_output(
-        self,
-        engine: Engine,
-        kafka: EngineRequests,
-        hub: LiveHub,
-        tokens: TokenMinter,
-        authenticator: TokenAuthenticator,
-        settings: Settings,
-        subjects: AbortSubjects,
-    ) -> EngineOutputService:
-        return EngineOutputService(
-            session_factory=session_factory_for(engine),
-            kafka=kafka,
-            hub=hub,
-            tokens=tokens,
-            authenticator=authenticator,
-            settings=settings,
-            subjects=subjects,
-        )
+    def session_factory(self, engine: Engine) -> SessionFactory:
+        return session_factory_for(engine)
 
-    @provide(scope=Scope.APP)
-    def engine_output_controller(
-        self,
-        engine_output: EngineOutputService,
-    ) -> EngineOutputController:
-        return EngineOutputController(engine_output)
+    engine_output = provide(EngineOutputService, scope=Scope.APP)
+    engine_output_controller = provide(EngineOutputController, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def engine_output_consumer(
@@ -191,15 +168,13 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def watchdog(
         self,
-        engine: Engine,
+        session_factory: SessionFactory,
         engine_output: EngineOutputService,
         settings: Settings,
     ) -> Watchdog:
-        return Watchdog(session_factory_for(engine), engine_output, settings)
+        return Watchdog(session_factory, engine_output, settings)
 
-    @provide(scope=Scope.APP)
-    def abort_subjects(self) -> AbortSubjects:
-        return AbortSubjects()
+    abort_subjects = provide(AbortSubjects, scope=Scope.APP)
 
     @provide(scope=Scope.REQUEST)
     def session(self, engine: Engine) -> Iterator[Session]:

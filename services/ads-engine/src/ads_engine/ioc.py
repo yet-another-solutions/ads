@@ -27,9 +27,9 @@ from ads_engine.store import ActiveSessionStore
 
 
 class KafkaPublisher:
-    def __init__(self, producer: AIOKafkaProducer, topic: str) -> None:
+    def __init__(self, producer: AIOKafkaProducer, settings: Settings) -> None:
         self._producer = producer
-        self._topic = topic
+        self._topic = settings.output_topic
 
     async def publish(
         self,
@@ -58,9 +58,7 @@ class AppProvider(Provider):
     def store(self, settings: Settings) -> ActiveSessionStore:
         return ActiveSessionStore(settings.database_url)
 
-    @provide(scope=Scope.APP)
-    def chat(self) -> ChatStreamer:
-        return LangChainChatStreamer()
+    chat = provide(LangChainChatStreamer, scope=Scope.APP, provides=ChatStreamer)
 
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
@@ -82,13 +80,7 @@ class AppProvider(Provider):
     ) -> SeekToEndListener:
         return SeekToEndListener(consumer)
 
-    @provide(scope=Scope.APP, provides=OutputPublisher)
-    def publisher(
-        self,
-        producer: AIOKafkaProducer,
-        settings: Settings,
-    ) -> KafkaPublisher:
-        return KafkaPublisher(producer, settings.output_topic)
+    publisher = provide(KafkaPublisher, scope=Scope.APP, provides=OutputPublisher)
 
     @provide(scope=Scope.APP)
     def engine_service(

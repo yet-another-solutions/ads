@@ -8,17 +8,15 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import structlog
-from sqlalchemy.orm import Session
 
 from ads.config import Settings
 from ads.domain import utc_now
-from ads.engine_output_service import EngineOutputService
+from ads.engine_output_service import EngineOutputService, SessionFactory
 from ads.models import STATUS_FINISHING, STATUS_PENDING, STATUS_RUNNING
 from ads.repository import SessionRunRepository
 
 log = structlog.get_logger("ads.watchdog")
 
-SessionFactory = Callable[[], Session]
 Clock = Callable[[], datetime]
 
 
