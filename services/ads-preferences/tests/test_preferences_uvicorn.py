@@ -36,7 +36,7 @@ def _base_env(
         {
             "ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL": keycloak_well_known_url,
             "ADS_PREFERENCES_KEYCLOAK_ISSUER": "https://kc/realms/ads",
-            "ADS_PREFERENCES_DATABASE_URL": "sqlite:///:memory:",
+            "ADS_PREFERENCES_DATABASE_URL": f"sqlite:///{tmp_path / 'preferences.db'}",
             "ADS_PREFERENCES_TLS_CERT_PATH": str(cert),
             "ADS_PREFERENCES_TLS_KEY_PATH": str(key),
             "ADS_PREFERENCES_BIND_HOST": "127.0.0.1",

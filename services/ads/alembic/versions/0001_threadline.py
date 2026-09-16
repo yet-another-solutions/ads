@@ -61,15 +61,16 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["next_id"], ["session_entry.id"], name="session_entry_next_fk"),
     )
     op.create_index("session_entry_session_id_idx", "session_entry", ["session_id"])
-    op.create_foreign_key(
-        "session_latest_entry_fk",
-        "session",
-        "session_entry",
-        ["latest_entry_id"],
-        ["id"],
-        deferrable=True,
-        initially="DEFERRED",
-    )
+    if op.get_bind().dialect.name != "sqlite":
+        op.create_foreign_key(
+            "session_latest_entry_fk",
+            "session",
+            "session_entry",
+            ["latest_entry_id"],
+            ["id"],
+            deferrable=True,
+            initially="DEFERRED",
+        )
     op.create_table(
         "session_run",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -120,7 +121,8 @@ def downgrade() -> None:
     op.drop_index("session_run_session_id_idx", table_name="session_run")
     op.drop_index("session_run_one_inflight", table_name="session_run")
     op.drop_table("session_run")
-    op.drop_constraint("session_latest_entry_fk", "session", type_="foreignkey")
+    if op.get_bind().dialect.name != "sqlite":
+        op.drop_constraint("session_latest_entry_fk", "session", type_="foreignkey")
     op.drop_index("session_entry_session_id_idx", table_name="session_entry")
     op.drop_table("session_entry")
     op.drop_index("session_user_id_idx", table_name="session")

@@ -14,6 +14,8 @@ _SRC = (
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/src",
     "libraries/ads-commons-beans/tests",
+    "libraries/ads-commons-schema/src",
+    "libraries/ads-commons-schema/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-engine/src",
@@ -29,6 +31,7 @@ _PACKAGES = (
     "services/ads-engine",
     "libraries/ads-commons",
     "libraries/ads-commons-beans",
+    "libraries/ads-commons-schema",
     "services/ads-preferences",
 )
 
@@ -81,6 +84,7 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads", external=True)
     session.run("uv", "build", "--package", "ads-commons", external=True)
     session.run("uv", "build", "--package", "ads-commons-beans", external=True)
+    session.run("uv", "build", "--package", "ads-commons-schema", external=True)
     session.run("uv", "build", "--package", "ads-engine", external=True)
     session.run("uv", "build", "--package", "ads-egress-controlplane", external=True)
     session.run("uv", "build", "--package", "ads-preferences", external=True)

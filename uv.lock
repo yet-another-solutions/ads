@@ -11,6 +11,7 @@ members = [
     "ads",
     "ads-commons",
     "ads-commons-beans",
+    "ads-commons-schema",
     "ads-egress-controlplane",
     "ads-engine",
     "ads-preferences",
@@ -24,6 +25,7 @@ source = { editable = "services/ads" }
 dependencies = [
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
+    { name = "ads-commons-schema" },
     { name = "advanced-alchemy" },
     { name = "aiokafka" },
     { name = "alembic" },
@@ -43,6 +45,7 @@ dependencies = [
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "alembic", specifier = "==1.16.5" },
@@ -87,6 +90,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "ads-commons-schema"
+version = "0.0.1"
+source = { editable = "libraries/ads-commons-schema" }
+dependencies = [
+    { name = "alembic" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = "==1.16.5" },
+    { name = "sqlalchemy", specifier = "==2.0.43" },
+]
+
+[[package]]
 name = "ads-egress-controlplane"
 version = "0.0.1"
 source = { editable = "services/ads-egress-controlplane" }
@@ -98,7 +116,9 @@ source = { editable = "services/ads-engine" }
 dependencies = [
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
+    { name = "ads-commons-schema" },
     { name = "aiokafka" },
+    { name = "alembic" },
     { name = "dishka" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -111,7 +131,9 @@ dependencies = [
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "aiokafka", specifier = "==0.14.0" },
+    { name = "alembic", specifier = "==1.16.5" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "langchain-core", specifier = "==1.6.3" },
     { name = "langchain-openai", specifier = "==1.6.2" },
@@ -127,6 +149,7 @@ source = { editable = "services/ads-preferences" }
 dependencies = [
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
+    { name = "ads-commons-schema" },
     { name = "advanced-alchemy" },
     { name = "alembic" },
     { name = "dishka" },
@@ -142,6 +165,7 @@ dependencies = [
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "alembic", specifier = "==1.16.5" },
     { name = "dishka", specifier = "==1.10.1" },
@@ -161,6 +185,7 @@ dependencies = [
     { name = "ads" },
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
+    { name = "ads-commons-schema" },
     { name = "ads-egress-controlplane" },
     { name = "ads-engine" },
     { name = "ads-preferences" },
@@ -189,6 +214,7 @@ requires-dist = [
     { name = "ads", editable = "services/ads" },
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "ads-egress-controlplane", editable = "services/ads-egress-controlplane" },
     { name = "ads-engine", editable = "services/ads-engine" },
     { name = "ads-preferences", editable = "services/ads-preferences" },
