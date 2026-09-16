@@ -5,42 +5,87 @@ from collections import OrderedDict
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     Capability,
+    Classifier,
+    ClassifierKind,
     Effect,
     Mode,
     Policy,
     PolicyDecision,
     PolicyRequest,
+    ResourceClass,
     Rule,
     Run,
     RunState,
-    Scope,
+    ToolCallRequest,
 )
-from ads_policy.normalize import branch_name, egress_host, is_migration_file, within_workdir
+from ads_policy.normalize import branch_name, egress_host, within_workdir
+
+
+class Unbound(ValueError):
+    """The call does not resolve to a capability, so there is nothing to decide.
+
+    Two ways to get here, and both are refusals rather than guesses: no binding names
+    this tool, or the binding names an argument the call did not carry.
+    """
+
+    def __init__(self, rule_id: str, detail: str) -> None:
+        super().__init__(detail)
+        self.rule_id = rule_id
+
+
+def resolve(call: ToolCallRequest, policy: Policy) -> tuple[Capability, str]:
+    """Turn one agent's tool call into the capability and resource it amounts to."""
+    binding = policy.binding_for(call.source, call.tool)
+    if binding is None:
+        raise Unbound("binding.missing", f"nothing binds {call.tool!r} from {call.source!r}")
+    resource = binding.resource(call.arguments)
+    if resource is None:
+        raise Unbound(
+            "binding.resource",
+            f"{call.tool!r} carries no {binding.argument!r} to act on",
+        )
+    return binding.capability, resource
 
 
 def classify(
     request: PolicyRequest, policy: Policy, settings: GovernanceSettings | None = None
-) -> Scope:
-    """Turn the raw resource into the matrix qualifier."""
+) -> str:
+    """Turn the raw resource into the class the matrix is written over.
+
+    Which classifier a capability uses comes from the policy; what each classifier
+    means is here. A capability the policy declares nothing for classifies as ``any``
+    and so only matches a rule written over ``any`` — which, absent one, is a denial.
+    """
     config = settings or GovernanceSettings()
+    classifier = policy.classifier_for(request.capability)
+    if classifier is None:
+        return ResourceClass.ANY
+    if classifier.kind is ClassifierKind.LITERAL:
+        return classifier.match
+    return (
+        classifier.match
+        if _matches(classifier, request, policy, config)
+        else (classifier.otherwise or ResourceClass.ANY)
+    )
+
+
+def _matches(
+    classifier: Classifier,
+    request: PolicyRequest,
+    policy: Policy,
+    config: GovernanceSettings,
+) -> bool:
+    resource = request.resource
     workdir = request.context.workdir
-    capability = request.capability
-    if capability in (Capability.FS_READ, Capability.FS_WRITE):
-        inside = within_workdir(request.resource, workdir)
-        return Scope.WORKDIR if inside else Scope.OUTSIDE_WORKDIR
-    if capability is Capability.NET_EGRESS:
-        allowlist = {host.lower() for host in policy.egress_allowlist}
-        return Scope.ALLOWLIST if egress_host(request.resource) in allowlist else Scope.INTERNET
-    if capability is Capability.DB_QUERY:
-        return Scope.BROKER
-    if capability is Capability.DB_MIGRATE:
-        migration = is_migration_file(request.resource, workdir, config)
-        return Scope.TEMPORARY if migration else Scope.OUTSIDE_WORKDIR
-    if capability is Capability.VCS_PUSH:
-        protected = {name.lower() for name in policy.protected_branches}
-        target = branch_name(request.resource, config)
-        return Scope.PROTECTED_BRANCH if target in protected else Scope.FEATURE_BRANCH
-    return Scope.ANY
+    if classifier.kind is ClassifierKind.PATH:
+        return within_workdir(resource, workdir)
+    if classifier.kind is ClassifierKind.SUFFIX:
+        return resource.strip().endswith(classifier.value) and within_workdir(resource, workdir)
+    if classifier.kind is ClassifierKind.HOST:
+        return egress_host(resource) in {host.lower() for host in policy.egress_allowlist}
+    if classifier.kind is ClassifierKind.BRANCH:
+        return branch_name(resource, config) in {name.lower() for name in policy.protected_branches}
+    raise ValueError(f"no such classifier: {classifier.kind}")
 
 
 class PolicyDecisionPoint:
@@ -58,6 +103,10 @@ class PolicyDecisionPoint:
     @property
     def policy_hash(self) -> str:
         return self._current
+
+    def policy_of(self, run: Run) -> Policy | None:
+        """The version this run was pinned to, or nothing if it has aged out."""
+        return self._versions.get(run.policy_hash)
 
     def reload(self, policy: Policy) -> str:
         """Publish a new version without disturbing runs pinned to an older one."""
@@ -92,7 +141,7 @@ class PolicyDecisionPoint:
 
     def _evaluate(self, policy: Policy, policy_hash: str, request: PolicyRequest) -> PolicyDecision:
         try:
-            scope = classify(request, policy, self._settings)
+            resource_class = classify(request, policy, self._settings)
         except Exception as exc:
             if not policy.deny_on_policy_error:
                 raise
@@ -103,13 +152,13 @@ class PolicyDecisionPoint:
                 reason=f"policy error: {exc}",
                 weight=policy.default_weight,
             )
-        rule = policy.rule_for(request.capability, scope)
+        rule = policy.rule_for(request.capability, resource_class)
         if rule is None:
             return self._deny(
                 policy,
                 policy_hash,
                 rule_id="policy.default-deny",
-                reason=f"no rule for {request.capability.value} in {scope.value}",
+                reason=f"no rule for {request.capability.value} in {resource_class}",
                 weight=policy.default_weight,
             )
         if not rule.satisfied_by(request.attributes):
@@ -127,7 +176,7 @@ class PolicyDecisionPoint:
                 policy_hash,
                 rule_id=rule.id,
                 reason=(
-                    f"{request.capability.value} in {scope.value} "
+                    f"{request.capability.value} in {resource_class} "
                     f"is not allowed at {request.isolation_level.value}"
                 ),
                 weight=rule.weight,
@@ -136,7 +185,7 @@ class PolicyDecisionPoint:
         return PolicyDecision(
             effect=Effect.ALLOW,
             rule_id=rule.id,
-            reason=f"{request.capability.value} in {scope.value}",
+            reason=f"{request.capability.value} in {resource_class}",
             policy_hash=policy_hash,
             mode=policy.mode,
         )

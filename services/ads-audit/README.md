@@ -44,8 +44,17 @@ forever would block everything behind it.
 
 | | |
 |---|---|
+| `GET /audit/events` | the whole journal, newest first, a page at a time |
+| `GET /audit/runs/{run_id}` | one run, in the order it happened |
+| `GET /audit/subjects/{subject}` | everything one subject did |
 | `GET /audit/runs/{run_id}/budget` | the accumulated cost of denials within one run |
 | `GET /audit/subjects/{subject}/budget` | the same across a subject's runs |
+
+Only the journal is paged, because only it is unbounded; a run is bounded by its own
+lifetime. Paging is keyset on `(recorded_at, event_id)` rather than an offset: the
+journal only grows, so a cursor keeps pointing at the same row however much lands after
+it. Carry `next_cursor` back to continue, and a page size above the service's ceiling is
+capped rather than refused.
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | the journal answers. 503 otherwise |
 

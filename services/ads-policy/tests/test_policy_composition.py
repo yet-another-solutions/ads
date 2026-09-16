@@ -11,8 +11,8 @@ from ads_policy.contract import (
     IsolationLevel,
     Mode,
     Policy,
+    ResourceClass,
     Rule,
-    Scope,
 )
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import compose, load_policy, org_policy, read_policy_document
@@ -39,7 +39,7 @@ def test_dev_policy_is_optional(policy: Policy) -> None:
 
 
 def test_dev_policy_narrows_a_rule(policy: Policy) -> None:
-    dev = _dev_policy(Rule("process.exec", Capability.PROCESS_EXEC, Scope.ANY, frozenset()))
+    dev = _dev_policy(Rule("process.exec", Capability.PROCESS_EXEC, ResourceClass.ANY, frozenset()))
     pdp = PolicyDecisionPoint(compose(policy, dev))
     request = policy_request(Capability.PROCESS_EXEC, "uv sync", level=IsolationLevel.LOCAL)
     assert pdp.decide(request).effect is Effect.DENY
@@ -47,7 +47,7 @@ def test_dev_policy_narrows_a_rule(policy: Policy) -> None:
 
 def test_dev_policy_cannot_widen_a_rule(policy: Policy) -> None:
     dev = _dev_policy(
-        Rule("secret.read", Capability.SECRET_READ, Scope.ANY, frozenset(IsolationLevel))
+        Rule("secret.read", Capability.SECRET_READ, ResourceClass.ANY, frozenset(IsolationLevel))
     )
     pdp = PolicyDecisionPoint(compose(policy, dev))
     request = policy_request(Capability.SECRET_READ, "ads-client-secret")
@@ -56,10 +56,10 @@ def test_dev_policy_cannot_widen_a_rule(policy: Policy) -> None:
 
 def test_dev_policy_cannot_add_a_row_the_org_policy_does_not_have(policy: Policy) -> None:
     dev = _dev_policy(
-        Rule("fs.read.anywhere", Capability.FS_READ, Scope.ANY, frozenset(IsolationLevel))
+        Rule("fs.read.anywhere", Capability.FS_READ, ResourceClass.ANY, frozenset(IsolationLevel))
     )
     composed = compose(policy, dev)
-    assert composed.rule_for(Capability.FS_READ, Scope.ANY) is None
+    assert composed.rule_for(Capability.FS_READ, ResourceClass.ANY) is None
 
 
 def test_dev_policy_narrows_the_egress_allowlist(policy: Policy) -> None:
@@ -93,13 +93,13 @@ def test_weights_and_attribute_requirements_never_loosen(policy: Policy) -> None
         Rule(
             "vcs.push.feature",
             Capability.VCS_PUSH,
-            Scope.FEATURE_BRANCH,
+            ResourceClass.FEATURE_BRANCH,
             frozenset(IsolationLevel),
             weight=1,
             requires=(("agent", "true"),),
         )
     )
-    rule = compose(policy, dev).rule_for(Capability.VCS_PUSH, Scope.FEATURE_BRANCH)
+    rule = compose(policy, dev).rule_for(Capability.VCS_PUSH, ResourceClass.FEATURE_BRANCH)
     assert rule is not None
     assert rule.weight == 2
     assert ("repo.write", "true") in rule.requires
@@ -110,7 +110,7 @@ def test_hash_is_computed_over_the_content_not_the_label() -> None:
     document = {
         "hash": "0" * 64,
         "version": "org-1",
-        "rules": [{"id": "secret.read", "capability": "secret.read", "scope": "any"}],
+        "rules": [{"id": "secret.read", "capability": "secret.read", "resourceClass": "any"}],
     }
     honest = dict(document)
     del honest["hash"]
@@ -127,20 +127,22 @@ def test_hash_ignores_rule_order_and_follows_rule_content(policy: Policy) -> Non
         rules=tuple(reversed(policy.rules)),
         egress_allowlist=policy.egress_allowlist,
         protected_branches=policy.protected_branches,
+        capabilities=policy.capabilities,
+        bindings=policy.bindings,
     )
     assert reordered.digest() == policy.digest()
     widened = compose(
         policy,
-        _dev_policy(Rule("process.exec", Capability.PROCESS_EXEC, Scope.ANY, frozenset())),
+        _dev_policy(Rule("process.exec", Capability.PROCESS_EXEC, ResourceClass.ANY, frozenset())),
     )
     assert widened.digest() != policy.digest()
 
 
 def test_an_unreadable_rule_is_rejected_at_load() -> None:
     with pytest.raises(ValueError, match="unreadable rule"):
-        load_policy({"rules": [{"id": "nope", "capability": "db.write", "scope": "any"}]})
+        load_policy({"rules": [{"id": "nope", "capability": "db.write", "resourceClass": "any"}]})
     with pytest.raises(ValueError, match="unreadable rule"):
-        load_policy({"rules": [{"id": "nope", "scope": "any"}]})
+        load_policy({"rules": [{"id": "nope", "resourceClass": "any"}]})
 
 
 def test_an_unknown_level_in_a_document_is_dropped() -> None:
@@ -150,13 +152,13 @@ def test_an_unknown_level_in_a_document_is_dropped() -> None:
                 {
                     "id": "process.exec",
                     "capability": "process.exec",
-                    "scope": "any",
+                    "resourceClass": "any",
                     "levels": ["vm", "bare-metal"],
                 }
             ]
         }
     )
-    rule = loaded.rule_for(Capability.PROCESS_EXEC, Scope.ANY)
+    rule = loaded.rule_for(Capability.PROCESS_EXEC, ResourceClass.ANY)
     assert rule is not None
     assert rule.levels == {IsolationLevel.VM}
 
@@ -192,7 +194,7 @@ def test_the_delivered_policy_is_read_from_the_mounted_directory(tmp_path: Path)
         rules:
           - id: process.exec
             capability: process.exec
-            scope: any
+            resourceClass: any
             levels: [vm]
         """
     )
@@ -200,6 +202,6 @@ def test_the_delivered_policy_is_read_from_the_mounted_directory(tmp_path: Path)
     assert document is not None
     loaded = load_policy(document, settings)
     assert loaded.version == "org-2"
-    rule = loaded.rule_for(Capability.PROCESS_EXEC, Scope.ANY)
+    rule = loaded.rule_for(Capability.PROCESS_EXEC, ResourceClass.ANY)
     assert rule is not None
     assert rule.levels == {IsolationLevel.VM}

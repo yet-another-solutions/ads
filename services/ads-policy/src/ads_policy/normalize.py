@@ -43,11 +43,3 @@ def branch_name(resource: str, settings: GovernanceSettings | None = None) -> st
     if tail and head in config.remote_names:
         name = tail
     return name.lower()
-
-
-def is_migration_file(
-    resource: str, workdir: str, settings: GovernanceSettings | None = None
-) -> bool:
-    """A migration is a versioned file reviewed in git, never SQL built at runtime."""
-    config = settings or GovernanceSettings()
-    return resource.strip().endswith(config.migration_suffix) and within_workdir(resource, workdir)

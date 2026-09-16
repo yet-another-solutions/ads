@@ -15,6 +15,7 @@ from ads_policy.contract import (
     PolicyDecision,
     Run,
     RunRequest,
+    ToolCallRequest,
 )
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import org_policy
@@ -48,6 +49,9 @@ class DirectPolicyClient:
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
         return _blocking(self.service.decide(request))
+
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        return _blocking(self.service.decide_call(call))
 
 
 def policy_service(journal: CollectingAuditSink) -> PolicyService:

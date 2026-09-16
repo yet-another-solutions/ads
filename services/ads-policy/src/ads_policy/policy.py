@@ -7,7 +7,18 @@ from typing import Any
 import msgspec
 
 from ads_policy.config import GovernanceSettings
-from ads_policy.contract import Capability, IsolationLevel, Mode, Policy, Rule, Scope
+from ads_policy.contract import (
+    Binding,
+    Capability,
+    CapabilityDef,
+    Classifier,
+    ClassifierKind,
+    IsolationLevel,
+    Mode,
+    Policy,
+    ResourceClass,
+    Rule,
+)
 from ads_policy.pdp import PolicyDecisionPoint
 
 
@@ -22,6 +33,8 @@ def org_policy(settings: GovernanceSettings | None = None) -> Policy:
         rules=config.rules,
         egress_allowlist=config.egress_allowlist,
         protected_branches=config.protected_branches,
+        capabilities=config.capabilities,
+        bindings=config.bindings,
         default_weight=config.default_weight,
     )
 
@@ -45,6 +58,17 @@ def load_policy(document: Mapping[str, Any], settings: GovernanceSettings | None
     """Parse a policy document, ignoring any hash the document claims about itself."""
     config = settings or GovernanceSettings()
     rules = tuple(_load_rule(raw) for raw in document.get("rules", ()))
+    # A missing section means "keep the built-in classifiers"; an empty one means the
+    # document declares none, and then everything classifies as `any`.
+    declared = document.get("capabilities")
+    capabilities = (
+        config.capabilities
+        if declared is None
+        else tuple(_load_capability(raw) for raw in declared)
+    )
+    bound = document.get("bindings")
+    bindings = config.bindings if bound is None else tuple(_load_binding(raw) for raw in bound)
+    _check_reachable(rules, capabilities)
     return Policy(
         schema_version=str(document.get("schemaVersion", config.schema_version)),
         version=str(document.get("version", config.policy_version)),
@@ -53,24 +77,87 @@ def load_policy(document: Mapping[str, Any], settings: GovernanceSettings | None
         rules=rules,
         egress_allowlist=tuple(str(host) for host in document.get("egressAllowlist", ())),
         protected_branches=tuple(str(name) for name in document.get("protectedBranches", ())),
+        capabilities=capabilities,
+        bindings=bindings,
         default_weight=int(document.get("defaultWeight", config.default_weight)),
     )
+
+
+def _load_binding(raw: Mapping[str, Any]) -> Binding:
+    try:
+        binding = Binding(
+            source=str(raw["source"]),
+            tool=str(raw["tool"]),
+            capability=Capability(str(raw["capability"])),
+            argument=str(raw.get("argument", "")),
+            value=str(raw.get("value", "")),
+        )
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"unreadable binding {raw.get('tool')!r}") from exc
+    if bool(binding.argument) == bool(binding.value):
+        raise ValueError(
+            f"binding {binding.tool!r} needs exactly one of argument or value:"
+            " the resource is either carried by the call or fixed by the binding"
+        )
+    return binding
+
+
+def _load_capability(raw: Mapping[str, Any]) -> CapabilityDef:
+    try:
+        capability = Capability(str(raw["capability"]))
+        spec = dict(raw["classifier"])
+        kind = ClassifierKind(str(spec["kind"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"unreadable capability {raw.get('capability')!r}") from exc
+    return CapabilityDef(
+        capability=capability,
+        classifier=Classifier(
+            kind=kind,
+            match=str(spec["match"]),
+            otherwise=str(spec.get("otherwise", "")),
+            value=str(spec.get("value", "")),
+        ),
+    )
+
+
+def _check_reachable(rules: tuple[Rule, ...], capabilities: tuple[CapabilityDef, ...]) -> None:
+    """A rule over a class no classifier answers with is dead, and silently so.
+
+    In a deny-by-default matrix a typo does not fail loudly: the rule simply never
+    matches and the capability is refused where the author meant to permit it. So the
+    document is rejected instead.
+    """
+    answers: dict[Capability, frozenset[str]] = {
+        definition.capability: definition.classifier.classes() for definition in capabilities
+    }
+    for rule in rules:
+        reachable = answers.get(rule.capability, frozenset({ResourceClass.ANY}))
+        if rule.resource_class not in reachable:
+            raise ValueError(
+                f"rule {rule.id!r} is written over {rule.resource_class!r}, which the"
+                f" classifier for {rule.capability.value} never answers with"
+                f" ({sorted(reachable)})"
+            )
 
 
 def _load_rule(raw: Mapping[str, Any]) -> Rule:
     try:
         capability = Capability(str(raw["capability"]))
-        scope = Scope(str(raw["scope"]))
-    except (KeyError, ValueError) as exc:
+        # Any word will do here: whether a classifier can produce it is checked once
+        # the capabilities are known, and that check names the mistake properly.
+        resource_class = str(raw["resourceClass"])
+    except KeyError as exc:
+        raise ValueError(f"unreadable rule {raw.get('id')!r}") from exc
+    except ValueError as exc:
         raise ValueError(f"unreadable rule {raw.get('id')!r}") from exc
     levels = frozenset(
         IsolationLevel(str(level)) for level in raw.get("levels", ()) if _known_level(level)
     )
     requires = tuple(sorted((str(k), str(v)) for k, v in dict(raw.get("requires", {})).items()))
     return Rule(
-        id=str(raw.get("id", f"{capability.value}.{scope.value}")),
+        id=str(raw.get("id", f"{capability.value}.{resource_class}")),
         capability=capability,
-        scope=scope,
+        resource_class=resource_class,
         levels=levels,
         weight=int(raw.get("weight", 1)),
         alternative=str(raw.get("alternative", "")),
@@ -124,6 +211,11 @@ def compose(org: Policy, dev: Policy | None = None) -> Policy:
             else org.egress_allowlist
         ),
         protected_branches=tuple(sorted(set(org.protected_branches) | set(dev.protected_branches))),
+        # Neither classification nor binding is a permission, and a dev policy does not
+        # get to change either: rebinding `bash` to `fs.read` would widen everything
+        # without touching a single rule.
+        capabilities=org.capabilities,
+        bindings=org.bindings,
         default_weight=max(org.default_weight, dev.default_weight),
     )
 

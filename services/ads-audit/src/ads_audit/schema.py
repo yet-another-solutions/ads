@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     event_id    varchar(64) NOT NULL,
     run_id      varchar(64) NOT NULL,
     subject     varchar(255) NOT NULL,
-    capability  varchar(64) NOT NULL,
+    capability  varchar(64),
     resource    text NOT NULL,
     effect      varchar(16) NOT NULL,
     rule_id     varchar(64) NOT NULL,

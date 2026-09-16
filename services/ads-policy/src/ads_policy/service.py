@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import msgspec
 from redis.exceptions import RedisError
 
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
+    AuditEvent,
     DecisionRequest,
     Effect,
     Mode,
@@ -15,9 +17,10 @@ from ads_policy.contract import (
     Run,
     RunContext,
     RunRequest,
+    ToolCallRequest,
 )
 from ads_policy.isolation import assign_isolation_level
-from ads_policy.pdp import PolicyDecisionPoint
+from ads_policy.pdp import PolicyDecisionPoint, Unbound, resolve
 from ads_policy.run import RunStore
 
 
@@ -54,6 +57,70 @@ class PolicyService:
             return await self.runs.revoke(run_id)
         except KeyError:
             return None
+
+    async def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        """Recognise an agent's tool call, then decide it like any other.
+
+        Resolution happens against the version the run is pinned to, so a binding
+        added after the run started does not change what that run may do.
+        """
+        try:
+            run = await self.runs.get(call.run_id)
+        except RedisError as exc:
+            return self._journal_call(
+                call, self._refuse("run.store", f"run store unreachable: {exc}")
+            )
+        if run is None:
+            return self._journal_call(
+                call, self._refuse("run.unknown", f"run {call.run_id} is unknown")
+            )
+        if run.subject != call.subject:
+            return self._journal_call(
+                call, self._refuse("run.subject", f"run {run.id} belongs to someone else")
+            )
+        policy = self.pdp.policy_of(run)
+        if policy is None:
+            return self._journal_call(call, self._refuse("policy.missing", "pinned policy is gone"))
+        try:
+            capability, resource = resolve(call, policy)
+        except Unbound as exc:
+            return self._journal_call(call, self._refuse(exc.rule_id, str(exc)))
+        decision = await self.decide(
+            DecisionRequest(
+                run_id=call.run_id,
+                subject=call.subject,
+                capability=capability,
+                resource=resource,
+                attributes=dict(call.attributes),
+            )
+        )
+        # The caller asked by tool name, so tell it what that turned out to be.
+        return msgspec.structs.replace(decision, capability=capability, resource=resource)
+
+    def _journal_call(self, call: ToolCallRequest, decision: PolicyDecision) -> PolicyDecision:
+        """A call nobody could recognise still happened, so it still gets a row.
+
+        No capability, because it never resolved to one. The tool is named in the
+        resource instead, which is what a reviewer needs to see: repeated attempts at
+        tools nothing binds are probing, and the budget should feel them.
+        """
+        try:
+            self.audit.enqueue(
+                AuditEvent(
+                    run_id=call.run_id,
+                    subject=call.subject,
+                    capability=None,
+                    resource=f"{call.source}/{call.tool}",
+                    effect=decision.effect,
+                    rule_id=decision.rule_id,
+                    weight=decision.weight or self.settings.default_weight,
+                    policy_hash=decision.policy_hash,
+                    point=decision.point,
+                )
+            )
+        except AuditBacklogFull as exc:
+            return self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
+        return decision
 
     async def decide(self, request: DecisionRequest) -> PolicyDecision:
         try:

@@ -11,21 +11,24 @@ from litestar.connection import ASGIConnection
 from litestar.exceptions import NotAuthorizedException, ServiceUnavailableException
 from litestar.handlers import BaseRouteHandler
 
-from ads_policy.contract import Capability, PolicyDecision, Run
+from ads_policy.contract import PolicyDecision, Run
 from ads_supervisor.supervisor import RunNotOpen, Supervisor
 
 BEARER = "Bearer "
 
 
 class PermissionRequest(msgspec.Struct, frozen=True):
-    """What opencode asks before it executes a tool, named in our own vocabulary.
+    """What an agent asks before it executes a tool, in the agent's own words.
+
+    No capability here: naming it would mean this side translating, and the binding
+    that does the translating is policy, versioned with the run.
 
     ``arguments`` is required and may be empty: a call that sends nothing outbound
     says so, rather than leaving "not checked" and "nothing to check" the same state.
     """
 
-    capability: Capability
-    resource: str
+    source: str
+    tool: str
     arguments: dict[str, str]
 
 
@@ -60,7 +63,7 @@ class SupervisorController(Controller):
             # The policy client is synchronous, and a hung policy service must not
             # take the event loop down with it — health probes answer from here too.
             return await anyio.to_thread.run_sync(
-                supervisor.permit, data.capability, data.resource, data.arguments
+                supervisor.permit, data.source, data.tool, data.arguments
             )
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc

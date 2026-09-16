@@ -24,7 +24,8 @@ audit_decisions = Table(
     Column("event_id", String(64), nullable=False),
     Column("run_id", String(64), nullable=False),
     Column("subject", String(255), nullable=False),
-    Column("capability", String(64), nullable=False),
+    #: Null when the call never resolved to a capability — an unbound tool still logs.
+    Column("capability", String(64), nullable=True),
     Column("resource", Text, nullable=False),
     Column("effect", String(16), nullable=False),
     Column("rule_id", String(64), nullable=False),

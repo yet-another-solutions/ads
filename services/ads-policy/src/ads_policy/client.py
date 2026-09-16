@@ -15,6 +15,7 @@ from ads_policy.contract import (
     PolicyDecision,
     Run,
     RunRequest,
+    ToolCallRequest,
 )
 
 UNREACHABLE = "policy.unreachable"
@@ -29,6 +30,8 @@ class PolicyClient(Protocol):
     def revoke_run(self, run_id: str) -> Run: ...
 
     def decide(self, request: DecisionRequest) -> PolicyDecision: ...
+
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision: ...
 
 
 def unreachable(reason: str, message: str) -> PolicyDecision:
@@ -71,8 +74,14 @@ class HttpPolicyClient:
         return msgspec.convert(self._post(f"/policy/runs/{run_id}/revoke", None), type=Run)
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
+        return self._ask("/policy/decide", request)
+
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        return self._ask("/policy/calls", call)
+
+    def _ask(self, path: str, body: msgspec.Struct) -> PolicyDecision:
         try:
-            payload = self._post("/policy/decide", request)
+            payload = self._post(path, body)
         except (httpx2.HTTPError, ValueError) as exc:
             return unreachable(f"policy service: {exc}", self._denied_message)
         try:
@@ -105,6 +114,9 @@ class UnconfiguredPolicyClient:
         raise RuntimeError(UNCONFIGURED)
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
+        return unreachable(UNCONFIGURED, self.denied_message)
+
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         return unreachable(UNCONFIGURED, self.denied_message)
 
 

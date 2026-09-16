@@ -6,7 +6,7 @@ import msgspec
 import pytest
 
 from ads_policy.config import GovernanceSettings
-from ads_policy.contract import Capability, Effect, IsolationLevel, RunState, Scope
+from ads_policy.contract import Capability, Effect, IsolationLevel, ResourceClass, RunState
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import org_policy, reload_policy
 from ads_policy.run import InMemoryRunStore
@@ -17,7 +17,7 @@ version: org-2
 rules:
   - id: process.exec
     capability: process.exec
-    scope: any
+    resourceClass: any
     levels: []
 """
 
@@ -102,4 +102,4 @@ async def test_a_rule_the_new_version_drops_is_not_applied_to_a_pinned_run(tmp_p
     assert run.state is RunState.RUNNING
     assert pinned.effect is Effect.ALLOW
     assert current.effect is Effect.DENY
-    assert pdp.policy.rule_for(Capability.PROCESS_EXEC, Scope.ANY) is not None
+    assert pdp.policy.rule_for(Capability.PROCESS_EXEC, ResourceClass.ANY) is not None

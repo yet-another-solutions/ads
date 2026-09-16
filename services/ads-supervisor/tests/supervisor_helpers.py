@@ -5,7 +5,13 @@ from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from ads_policy.contract import DecisionRequest, PolicyDecision, Run, RunRequest
+from ads_policy.contract import (
+    DecisionRequest,
+    PolicyDecision,
+    Run,
+    RunRequest,
+    ToolCallRequest,
+)
 from ads_policy.service import PolicyService
 
 TOKEN = "supervisor-api-token-32-bytes"
@@ -35,6 +41,9 @@ class DirectPolicyClient:
     def decide(self, request: DecisionRequest) -> PolicyDecision:
         return blocking(self.service.decide(request))
 
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        return blocking(self.service.decide_call(call))
+
 
 class RefusingPolicyClient:
     """Stands in for a policy service that cannot be reached at all."""
@@ -46,4 +55,7 @@ class RefusingPolicyClient:
         raise ConnectionError("no route to the policy service")
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
+        raise ConnectionError("no route to the policy service")
+
+    def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         raise ConnectionError("no route to the policy service")

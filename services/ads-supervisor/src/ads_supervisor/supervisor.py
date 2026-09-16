@@ -3,19 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import msgspec
 import structlog
 
-from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
+from ads_policy.audit import AuditBacklogFull, BufferedAuditSink
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
-    Capability,
-    DecisionRequest,
+    AuditEvent,
     Effect,
     InterceptionPoint,
     PolicyDecision,
     Run,
     RunRequest,
+    ToolCallRequest,
 )
 from ads_policy.output import inspect_payload
 from ads_supervisor.config import Settings
@@ -69,10 +70,12 @@ class Supervisor:
         logger.info("run opened", run_id=started.id, isolation_level=started.isolation_level.value)
         return started
 
-    def permit(
-        self, capability: Capability, resource: str, arguments: Mapping[str, str]
-    ) -> PolicyDecision:
+    def permit(self, source: str, tool: str, arguments: Mapping[str, str]) -> PolicyDecision:
         """What answering opencode's ``permission.asked`` comes down to.
+
+        The call arrives in the agent's own words. This side does not translate it:
+        bindings are policy, pinned to the run, and a copy held here would decide
+        under a version nobody recorded.
 
         The matrix decides first. Only a call it permits is going to happen, so only
         then is there an outbound payload worth reading — and a credential in it turns
@@ -80,29 +83,54 @@ class Supervisor:
         """
         if self.run is None:
             raise RunNotOpen("no run has been opened")
-        request = DecisionRequest(
+        call = ToolCallRequest(
             run_id=self.run.id,
             subject=self.run.subject,
-            capability=capability,
-            resource=resource,
+            source=source,
+            tool=tool,
+            arguments=dict(arguments),
             attributes=dict(self.settings.attributes or {}),
         )
-        decision = self.client.decide(request)
+        decision = self.client.decide_call(call)
         if decision.rule_id == UNREACHABLE:
-            return self._journal(request, decision)
+            return self._journal(call, decision)
         # The policy service journalled its own answer; a second copy would read as a
         # second attempt and charge the budget twice.
         if not decision.permitted:
             return decision
         leak = inspect_payload(_payload(arguments), InterceptionPoint.REQUEST, self.governance)
         if leak.effect is Effect.DENY:
-            # This one the policy service never saw, so nobody else will record it.
-            return self._journal(request, leak)
+            # This one the policy service never saw, so nobody else will record it. It
+            # is the call the matrix just recognised, so it goes down as that
+            # capability rather than as an anonymous one.
+            return self._journal(
+                call,
+                msgspec.structs.replace(
+                    leak, capability=decision.capability, resource=decision.resource
+                ),
+            )
         return decision
 
-    def _journal(self, request: DecisionRequest, decision: PolicyDecision) -> PolicyDecision:
+    def _journal(self, call: ToolCallRequest, decision: PolicyDecision) -> PolicyDecision:
+        """Only what the policy service never saw lands here, so nothing is doubled.
+
+        The capability comes back on the decision when the call resolved; when it did
+        not, the tool names itself in the resource and that is the honest record.
+        """
         try:
-            self.audit.enqueue(record(request, decision))
+            self.audit.enqueue(
+                AuditEvent(
+                    run_id=call.run_id,
+                    subject=call.subject,
+                    capability=decision.capability,
+                    resource=decision.resource or f"{call.source}/{call.tool}",
+                    effect=decision.effect,
+                    rule_id=decision.rule_id,
+                    weight=decision.weight,
+                    policy_hash=decision.policy_hash,
+                    point=decision.point,
+                )
+            )
         except AuditBacklogFull as exc:
             return unreachable(
                 f"cannot journal the decision: {exc}", self.governance.denied_message

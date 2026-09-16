@@ -3,14 +3,48 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import desc, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_audit.models import audit_decisions
 from ads_policy.contract import AuditEvent, Capability, Effect, InterceptionPoint
+
+
+@dataclass(frozen=True, slots=True)
+class Cursor:
+    """Where a page of the journal ended. Keyset, because offsets lie.
+
+    ``(recorded_at, event_id)`` carries a unique index and the journal only ever
+    grows, so a cursor still points at the same row however much has landed since.
+    """
+
+    recorded_at: datetime
+    event_id: str
+
+    def encode(self) -> str:
+        # Zulu rather than +00:00: a plus sign in a query string decodes as a space,
+        # and this ends up on curl command lines.
+        moment = self.recorded_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        return f"{moment}|{self.event_id}"
+
+    @staticmethod
+    def decode(raw: str) -> Cursor:
+        moment, _, event_id = raw.partition("|")
+        if not moment or not event_id:
+            raise ValueError("a cursor is <timestamp>|<event id>")
+        return Cursor(datetime.fromisoformat(moment), event_id)
+
+
+@dataclass(frozen=True, slots=True)
+class Page:
+    """One page of the journal, newest first, and where to carry on from."""
+
+    events: tuple[AuditEvent, ...]
+    next_cursor: str | None
 
 
 class AuditRepository(Protocol):
@@ -21,6 +55,8 @@ class AuditRepository(Protocol):
     async def for_run(self, run_id: str) -> Sequence[AuditEvent]: ...
 
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]: ...
+
+    async def page(self, limit: int, cursor: Cursor | None = None) -> Page: ...
 
 
 class UnitOfWork(Protocol):
@@ -58,7 +94,7 @@ class SqlAuditRepository:
             event_id=event.event_id,
             run_id=event.run_id,
             subject=event.subject,
-            capability=event.capability.value,
+            capability=event.capability.value if event.capability else None,
             resource=event.resource,
             effect=event.effect.value,
             rule_id=event.rule_id,
@@ -74,6 +110,24 @@ class SqlAuditRepository:
 
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]:
         return await self._select(audit_decisions.c.subject == subject)
+
+    async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
+        """Newest first, because a reviewer starts from what just happened."""
+        keyset = tuple_(audit_decisions.c.recorded_at, audit_decisions.c.event_id)
+        statement = (
+            select(audit_decisions)
+            .order_by(desc(audit_decisions.c.recorded_at), desc(audit_decisions.c.event_id))
+            .limit(limit + 1)
+        )
+        if cursor is not None:
+            statement = statement.where(keyset < (cursor.recorded_at, cursor.event_id))
+        rows = (await self.session.execute(statement)).mappings().all()
+        events = [_event(dict(row)) for row in rows[:limit]]
+        # One row past the page is how we know whether there is another one, without
+        # a second count query over a partitioned table.
+        more = len(rows) > limit
+        following = Cursor(events[-1].recorded_at, events[-1].event_id) if more else None
+        return Page(tuple(events), following.encode() if following else None)
 
     async def _select(self, condition: object) -> Sequence[AuditEvent]:
         statement = (
@@ -104,6 +158,19 @@ class InMemoryAuditRepository:
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]:
         return [event for event in self._events if event.subject == subject]
 
+    async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
+        ordered = sorted(self._events, key=lambda e: (e.recorded_at, e.event_id), reverse=True)
+        if cursor is not None:
+            key = (cursor.recorded_at, cursor.event_id)
+            ordered = [e for e in ordered if (e.recorded_at, e.event_id) < key]
+        events = ordered[:limit]
+        following = (
+            Cursor(events[-1].recorded_at, events[-1].event_id).encode()
+            if len(ordered) > limit
+            else None
+        )
+        return Page(tuple(events), following)
+
     def all(self) -> tuple[AuditEvent, ...]:
         return tuple(self._events)
 
@@ -112,7 +179,7 @@ def _event(row: Mapping[str, Any]) -> AuditEvent:
     return AuditEvent(
         run_id=str(row["run_id"]),
         subject=str(row["subject"]),
-        capability=Capability(str(row["capability"])),
+        capability=Capability(str(row["capability"])) if row["capability"] else None,
         resource=str(row["resource"]),
         effect=Effect(str(row["effect"])),
         rule_id=str(row["rule_id"]),

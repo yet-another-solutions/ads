@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from datetime import UTC, datetime
 
+import msgspec
 import pytest
 from litestar.testing import TestClient
 
 from ads_audit.app import create_app
 from ads_audit.config import Settings
 from ads_audit.repository import InMemoryAuditRepository
-from ads_policy.contract import AuditEvent
+from ads_audit.service import MAX_PAGE
+from ads_policy.contract import AuditEvent, Capability, InterceptionPoint
 from audit_helpers import TOKEN, denied
 
 
@@ -86,6 +89,80 @@ def test_the_subject_budget_is_served(api: TestClient, repository: InMemoryAudit
     assert payload["subject"] == "alice"
     assert payload["budget"] == 5 + 5 * 3
     assert api.get("/audit/subjects/bob/budget").json()["budget"] == 0
+
+
+def _at(minute: int, event_id: str) -> AuditEvent:
+    return msgspec.structs.replace(
+        denied(),
+        event_id=event_id,
+        recorded_at=datetime(2026, 9, 15, 12, minute, tzinfo=UTC),
+    )
+
+
+def test_the_events_of_a_run_are_served(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    _seed(repository, denied(resource="ads-client-secret"), denied(run_id="run-2"))
+    events = api.get("/audit/runs/run-1").json()
+    assert [event["resource"] for event in events] == ["ads-client-secret"]
+    assert events[0]["capability"] == Capability.SECRET_READ.value
+    assert events[0]["point"] == InterceptionPoint.CALL.value
+    assert api.get("/audit/runs/nothing-here").json() == []
+
+
+def test_the_events_of_a_subject_are_served(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    _seed(repository, denied(run_id="run-1"), denied(run_id="run-2"), denied(subject="bob"))
+    events = api.get("/audit/subjects/alice").json()
+    assert {event["run_id"] for event in events} == {"run-1", "run-2"}
+    assert api.get("/audit/subjects/bob").json()[0]["subject"] == "bob"
+
+
+def test_the_journal_comes_newest_first(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    _seed(repository, _at(1, "e1"), _at(2, "e2"), _at(3, "e3"))
+    page = api.get("/audit/events").json()
+    assert [event["event_id"] for event in page["events"]] == ["e3", "e2", "e1"]
+    assert page["next_cursor"] is None
+
+
+def test_the_journal_pages_through_without_repeating(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    _seed(repository, *(_at(minute, f"e{minute}") for minute in range(1, 6)))
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(3):
+        query = f"/audit/events?limit=2{f'&cursor={cursor}' if cursor else ''}"
+        page = api.get(query).json()
+        seen += [event["event_id"] for event in page["events"]]
+        cursor = page["next_cursor"]
+        if cursor is None:
+            break
+    assert seen == ["e5", "e4", "e3", "e2", "e1"]
+    assert cursor is None
+
+
+def test_a_page_says_when_there_is_more(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    _seed(repository, _at(1, "e1"), _at(2, "e2"), _at(3, "e3"))
+    page = api.get("/audit/events?limit=2").json()
+    assert [event["event_id"] for event in page["events"]] == ["e3", "e2"]
+    assert page["next_cursor"] is not None
+
+
+def test_an_unreadable_cursor_is_refused(api: TestClient) -> None:
+    assert api.get("/audit/events?cursor=nonsense").status_code == 400
+
+
+def test_the_page_size_is_capped(api: TestClient, repository: InMemoryAuditRepository) -> None:
+    """The journal is unbounded, so the ceiling belongs to the service, not the caller."""
+    _seed(repository, *(_at(minute, f"e{minute}") for minute in range(1, 6)))
+    page = api.get(f"/audit/events?limit={MAX_PAGE * 10}").json()
+    assert len(page["events"]) == 5
 
 
 def test_the_journal_offers_no_way_to_remove_a_row() -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ads_policy.config import GovernanceSettings
-from ads_policy.normalize import branch_name, egress_host, is_migration_file, within_workdir
+from ads_policy.normalize import branch_name, egress_host, within_workdir
 
 WORKDIR = GovernanceSettings().workdir
 
@@ -39,10 +39,3 @@ def test_branch_name_strips_refs_and_remotes() -> None:
     assert branch_name("refs/remotes/origin/main") == "main"
     assert branch_name("Main") == "main"
     assert branch_name("feature/governance") == "feature/governance"
-
-
-def test_migration_must_be_a_file_in_the_workdir() -> None:
-    assert is_migration_file(f"{WORKDIR}/migrations/0001_init.sql", WORKDIR)
-    assert not is_migration_file("DROP DATABASE ads", WORKDIR)
-    assert not is_migration_file("/etc/0001_init.sql", WORKDIR)
-    assert not is_migration_file(f"{WORKDIR}/migrations/0001_init.py", WORKDIR)

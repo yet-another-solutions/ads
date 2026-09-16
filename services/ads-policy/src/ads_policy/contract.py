@@ -24,8 +24,18 @@ class Capability(StrEnum):
     VCS_PUSH = "vcs.push"
 
 
-class Scope(StrEnum):
-    """Resource qualifier the PDP derives from the resource, never a caller claim."""
+class ResourceClass(StrEnum):
+    """What kind of thing the resource is, derived by the PDP and never claimed.
+
+    Not who is asking and not what they may do — a property of the object acted on.
+    It is the third axis of the matrix, and it is what keeps ``fs.read`` one
+    capability instead of two: the same call against the workdir and against
+    somewhere else classifies differently.
+
+    These are the classes the built-in capabilities produce, named so the code can
+    read. A resource class is a plain string everywhere: a policy document may
+    declare a capability whose classifier answers with a word that is not here.
+    """
 
     ANY = "any"
     WORKDIR = "workdir"
@@ -36,6 +46,79 @@ class Scope(StrEnum):
     TEMPORARY = "temporary"
     FEATURE_BRANCH = "feature-branch"
     PROTECTED_BRANCH = "protected-branch"
+
+
+class ClassifierKind(StrEnum):
+    """How a capability turns a raw resource into a resource class.
+
+    Which kind applies to which capability is data, and lives in the policy document.
+    The kinds themselves are code, because each is a piece of normalisation rather
+    than a preference — and because a rule may only be written over a class some
+    classifier can actually produce.
+    """
+
+    #: Is the path inside the run workdir?
+    PATH = "path"
+    #: Is it a file with this suffix, inside the workdir?
+    SUFFIX = "suffix"
+    #: Is the host on the policy's egress allowlist?
+    HOST = "host"
+    #: Is the branch one of the policy's protected branches?
+    BRANCH = "branch"
+    #: The resource says nothing; the answer is always the same.
+    LITERAL = "literal"
+
+
+@dataclass(frozen=True, slots=True)
+class Classifier:
+    """A classifier and the two classes it chooses between."""
+
+    kind: ClassifierKind
+    match: str
+    otherwise: str = ""
+    value: str = ""
+
+    def classes(self) -> frozenset[str]:
+        """Everything this classifier can answer, so a rule can be checked against it."""
+        return frozenset({self.match} | ({self.otherwise} if self.otherwise else set()))
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityDef:
+    """A capability and how the resource it names becomes a class."""
+
+    capability: Capability
+    classifier: Classifier
+
+
+@dataclass(frozen=True, slots=True)
+class Binding:
+    """What one agent's tool means in our vocabulary.
+
+    This is the only place a foreign tool name appears: the matrix stays written over
+    capabilities, so updating an agent or attaching an MCP server changes bindings and
+    leaves the rules alone.
+
+    We write these, never the agent and never the MCP server. A server describing its
+    own tool is self-declaration, and a decision may not rest on it.
+
+    The resource comes either from a named argument or from a constant. A search takes
+    a query, and a query is not an object of access — the thing being reached is the
+    provider, so that binding carries the provider as ``value``.
+    """
+
+    source: str
+    tool: str
+    capability: Capability
+    argument: str = ""
+    value: str = ""
+
+    def resource(self, arguments: Mapping[str, str]) -> str | None:
+        """None when the call does not carry what the binding says it should."""
+        if self.value:
+            return self.value
+        found = arguments.get(self.argument)
+        return found if found else None
 
 
 class IsolationLevel(StrEnum):
@@ -100,14 +183,14 @@ class Rule:
 
     id: str
     capability: Capability
-    scope: Scope
+    resource_class: str
     levels: frozenset[IsolationLevel] = frozenset()
     weight: int = 1
     alternative: str = ""
     requires: tuple[tuple[str, str], ...] = ()
 
-    def key(self) -> tuple[Capability, Scope]:
-        return (self.capability, self.scope)
+    def key(self) -> tuple[Capability, str]:
+        return (self.capability, str(self.resource_class))
 
     def allows(self, level: IsolationLevel) -> bool:
         return level in self.levels
@@ -127,12 +210,26 @@ class Policy:
     rules: tuple[Rule, ...]
     egress_allowlist: tuple[str, ...]
     protected_branches: tuple[str, ...]
+    capabilities: tuple[CapabilityDef, ...] = ()
+    bindings: tuple[Binding, ...] = ()
     default_weight: int = 1
 
-    def rule_for(self, capability: Capability, scope: Scope) -> Rule | None:
+    def binding_for(self, source: str, tool: str) -> Binding | None:
+        for binding in self.bindings:
+            if binding.source == source and binding.tool == tool:
+                return binding
+        return None
+
+    def rule_for(self, capability: Capability, resource_class: str) -> Rule | None:
         for rule in self.rules:
-            if rule.key() == (capability, scope):
+            if rule.key() == (capability, str(resource_class)):
                 return rule
+        return None
+
+    def classifier_for(self, capability: Capability) -> Classifier | None:
+        for definition in self.capabilities:
+            if definition.capability is capability:
+                return definition.classifier
         return None
 
     def digest(self) -> str:
@@ -144,7 +241,7 @@ class Policy:
             [
                 rule.id,
                 rule.capability.value,
-                rule.scope.value,
+                str(rule.resource_class),
                 sorted(level.value for level in rule.levels),
                 rule.weight,
                 rule.alternative,
@@ -160,6 +257,30 @@ class Policy:
             rules,
             sorted(host.lower() for host in self.egress_allowlist),
             sorted(branch.lower() for branch in self.protected_branches),
+            # Two policies with the same rules but different classifiers decide
+            # differently, so the hash has to tell them apart.
+            sorted(
+                [
+                    definition.capability.value,
+                    str(definition.classifier.kind),
+                    definition.classifier.match,
+                    definition.classifier.otherwise,
+                    definition.classifier.value,
+                ]
+                for definition in self.capabilities
+            ),
+            # A binding decides what a call even is, so it belongs in the hash for the
+            # same reason a rule does.
+            sorted(
+                [
+                    binding.source,
+                    binding.tool,
+                    binding.capability.value,
+                    binding.argument,
+                    binding.value,
+                ]
+                for binding in self.bindings
+            ),
             self.default_weight,
         ]
 
@@ -212,6 +333,10 @@ class PolicyDecision(msgspec.Struct, frozen=True):
     policy_hash: str = ""
     mode: Mode = Mode.ENFORCE
     point: InterceptionPoint = InterceptionPoint.CALL
+    #: What the call was recognised as, so a PEP that asked by tool name can say so
+    #: in its own journal. Absent when nothing bound it.
+    capability: Capability | None = None
+    resource: str = ""
 
     @property
     def enforced(self) -> bool:
@@ -245,7 +370,8 @@ class AuditEvent(msgspec.Struct, frozen=True):
 
     run_id: str
     subject: str
-    capability: Capability
+    #: Absent when the call never resolved to one — an unbound tool is still a row.
+    capability: Capability | None
     resource: str
     effect: Effect
     rule_id: str
@@ -271,10 +397,30 @@ class RunRequest(msgspec.Struct, frozen=True):
 
 
 class DecisionRequest(msgspec.Struct, frozen=True):
-    """What a PEP asks about. Subject and resource are its own, the rest is the run."""
+    """What a PEP asks about when it already knows the capability.
+
+    Our own code does: ``@require_permission(Capability.FS_READ)`` names it outright.
+    An agent's tool call does not, and asks with :class:`ToolCallRequest` instead.
+    """
 
     run_id: str
     subject: str
     capability: Capability
     resource: str
+    attributes: dict[str, str] = msgspec.field(default_factory=dict)
+
+
+class ToolCallRequest(msgspec.Struct, frozen=True):
+    """A tool call in the agent's own words, for the PDP to recognise.
+
+    The PEP does not translate it. Bindings are policy, pinned to the run along with
+    the rules, and a PEP holding its own copy would decide under a version nobody
+    recorded.
+    """
+
+    run_id: str
+    subject: str
+    source: str
+    tool: str
+    arguments: dict[str, str] = msgspec.field(default_factory=dict)
     attributes: dict[str, str] = msgspec.field(default_factory=dict)

@@ -5,7 +5,17 @@ import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ads_policy.contract import Capability, IsolationLevel, Mode, Rule, Scope
+from ads_policy.contract import (
+    Binding,
+    Capability,
+    CapabilityDef,
+    Classifier,
+    ClassifierKind,
+    IsolationLevel,
+    Mode,
+    ResourceClass,
+    Rule,
+)
 
 ALL_LEVELS = frozenset(IsolationLevel)
 LOCAL_ONLY = frozenset({IsolationLevel.LOCAL})
@@ -13,18 +23,20 @@ EXEC_LEVELS = frozenset({IsolationLevel.LOCAL, IsolationLevel.VM})
 VM_ONLY = frozenset({IsolationLevel.VM})
 
 DEFAULT_RULES: tuple[Rule, ...] = (
-    Rule("fs.read.workdir", Capability.FS_READ, Scope.WORKDIR, ALL_LEVELS),
-    Rule("fs.write.workdir", Capability.FS_WRITE, Scope.WORKDIR, ALL_LEVELS),
-    Rule("fs.read.outside", Capability.FS_READ, Scope.OUTSIDE_WORKDIR, weight=3),
-    Rule("fs.write.outside", Capability.FS_WRITE, Scope.OUTSIDE_WORKDIR, weight=3),
-    Rule("process.exec", Capability.PROCESS_EXEC, Scope.ANY, EXEC_LEVELS, weight=2),
-    Rule("net.egress.internet", Capability.NET_EGRESS, Scope.INTERNET, LOCAL_ONLY, weight=2),
-    Rule("net.egress.allowlist", Capability.NET_EGRESS, Scope.ALLOWLIST, ALL_LEVELS),
-    Rule("db.query.broker", Capability.DB_QUERY, Scope.BROKER, ALL_LEVELS),
+    Rule("fs.read.workdir", Capability.FS_READ, ResourceClass.WORKDIR, ALL_LEVELS),
+    Rule("fs.write.workdir", Capability.FS_WRITE, ResourceClass.WORKDIR, ALL_LEVELS),
+    Rule("fs.read.outside", Capability.FS_READ, ResourceClass.OUTSIDE_WORKDIR, weight=3),
+    Rule("fs.write.outside", Capability.FS_WRITE, ResourceClass.OUTSIDE_WORKDIR, weight=3),
+    Rule("process.exec", Capability.PROCESS_EXEC, ResourceClass.ANY, EXEC_LEVELS, weight=2),
+    Rule(
+        "net.egress.internet", Capability.NET_EGRESS, ResourceClass.INTERNET, LOCAL_ONLY, weight=2
+    ),
+    Rule("net.egress.allowlist", Capability.NET_EGRESS, ResourceClass.ALLOWLIST, ALL_LEVELS),
+    Rule("db.query.broker", Capability.DB_QUERY, ResourceClass.BROKER, ALL_LEVELS),
     Rule(
         "db.migrate.temporary",
         Capability.DB_MIGRATE,
-        Scope.TEMPORARY,
+        ResourceClass.TEMPORARY,
         VM_ONLY,
         weight=2,
         alternative="db.query",
@@ -32,15 +44,15 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule(
         "db.migrate.outside",
         Capability.DB_MIGRATE,
-        Scope.OUTSIDE_WORKDIR,
+        ResourceClass.OUTSIDE_WORKDIR,
         weight=4,
         alternative="db.query",
     ),
-    Rule("secret.read", Capability.SECRET_READ, Scope.ANY, weight=5),
+    Rule("secret.read", Capability.SECRET_READ, ResourceClass.ANY, weight=5),
     Rule(
         "vcs.push.feature",
         Capability.VCS_PUSH,
-        Scope.FEATURE_BRANCH,
+        ResourceClass.FEATURE_BRANCH,
         EXEC_LEVELS,
         weight=2,
         requires=(("repo.write", "true"),),
@@ -48,10 +60,71 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     Rule(
         "vcs.push.protected",
         Capability.VCS_PUSH,
-        Scope.PROTECTED_BRANCH,
+        ResourceClass.PROTECTED_BRANCH,
         weight=5,
         alternative="vcs.push to a feature branch",
     ),
+)
+
+#: How each capability's resource becomes a class. Data, so a delivered policy can
+#: reclassify without a new image; the kinds behind them stay code.
+DEFAULT_CAPABILITIES: tuple[CapabilityDef, ...] = (
+    CapabilityDef(
+        Capability.FS_READ,
+        Classifier(ClassifierKind.PATH, ResourceClass.WORKDIR, ResourceClass.OUTSIDE_WORKDIR),
+    ),
+    CapabilityDef(
+        Capability.FS_WRITE,
+        Classifier(ClassifierKind.PATH, ResourceClass.WORKDIR, ResourceClass.OUTSIDE_WORKDIR),
+    ),
+    CapabilityDef(
+        Capability.PROCESS_EXEC,
+        Classifier(ClassifierKind.LITERAL, ResourceClass.ANY),
+    ),
+    CapabilityDef(
+        Capability.NET_EGRESS,
+        Classifier(ClassifierKind.HOST, ResourceClass.ALLOWLIST, ResourceClass.INTERNET),
+    ),
+    CapabilityDef(
+        Capability.DB_QUERY,
+        Classifier(ClassifierKind.LITERAL, ResourceClass.BROKER),
+    ),
+    CapabilityDef(
+        Capability.DB_MIGRATE,
+        Classifier(
+            ClassifierKind.SUFFIX,
+            ResourceClass.TEMPORARY,
+            ResourceClass.OUTSIDE_WORKDIR,
+            value=".sql",
+        ),
+    ),
+    CapabilityDef(
+        Capability.SECRET_READ,
+        Classifier(ClassifierKind.LITERAL, ResourceClass.ANY),
+    ),
+    CapabilityDef(
+        Capability.VCS_PUSH,
+        Classifier(
+            ClassifierKind.BRANCH, ResourceClass.PROTECTED_BRANCH, ResourceClass.FEATURE_BRANCH
+        ),
+    ),
+)
+
+#: The only place a foreign tool name appears. Expect to replace this per deployment:
+#: agents rename and add tools, and that is precisely why it is data and why it is
+#: separate from the rules. A tool absent here is refused, which is the safe default
+#: and also the reason an agent upgrade wants a look at this list.
+DEFAULT_BINDINGS: tuple[Binding, ...] = (
+    Binding("opencode", "bash", Capability.PROCESS_EXEC, argument="command"),
+    Binding("opencode", "read", Capability.FS_READ, argument="filePath"),
+    Binding("opencode", "write", Capability.FS_WRITE, argument="filePath"),
+    Binding("opencode", "edit", Capability.FS_WRITE, argument="filePath"),
+    Binding("opencode", "grep", Capability.FS_READ, argument="path"),
+    Binding("opencode", "glob", Capability.FS_READ, argument="path"),
+    Binding("opencode", "list", Capability.FS_READ, argument="path"),
+    Binding("opencode", "webfetch", Capability.NET_EGRESS, argument="url"),
+    # A query is not an object of access; what the call reaches is the provider.
+    Binding("opencode", "websearch", Capability.NET_EGRESS, value="search-proxy.interlab"),
 )
 
 DEFAULT_EGRESS_ALLOWLIST = (
@@ -100,10 +173,11 @@ class GovernanceSettings:
     protected_branches: tuple[str, ...] = DEFAULT_PROTECTED_BRANCHES
     ref_prefixes: tuple[str, ...] = ("refs/heads/", "refs/remotes/")
     remote_names: frozenset[str] = frozenset({"origin", "upstream"})
-    migration_suffix: str = ".sql"
     write_roles: frozenset[str] = frozenset({"developer", "maintainer"})
     agent_roles: frozenset[str] = frozenset({"agent"})
     rules: tuple[Rule, ...] = DEFAULT_RULES
+    capabilities: tuple[CapabilityDef, ...] = DEFAULT_CAPABILITIES
+    bindings: tuple[Binding, ...] = DEFAULT_BINDINGS
     injection_markers: tuple[str, ...] = DEFAULT_INJECTION_MARKERS
 
 

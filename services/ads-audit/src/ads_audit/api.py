@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Sequence
 from typing import Any
 
 from dishka.integrations.litestar import FromDishka, inject
 from litestar import Controller, get
 from litestar.connection import ASGIConnection
-from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.handlers import BaseRouteHandler
 
+from ads_audit.repository import Page
 from ads_audit.service import AuditService
+from ads_policy.contract import AuditEvent
 
 BEARER = "Bearer "
 
@@ -28,6 +31,35 @@ class AuditController(Controller):
 
     path = "/audit"
     guards = [require_api_token]
+
+    @get("/events")
+    @inject
+    async def journal(
+        self,
+        service: FromDishka[AuditService],
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> Page:
+        """The whole journal, newest first. Carry `next_cursor` back to go on."""
+        try:
+            return await service.journal(limit, cursor)
+        except ValueError as exc:
+            raise ClientException(detail=f"unreadable cursor: {exc}") from exc
+
+    @get("/runs/{run_id:str}")
+    @inject
+    async def run_events(
+        self, run_id: str, service: FromDishka[AuditService]
+    ) -> Sequence[AuditEvent]:
+        """One run in the order it happened; a run is bounded by its own lifetime."""
+        return await service.for_run(run_id)
+
+    @get("/subjects/{subject:str}")
+    @inject
+    async def subject_events(
+        self, subject: str, service: FromDishka[AuditService]
+    ) -> Sequence[AuditEvent]:
+        return await service.for_subject(subject)
 
     @get("/runs/{run_id:str}/budget")
     @inject

@@ -18,7 +18,14 @@ and no `deploy` (the deployment boundary belongs to CI).
 The resource is classified by the service, never by the caller: a path is inside the
 workdir or outside it, a host is on the egress allowlist or is the internet, a branch is
 protected or is not. Path traversal, URL userinfo and `refs/heads/` prefixes are
-resolved before the rule is matched.
+resolved before the rule is matched. Which classifier applies to which capability is
+policy; the five kinds behind them — path, suffix, host, branch, literal — are code.
+
+Recognising an agent's tool call is also the service's job, not the caller's. A binding
+says what `bash` from `opencode` amounts to and which argument it acts on, so the matrix
+stays written over capabilities while foreign tool names live in one place. Bindings are
+pinned to the run with everything else: one added mid-run does not change what that run
+may do, and a tool nothing binds is refused.
 
 Isolation levels are `local`, `container` and `vm`. `container` and `vm` are derived
 from where the run was actually scheduled; `local` is asserted by a supervisor running
@@ -35,6 +42,7 @@ public. Everything is HTTPS; there is no plain-HTTP mode.
 | `POST /policy/runs` | open a run. The body describes the placement; the level is derived from it |
 | `POST /policy/runs/{id}/revoke` | revoke a run. The next decision sees it |
 | `POST /policy/decide` | a decision for one capability and resource within a run |
+| `POST /policy/calls` | a decision for one tool call, named as the agent names it |
 | `GET /policy/version` | schema version, policy version, the hash the service computed, mode |
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | the run store answers. 503 otherwise |

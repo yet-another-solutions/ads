@@ -26,10 +26,19 @@ the agent and who creates the pod, not the decisions.
 
 ## What it does not do
 
-It does not decide. It names the capability and the resource and forwards the question;
-the verdict belongs to the policy service. `rm -rf /workspace` and `uv sync` are the
-same `process.exec` here, and the difference between them is not this service's to
-find — the boundary is isolation, not command parsing.
+It does not decide, and it does not translate. The tool call goes on in the agent's own
+words — `{source, tool, arguments}` — and the policy service says both what that amounts
+to and whether it is allowed. The bindings that turn `bash` into `process.exec` are
+policy, pinned to the run along with the rules; a copy kept here would decide under a
+version nobody recorded.
+
+`rm -rf /workspace` and `uv sync` come out as the same `process.exec`, and the difference
+between them is not this service's to find — the boundary is isolation, not command
+parsing.
+
+The one thing it does look at is the outbound payload: once the matrix has permitted a
+call, a credential among its arguments turns the permission into a refusal. That check
+runs here rather than in the policy service because the payload is already in hand.
 
 It also does not describe the agent's placement from what the agent says. The run is
 opened with the placement this process was configured with, and the level follows from
@@ -42,7 +51,7 @@ public.
 
 | | |
 |---|---|
-| `POST /supervisor/permissions` | `{capability, resource}` → the decision |
+| `POST /supervisor/permissions` | `{source, tool, arguments}` → the decision |
 | `GET /supervisor/run` | the run this process serves |
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | a run is open. 503 otherwise |

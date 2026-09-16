@@ -9,7 +9,13 @@ from litestar.connection import ASGIConnection
 from litestar.exceptions import ClientException, NotAuthorizedException, NotFoundException
 from litestar.handlers import BaseRouteHandler
 
-from ads_policy.contract import DecisionRequest, PolicyDecision, Run, RunRequest
+from ads_policy.contract import (
+    DecisionRequest,
+    PolicyDecision,
+    Run,
+    RunRequest,
+    ToolCallRequest,
+)
 from ads_policy.isolation import UnknownPlacement
 from ads_policy.service import PolicyService
 
@@ -53,7 +59,16 @@ class PolicyController(Controller):
     async def decide(
         self, data: DecisionRequest, service: FromDishka[PolicyService]
     ) -> PolicyDecision:
+        """For a caller that already knows the capability, such as our own decorator."""
         return await service.decide(data)
+
+    @post("/calls")
+    @inject
+    async def decide_call(
+        self, data: ToolCallRequest, service: FromDishka[PolicyService]
+    ) -> PolicyDecision:
+        """For an agent's tool call, named in the agent's vocabulary rather than ours."""
+        return await service.decide_call(data)
 
     @get("/version")
     @inject
