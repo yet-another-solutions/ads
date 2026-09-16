@@ -18,6 +18,8 @@ policy:
     service: ads-redis
     namespace: ""
     url: rediss://ads-redis:6379/0
+  # How long a run lives with no calls into it. Each call starts the count again, so
+  # a long task is kept and an abandoned one expires.
   runTtlSeconds: 3600
   mountPath: /policy
   mode: enforce
@@ -40,25 +42,47 @@ policy:
   # Mounted as a directory, never through subPath, so edits reach a running pod.
   document: {}
 
-# One supervisor serves one run. Off by default: a real deployment creates these per
-# run, not as a standing Deployment, and this one exists to exercise the path.
-supervisor:
+# One guardrail for every agent, outside all their sandboxes. It holds no run state of
+# its own — runs live in the policy service — so replicas are interchangeable.
+guardrail:
   enabled: false
+  replicaCount: 1
   image:
-    repository: ghcr.io/yet-another-solutions/ads-supervisor
+    repository: ghcr.io/yet-another-solutions/ads-guardrail
     tag: "0.0.1"
     pullPolicy: IfNotPresent
   service:
     port: 8083
-  subject: ""
   attributes:
     - repo.write=true
     - agent=true
+  # The audience a person's token must be issued for to act in their runs, e.g. the
+  # client our sandbox service obtains tokens as. Checked against `keycloak.*` below.
+  # Empty: no person's token is accepted; configured applications still are.
+  mcpAudience: ""
   # name: URL. Point an agent's MCP client for `name` at
-  # https://<release>-supervisor:<port>/mcp/<name>; bindings know the server as
+  # https://<release>-guardrail:<port>/mcp/<name>; bindings know the server as
   # `mcp:<name>`.
   mcpServers: {}
   #   retriever: http://retriever.agents:8006/mcp
+  # Applications that call with their own key and act for no person, such as hermes.
+  # Nothing in their path knows the guardrail is there, so the guardrail opens their
+  # runs itself: on the first call, and again once the last one has ended. A revoked
+  # run is not replaced. Configure the key's fingerprint, never the key:
+  #   printf %s "$API_SERVER_KEY" | sha256sum
+  # and where the application runs, the same way a launcher describes a sandbox.
+  applications: []
+  #   - name: hermes
+  #     keySha256: "<64 lowercase hex>"
+  #     sandbox:
+  #       project: ads
+  #       repo: yet-another-solutions/ads
+  #       env: test
+  #       workdir: /workspace
+  #       placement: cluster
+  #       runtimeClassName: ""
+  #       nodeLabels:
+  #         ads.io/application-node: "true"
 
 audit:
   replicaCount: 1
@@ -182,7 +206,7 @@ tls:
   serviceSecretName: ""
   policySecretName: ""
   auditSecretName: ""
-  supervisorSecretName: ""
+  guardrailSecretName: ""
   caBundle:
     secretName: ""
     key: ca.crt
@@ -200,7 +224,7 @@ secrets:
   engineKeycloakClientSecret: change-me
   policyApiToken: change-me-change-me-32b
   auditApiToken: change-me-change-me-32b
-  supervisorApiToken: change-me-change-me-32b
+  guardrailApiToken: change-me-change-me-32b
 
 nodes:
   application:

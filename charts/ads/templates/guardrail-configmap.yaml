@@ -1,0 +1,61 @@
+{{- if .Values.guardrail.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-guardrail
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.guardrail.service.port | quote }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  {{- with include "ads.caBundlePath" . }}
+  ADS_TLS_CA_BUNDLE: {{ . | quote }}
+  {{- end }}
+  ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
+  ADS_ATTRIBUTES: {{ join "," .Values.guardrail.attributes | quote }}
+  # People's tokens are verified against this realm and accepted only when issued for
+  # this audience. Empty accepts no person at all; configured applications still work.
+  ADS_MCP_AUDIENCE: {{ .Values.guardrail.mcpAudience | quote }}
+  ADS_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.keycloak.wellKnownUrl | quote }}
+  ADS_KEYCLOAK_ISSUER: {{ .Values.keycloak.issuer | quote }}
+  # One service for every agent, outside all their sandboxes. It says nothing about
+  # where a run executes or for whom: whoever creates the sandbox says both when
+  # opening the run, along with the credentials the run's calls will carry.
+  # An agent reaches each server below at /mcp/<name> instead of its own address.
+  {{- $servers := list }}
+  {{- range $name, $url := .Values.guardrail.mcpServers }}
+  {{- $servers = append $servers (printf "%s=%s" $name $url) }}
+  {{- end }}
+  ADS_MCP_SERVERS: {{ join "," $servers | quote }}
+  {{- $applications := list }}
+  {{- range .Values.guardrail.applications }}
+  {{- $given := required "guardrail.applications[].sandbox is required: where the application runs decides its rules" .sandbox }}
+  {{- $sandbox := dict
+        "project" (required "guardrail.applications[].sandbox.project is required" $given.project)
+        "repo" (required "guardrail.applications[].sandbox.repo is required" $given.repo)
+        "env" (required "guardrail.applications[].sandbox.env is required" $given.env)
+        "workdir" ($given.workdir | default $.Values.policy.workdir)
+        "placement" ($given.placement | default "cluster")
+        "runtime_class_name" ($given.runtimeClassName | default nil)
+        "node_labels" ($given.nodeLabels | default dict) }}
+  {{- $applications = append $applications (dict
+        "name" (required "guardrail.applications[].name is required" .name)
+        "key_sha256" (required "guardrail.applications[].keySha256 is required" .keySha256)
+        "sandbox" $sandbox) }}
+  {{- end }}
+  ADS_APPLICATIONS: {{ toJson $applications | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "ads.fullname" . }}-guardrail
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  ADS_GUARDRAIL_API_TOKEN: {{ .Values.secrets.guardrailApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
+{{- end }}

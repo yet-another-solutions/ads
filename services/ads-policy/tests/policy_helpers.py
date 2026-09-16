@@ -47,7 +47,7 @@ def policy_request(
     )
 
 
-def run_request(level: IsolationLevel, subject: str = "alice") -> RunRequest:
+def run_request(level: IsolationLevel, subject: str = "alice", holder: str = "") -> RunRequest:
     """Ask for a run the way a controller would, by describing the placement."""
     labels: dict[str, str] = {}
     runtime: str | None = None
@@ -71,6 +71,7 @@ def run_request(level: IsolationLevel, subject: str = "alice") -> RunRequest:
         placement=placement,
         runtime_class_name=runtime,
         node_labels=labels,
+        holder=holder,
     )
 
 

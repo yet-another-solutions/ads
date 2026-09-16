@@ -23,12 +23,12 @@ _SRC = (
     "services/ads-engine/src",
     "services/ads-engine/tests",
     "services/ads-egress-controlplane/src",
+    "services/ads-guardrail/src",
+    "services/ads-guardrail/tests",
     "services/ads-policy/src",
     "services/ads-policy/tests",
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
-    "services/ads-supervisor/src",
-    "services/ads-supervisor/tests",
     "noxfile.py",
 )
 
@@ -39,9 +39,9 @@ _PACKAGES = (
     "libraries/ads-commons-beans",
     "libraries/ads-commons-schema",
     "services/ads-audit",
+    "services/ads-guardrail",
     "services/ads-policy",
     "services/ads-preferences",
-    "services/ads-supervisor",
 )
 
 
@@ -99,4 +99,4 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads-policy", external=True)
     session.run("uv", "build", "--package", "ads-audit", external=True)
     session.run("uv", "build", "--package", "ads-preferences", external=True)
-    session.run("uv", "build", "--package", "ads-supervisor", external=True)
+    session.run("uv", "build", "--package", "ads-guardrail", external=True)

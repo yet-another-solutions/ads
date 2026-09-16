@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ads_supervisor.server import run
+from ads_guardrail.server import run
 
 
 def main() -> None:

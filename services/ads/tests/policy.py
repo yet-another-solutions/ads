@@ -41,6 +41,15 @@ class DirectPolicyClient:
     def start_run(self, request: RunRequest) -> Run:
         return _blocking(self.service.start(request))
 
+    def run(self, run_id: str) -> Run | None:
+        return _blocking(self.service.run(run_id))
+
+    def runs_held(self, holder: str) -> list[Run]:
+        return _blocking(self.service.held_by(holder))
+
+    def finish_run(self, run_id: str) -> Run | None:
+        return _blocking(self.service.finish(run_id))
+
     def revoke_run(self, run_id: str) -> Run:
         run = _blocking(self.service.revoke(run_id))
         if run is None:

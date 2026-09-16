@@ -1,21 +1,20 @@
-{{- if .Values.supervisor.enabled }}
+{{- if .Values.guardrail.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "ads.fullname" . }}-supervisor
+  name: {{ include "ads.fullname" . }}-guardrail
   labels:
     {{- include "ads.labels" . | nindent 4 }}
-    app.kubernetes.io/component: ads-supervisor
+    app.kubernetes.io/component: ads-guardrail
 spec:
-  # One supervisor serves one run, so this is not a scaling knob.
-  replicas: 1
+  replicas: {{ .Values.guardrail.replicaCount }}
   selector:
     matchLabels:
-      {{- include "ads.supervisorSelectorLabels" . | nindent 6 }}
+      {{- include "ads.guardrailSelectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "ads.supervisorSelectorLabels" . | nindent 8 }}
+        {{- include "ads.guardrailSelectorLabels" . | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -25,20 +24,20 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
-        - name: ads-supervisor
+        - name: ads-guardrail
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.supervisor.image.repository }}:{{ .Values.supervisor.image.tag }}"
-          imagePullPolicy: {{ .Values.supervisor.image.pullPolicy }}
+          image: "{{ .Values.guardrail.image.repository }}:{{ .Values.guardrail.image.tag }}"
+          imagePullPolicy: {{ .Values.guardrail.image.pullPolicy }}
           ports:
             - name: https
-              containerPort: {{ .Values.supervisor.service.port }}
+              containerPort: {{ .Values.guardrail.service.port }}
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: {{ include "ads.fullname" . }}-supervisor
+                name: {{ include "ads.fullname" . }}-guardrail
             - secretRef:
-                name: {{ include "ads.fullname" . }}-supervisor
+                name: {{ include "ads.fullname" . }}-guardrail
           volumeMounts:
             - name: tls
               mountPath: /certs
@@ -67,7 +66,7 @@ spec:
       volumes:
         - name: tls
           secret:
-            secretName: {{ include "ads.supervisorSecretName" . }}
+            secretName: {{ include "ads.guardrailSecretName" . }}
         {{- if .Values.tls.caBundle.secretName }}
         - name: ca
           secret:

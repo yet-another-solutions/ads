@@ -132,10 +132,10 @@ def test_the_backlog_has_a_ceiling() -> None:
 async def test_every_row_names_the_build_that_wrote_it() -> None:
     """The payload checks ship in the image, so the policy hash alone cannot say."""
     journal = CollectingAuditSink()
-    buffered = BufferedAuditSink(journal, decided_by="ads-supervisor 0.2.0@1a2b3c4")
+    buffered = BufferedAuditSink(journal, decided_by="ads-guardrail 0.2.0@1a2b3c4")
     buffered.enqueue(_event(Capability.SECRET_READ, "a", 5))
     await buffered.drain()
-    assert journal.events()[-1].decided_by == "ads-supervisor 0.2.0@1a2b3c4"
+    assert journal.events()[-1].decided_by == "ads-guardrail 0.2.0@1a2b3c4"
 
 
 def test_a_build_names_its_release(monkeypatch: pytest.MonkeyPatch) -> None:

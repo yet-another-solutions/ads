@@ -1,7 +1,7 @@
 # ads-policy
 
 The policy decision point. It is the only thing in ADS that decides whether an agent
-may do something, and every enforcement point — the web app, the supervisor, later the
+may do something, and every enforcement point — the web app, the guardrail, later the
 egress control plane and the tool broker — asks it rather than deciding for itself.
 
 A decision is a function of four things: the capability, the resource, the isolation
@@ -28,7 +28,7 @@ pinned to the run with everything else: one added mid-run does not change what t
 may do, and a tool nothing binds is refused.
 
 Isolation levels are `local`, `container` and `vm`. `container` and `vm` are derived
-from where the run was actually scheduled; `local` is asserted by a supervisor running
+from where the run was actually scheduled; `local` is asserted by whoever opens a run
 on a developer machine, because node labels are a cluster notion. A cluster placement
 that resolves to nothing is a refusal, not a weaker level.
 
@@ -68,7 +68,10 @@ Optional, with defaults:
 - `ADS_POLICY_DENY_ON_ERROR` (`true`)
 - `ADS_SANDBOX_AVAILABLE` (`true`) — the chart computes this; without Kata no run is
   ever assigned `vm`
-- `ADS_RUN_TTL_SECONDS` (`3600`), `ADS_RUN_WORKDIR` (`/workspace`)
+- `ADS_RUN_TTL_SECONDS` (`3600`) — how long a run lives without a decision. Every
+  decision in a running run starts the count again, so a task in use never runs out
+  and a forgotten one does; a revoked or finished run is not extended
+- `ADS_RUN_WORKDIR` (`/workspace`)
 - `ADS_EGRESS_ALLOWLIST`, `ADS_PROTECTED_BRANCHES` — comma separated
 
 Everything else — rule weights, the repeat multiplier, secret patterns, node labels —

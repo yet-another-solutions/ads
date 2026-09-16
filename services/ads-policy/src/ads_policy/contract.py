@@ -133,7 +133,7 @@ class Placement(StrEnum):
     """Which kind of executor opened the run, which decides how its level is found.
 
     A cluster placement is derived from where the pod landed. A workstation has no
-    nodes to read, so the supervisor states it and is trusted to, because a developer
+    nodes to read, so whoever opens the run states it and is trusted to, because a developer
     machine is the one place the agent has no more rights than the developer already.
     """
 
@@ -477,6 +477,11 @@ class Run(msgspec.Struct, frozen=True):
     isolation_level: IsolationLevel
     policy_hash: str
     state: RunState = RunState.RUNNING
+    #: Who the run's calls come from, as the enforcement point recognises them — a
+    #: verified person, or an application by its key's fingerprint. A proxied call says
+    #: nothing else about which run it belongs to, so this is how it is found. Never a
+    #: credential: a person's token changes under a long run, the person does not.
+    holder: str = ""
 
 
 class AuditEvent(msgspec.Struct, frozen=True):
@@ -499,7 +504,7 @@ class AuditEvent(msgspec.Struct, frozen=True):
     policy_hash: str
     content: str | None = None
     point: InterceptionPoint = InterceptionPoint.CALL
-    #: The build that took the decision, e.g. ``ads-supervisor 0.2.0@1a2b3c4``.
+    #: The build that took the decision, e.g. ``ads-guardrail 0.2.0@1a2b3c4``.
     decided_by: str = ""
     event_id: str = msgspec.field(default_factory=lambda: uuid.uuid4().hex)
     recorded_at: datetime = msgspec.field(default_factory=lambda: datetime.now(UTC))
@@ -516,6 +521,7 @@ class RunRequest(msgspec.Struct, frozen=True):
     placement: Placement = Placement.CLUSTER
     runtime_class_name: str | None = None
     node_labels: dict[str, str] = msgspec.field(default_factory=dict)
+    holder: str = ""
 
 
 class DecisionRequest(msgspec.Struct, frozen=True):

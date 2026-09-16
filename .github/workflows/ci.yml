@@ -40,9 +40,9 @@ jobs:
           - services/ads-audit/Containerfile
           - services/ads-egress-controlplane/Containerfile
           - services/ads-engine/Containerfile
+          - services/ads-guardrail/Containerfile
           - services/ads-policy/Containerfile
           - services/ads-preferences/Containerfile
-          - services/ads-supervisor/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Hadolint
@@ -77,9 +77,9 @@ jobs:
           - image: ads-preferences
             file: services/ads-preferences/Containerfile
             smoke: "import ads_preferences; print(ads_preferences.__version__)"
-          - image: ads-supervisor
-            file: services/ads-supervisor/Containerfile
-            smoke: "import ads_supervisor; print(ads_supervisor.__version__)"
+          - image: ads-guardrail
+            file: services/ads-guardrail/Containerfile
+            smoke: "import ads_guardrail; print(ads_guardrail.__version__)"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -152,17 +152,26 @@ jobs:
             exit 1
           fi
           helm template ads charts/ads \
-            --set supervisor.enabled=true --set supervisor.subject=alice \
-            --set supervisor.mcpServers.retriever=http://retriever:8006/mcp >/tmp/ads-sup.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 7
-          grep -q 'app.kubernetes.io/component: ads-supervisor' /tmp/ads-sup.yaml
-          grep -q 'ADS_MCP_SERVERS: "retriever=http://retriever:8006/mcp"' /tmp/ads-sup.yaml
-          if grep -q 'ADS_PLACEMENT' /tmp/ads-sup.yaml; then
-            echo 'the shared service must not describe a sandbox it is not in' >&2
+            --set guardrail.enabled=true \
+            --set guardrail.mcpServers.retriever=http://retriever:8006/mcp >/tmp/ads-guard.yaml
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-guard.yaml)" -eq 7
+          grep -q 'app.kubernetes.io/component: ads-guardrail' /tmp/ads-guard.yaml
+          grep -q 'ADS_GUARDRAIL_API_TOKEN' /tmp/ads-guard.yaml
+          grep -q 'ADS_MCP_SERVERS: "retriever=http://retriever:8006/mcp"' /tmp/ads-guard.yaml
+          if grep -qE 'ADS_PLACEMENT|ADS_SUBJECT' /tmp/ads-guard.yaml; then
+            echo 'the shared service must not describe a sandbox or a person it does not serve' >&2
             exit 1
           fi
-          if helm template ads charts/ads --set supervisor.enabled=true >/tmp/ads-sup-bad.yaml; then
-            echo 'a run opened on behalf of nobody' >&2
+          grep -q 'ADS_APPLICATIONS: "\[\]"' /tmp/ads-guard.yaml
+          grep -q 'ADS_MCP_AUDIENCE: ""' /tmp/ads-guard.yaml
+          grep -q 'ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-guard.yaml
+          helm template ads charts/ads --set guardrail.enabled=true \
+            --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"'"$(printf 'a%.0s' $(seq 64))"'","sandbox":{"project":"ads","repo":"r","env":"test"}}]' \
+            >/tmp/ads-apps.yaml
+          grep -q '\\"name\\":\\"hermes\\"' /tmp/ads-apps.yaml
+          if helm template ads charts/ads --set guardrail.enabled=true \
+            --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"x"}]' >/tmp/ads-apps-bad.yaml; then
+            echo 'an application rendered without saying where it runs' >&2
             exit 1
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml

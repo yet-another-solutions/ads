@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import msgspec
+import structlog
 from redis.exceptions import RedisError
 
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
@@ -17,11 +18,14 @@ from ads_policy.contract import (
     Run,
     RunContext,
     RunRequest,
+    RunState,
     ToolCallRequest,
 )
 from ads_policy.isolation import assign_isolation_level
 from ads_policy.pdp import PolicyDecisionPoint, Unbound, resolve
 from ads_policy.run import RunStore
+
+logger = structlog.get_logger("ads.policy")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -50,13 +54,34 @@ class PolicyService:
                 settings=self.settings,
             ),
             policy_hash=self.pdp.policy_hash,
+            holder=request.holder,
         )
+
+    async def run(self, run_id: str) -> Run | None:
+        return await self.runs.get(run_id)
+
+    async def held_by(self, holder: str) -> list[Run]:
+        """Every unexpired run of this holder, whatever its state.
+
+        The caller tells a revoked run from none at all: a call into a revoked run is
+        still refused here, and journalled, rather than treated as belonging nowhere.
+        """
+        return await self.runs.held_by(holder)
 
     async def revoke(self, run_id: str) -> Run | None:
         try:
             return await self.runs.revoke(run_id)
         except KeyError:
             return None
+
+    async def finish(self, run_id: str) -> Run | None:
+        """The task is over. A revoked run stays revoked: that is the stronger word."""
+        run = await self.runs.get(run_id)
+        if run is None:
+            return None
+        if run.state is not RunState.RUNNING:
+            return run
+        return await self.runs.finish(run_id)
 
     async def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         """Recognise an agent's tool call, then decide it like any other.
@@ -147,7 +172,21 @@ class PolicyService:
                     attributes=dict(request.attributes),
                 ),
             )
+            if run.state is RunState.RUNNING:
+                await self._keep_alive(run)
         return self._journal(request, decision)
+
+    async def _keep_alive(self, run: Run) -> None:
+        """A run lives as long as it is used: its lifetime counts from the last call.
+
+        A task may run for hours on refreshed tokens; what should end a run by itself
+        is silence, not age. A failure to extend is not a reason to refuse the call —
+        the run is still there, only its end is not moved.
+        """
+        try:
+            await self.runs.touch(run)
+        except RedisError as exc:
+            logger.warning("run lifetime not extended", run_id=run.id, error=str(exc))
 
     def _journal(self, request: DecisionRequest, decision: PolicyDecision) -> PolicyDecision:
         """A decision nobody can record is a decision nobody may act on."""

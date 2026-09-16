@@ -5,8 +5,8 @@ import sys
 
 import uvicorn
 
-from ads_supervisor.app import create_app
-from ads_supervisor.config import Settings, load_settings, load_tls_context
+from ads_guardrail.app import create_app
+from ads_guardrail.config import Settings, load_settings, load_tls_context
 
 STARTUP_FAILURE = 3
 

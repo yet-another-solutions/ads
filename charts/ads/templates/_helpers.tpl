@@ -52,9 +52,9 @@ app.kubernetes.io/component: ads-egress-controlplane
 app.kubernetes.io/component: ads-policy
 {{- end }}
 
-{{- define "ads.supervisorSelectorLabels" -}}
+{{- define "ads.guardrailSelectorLabels" -}}
 {{ include "ads.selectorLabels" . }}
-app.kubernetes.io/component: ads-supervisor
+app.kubernetes.io/component: ads-guardrail
 {{- end }}
 
 {{- define "ads.auditSelectorLabels" -}}
@@ -143,11 +143,11 @@ app.kubernetes.io/component: ads-preferences
 https://{{ .Values.httpRoute.hostname }}
 {{- end }}
 
-{{- define "ads.supervisorSecretName" -}}
+{{- define "ads.guardrailSecretName" -}}
 {{- if .Values.tls.certManager.enabled -}}
-{{ include "ads.fullname" . }}-supervisor-tls
+{{ include "ads.fullname" . }}-guardrail-tls
 {{- else -}}
-{{ required "tls.supervisorSecretName is required when tls.certManager.enabled is false" .Values.tls.supervisorSecretName }}
+{{ required "tls.guardrailSecretName is required when tls.certManager.enabled is false" .Values.tls.guardrailSecretName }}
 {{- end -}}
 {{- end }}
 

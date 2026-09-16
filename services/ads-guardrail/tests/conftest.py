@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
+from ads_guardrail.config import Settings
+from ads_guardrail.guardrail import Guardrail
+from ads_guardrail.logconfig import configure_logging
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.client import PolicyClient
-from ads_policy.contract import IsolationLevel
+from ads_policy.contract import IsolationLevel, Run
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import org_policy
 from ads_policy.run import InMemoryRunStore
 from ads_policy.service import PolicyService
-from ads_supervisor.config import Settings
-from ads_supervisor.logconfig import configure_logging
-from ads_supervisor.supervisor import Supervisor
-from supervisor_helpers import TOKEN, VM_SANDBOX, DirectPolicyClient
+from guardrail_helpers import AUDIENCE, ISSUER, TOKEN, VERIFIER, DirectPolicyClient, opening
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -58,26 +58,28 @@ def settings(tmp_path: Path) -> Settings:
         api_token=TOKEN,
         tls_cert_path=cert,
         tls_key_path=key,
-        subject="alice",
         policy_url="https://policy.interlab:8081",
         policy_api_token="policy-api-token-32-bytes-long",
         amqp_url="amqp://unused",
         attributes={"repo.write": "true", "agent": "true"},
         mcp_servers={"retriever": "http://mcp.invalid/mcp"},
+        mcp_audience=AUDIENCE,
+        keycloak_well_known_url="https://keycloak.test/.well-known/openid-configuration",
+        keycloak_issuer=ISSUER,
     )
 
 
 @pytest.fixture
-def run_id(supervisor: Supervisor) -> str:
-    """The launcher opens one of these per task; the id then rides with every call."""
-    return supervisor.open(VM_SANDBOX).id
+def run(guardrail: Guardrail) -> Run:
+    """The launcher opens one of these per task, for a person and a sandbox."""
+    return guardrail.open(opening())
 
 
 @pytest.fixture
-def supervisor(
+def guardrail(
     settings: Settings, policy_client: PolicyClient, audit: BufferedAuditSink
-) -> Supervisor:
-    return Supervisor(settings=settings, client=policy_client, audit=audit)
+) -> Guardrail:
+    return Guardrail(settings=settings, client=policy_client, audit=audit, verifier=VERIFIER)
 
 
 @pytest.fixture

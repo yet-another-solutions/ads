@@ -38,7 +38,7 @@ def test_unconfirmed_placement_opens_no_run() -> None:
             assign_isolation_level(**kwargs)  # type: ignore[arg-type]
 
 
-def test_local_is_asserted_by_the_supervisor_not_derived() -> None:
+def test_local_is_asserted_by_whoever_opens_the_run_not_derived() -> None:
     level = assign_isolation_level(placement=Placement.WORKSTATION)
     assert level is IsolationLevel.LOCAL
 

@@ -14,9 +14,9 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-policy` — decision point: capability matrix, tool-call bindings, run lifecycle, isolation levels
 - `services/ads-audit` — append-only journal of decisions, deny budget
-- `services/ads-supervisor` — enforcement point outside the sandbox boundary
+- `services/ads-guardrail` — enforcement point outside every sandbox: MCP proxy and decision API
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
-- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional supervisor, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
+- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
 
 Images:
@@ -26,7 +26,7 @@ Images:
 - `ghcr.io/yet-another-solutions/ads-preferences`
 - `ghcr.io/yet-another-solutions/ads-policy`
 - `ghcr.io/yet-another-solutions/ads-audit`
-- `ghcr.io/yet-another-solutions/ads-supervisor`
+- `ghcr.io/yet-another-solutions/ads-guardrail`
 - `ghcr.io/yet-another-solutions/ads-egress-controlplane`
 
 ## Configuration
@@ -64,7 +64,7 @@ The governance services are HTTPS APIs behind a bearer token, reachable only fro
 
 - ads-policy: `ADS_POLICY_API_TOKEN`, `ADS_REDIS_URL` (run state), `ADS_AMQP_URL` (decisions out), `ADS_POLICY_DIR`, `ADS_POLICY_MODE` (`enforce`/`review`), `ADS_POLICY_DENY_ON_ERROR`, `ADS_SANDBOX_AVAILABLE`, `ADS_RUN_WORKDIR`, `ADS_RUN_TTL_SECONDS`, `ADS_EGRESS_ALLOWLIST`, `ADS_PROTECTED_BRANCHES`
 - ads-audit: `ADS_AUDIT_API_TOKEN`, `ADS_DATABASE_URL` (PostgreSQL journal), `ADS_AMQP_URL` (decisions in)
-- ads-supervisor (optional, `supervisor.enabled`): `ADS_SUPERVISOR_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_SUBJECT`, `ADS_ATTRIBUTES`, `ADS_MCP_SERVERS` (`name=url,…`; an agent reaches each at `/mcp/<name>`), `ADS_MCP_TIMEOUT_SECONDS`, `ADS_RUN_HEADER`. Where a run executes is not configured here: whoever creates the sandbox sends it with `POST /supervisor/runs`.
+- ads-guardrail (optional, `guardrail.enabled`): `ADS_GUARDRAIL_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_ATTRIBUTES`, `ADS_MCP_SERVERS` (`name=url,…`; an agent reaches each at `/mcp/<name>`), `ADS_APPLICATIONS` (JSON: applications such as hermes that call with their own key; their runs are opened by the guardrail), `ADS_MCP_AUDIENCE` with `ADS_KEYCLOAK_WELL_KNOWN_URL` and `ADS_KEYCLOAK_ISSUER` (whose tokens identify people; empty accepts none), `ADS_MCP_TIMEOUT_SECONDS`, `ADS_RUN_HEADER`. Where a run executes is not configured here: whoever creates the sandbox sends it with `POST /guardrail/runs`, along with the person's token.
 
 All three take the same `ADS_TLS_*` and `ADS_BIND_HOST`/`ADS_PORT` as the ADS process.
 
@@ -83,7 +83,7 @@ ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON
 
 ## Helm
 
-`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname for ads, and TLS via cert-manager or bring-your-own secrets (optional CA bundle). ads-preferences is an in-cluster ClusterIP TLS service (`preferences.*`, including `preferences.database.url`). Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The capability matrix, tool-call bindings, run TTL, egress allowlist and protected branches live under `policy.*`; the journal database and broker under `audit.*`; the optional enforcement point under `supervisor.*`. The chart installs none of Kafka, Redis, RabbitMQ or Postgres.
+`charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname for ads, and TLS via cert-manager or bring-your-own secrets (optional CA bundle). ads-preferences is an in-cluster ClusterIP TLS service (`preferences.*`, including `preferences.database.url`). Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The capability matrix, tool-call bindings, run TTL, egress allowlist and protected branches live under `policy.*`; the journal database and broker under `audit.*`; the optional enforcement point under `guardrail.*`. The chart installs none of Kafka, Redis, RabbitMQ or Postgres.
 
 Install requires:
 

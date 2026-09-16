@@ -22,12 +22,28 @@ UNREACHABLE = "policy.unreachable"
 UNCONFIGURED = "policy service is not configured"
 
 
+class PolicyUnavailable(ConnectionError):
+    """A lookup that could not be answered. Never the same as "there is nothing"."""
+
+
 class PolicyClient(Protocol):
     """How a PEP reaches the policy service."""
 
     def start_run(self, request: RunRequest) -> Run: ...
 
+    def run(self, run_id: str) -> Run | None:
+        """The run, or nothing if it is unknown. Raises if the service is out of reach."""
+        ...
+
+    def runs_held(self, holder: str) -> list[Run]:
+        """Runs in any state of one holder. Raises if out of reach."""
+        ...
+
     def revoke_run(self, run_id: str) -> Run: ...
+
+    def finish_run(self, run_id: str) -> Run | None:
+        """The finished run, or nothing if it is unknown. Raises if out of reach."""
+        ...
 
     def decide(self, request: DecisionRequest) -> PolicyDecision: ...
 
@@ -70,8 +86,38 @@ class HttpPolicyClient:
     def start_run(self, request: RunRequest) -> Run:
         return msgspec.convert(self._post("/policy/runs", request), type=Run)
 
+    def run(self, run_id: str) -> Run | None:
+        return self._maybe_run("GET", f"/policy/runs/{run_id}")
+
+    def runs_held(self, holder: str) -> list[Run]:
+        try:
+            response = self._client.get("/policy/runs", params={"holder": holder})
+            response.raise_for_status()
+            return msgspec.convert(response.json(), type=list[Run])
+        except (httpx2.HTTPError, ValueError, msgspec.ValidationError) as exc:
+            raise PolicyUnavailable(f"policy service: {exc}") from exc
+
     def revoke_run(self, run_id: str) -> Run:
         return msgspec.convert(self._post(f"/policy/runs/{run_id}/revoke", None), type=Run)
+
+    def finish_run(self, run_id: str) -> Run | None:
+        return self._maybe_run("POST", f"/policy/runs/{run_id}/finish")
+
+    def _maybe_run(self, method: str, path: str) -> Run | None:
+        """A run, nothing for an unknown one, and an error for everything else."""
+        try:
+            response = self._client.request(
+                method,
+                path,
+                content=b"{}" if method == "POST" else None,
+                headers={"content-type": "application/json"},
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            return msgspec.convert(response.json(), type=Run)
+        except (httpx2.HTTPError, ValueError, msgspec.ValidationError) as exc:
+            raise PolicyUnavailable(f"policy service: {exc}") from exc
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
         return self._ask("/policy/decide", request)
@@ -110,8 +156,17 @@ class UnconfiguredPolicyClient:
     def start_run(self, request: RunRequest) -> Run:
         raise RuntimeError(UNCONFIGURED)
 
+    def run(self, run_id: str) -> Run | None:
+        raise PolicyUnavailable(UNCONFIGURED)
+
+    def runs_held(self, holder: str) -> list[Run]:
+        raise PolicyUnavailable(UNCONFIGURED)
+
     def revoke_run(self, run_id: str) -> Run:
         raise RuntimeError(UNCONFIGURED)
+
+    def finish_run(self, run_id: str) -> Run | None:
+        raise PolicyUnavailable(UNCONFIGURED)
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
         return unreachable(UNCONFIGURED, self.denied_message)

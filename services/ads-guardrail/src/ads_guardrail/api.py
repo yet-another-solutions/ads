@@ -9,6 +9,7 @@ from dishka.integrations.litestar import FromDishka, inject
 from litestar import Controller, HttpMethod, Request, Response, post, route
 from litestar.connection import ASGIConnection
 from litestar.exceptions import (
+    ClientException,
     HTTPException,
     NotAuthorizedException,
     NotFoundException,
@@ -17,9 +18,10 @@ from litestar.exceptions import (
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Stream
 
+from ads_guardrail.contract import Opening, Sandbox
+from ads_guardrail.guardrail import Guardrail, NotAPerson, RunNotOpen
+from ads_guardrail.proxy import Proxy, UnknownServer, UpstreamUnavailable
 from ads_policy.contract import PolicyDecision, Run
-from ads_supervisor.proxy import Proxy, UnknownServer, UpstreamUnavailable
-from ads_supervisor.supervisor import RunNotOpen, Sandbox, Supervisor
 
 BEARER = "Bearer "
 
@@ -93,35 +95,62 @@ class McpController(Controller):
         )
 
 
-class SupervisorController(Controller):
+class GuardrailController(Controller):
     """The decision API, for callers that ask rather than being proxied."""
 
-    path = "/supervisor"
+    path = "/guardrail"
     guards = [require_api_token]
 
     @post("/runs")
     @inject
-    async def open_run(self, data: Sandbox, supervisor: FromDishka[Supervisor]) -> Run:
+    async def open_run(self, data: Opening, guardrail: FromDishka[Guardrail]) -> Run:
         """Whoever creates an agent's sandbox opens a run for each task put in it.
 
-        The token is what makes the placement believable: the agent must not hold it,
-        or it could open a run claiming a sandbox it is not in.
+        The API token is what makes the placement believable: the agent must not hold
+        it, or it could open a run somewhere it is not. Who the run is for comes from
+        the person's own token, which has to verify.
         """
-        return await anyio.to_thread.run_sync(supervisor.open, data)
+        try:
+            return await anyio.to_thread.run_sync(guardrail.open, data)
+        except NotAPerson as exc:
+            raise ClientException(detail=str(exc)) from exc
+
+    @post("/runs/{run_id:str}/finish", status_code=200)
+    @inject
+    async def finish_run(self, run_id: str, guardrail: FromDishka[Guardrail]) -> Run:
+        """The task is over. Without this a run lingers until its lifetime ends, and the
+        next task on the same credentials would find two."""
+        try:
+            finished = await anyio.to_thread.run_sync(guardrail.finish, run_id)
+        except RunNotOpen as exc:
+            raise ServiceUnavailableException(detail=str(exc)) from exc
+        if finished is None:
+            raise NotFoundException(detail="no such run")
+        return finished
 
     @post("/permissions")
     @inject
     async def permission(
-        self, data: PermissionRequest, supervisor: FromDishka[Supervisor]
+        self, data: PermissionRequest, guardrail: FromDishka[Guardrail]
     ) -> PolicyDecision:
         try:
             # The policy client is synchronous, and a hung policy service must not
             # take the event loop down with it — health probes answer from here too.
-            return await anyio.to_thread.run_sync(
-                supervisor.permit, data.run_id, data.source, data.tool, data.arguments
-            )
+            return await anyio.to_thread.run_sync(_permit, guardrail, data)
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc
 
 
-__all__ = ["MCP_PATH", "McpController", "PermissionRequest", "Sandbox", "SupervisorController"]
+def _permit(guardrail: Guardrail, data: PermissionRequest) -> PolicyDecision:
+    run = guardrail.run(data.run_id)
+    return guardrail.permit(run, data.source, data.tool, data.arguments)
+
+
+__all__ = [
+    "MCP_PATH",
+    "GuardrailController",
+    "McpController",
+    "Opening",
+    "PermissionRequest",
+    "Sandbox",
+]

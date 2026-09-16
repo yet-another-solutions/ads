@@ -23,7 +23,7 @@ BEARER = "Bearer "
 
 
 def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
-    """Only the controller and the supervisor reach this API."""
+    """Only the controller and the guardrail reach this API."""
     expected = str(connection.app.state.api_token)
     header = connection.headers.get("authorization", "")
     if not header.startswith(BEARER):
@@ -46,10 +46,34 @@ class PolicyController(Controller):
         except UnknownPlacement as exc:
             raise ClientException(detail=f"placement not confirmed: {exc}") from exc
 
+    @get("/runs")
+    @inject
+    async def held_runs(self, holder: str, service: FromDishka[PolicyService]) -> list[Run]:
+        """The runs of one holder, in any state."""
+        if not holder:
+            raise ClientException(detail="a holder is required")
+        return await service.held_by(holder)
+
+    @get("/runs/{run_id:str}")
+    @inject
+    async def run(self, run_id: str, service: FromDishka[PolicyService]) -> Run:
+        found = await service.run(run_id)
+        if found is None:
+            raise NotFoundException(detail="no such run")
+        return found
+
     @post("/runs/{run_id:str}/revoke")
     @inject
     async def revoke_run(self, run_id: str, service: FromDishka[PolicyService]) -> Run:
         run = await service.revoke(run_id)
+        if run is None:
+            raise NotFoundException(detail="no such run")
+        return run
+
+    @post("/runs/{run_id:str}/finish")
+    @inject
+    async def finish_run(self, run_id: str, service: FromDishka[PolicyService]) -> Run:
+        run = await service.finish(run_id)
         if run is None:
             raise NotFoundException(detail="no such run")
         return run

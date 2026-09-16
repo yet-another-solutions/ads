@@ -15,9 +15,9 @@ members = [
     "ads-commons-schema",
     "ads-egress-controlplane",
     "ads-engine",
+    "ads-guardrail",
     "ads-policy",
     "ads-preferences",
-    "ads-supervisor",
     "ads-workspace",
 ]
 
@@ -181,6 +181,41 @@ requires-dist = [
 ]
 
 [[package]]
+name = "ads-guardrail"
+version = "0.0.1"
+source = { editable = "services/ads-guardrail" }
+dependencies = [
+    { name = "ads-commons" },
+    { name = "ads-commons-beans" },
+    { name = "ads-policy" },
+    { name = "aio-pika" },
+    { name = "aiohttp" },
+    { name = "anyio" },
+    { name = "dishka" },
+    { name = "litestar" },
+    { name = "msgspec" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "structlog" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-policy", editable = "services/ads-policy" },
+    { name = "aio-pika", specifier = "==10.0.1" },
+    { name = "aiohttp", specifier = "==3.14.3" },
+    { name = "anyio", specifier = "==4.12.0" },
+    { name = "dishka", specifier = "==1.10.1" },
+    { name = "litestar", specifier = "==2.24.0" },
+    { name = "msgspec", specifier = "==0.21.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
+    { name = "structlog", specifier = "==26.1.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
+]
+
+[[package]]
 name = "ads-policy"
 version = "0.0.1"
 source = { editable = "services/ads-policy" }
@@ -245,35 +280,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "ads-supervisor"
-version = "0.0.1"
-source = { editable = "services/ads-supervisor" }
-dependencies = [
-    { name = "ads-policy" },
-    { name = "aio-pika" },
-    { name = "aiohttp" },
-    { name = "anyio" },
-    { name = "dishka" },
-    { name = "litestar" },
-    { name = "msgspec" },
-    { name = "structlog" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ads-policy", editable = "services/ads-policy" },
-    { name = "aio-pika", specifier = "==10.0.1" },
-    { name = "aiohttp", specifier = "==3.14.3" },
-    { name = "anyio", specifier = "==4.12.0" },
-    { name = "dishka", specifier = "==1.10.1" },
-    { name = "litestar", specifier = "==2.24.0" },
-    { name = "msgspec", specifier = "==0.21.1" },
-    { name = "structlog", specifier = "==26.1.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
-]
-
-[[package]]
 name = "ads-workspace"
 version = "0.0.1"
 source = { virtual = "." }
@@ -285,9 +291,9 @@ dependencies = [
     { name = "ads-commons-schema" },
     { name = "ads-egress-controlplane" },
     { name = "ads-engine" },
+    { name = "ads-guardrail" },
     { name = "ads-policy" },
     { name = "ads-preferences" },
-    { name = "ads-supervisor" },
 ]
 
 [package.dev-dependencies]
@@ -318,9 +324,9 @@ requires-dist = [
     { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "ads-egress-controlplane", editable = "services/ads-egress-controlplane" },
     { name = "ads-engine", editable = "services/ads-engine" },
+    { name = "ads-guardrail", editable = "services/ads-guardrail" },
     { name = "ads-policy", editable = "services/ads-policy" },
     { name = "ads-preferences", editable = "services/ads-preferences" },
-    { name = "ads-supervisor", editable = "services/ads-supervisor" },
 ]
 
 [package.metadata.requires-dev]

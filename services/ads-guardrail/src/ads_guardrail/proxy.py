@@ -6,14 +6,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import anyio.to_thread
 import msgspec
 import structlog
 
-from ads_policy.contract import PolicyDecision
-from ads_supervisor.config import Settings
-from ads_supervisor.supervisor import Reading, RunNotOpen, Supervisor
+from ads_guardrail.config import Settings
+from ads_guardrail.guardrail import Guardrail, Reading, RunNotOpen
+from ads_policy.contract import PolicyDecision, Run
 
-logger = structlog.get_logger("ads.supervisor")
+logger = structlog.get_logger("ads.guardrail")
 
 #: The one method that is an action. Everything else — initialize, ping, tools/list,
 #: resources, prompts — passes through unread: the less of the protocol this
@@ -94,10 +95,10 @@ class Proxy:
     in its code. Remove the override and the guardrail is gone.
     """
 
-    def __init__(self, settings: Settings, supervisor: Supervisor) -> None:
+    def __init__(self, settings: Settings, guardrail: Guardrail) -> None:
         self._settings = settings
         self._servers = dict(settings.mcp_servers or {})
-        self._supervisor = supervisor
+        self._guardrail = guardrail
         wait = settings.mcp_timeout_seconds
         # No total: a tool may take long and say so in progress events. What is
         # bounded is silence — between bytes, and before the connection is made.
@@ -124,19 +125,28 @@ class Proxy:
                 # A batch is a way to carry a call past the check inside something that
                 # is not a call. The current protocol has dropped batches anyway.
                 logger.info("batched tool call refused", server=server)
-                return _json(_refuse_batch(message, self._supervisor.governance.denied_message))
+                return _json(_refuse_batch(message, self._guardrail.governance.denied_message))
             return await self._relay(method, upstream, body, headers)
         call = _tool_call(message)
         if call is None:
             return await self._relay(method, upstream, body, headers)
         tool, arguments, request_id = call
-        run_id = headers.get(self._settings.run_header, "")
         try:
-            # The server's name is the source bindings know it by: two servers may both
-            # offer `search`, and they need not mean the same thing by it.
-            decision = self._supervisor.permit(run_id, f"mcp:{server}", tool, arguments)
+            # The policy client is synchronous and goes over the network; the event
+            # loop carries every other agent's traffic meanwhile.
+            run, decision = await anyio.to_thread.run_sync(
+                self._decide,
+                _bearer(headers),
+                headers.get(self._settings.run_header, ""),
+                # The server's name is the source bindings know it by: two servers may
+                # both offer `search`, and they need not mean the same thing by it.
+                f"mcp:{server}",
+                tool,
+                arguments,
+            )
         except RunNotOpen as exc:
-            return _json(_refuse(request_id, str(exc)))
+            logger.info("tool call belongs to no run", server=server, tool=tool, reason=str(exc))
+            return _json(_refuse(request_id, self._guardrail.governance.denied_message))
         if not decision.permitted:
             logger.info("tool call refused", server=server, tool=tool, rule_id=decision.rule_id)
             # The agent is told what it may do instead, never where the wall is.
@@ -144,7 +154,7 @@ class Proxy:
         response = await self._open(method, upstream, body, headers)
         relayed = _headers(response)
         if response.content_type == SSE:
-            events = self._read_stream(response, run_id, decision)
+            events = self._read_stream(response, run, decision)
             return Relayed(response.status, relayed, events)
         try:
             answer = await response.read()
@@ -154,7 +164,13 @@ class Proxy:
             response.release()
         if not answer:
             return Relayed(response.status, relayed, answer)
-        return Relayed(response.status, relayed, self._read_message(run_id, decision, answer))
+        return Relayed(response.status, relayed, self._read_message(run, decision, answer))
+
+    def _decide(
+        self, bearer: str, named: str, source: str, tool: str, arguments: dict[str, str]
+    ) -> tuple[Run, PolicyDecision]:
+        run = self._guardrail.find(bearer, named)
+        return run, self._guardrail.permit(run, source, tool, arguments)
 
     async def close(self) -> None:
         await self._session.close()
@@ -191,7 +207,7 @@ class Proxy:
         }
 
     async def _read_stream(
-        self, response: aiohttp.ClientResponse, run_id: str, decision: PolicyDecision
+        self, response: aiohttp.ClientResponse, run: Run, decision: PolicyDecision
     ) -> AsyncIterator[bytes]:
         """Each event as it completes, read. Progress reaches the agent as it happens.
 
@@ -203,31 +219,31 @@ class Proxy:
             async for chunk in response.content.iter_any():
                 events, pending = _split_events(pending + chunk)
                 for event in events:
-                    yield self._read_event(event, run_id, decision)
+                    yield self._read_event(event, run, decision)
                 if len(pending) > MAX_EVENT_BYTES:
                     logger.warning("stream cut: an event outgrew the limit", size=len(pending))
                     return
             if pending:
-                yield self._read_event(pending, run_id, decision)
+                yield self._read_event(pending, run, decision)
         except aiohttp.ClientError as exc:
             logger.warning("stream from the MCP server broke off", error=str(exc))
         finally:
             response.release()
 
-    def _read_event(self, event: bytes, run_id: str, decision: PolicyDecision) -> bytes:
+    def _read_event(self, event: bytes, run: Run, decision: PolicyDecision) -> bytes:
         """One event, with its data read as a message and every other field kept."""
         lines = event.splitlines()
         data = [_field_value(line) for line in lines if line.startswith(b"data:")]
         if not data:
             return event
         payload = b"\n".join(data)
-        read = self._read_message(run_id, decision, payload)
+        read = self._read_message(run, decision, payload)
         if read is payload:
             return event
         kept = [line for line in lines if not line.startswith(b"data:")]
         return b"\n".join([*kept, b"data: " + read]) + b"\n\n"
 
-    def _read_message(self, run_id: str, decision: PolicyDecision, payload: bytes) -> bytes:
+    def _read_message(self, run: Run, decision: PolicyDecision, payload: bytes) -> bytes:
         """A message as the agent should get it; ``payload`` itself when nothing changed.
 
         The strings inside are read, not the JSON text: an escaped secret is found, and
@@ -237,7 +253,7 @@ class Proxy:
         message = _decode(payload)
         if message is None:
             text = payload.decode("utf-8", errors="replace")
-            reading = self._inspect(run_id, decision, [text])
+            reading = self._inspect(run, decision, [text])
             return payload if reading.texts == (text,) else reading.texts[0].encode("utf-8")
         messages = message if isinstance(message, list) else [message]
         texts = [
@@ -250,7 +266,7 @@ class Proxy:
         ]
         if not texts:
             return payload
-        reading = self._inspect(run_id, decision, texts)
+        reading = self._inspect(run, decision, texts)
         if reading.texts == tuple(texts):
             return payload
         replacements = iter(reading.texts)
@@ -261,8 +277,8 @@ class Proxy:
                         item[key] = _replaced(item[key], replacements)
         return msgspec.json.encode(message)
 
-    def _inspect(self, run_id: str, decision: PolicyDecision, texts: list[str]) -> Reading:
-        reading = self._supervisor.inspect_result(run_id, decision, texts)
+    def _inspect(self, run: Run, decision: PolicyDecision, texts: list[str]) -> Reading:
+        reading = self._guardrail.inspect_result(run, decision, texts)
         found = reading.decision
         if found.warnings:
             logger.warning("tool result carries a signal", warnings=list(found.warnings))
@@ -294,6 +310,12 @@ def _field_value(line: bytes) -> bytes:
     """The value of an SSE field: after the colon, less one space if there is one."""
     value = line.split(b":", 1)[1]
     return value[1:] if value.startswith(b" ") else value
+
+
+def _bearer(headers: dict[str, str]) -> str:
+    """The credential the call arrived with, as its run was bound to it."""
+    scheme, _, credential = headers.get("authorization", "").partition(" ")
+    return credential.strip() if scheme.lower() == "bearer" else ""
 
 
 def _headers(response: aiohttp.ClientResponse) -> dict[str, str]:

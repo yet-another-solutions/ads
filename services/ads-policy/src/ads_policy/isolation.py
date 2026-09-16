@@ -43,8 +43,8 @@ def assign_isolation_level(
     """Derive the level from where the run was scheduled, never from what it claims.
 
     ``local`` is not derivable here: node labels are a cluster notion and a developer
-    machine has none. The supervisor asserts it instead, because only it knows it is a
-    devcontainer. A cluster placement that resolves to nothing is a refusal, not a
+    machine has none. Whoever opens the run asserts it instead, because only it knows it
+    is a devcontainer. A cluster placement that resolves to nothing is a refusal, not a
     weaker level — weaker isolation is not the same as fewer permissions.
 
     A cluster without sandbox nodes cannot honour a Kata placement, so a run that
