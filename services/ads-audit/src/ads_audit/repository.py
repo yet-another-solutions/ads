@@ -102,6 +102,7 @@ class SqlAuditRepository:
             policy_hash=event.policy_hash,
             content=event.content,
             point=event.point.value,
+            decided_by=event.decided_by,
         )
         await self.session.execute(statement.on_conflict_do_nothing())
 
@@ -187,6 +188,7 @@ def _event(row: Mapping[str, Any]) -> AuditEvent:
         policy_hash=str(row["policy_hash"]),
         content=None if row["content"] is None else str(row["content"]),
         point=InterceptionPoint(str(row["point"])),
+        decided_by=str(row["decided_by"]),
         event_id=str(row["event_id"]),
         recorded_at=row["recorded_at"],
     )

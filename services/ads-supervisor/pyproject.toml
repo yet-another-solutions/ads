@@ -7,6 +7,7 @@ authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-policy==0.0.1",
     "aio-pika==10.0.1",
+    "aiohttp==3.14.3",
     "anyio==4.12.0",
     "dishka==1.10.1",
     "litestar==2.24.0",

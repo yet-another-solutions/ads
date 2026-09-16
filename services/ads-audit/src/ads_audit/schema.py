@@ -22,9 +22,16 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     policy_hash varchar(64) NOT NULL,
     content     text,
     point       varchar(16) NOT NULL DEFAULT 'call',
+    decided_by  varchar(128) NOT NULL DEFAULT '',
     PRIMARY KEY (recorded_at, id)
 ) PARTITION BY RANGE (recorded_at)
 """
+
+#: A journal created before the build was recorded gets the column, and its old rows
+#: an empty value: nobody knows which build wrote them, and that is what it says.
+ADD_DECIDED_BY = (
+    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS decided_by varchar(128) NOT NULL DEFAULT ''"
+)
 
 #: Redelivery from the broker must not double-count a denial in the budget.
 CREATE_UNIQUE = f"""
@@ -56,6 +63,7 @@ def create_partition(start: date, end: date) -> str:
 async def ensure_schema(connection: AsyncConnection, months_ahead: int = 2) -> None:
     """Create the journal and the partitions it will land in. Never drops anything."""
     await connection.execute(text(CREATE_TABLE))
+    await connection.execute(text(ADD_DECIDED_BY))
     await connection.execute(text(CREATE_UNIQUE))
     await connection.execute(text(CREATE_RUN_INDEX))
     await connection.execute(text(CREATE_SUBJECT_INDEX))

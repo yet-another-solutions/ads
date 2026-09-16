@@ -15,16 +15,15 @@ data:
   {{- end }}
   ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
   ADS_SUBJECT: {{ required "supervisor.subject is required: a run is opened on behalf of someone" .Values.supervisor.subject | quote }}
-  ADS_PROJECT: {{ .Values.supervisor.project | quote }}
-  ADS_REPO: {{ .Values.supervisor.repo | quote }}
-  ADS_ENV: {{ .Values.supervisor.env | quote }}
-  ADS_RUN_WORKDIR: {{ .Values.policy.workdir | quote }}
-  ADS_PLACEMENT: "cluster"
-  # This pod is scheduled by supervisor-deployment.yaml onto an application node with
-  # no runtimeClassName, so that is the only placement it may describe. Claiming the
-  # sandbox here would hand an ordinary container the rules written for a Kata guest.
-  ADS_NODE_LABELS: {{ printf "%s=%s" .Values.nodes.application.labelKey (.Values.nodes.application.labelValue | toString) | quote }}
   ADS_ATTRIBUTES: {{ join "," .Values.supervisor.attributes | quote }}
+  # One service for every agent, outside all their sandboxes. It says nothing about
+  # where a run executes: whoever creates the sandbox says that when opening the run.
+  # An agent reaches each server below at /mcp/<name> instead of its own address.
+  {{- $servers := list }}
+  {{- range $name, $url := .Values.supervisor.mcpServers }}
+  {{- $servers = append $servers (printf "%s=%s" $name $url) }}
+  {{- end }}
+  ADS_MCP_SERVERS: {{ join "," $servers | quote }}
 ---
 apiVersion: v1
 kind: Secret

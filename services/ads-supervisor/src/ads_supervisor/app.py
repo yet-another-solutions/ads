@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-import anyio.to_thread
 import structlog
 from dishka import AsyncContainer, make_async_container
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
@@ -11,12 +10,11 @@ from litestar import Litestar
 
 from ads_policy.audit import AuditSink, BufferedAuditSink
 from ads_policy.client import PolicyClient
-from ads_supervisor.api import SupervisorController
+from ads_supervisor.api import McpController, SupervisorController
 from ads_supervisor.config import Settings
 from ads_supervisor.health import live, ready
 from ads_supervisor.ioc import AppProvider
 from ads_supervisor.logconfig import configure_logging
-from ads_supervisor.supervisor import Supervisor
 
 logger = structlog.get_logger("ads.supervisor")
 
@@ -33,8 +31,6 @@ def create_app(
 
     async def _start(app: Litestar) -> None:
         del app
-        supervisor = await container.get(Supervisor)
-        await anyio.to_thread.run_sync(supervisor.open)
         flusher.append(asyncio.create_task(_publish_audit(container, settings)))
 
     async def _stop(app: Litestar) -> None:
@@ -47,7 +43,7 @@ def create_app(
         await container.close()
 
     app = Litestar(
-        route_handlers=[SupervisorController, live, ready],
+        route_handlers=[McpController, SupervisorController, live, ready],
         state=None,
         on_startup=[_start],
         on_shutdown=[_stop],

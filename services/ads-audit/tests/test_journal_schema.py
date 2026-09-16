@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ads_audit.models import TABLE, audit_decisions
-from ads_audit.schema import CREATE_TABLE, create_partition, month_bounds, partition_name
+from ads_audit.schema import (
+    ADD_DECIDED_BY,
+    CREATE_TABLE,
+    create_partition,
+    month_bounds,
+    partition_name,
+)
 
 
 def test_the_journal_is_partitioned_by_time() -> None:
@@ -64,6 +70,7 @@ def test_the_table_carries_what_the_event_carries() -> None:
         "policy_hash",
         "content",
         "point",
+        "decided_by",
     } <= columns
 
 
@@ -71,3 +78,14 @@ def test_the_journal_says_which_check_produced_the_row() -> None:
     """One call can leave two rows — the matrix permitted it, the payload refused it."""
     assert "point" in CREATE_TABLE
     assert "DEFAULT 'call'" in CREATE_TABLE
+
+
+def test_the_journal_says_which_build_wrote_the_row() -> None:
+    """The payload checks ship in the image, outside the policy hash."""
+    assert "decided_by" in CREATE_TABLE
+
+
+def test_a_journal_that_predates_the_build_column_gets_it() -> None:
+    """``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it was."""
+    assert "ADD COLUMN IF NOT EXISTS decided_by" in ADD_DECIDED_BY
+    assert "DEFAULT ''" in ADD_DECIDED_BY

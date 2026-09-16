@@ -129,8 +129,25 @@ def find_secrets(text: str) -> tuple[Finding, ...]:
 
 
 def redact(text: str, findings: tuple[Finding, ...]) -> str:
-    """Cut the secrets out, latest first so earlier spans keep their offsets."""
+    """Cut the secrets out, latest first so earlier spans keep their offsets.
+
+    One secret often trips several rules — a key matches both its vendor's pattern and
+    the generic one — and those matches overlap. Cutting each in turn would splice the
+    text through a hole already made, so overlaps are dropped: the widest match wins
+    and the rest are already inside it.
+    """
     payload = text
-    for finding in sorted(findings, key=lambda f: f.start, reverse=True):
+    for finding in _widest(findings):
         payload = f"{payload[: finding.start]}[redacted:{finding.rule_id}]{payload[finding.end :]}"
     return payload
+
+
+def _widest(findings: tuple[Finding, ...]) -> list[Finding]:
+    """Non-overlapping spans, latest first, preferring the longer of any two."""
+    ordered = sorted(findings, key=lambda f: (f.start, f.start - f.end))
+    kept: list[Finding] = []
+    for finding in ordered:
+        if kept and finding.start < kept[-1].end:
+            continue
+        kept.append(finding)
+    return list(reversed(kept))

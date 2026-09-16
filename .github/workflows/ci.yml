@@ -152,10 +152,15 @@ jobs:
             exit 1
           fi
           helm template ads charts/ads \
-            --set supervisor.enabled=true --set supervisor.subject=alice >/tmp/ads-sup.yaml
+            --set supervisor.enabled=true --set supervisor.subject=alice \
+            --set supervisor.mcpServers.retriever=http://retriever:8006/mcp >/tmp/ads-sup.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 7
           grep -q 'app.kubernetes.io/component: ads-supervisor' /tmp/ads-sup.yaml
-          grep -q 'ADS_PLACEMENT: "cluster"' /tmp/ads-sup.yaml
+          grep -q 'ADS_MCP_SERVERS: "retriever=http://retriever:8006/mcp"' /tmp/ads-sup.yaml
+          if grep -q 'ADS_PLACEMENT' /tmp/ads-sup.yaml; then
+            echo 'the shared service must not describe a sandbox it is not in' >&2
+            exit 1
+          fi
           if helm template ads charts/ads --set supervisor.enabled=true >/tmp/ads-sup-bad.yaml; then
             echo 'a run opened on behalf of nobody' >&2
             exit 1

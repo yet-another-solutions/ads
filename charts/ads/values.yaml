@@ -51,12 +51,14 @@ supervisor:
   service:
     port: 8083
   subject: ""
-  project: ads
-  repo: yet-another-solutions/ads
-  env: dev
   attributes:
     - repo.write=true
     - agent=true
+  # name: URL. Point an agent's MCP client for `name` at
+  # https://<release>-supervisor:<port>/mcp/<name>; bindings know the server as
+  # `mcp:<name>`.
+  mcpServers: {}
+  #   retriever: http://retriever.agents:8006/mcp
 
 audit:
   replicaCount: 1

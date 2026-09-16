@@ -129,6 +129,7 @@ def test_hash_ignores_rule_order_and_follows_rule_content(policy: Policy) -> Non
         protected_branches=policy.protected_branches,
         capabilities=policy.capabilities,
         bindings=policy.bindings,
+        interception=policy.interception,
     )
     assert reordered.digest() == policy.digest()
     widened = compose(

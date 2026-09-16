@@ -4,7 +4,7 @@ import base64
 
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import Effect, InterceptionPoint
-from ads_policy.output import inspect_payload
+from ads_policy.output import inspect_payload, inspect_texts
 
 AWS = "AKIAQYLPMN5HHHFPZAM2"
 GITHUB = "GITHUB_TOKEN=ghp_016C4eD3aB9fE7d2C5a8B1f0E3d6C9b2A5f8E1"
@@ -121,6 +121,29 @@ def test_the_same_payload_is_refused_out_and_redacted_in() -> None:
     payload = f"export KEY={AWS}\n"
     assert inspect_payload(payload, InterceptionPoint.REQUEST).effect is Effect.DENY
     assert inspect_payload(payload, InterceptionPoint.RESPONSE).effect is Effect.TRANSFORM
+
+
+def test_many_texts_are_cleaned_apart_under_one_verdict() -> None:
+    decision, cleaned = inspect_texts(["clean", f"KEY={AWS}", f"{GITHUB}"])
+    assert cleaned[0] == "clean"
+    assert cleaned[1] == "KEY=[redacted:aws-access-token]"
+    assert "ghp_" not in cleaned[2]
+    assert decision.effect is Effect.TRANSFORM
+    assert decision.transform is not None
+    assert "aws-access-token" in decision.transform.redactions
+
+
+def test_a_secret_is_not_looked_for_across_two_texts() -> None:
+    """Each text is its own: the boundary between two is not a place a key can span."""
+    decision, cleaned = inspect_texts(["AKIAQYLPMN", "5HHHFPZAM2"])
+    assert decision.effect is Effect.ALLOW
+    assert cleaned == ("AKIAQYLPMN", "5HHHFPZAM2")
+
+
+def test_no_texts_is_nothing_to_say() -> None:
+    decision, cleaned = inspect_texts([])
+    assert decision.effect is Effect.ALLOW
+    assert cleaned == ()
 
 
 def test_ordinary_source_code_is_not_a_secret() -> None:

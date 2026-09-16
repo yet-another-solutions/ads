@@ -73,9 +73,15 @@ class BufferedAuditSink:
     once it is reached: a decision that cannot be recorded must not be granted.
     """
 
-    def __init__(self, sink: AuditSink, settings: GovernanceSettings | None = None) -> None:
+    def __init__(
+        self,
+        sink: AuditSink,
+        settings: GovernanceSettings | None = None,
+        decided_by: str = "",
+    ) -> None:
         self._sink = sink
         self._capacity = (settings or GovernanceSettings()).audit_backlog
+        self._decided_by = decided_by
         self._pending: list[AuditEvent] = []
 
     @property
@@ -85,6 +91,10 @@ class BufferedAuditSink:
     def enqueue(self, event: AuditEvent) -> None:
         if len(self._pending) >= self._capacity:
             raise AuditBacklogFull(f"{self._capacity} events are waiting to be journalled")
+        # Stamped here because every row this process writes passes through here, and
+        # every one of them was decided by this build.
+        if self._decided_by:
+            event = msgspec.structs.replace(event, decided_by=self._decided_by)
         self._pending.append(event)
 
     async def drain(self) -> int:

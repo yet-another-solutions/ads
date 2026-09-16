@@ -59,3 +59,18 @@ def test_redaction_keeps_the_offsets_of_earlier_findings() -> None:
 
 def test_redacting_nothing_changes_nothing() -> None:
     assert redact("untouched", ()) == "untouched"
+
+
+def test_overlapping_findings_cut_once() -> None:
+    """One key trips several rules; cutting each in turn would splice through a hole."""
+    text = "export KEY=AKIAQYLPMN5HHHFPZAM2"
+    payload = redact(text, find_secrets(text))
+    assert "AKIAQYLPMN5HHHFPZAM2" not in payload
+    assert payload.count("[redacted:") == 1
+    assert payload.startswith("export KEY=")
+
+
+def test_the_wider_of_two_overlapping_findings_wins() -> None:
+    inner = Finding("narrow", "BCD", 1, 4)
+    outer = Finding("wide", "ABCDE", 0, 5)
+    assert redact("ABCDE tail", (inner, outer)) == "[redacted:wide] tail"

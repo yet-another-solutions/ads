@@ -116,6 +116,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event.inputs.dry_run != 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
+          # The release a journal row was decided by; images that write none ignore it.
+          build-args: |
+            ADS_BUILD=${{ needs.channel.outputs.image_tag }}@${{ github.sha }}
           labels: |
             ${{ steps.meta.outputs.labels }}
             org.opencontainers.image.source=https://github.com/yet-another-solutions/ads

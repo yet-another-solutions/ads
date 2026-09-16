@@ -7,9 +7,11 @@ from aio_pika.abc import AbstractRobustConnection
 from dishka import Provider, Scope, provide
 
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
+from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
 from ads_policy.config import GovernanceSettings
 from ads_supervisor.config import Settings
+from ads_supervisor.proxy import Proxy
 from ads_supervisor.supervisor import Supervisor
 
 
@@ -61,7 +63,7 @@ class AppProvider(Provider):
     ) -> BufferedAuditSink:
         sink = self._sink if broker is None else RabbitAuditSink(broker)
         assert sink is not None
-        return BufferedAuditSink(sink, governance)
+        return BufferedAuditSink(sink, governance, decided_by=identity("ads-supervisor"))
 
     @provide(scope=Scope.APP)
     def supervisor(
@@ -72,3 +74,11 @@ class AppProvider(Provider):
         governance: GovernanceSettings,
     ) -> Supervisor:
         return Supervisor(settings=settings, client=client, audit=audit, governance=governance)
+
+    @provide(scope=Scope.APP)
+    async def proxy(self, settings: Settings, supervisor: Supervisor) -> AsyncIterator[Proxy]:
+        standing_in = Proxy(settings, supervisor)
+        try:
+            yield standing_in
+        finally:
+            await standing_in.close()

@@ -5,16 +5,43 @@ from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+import msgspec
+
+from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     DecisionRequest,
+    Placement,
     PolicyDecision,
     Run,
     RunRequest,
     ToolCallRequest,
 )
 from ads_policy.service import PolicyService
+from ads_supervisor.supervisor import Sandbox
 
 TOKEN = "supervisor-api-token-32-bytes"
+GOVERNANCE = GovernanceSettings()
+
+#: A Kata pod on a sandbox node, as the launcher that created it describes it.
+VM_SANDBOX = Sandbox(
+    project="ads",
+    repo="yet-another-solutions/ads",
+    env="dev",
+    workdir=GOVERNANCE.workdir,
+    placement=Placement.CLUSTER,
+    runtime_class_name=GOVERNANCE.vm_runtime_class,
+    node_labels={
+        GOVERNANCE.sandbox_node_label: GOVERNANCE.node_label_value,
+        GOVERNANCE.application_node_label: GOVERNANCE.node_label_value,
+    },
+)
+WORKSTATION = msgspec.structs.replace(
+    VM_SANDBOX, placement=Placement.WORKSTATION, runtime_class_name=None, node_labels={}
+)
+
+
+def sandbox_body(sandbox: Sandbox = VM_SANDBOX) -> dict[str, Any]:
+    return dict(msgspec.to_builtins(sandbox))
 
 
 def blocking[T](coroutine: Coroutine[Any, Any, T]) -> T:

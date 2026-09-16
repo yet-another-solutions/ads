@@ -14,8 +14,11 @@ RUN adduser --disabled-password --gecos "" --uid 1000 ads \
     && mkdir -p /app \
     && chown ads:ads /app
 COPY --from=builder --chown=ads:ads /app /app
+# Every journal row this image writes carries it; unset reads as a developer's build.
+ARG ADS_BUILD=dev
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    ADS_BUILD=$ADS_BUILD
 USER 1000
 WORKDIR /app
 EXPOSE 8080

@@ -8,16 +8,22 @@ import msgspec
 
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
+    DEFAULT_REQUEST,
+    DEFAULT_RESPONSE,
     Binding,
     Capability,
     CapabilityDef,
+    CheckKind,
     Classifier,
     ClassifierKind,
+    Interception,
     IsolationLevel,
     Mode,
     Policy,
     ResourceClass,
     Rule,
+    Side,
+    Switch,
 )
 from ads_policy.pdp import PolicyDecisionPoint
 
@@ -36,6 +42,7 @@ def org_policy(settings: GovernanceSettings | None = None) -> Policy:
         capabilities=config.capabilities,
         bindings=config.bindings,
         default_weight=config.default_weight,
+        interception=Interception(request=DEFAULT_REQUEST, response=DEFAULT_RESPONSE),
     )
 
 
@@ -80,7 +87,50 @@ def load_policy(document: Mapping[str, Any], settings: GovernanceSettings | None
         capabilities=capabilities,
         bindings=bindings,
         default_weight=int(document.get("defaultWeight", config.default_weight)),
+        interception=_load_interception(document.get("interception"), "interception"),
     )
+
+
+def _load_interception(raw: object, where: str) -> Interception:
+    """A missing section, or a missing side, is left unstated.
+
+    Unstated is never off: it resolves to the level above, and at the top to the
+    default, which is enforced. Turning a side off has to be written down.
+    """
+    if raw is None:
+        return Interception()
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{where} must be a mapping of request and response")
+    return Interception(
+        request=_load_side(raw.get("request"), f"{where}.request", DEFAULT_REQUEST),
+        response=_load_side(raw.get("response"), f"{where}.response", DEFAULT_RESPONSE),
+    )
+
+
+def _load_side(raw: object, where: str, default: Side) -> Side | None:
+    """``{on, checks}``, either optional. Missing checks are that side's usual ones."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{where} must be a mapping of on and checks")
+    try:
+        on = Switch(str(raw.get("on", Switch.ENFORCE.value)))
+    except ValueError as exc:
+        raise ValueError(f"{where}.on must be one of {[s.value for s in Switch]}") from exc
+    if "checks" not in raw:
+        return Side(checks=default.checks, on=on)
+    try:
+        checks = frozenset(CheckKind(str(check)) for check in raw["checks"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{where}.checks must be a list of {[c.value for c in CheckKind]}"
+        ) from exc
+    # Only the checks this side can run. An outbound injection check would be read as
+    # protection and do nothing: what goes out is ours, there is no one to inject it.
+    unsupported = checks - default.checks
+    if unsupported:
+        raise ValueError(f"{where} cannot check {sorted(c.value for c in unsupported)}")
+    return Side(checks=checks, on=on)
 
 
 def _load_binding(raw: Mapping[str, Any]) -> Binding:
@@ -154,14 +204,16 @@ def _load_rule(raw: Mapping[str, Any]) -> Rule:
         IsolationLevel(str(level)) for level in raw.get("levels", ()) if _known_level(level)
     )
     requires = tuple(sorted((str(k), str(v)) for k, v in dict(raw.get("requires", {})).items()))
+    rule_id = str(raw.get("id", f"{capability.value}.{resource_class}"))
     return Rule(
-        id=str(raw.get("id", f"{capability.value}.{resource_class}")),
+        id=rule_id,
         capability=capability,
         resource_class=resource_class,
         levels=levels,
         weight=int(raw.get("weight", 1)),
         alternative=str(raw.get("alternative", "")),
         requires=requires,
+        inspect=_load_interception(raw.get("inspect"), f"rule {rule_id!r} inspect"),
     )
 
 
@@ -204,7 +256,7 @@ def compose(org: Policy, dev: Policy | None = None) -> Policy:
         version=f"{org.version}+{dev.version}",
         mode=Mode.REVIEW if org.mode is Mode.REVIEW and dev.mode is Mode.REVIEW else Mode.ENFORCE,
         deny_on_policy_error=org.deny_on_policy_error or dev.deny_on_policy_error,
-        rules=tuple(_narrow(rule, narrowing.get(rule.key())) for rule in org.rules),
+        rules=tuple(_narrow(org, rule, dev, narrowing.get(rule.key())) for rule in org.rules),
         egress_allowlist=(
             tuple(host for host in org.egress_allowlist if host.lower() in allowed)
             if dev.egress_allowlist
@@ -217,15 +269,29 @@ def compose(org: Policy, dev: Policy | None = None) -> Policy:
         capabilities=org.capabilities,
         bindings=org.bindings,
         default_weight=max(org.default_weight, dev.default_weight),
+        # Narrowing again: a dev policy may add checks and switch a side up, never
+        # remove or switch down. A side it does not mention it leaves alone.
+        interception=org.interception.stricter(dev.interception),
     )
 
 
-def _narrow(rule: Rule, dev_rule: Rule | None) -> Rule:
+def _narrow(org: Policy, rule: Rule, dev: Policy, dev_rule: Rule | None) -> Rule:
+    """Every row is read at least as strictly as either policy would read it.
+
+    The reading is resolved on both sides before it is combined: a dev policy that
+    tightens its top level has to reach an org row that states its own, or the row
+    would quietly stay as loose as the org wrote it.
+    """
+    theirs = dev.inspection_for(dev_rule)
+    inspect = (
+        org.inspection_for(rule).stricter(theirs) if theirs != Interception() else rule.inspect
+    )
     if dev_rule is None:
-        return rule
+        return replace(rule, inspect=inspect)
     return replace(
         rule,
         levels=rule.levels & dev_rule.levels,
         weight=max(rule.weight, dev_rule.weight),
         requires=tuple(sorted(set(rule.requires) | set(dev_rule.requires))),
+        inspect=inspect,
     )

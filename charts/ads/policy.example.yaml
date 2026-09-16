@@ -1,0 +1,198 @@
+# The policy the PDP applies, written out in full. This file is an example and is not
+# installed: copy what you need under `policy.document` in your values, and the chart
+# mounts it as a directory the running pod re-reads without a restart.
+#
+# As written it reproduces the matrix compiled into the image exactly — the hash the
+# service computes over it is the same either way — so it is a starting point to edit
+# rather than a change in itself.
+#
+# Anything no rule covers is denied.
+schemaVersion: ads.governance/v1
+version: org-1
+mode: enforce
+denyOnPolicyError: true
+defaultWeight: 1
+
+# How the content of a permitted call is read. `mode` above governs the call itself —
+# the capability matrix; this governs what goes out with it (`request`) and what comes
+# back (`response`). They are separate because they are not the same risk: a
+# credential on its way out is a leak and the call is refused, the same credential on
+# its way back is cut out and the result still goes through.
+#
+# `on`:
+#   enforce  scan, and apply the verdict
+#   review   scan, journal the finding, let the payload through unchanged
+#   off      do not scan — on a large result this is the whole cost of that side
+#
+# `checks`:
+#   secrets    credentials, by the vendored gitleaks rule set
+#   injection  instructions planted in a result; inbound only, and only ever a warning
+#
+# This is the default for every rule. A rule may state its own under `inspect`, in the
+# same shape, and whatever it leaves out comes from here. Leaving something out is
+# never a way to turn it off: unstated at the top means enforce, with both sides'
+# usual checks. A dev policy composed over this one may add checks and switch a side
+# up, never remove or switch down.
+interception:
+  request: {on: enforce, checks: [secrets]}
+  response: {on: enforce, checks: [secrets, injection]}
+
+# Where an agent may reach. Exactly the addresses the perimeter allows: the package
+# mirror, the model gateway, the database broker, the git proxy. There is no internet.
+egressAllowlist:
+  - mirror.interlab
+  - llm-gateway.interlab
+  - tool-broker.interlab
+  - git-proxy.interlab
+
+protectedBranches: [main, master, release]
+
+# How each capability's raw resource becomes the class the matrix is written over.
+# The kinds — path, suffix, host, branch, literal — are code, because each is a piece
+# of normalisation; which one applies to what is policy.
+capabilities:
+  - capability: fs.read
+    classifier: {kind: path, match: workdir, otherwise: outside-workdir}
+  - capability: fs.write
+    classifier: {kind: path, match: workdir, otherwise: outside-workdir}
+  - capability: process.exec
+    classifier: {kind: literal, match: any}
+  - capability: net.egress
+    classifier: {kind: host, match: allowlist, otherwise: internet}
+  - capability: db.query
+    classifier: {kind: literal, match: broker}
+  - capability: db.migrate
+    classifier: {kind: suffix, value: .sql, match: temporary, otherwise: outside-workdir}
+  - capability: secret.read
+    classifier: {kind: literal, match: any}
+  - capability: vcs.push
+    classifier: {kind: branch, match: protected-branch, otherwise: feature-branch}
+
+# What one agent's tool means here. The only place a foreign tool name appears, so
+# updating an agent or attaching an MCP server leaves the rules alone. We write these,
+# never the agent and never the MCP server: a server describing its own tool is
+# self-declaration, and a decision may not rest on it.
+#
+# Either `argument` (the call carries the resource) or `value` (the binding fixes it),
+# never both. A tool absent from this list is refused, which is why an agent upgrade
+# wants a look at it.
+bindings:
+  - {source: opencode, tool: bash, capability: process.exec, argument: command}
+  - {source: opencode, tool: read, capability: fs.read, argument: filePath}
+  - {source: opencode, tool: write, capability: fs.write, argument: filePath}
+  - {source: opencode, tool: edit, capability: fs.write, argument: filePath}
+  - {source: opencode, tool: grep, capability: fs.read, argument: path}
+  - {source: opencode, tool: glob, capability: fs.read, argument: path}
+  - {source: opencode, tool: list, capability: fs.read, argument: path}
+  - {source: opencode, tool: webfetch, capability: net.egress, argument: url}
+  # A query is not an object of access; what the call reaches is the provider. Note
+  # that the provider is not on the allowlist above, so search is refused everywhere
+  # but `local` until a proxy for it is added — deliberately, not by oversight.
+  - {source: opencode, tool: websearch, capability: net.egress, value: search-proxy.interlab}
+
+# capability x resource class x isolation level. An empty `levels` is an explicit deny
+# that still carries a weight, which is how a refusal costs more than a miss and how a
+# retry of the same refusal costs a multiple.
+#
+# `alternative` is the only thing a denied agent is told. Never describe the boundary
+# to it — that is a map, and it will start walking around the edges.
+rules:
+  - id: fs.read.workdir
+    capability: fs.read
+    resourceClass: workdir
+    levels: [local, container, vm]
+
+  - id: fs.write.workdir
+    capability: fs.write
+    resourceClass: workdir
+    levels: [local, container, vm]
+
+  # Reaching outside the workdir is refused here, but the boundary is the mount: in a
+  # devcontainer and in a run pod there is nothing else to see.
+  - id: fs.read.outside
+    capability: fs.read
+    resourceClass: outside-workdir
+    levels: []
+    weight: 3
+
+  - id: fs.write.outside
+    capability: fs.write
+    resourceClass: outside-workdir
+    levels: []
+    weight: 3
+
+  # Absent from `container` on purpose: running commands is the whole difference
+  # between container and vm, and so the whole reason to want Kata.
+  - id: process.exec
+    capability: process.exec
+    resourceClass: any
+    levels: [local, vm]
+    weight: 2
+
+  # A developer machine already reaches the internet; a run pod must not.
+  #
+  # One capability, two rows, two risks — so this is also where the reading differs.
+  # Results from the open internet are the most hostile thing an agent receives: they
+  # are chosen to match its query. The package mirror is ours. To relax the mirror,
+  # for example, add to its row:
+  #
+  #   inspect:
+  #     response: {on: review, checks: [secrets]}
+  - id: net.egress.internet
+    capability: net.egress
+    resourceClass: internet
+    levels: [local]
+    weight: 2
+
+  - id: net.egress.allowlist
+    capability: net.egress
+    resourceClass: allowlist
+    levels: [local, container, vm]
+
+  - id: db.query.broker
+    capability: db.query
+    resourceClass: broker
+    levels: [local, container, vm]
+
+  # A migration is a versioned file reviewed in git, never SQL built at runtime. That
+  # is why there is no `db.write`: the object of control is the file.
+  - id: db.migrate.temporary
+    capability: db.migrate
+    resourceClass: temporary
+    levels: [vm]
+    weight: 2
+    alternative: db.query
+
+  - id: db.migrate.outside
+    capability: db.migrate
+    resourceClass: outside-workdir
+    levels: []
+    weight: 4
+    alternative: db.query
+
+  # Nowhere, at any level. Credentials are never handed to the agent: the tool broker
+  # and the git proxy hold them and act on its behalf.
+  - id: secret.read
+    capability: secret.read
+    resourceClass: any
+    levels: []
+    weight: 5
+
+  # The attribute comes from the caller's claims, mapped once; policy is written over
+  # attributes rather than role names so the mapping can change alone.
+  - id: vcs.push.feature
+    capability: vcs.push
+    resourceClass: feature-branch
+    levels: [local, vm]
+    weight: 2
+    requires:
+      repo.write: "true"
+
+  # Review is the only remaining guard on the path into the cluster, so pushing past
+  # it is refused everywhere.
+  - id: vcs.push.protected
+    capability: vcs.push
+    resourceClass: protected-branch
+    levels: []
+    weight: 5
+    alternative: vcs.push to a feature branch

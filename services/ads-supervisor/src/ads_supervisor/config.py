@@ -5,8 +5,6 @@ import ssl
 from dataclasses import dataclass
 from pathlib import Path
 
-from ads_policy.contract import Placement
-
 
 @dataclass(frozen=True, slots=True)
 class Settings:
@@ -16,21 +14,24 @@ class Settings:
     tls_cert_path: Path
     tls_key_path: Path
     subject: str
-    project: str
-    repo: str
-    env: str
     policy_url: str = ""
     policy_api_token: str = ""
     amqp_url: str = ""
-    workdir: str = "/workspace"
-    placement: Placement = Placement.CLUSTER
-    runtime_class_name: str | None = None
-    node_labels: dict[str, str] | None = None
     attributes: dict[str, str] | None = None
     tls_ca_bundle: Path | None = None
     bind_host: str = "0.0.0.0"
     port: int = 8080
     audit_flush_seconds: float = 1.0
+    #: The MCP servers this stands in front of, by name. An agent reaches one at
+    #: ``/mcp/<name>`` instead of its real address, which is the whole installation: one
+    #: URL per server in its config, and nothing in its code. The name is also what
+    #: bindings call the server, as ``mcp:<name>`` — two servers may both offer `search`.
+    mcp_servers: dict[str, str] | None = None
+    mcp_timeout_seconds: float = 60.0
+    #: Where the run id rides. A long-lived worker serves many runs, so the call has
+    #: to say which one it belongs to; without it there is nothing to charge a budget
+    #: against and nothing to revoke.
+    run_header: str = "x-ads-run"
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -67,6 +68,17 @@ def _pairs(name: str) -> dict[str, str]:
     return pairs
 
 
+def _mcp_servers() -> dict[str, str]:
+    """``name=url,name=url``. A name becomes a path segment, so it has to be one."""
+    servers = {name: url.rstrip("/") for name, url in _pairs("ADS_MCP_SERVERS").items()}
+    for name, url in servers.items():
+        if not name.replace("-", "").replace("_", "").isalnum():
+            raise RuntimeError(f"ADS_MCP_SERVERS: {name!r} is not usable as a path segment")
+        if not url.startswith(("http://", "https://")):
+            raise RuntimeError(f"ADS_MCP_SERVERS: {name!r} needs an http(s) URL")
+    return servers
+
+
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -88,31 +100,21 @@ def load_settings() -> Settings:
     api_token = _required("ADS_SUPERVISOR_API_TOKEN")
     if len(api_token) < 16:
         raise RuntimeError("ADS_SUPERVISOR_API_TOKEN must be at least 16 characters")
-    raw_placement = os.environ.get("ADS_PLACEMENT", Placement.CLUSTER.value).strip()
-    try:
-        placement = Placement(raw_placement)
-    except ValueError as exc:
-        raise RuntimeError(f"ADS_PLACEMENT must be one of {[p.value for p in Placement]}") from exc
-    runtime_class = os.environ.get("ADS_RUNTIME_CLASS_NAME", "").strip()
     settings = Settings(
         api_token=api_token,
         tls_cert_path=cert_path,
         tls_key_path=key_path,
         subject=_required("ADS_SUBJECT"),
-        project=_required("ADS_PROJECT"),
-        repo=_required("ADS_REPO"),
-        env=_env("ADS_ENV", "dev"),
         policy_url=_required("ADS_POLICY_URL").rstrip("/"),
         policy_api_token=_required("ADS_POLICY_API_TOKEN"),
         amqp_url=_required("ADS_AMQP_URL"),
-        workdir=_env("ADS_RUN_WORKDIR", "/workspace").rstrip("/") or "/",
-        placement=placement,
-        runtime_class_name=runtime_class or None,
-        node_labels=_pairs("ADS_NODE_LABELS"),
         attributes=_pairs("ADS_ATTRIBUTES"),
         tls_ca_bundle=_existing_file("ADS_TLS_CA_BUNDLE", ca_raw) if ca_raw else None,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
+        mcp_servers=_mcp_servers(),
+        mcp_timeout_seconds=float(_env("ADS_MCP_TIMEOUT_SECONDS", "60")),
+        run_header=_env("ADS_RUN_HEADER", "x-ads-run").lower(),
     )
     load_tls_context(settings)
     return settings

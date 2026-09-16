@@ -171,6 +171,105 @@ class Mode(StrEnum):
     REVIEW = "review"
 
 
+class Switch(StrEnum):
+    """Whether a payload inspection runs, and whether its verdict is applied.
+
+    ``off`` does not scan at all, which is the point of having it: the scan costs
+    real time on a large payload, and a deployment that does not want it should not
+    pay for it. Declared from least to most strict, which is how two policies
+    compose — a dev policy may tighten a side, never loosen it.
+    """
+
+    OFF = "off"
+    REVIEW = "review"
+    ENFORCE = "enforce"
+
+    def stricter(self, other: Switch) -> Switch:
+        order = list(Switch)
+        return self if order.index(self) >= order.index(other) else other
+
+
+class CheckKind(StrEnum):
+    """What a payload can be read for. Which exist is code; which apply where is policy.
+
+    The same split as ``ClassifierKind``: each of these is a piece of detection
+    logic, and a document naming one this build does not have is a broken document.
+    """
+
+    SECRETS = "secrets"
+    INJECTION = "injection"
+
+
+class Side(msgspec.Struct, frozen=True):
+    """How one direction of a call is read: which checks, and what their verdict does."""
+
+    checks: frozenset[CheckKind]
+    on: Switch = Switch.ENFORCE
+
+    def stricter(self, other: Side) -> Side:
+        """More checks, and the stricter switch. Neither can loosen the other."""
+        return Side(checks=self.checks | other.checks, on=self.on.stricter(other.on))
+
+
+#: What a side is read for when nothing anywhere says otherwise. Injection is only
+#: looked for on the way in: we compose what goes out, so an instruction in it is ours.
+DEFAULT_REQUEST = Side(checks=frozenset({CheckKind.SECRETS}))
+DEFAULT_RESPONSE = Side(checks=frozenset({CheckKind.SECRETS, CheckKind.INJECTION}))
+
+
+class Interception(msgspec.Struct, frozen=True):
+    """The two payload sides of a call. ``call`` itself is the matrix and has ``mode``.
+
+    They are separate because they are not the same risk: a credential on its way out
+    is a leak and the call is refused, the same credential on its way back is cut out
+    and the result still goes through.
+
+    A side left as ``None`` was not stated. That is not the same as enforced: it means
+    "whatever the level above says", which is how a rule inherits the policy's
+    setting and how a dev policy that is silent about a side leaves it alone.
+    """
+
+    request: Side | None = None
+    response: Side | None = None
+
+    def filled_from(self, fallback: Interception) -> Interception:
+        """This, with every side it does not state taken from ``fallback``."""
+        return Interception(
+            request=self.request or fallback.request,
+            response=self.response or fallback.response,
+        )
+
+    def stricter(self, other: Interception) -> Interception:
+        return Interception(
+            request=_stricter(self.request, other.request),
+            response=_stricter(self.response, other.response),
+        )
+
+    def side(self, point: InterceptionPoint) -> Side:
+        """The side a PEP acts on. Nothing stated anywhere means the default, enforced."""
+        if point is InterceptionPoint.REQUEST:
+            return self.request or DEFAULT_REQUEST
+        if point is InterceptionPoint.RESPONSE:
+            return self.response or DEFAULT_RESPONSE
+        raise ValueError(f"{point.value} is not a payload side")
+
+    def canonical(self) -> list[Any]:
+        return [_canonical_side(self.request), _canonical_side(self.response)]
+
+
+def _stricter(one: Side | None, other: Side | None) -> Side | None:
+    """An unstated side narrows nothing, so the stated one stands."""
+    if one is None or other is None:
+        return one or other
+    return one.stricter(other)
+
+
+def _canonical_side(side: Side | None) -> list[Any] | None:
+    if side is None:
+        return None
+    return [side.on.value, sorted(check.value for check in side.checks)]
+
+
 class RunState(StrEnum):
     RUNNING = "running"
     FINISHED = "finished"
@@ -188,6 +287,10 @@ class Rule:
     weight: int = 1
     alternative: str = ""
     requires: tuple[tuple[str, str], ...] = ()
+    #: How a call this row permits is read. The row is where the risk is named — the
+    #: same capability against the package mirror and against the open internet are
+    #: two rows — so it is where reading that risk is named too.
+    inspect: Interception = Interception()
 
     def key(self) -> tuple[Capability, str]:
         return (self.capability, str(self.resource_class))
@@ -213,6 +316,7 @@ class Policy:
     capabilities: tuple[CapabilityDef, ...] = ()
     bindings: tuple[Binding, ...] = ()
     default_weight: int = 1
+    interception: Interception = Interception()
 
     def binding_for(self, source: str, tool: str) -> Binding | None:
         for binding in self.bindings:
@@ -225,6 +329,12 @@ class Policy:
             if rule.key() == (capability, str(resource_class)):
                 return rule
         return None
+
+    def inspection_for(self, rule: Rule | None) -> Interception:
+        """The rule's own reading, with what it leaves unstated taken from the policy."""
+        if rule is None:
+            return self.interception
+        return rule.inspect.filled_from(self.interception)
 
     def classifier_for(self, capability: Capability) -> Classifier | None:
         for definition in self.capabilities:
@@ -246,6 +356,7 @@ class Policy:
                 rule.weight,
                 rule.alternative,
                 sorted([name, value] for name, value in rule.requires),
+                rule.inspect.canonical(),
             ]
             for rule in self.rules
         )
@@ -282,6 +393,10 @@ class Policy:
                 for binding in self.bindings
             ),
             self.default_weight,
+            # Two policies that inspect different sides behave differently, so the
+            # hash has to tell them apart — a run pinned to one must not be read back
+            # as having run under the other.
+            self.interception.canonical(),
         ]
 
 
@@ -337,6 +452,11 @@ class PolicyDecision(msgspec.Struct, frozen=True):
     #: in its own journal. Absent when nothing bound it.
     capability: Capability | None = None
     resource: str = ""
+    #: How to read this call's payload, already resolved from the matched rule and the
+    #: policy around it. It rides on the decision because the PEP does the reading and
+    #: must not hold its own copy of the policy: a second source would drift from the
+    #: version the run is pinned to.
+    interception: Interception = msgspec.field(default_factory=Interception)
 
     @property
     def enforced(self) -> bool:
@@ -379,6 +499,8 @@ class AuditEvent(msgspec.Struct, frozen=True):
     policy_hash: str
     content: str | None = None
     point: InterceptionPoint = InterceptionPoint.CALL
+    #: The build that took the decision, e.g. ``ads-supervisor 0.2.0@1a2b3c4``.
+    decided_by: str = ""
     event_id: str = msgspec.field(default_factory=lambda: uuid.uuid4().hex)
     recorded_at: datetime = msgspec.field(default_factory=lambda: datetime.now(UTC))
 

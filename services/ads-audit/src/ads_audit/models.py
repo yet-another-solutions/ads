@@ -33,4 +33,5 @@ audit_decisions = Table(
     Column("policy_hash", String(64), nullable=False),
     Column("content", Text, nullable=True),
     Column("point", String(16), nullable=False, server_default="call"),
+    Column("decided_by", String(128), nullable=False, server_default=""),
 )

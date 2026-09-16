@@ -188,6 +188,7 @@ class PolicyDecisionPoint:
             reason=f"{request.capability.value} in {resource_class}",
             policy_hash=policy_hash,
             mode=policy.mode,
+            interception=policy.inspection_for(rule),
         )
 
     def _deny(
@@ -209,6 +210,7 @@ class PolicyDecisionPoint:
             weight=weight,
             policy_hash=policy_hash,
             mode=policy.mode,
+            interception=policy.inspection_for(rule),
         )
 
     def _refuse(self, rule_id: str, reason: str, policy_hash: str) -> PolicyDecision:

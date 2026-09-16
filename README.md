@@ -64,7 +64,7 @@ The governance services are HTTPS APIs behind a bearer token, reachable only fro
 
 - ads-policy: `ADS_POLICY_API_TOKEN`, `ADS_REDIS_URL` (run state), `ADS_AMQP_URL` (decisions out), `ADS_POLICY_DIR`, `ADS_POLICY_MODE` (`enforce`/`review`), `ADS_POLICY_DENY_ON_ERROR`, `ADS_SANDBOX_AVAILABLE`, `ADS_RUN_WORKDIR`, `ADS_RUN_TTL_SECONDS`, `ADS_EGRESS_ALLOWLIST`, `ADS_PROTECTED_BRANCHES`
 - ads-audit: `ADS_AUDIT_API_TOKEN`, `ADS_DATABASE_URL` (PostgreSQL journal), `ADS_AMQP_URL` (decisions in)
-- ads-supervisor (optional, `supervisor.enabled`): `ADS_SUPERVISOR_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_SUBJECT`, `ADS_PROJECT`, `ADS_REPO`, `ADS_ENV`, `ADS_PLACEMENT`, `ADS_NODE_LABELS`, `ADS_ATTRIBUTES`
+- ads-supervisor (optional, `supervisor.enabled`): `ADS_SUPERVISOR_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_SUBJECT`, `ADS_ATTRIBUTES`, `ADS_MCP_SERVERS` (`name=url,…`; an agent reaches each at `/mcp/<name>`), `ADS_MCP_TIMEOUT_SECONDS`, `ADS_RUN_HEADER`. Where a run executes is not configured here: whoever creates the sandbox sends it with `POST /supervisor/runs`.
 
 All three take the same `ADS_TLS_*` and `ADS_BIND_HOST`/`ADS_PORT` as the ADS process.
 
