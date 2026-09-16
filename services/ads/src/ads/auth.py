@@ -7,12 +7,11 @@ from dishka.integrations.litestar import FromDishka
 from litestar import Controller, Request, get
 from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
-from msgspec import structs
 
 from ads.frontend import pop_return_to
-from ads.identity import ACCESS_TOKEN_SESSION_KEY
 from ads.inject import inject
 from ads.oidc import OidcClient
+from ads.session_binder import SessionBinder
 from ads_commons.security import InvalidAccessToken
 
 
@@ -20,6 +19,7 @@ from ads_commons.security import InvalidAccessToken
 class AuthController(Controller):
     path = "/"
     oidc: FromDishka[OidcClient]
+    binder: FromDishka[SessionBinder]
 
     @get("/login")
     async def login(self, request: Request[Any, Any, Any]) -> Redirect:
@@ -43,17 +43,23 @@ class AuthController(Controller):
         if not isinstance(id_token, str):
             raise NotAuthorizedException(detail="token response missing id_token")
         try:
-            identity = self.oidc.decode_id_token(id_token, nonce=nonce)
+            self.oidc.decode_id_token(id_token, nonce=nonce)
         except InvalidAccessToken as exc:
             raise NotAuthorizedException(detail="invalid id_token") from exc
         access_token = token.get("access_token")
         if not isinstance(access_token, str) or not access_token.strip():
             raise NotAuthorizedException(detail="token response missing access_token")
-        request.session["identity"] = structs.asdict(identity)
-        request.session[ACCESS_TOKEN_SESSION_KEY] = access_token
+        refresh_token = token.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token.strip():
+            raise NotAuthorizedException(detail="token response missing refresh_token")
+        try:
+            self.binder.establish(request.session, access_token, refresh_token)
+        except InvalidAccessToken as exc:
+            raise NotAuthorizedException(detail="invalid access_token") from exc
         return Redirect(pop_return_to(request.session))
 
     @get("/logout")
     async def logout(self, request: Request[Any, Any, Any]) -> Redirect:
+        self.binder.forget(request.session)
         request.session.clear()
         return Redirect("/login")

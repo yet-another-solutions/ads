@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import MutableMapping
 
 from litestar.enums import ScopeType
 from litestar.types import ASGIApp, Receive, Scope, Send
 
-from ads.identity import security_context_from_session
 from ads.security_holder import SecurityContextHolder
+from ads.session_binder import SessionBinder
+from ads_commons.security import SecurityContext
 
 _BOUND_SCOPES = frozenset({ScopeType.HTTP, ScopeType.WEBSOCKET})
 
 
 class SecurityContextMiddleware:
-    """Bind SecurityContextHolder from the cookie session for HTTP and WebSocket work."""
+    """Bind SecurityContextHolder from the cookie access token for HTTP and WebSocket work."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -22,9 +23,26 @@ class SecurityContextMiddleware:
             await self.app(scope, receive, send)
             return
         session = scope.get("session")
-        context = security_context_from_session(session) if isinstance(session, Mapping) else None
+        context: SecurityContext | None = None
+        binder = await self._binder(scope)
+        if binder is not None and isinstance(session, MutableMapping):
+            context = await binder.bind(session)
         token = SecurityContextHolder.set(context)
         try:
             await self.app(scope, receive, send)
         finally:
             SecurityContextHolder.reset(token)
+
+    async def _binder(self, scope: Scope) -> SessionBinder | None:
+        app = scope["app"]
+        existing = getattr(app.state, "session_binder", None)
+        if isinstance(existing, SessionBinder):
+            return existing
+        container = getattr(app.state, "dishka_container", None)
+        if container is None:
+            return None
+        binder = await container.get(SessionBinder)
+        if not isinstance(binder, SessionBinder):
+            return None
+        app.state.session_binder = binder
+        return binder

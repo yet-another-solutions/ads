@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import pytest
+from litestar.testing import TestClient
 
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AuthenticationRequired, require_role
 from ads_commons.security import SecurityContextHolder as CommonsHolder
+from tests.threadline_fakes import USER_ACCESS_TOKEN, USER_ID, login
 
 
 class _MutatingService:
@@ -17,7 +19,12 @@ class _MutatingService:
 
 
 def _ctx(*roles: str) -> SecurityContext:
-    return SecurityContext(subject="alice", name="Alice", roles=frozenset(roles))
+    return SecurityContext(
+        subject=str(USER_ID),
+        name="Alice",
+        roles=frozenset(roles),
+        access_token=USER_ACCESS_TOKEN,
+    )
 
 
 def test_require_without_bind_is_unauthorized() -> None:
@@ -32,67 +39,44 @@ def test_bound_context_is_current() -> None:
     assert SecurityContextHolder.get() is None
 
 
-def test_capture_from_live_session_when_holder_empty() -> None:
-    session = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        },
-        "access_token": "user-access-token",
-    }
-    captured = SecurityContextHolder.capture(session)
-    assert captured.subject == "alice"
-    assert captured.has_role("user")
-    assert captured.access_token == "user-access-token"
-
-
-def test_capture_prefers_holder_over_session() -> None:
-    holder_ctx = _ctx("user")
-    session = {
-        "identity": {
-            "sub": "bob",
-            "name": "Bob",
-            "roles": ["user"],
-            "email": "bob@example.com",
-        }
-    }
-    with SecurityContextHolder.bound(holder_ctx):
-        assert SecurityContextHolder.capture(session) is holder_ctx
-
-
-def test_detached_picks_session_and_stores_in_work_context() -> None:
-    session = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        },
-        "access_token": "user-access-token",
-    }
-    with SecurityContextHolder.detached(session) as context:
-        assert SecurityContextHolder.require() is context
-        assert _MutatingService().touch() == "touched"
-    assert SecurityContextHolder.get() is None
-
-
-def test_detached_identity_only_session_is_unauthorized() -> None:
-    session = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        }
-    }
+def test_capture_without_holder_raises_even_if_session_has_token() -> None:
     with pytest.raises(AuthenticationRequired):
-        with SecurityContextHolder.detached(session):
+        SecurityContextHolder.capture()
+
+
+def test_capture_returns_bound_context() -> None:
+    holder_ctx = _ctx("user")
+    with SecurityContextHolder.bound(holder_ctx):
+        assert SecurityContextHolder.capture() is holder_ctx
+        assert SecurityContextHolder.capture().access_token == USER_ACCESS_TOKEN
+
+
+def test_detached_without_holder_is_unauthorized() -> None:
+    with pytest.raises(AuthenticationRequired):
+        with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
 
 
-def test_detached_without_session_or_holder_is_unauthorized() -> None:
+def test_detached_copies_bound_context() -> None:
+    context = _ctx("user")
+    with SecurityContextHolder.bound(context):
+        with SecurityContextHolder.detached() as detached:
+            assert SecurityContextHolder.require() is detached
+            assert detached == context
+            assert _MutatingService().touch() == "touched"
+    assert SecurityContextHolder.get() is None
+
+
+def test_identity_only_bound_context_is_not_a_session_source() -> None:
+    session = {
+        "identity": {
+            "sub": str(USER_ID),
+            "name": "Alice",
+            "roles": ["user"],
+            "email": "alice@example.com",
+        }
+    }
+    del session
     with pytest.raises(AuthenticationRequired):
         with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
@@ -104,3 +88,25 @@ def test_ads_holder_shares_commons_context_var() -> None:
         assert SecurityContextHolder.get() is context
         assert SecurityContextHolder.require() is context
     assert SecurityContextHolder.get() is None
+
+
+def test_http_request_binds_access_token(client: TestClient) -> None:
+    login(client)
+    response = client.get("/")
+    assert response.status_code == 200
+
+
+def test_identity_only_session_is_unauthorized(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": str(USER_ID),
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/login")
