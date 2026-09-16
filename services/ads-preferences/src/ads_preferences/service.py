@@ -9,7 +9,14 @@ import msgspec
 from sqlalchemy.orm import Session
 
 from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelSummary, ModelWrite
+from ads_commons.preferences import (
+    ModelInfo,
+    ModelList,
+    ModelPatch,
+    ModelSummary,
+    ModelTypeList,
+    ModelWrite,
+)
 from ads_commons.security import SecurityContextHolder, require_role
 from ads_preferences.exceptions import InvalidModel, ModelNotFound
 from ads_preferences.models import UserModel
@@ -65,6 +72,10 @@ class PreferencesService:
             authentication=_authentication_from_row(row.authentication),
             options=_options_from_row(row.options),
         )
+
+    @require_role("user")
+    async def list_model_types(self) -> ModelTypeList:
+        return ModelTypeList(types=["openai-stream"])
 
     @require_role("user")
     async def list_models(self) -> ModelList:

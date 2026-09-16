@@ -6,7 +6,7 @@ from dishka.integrations.litestar import FromDishka
 from litestar import Controller, Response, delete, get, patch, post
 from litestar.status_codes import HTTP_201_CREATED, HTTP_204_NO_CONTENT
 
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelWrite
+from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelTypeList, ModelWrite
 from ads_preferences.inject import inject
 from ads_preferences.service import PreferencesService
 
@@ -15,6 +15,10 @@ from ads_preferences.service import PreferencesService
 class ModelsController(Controller):
     path = "/v1"
     service: FromDishka[PreferencesService]
+
+    @get("/model-types")
+    async def list_model_types(self) -> ModelTypeList:
+        return await self.service.list_model_types()
 
     @get("/models")
     async def list_models(self) -> ModelList:

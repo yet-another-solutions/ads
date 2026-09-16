@@ -13,7 +13,14 @@ from ads_commons.engine import (
     OpenAiStreamAuthentication,
     OpenAiStreamOptions,
 )
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelSummary, ModelWrite
+from ads_commons.preferences import (
+    ModelInfo,
+    ModelList,
+    ModelPatch,
+    ModelSummary,
+    ModelTypeList,
+    ModelWrite,
+)
 from ads_commons.security import InvalidAccessToken, SecurityContext
 
 USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
@@ -70,6 +77,9 @@ class FakePreferences:
         )
         self.models[model_id] = info
         return info
+
+    async def list_model_types(self) -> ModelTypeList:
+        return ModelTypeList(types=["openai-stream"])
 
     async def list_models(self) -> ModelList:
         return ModelList(

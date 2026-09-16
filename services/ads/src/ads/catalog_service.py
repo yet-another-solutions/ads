@@ -37,17 +37,31 @@ def _require_text(value: str, field: str) -> str:
     return value.strip()
 
 
+def _require_known_type(value: str, allowed: list[str]) -> OpenAiStreamType:
+    text = _require_text(value, "Type")
+    if text not in allowed or text != OPENAI_STREAM:
+        raise InvalidInput("unsupported model type")
+    return OPENAI_STREAM
+
+
 class CatalogService:
     """Reads and writes the per-user model catalog over S2S HTTPS."""
 
     def __init__(self, preferences: PreferencesApi) -> None:
         self._preferences = preferences
 
+    @require_role("user")
+    async def list_model_types(self) -> list[str]:
+        listing = await self._preferences.list_model_types()
+        return list(listing.types)
+
+    @require_role("user")
     async def options(self) -> list[ModelOption]:
         """Composer options: id and description only."""
         listing = await self._preferences.list_models()
         return [ModelOption(id=row.id, description=row.description) for row in listing.models]
 
+    @require_role("user")
     async def list_models(self) -> list[ModelView]:
         listing = await self._preferences.list_models()
         views: list[ModelView] = []
@@ -66,13 +80,15 @@ class CatalogService:
         url: str,
         bearer: str,
         model_name: str,
+        model_type: str,
     ) -> ModelView:
         """The typed bearer is forwarded once and never echoed back."""
+        allowed = await self.list_model_types()
         info = await self._preferences.add_model(
             ModelWrite(
                 description=_require_text(description, "Description"),
                 name=_require_text(name, "Name"),
-                type=OPENAI_STREAM,
+                type=_require_known_type(model_type, allowed),
                 url=_require_text(url, "URL"),
                 authentication=OpenAiStreamAuthentication(
                     openai_bearer=OpenAiBearerToken(token=_require_text(bearer, "Bearer token")),
@@ -93,6 +109,7 @@ class CatalogService:
         url: str | None,
         bearer: str | None,
         model_name: str | None,
+        model_type: str | None,
     ) -> ModelView:
         """An omitted or blank bearer patches without ``authentication``: the stored one stays."""
         authentication = None
@@ -103,9 +120,14 @@ class CatalogService:
         options = None
         if model_name is not None:
             options = OpenAiStreamOptions(model_name=model_name.strip())
+        patch_type = None
+        if model_type is not None and model_type.strip():
+            allowed = await self.list_model_types()
+            patch_type = _require_known_type(model_type, allowed)
         patch = ModelPatch(
             description=description.strip() if description is not None else None,
             name=name.strip() if name is not None else None,
+            type=patch_type,
             url=url.strip() if url is not None else None,
             authentication=authentication,
             options=options,
@@ -113,6 +135,7 @@ class CatalogService:
         if (
             patch.description is None
             and patch.name is None
+            and patch.type is None
             and patch.url is None
             and patch.authentication is None
             and patch.options is None
