@@ -46,10 +46,11 @@ class AuthController(Controller):
             identity = self.oidc.decode_id_token(id_token, nonce=nonce)
         except InvalidAccessToken as exc:
             raise NotAuthorizedException(detail="invalid id_token") from exc
-        request.session["identity"] = structs.asdict(identity)
         access_token = token.get("access_token")
-        if isinstance(access_token, str) and access_token.strip():
-            request.session[ACCESS_TOKEN_SESSION_KEY] = access_token
+        if not isinstance(access_token, str) or not access_token.strip():
+            raise NotAuthorizedException(detail="token response missing access_token")
+        request.session["identity"] = structs.asdict(identity)
+        request.session[ACCESS_TOKEN_SESSION_KEY] = access_token
         return Redirect(pop_return_to(request.session))
 
     @get("/logout")

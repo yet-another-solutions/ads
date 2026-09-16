@@ -14,6 +14,7 @@ from ads.identity import (
     access_token_from_session,
     identity_from_session,
     security_context_from_identity,
+    session_is_authenticated,
 )
 from ads.security_context import SecurityContext
 from ads_commons.security import AccessDenied, AuthenticationRequired
@@ -22,7 +23,7 @@ from ads_commons.security import AccessDenied, AuthenticationRequired
 def require_authenticated(
     connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler
 ) -> None:
-    if identity_from_session(connection.session) is None:
+    if not session_is_authenticated(connection.session):
         raise AuthenticationRequired()
 
 

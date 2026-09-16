@@ -76,6 +76,22 @@ def test_unauthenticated_root_stores_return_to(client: TestClient) -> None:
     assert client.get_session_data().get(RETURN_TO_SESSION_KEY) == "/"
 
 
+def test_identity_only_session_redirects_to_login(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("/login")
+
+
 def test_require_frontend_login_rejects_post() -> None:
     request = RequestFactory().post("/")
     request.scope["session"] = {
@@ -104,7 +120,8 @@ def test_frontend_controller_rejects_post_even_when_logged_in(settings: Settings
                     "name": "Alice",
                     "roles": ["user"],
                     "email": "alice@example.com",
-                }
+                },
+                "access_token": "user-access-token",
             }
         )
         denied = client.post("/page/submit")

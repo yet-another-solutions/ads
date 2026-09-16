@@ -5,6 +5,7 @@ from ads.identity import (
     identity_from_session,
     security_context_from_identity,
     security_context_from_session,
+    session_is_authenticated,
 )
 
 
@@ -30,6 +31,7 @@ def test_session_without_identity() -> None:
     assert identity_from_session({}) is None
     assert identity_from_session({"identity": "bad"}) is None
     assert security_context_from_session({}) is None
+    assert session_is_authenticated({}) is False
 
 
 def test_session_context_includes_access_token() -> None:
@@ -47,3 +49,18 @@ def test_session_context_includes_access_token() -> None:
     assert context.subject == "alice"
     assert context.access_token == "user-access-token"
     assert "user-access-token" not in repr(context)
+    assert session_is_authenticated(session) is True
+
+
+def test_session_without_access_token_has_no_security_context() -> None:
+    session = {
+        "identity": {
+            "sub": "alice",
+            "name": "Alice",
+            "roles": ["user"],
+            "email": "alice@example.com",
+        }
+    }
+    assert identity_from_session(session) is not None
+    assert security_context_from_session(session) is None
+    assert session_is_authenticated(session) is False
