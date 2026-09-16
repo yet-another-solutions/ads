@@ -7,7 +7,9 @@ authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-commons",
     "ads-commons-beans",
+    "ads-commons-schema",
     "aiokafka==0.14.0",
+    "alembic==1.16.5",
     "dishka==1.10.1",
     "langchain-core==1.6.3",
     "langchain-openai==1.6.2",
@@ -32,6 +34,7 @@ known_first_party = ["ads_engine"]
 [tool.deptry.package_module_name_map]
 ads-commons = ["ads_commons"]
 ads-commons-beans = ["ads_commons_beans"]
+ads-commons-schema = ["ads_commons_schema"]
 
 [tool.deptry.per_rule_ignores]
-DEP002 = ["psycopg"]
+DEP002 = ["alembic", "psycopg"]
