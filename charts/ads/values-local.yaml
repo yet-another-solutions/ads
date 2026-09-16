@@ -31,6 +31,11 @@ audit:
     url: postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit
 
 engine:
+  # Off here. Unlike the web app, which discovers Keycloak lazily on the first login,
+  # the engine fetches the openid configuration while building its container and dies
+  # when it cannot — and there is no Keycloak on a throwaway cluster. Nothing in the
+  # governance layer depends on it.
+  replicaCount: 0
   image:
     repository: ads-engine
     tag: local

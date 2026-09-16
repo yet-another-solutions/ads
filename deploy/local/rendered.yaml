@@ -487,7 +487,9 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: ads-engine
 spec:
-  replicas: 1
+  # Zero on purpose: the engine loads the openid configuration while starting and
+  # there is no Keycloak on a local cluster. See charts/ads/values-local.yaml.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: ads
