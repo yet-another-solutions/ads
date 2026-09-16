@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import ssl
+from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -21,23 +22,27 @@ SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 
+@dataclass(frozen=True)
+class TokenExchangeSettings:
+    token_endpoint: str
+    client_id: str
+    client_secret: str
+    ssl_context: ssl.SSLContext | None
+
+
 class TokenExchange:
     """Mint a fresh Standard Token Exchange V2 token. No cache. Does not store tokens."""
 
     def __init__(
         self,
-        *,
-        token_endpoint: str,
-        client_id: str,
-        client_secret: str,
+        settings: TokenExchangeSettings,
         verifier: AccessTokenVerifier,
-        ssl_context: ssl.SSLContext | None = None,
     ) -> None:
-        self._token_endpoint = token_endpoint
-        self._client_id = client_id
-        self._client_secret = client_secret
+        self._token_endpoint = settings.token_endpoint
+        self._client_id = settings.client_id
+        self._client_secret = settings.client_secret
         self._verifier = verifier
-        self._ssl_context = ssl_context
+        self._ssl_context = settings.ssl_context
 
     def exchange(self, audience: str, subject_token: str | None = None) -> str:
         """Exchange ``subject_token``, or the bound holder access token when omitted."""

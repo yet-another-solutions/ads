@@ -13,7 +13,7 @@ from ads_commons.security import (
     SecurityContextHolder,
     TokenExchangeError,
 )
-from ads_commons_beans import TokenExchange
+from ads_commons_beans import TokenExchange, TokenExchangeSettings
 
 INBOUND = "inbound-user-token"
 EXCHANGED_SUBJECT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -55,10 +55,13 @@ class _Verifier:
 
 def _exchanger(verifier: _Verifier | None = None) -> TokenExchange:
     return TokenExchange(
-        token_endpoint=TOKEN_URL,
-        client_id="ads",
-        client_secret="ads-secret",
-        verifier=verifier or _Verifier(),
+        TokenExchangeSettings(
+            token_endpoint=TOKEN_URL,
+            client_id="ads",
+            client_secret="ads-secret",
+            ssl_context=None,
+        ),
+        verifier or _Verifier(),
     )
 
 
