@@ -32,6 +32,7 @@ from ads_commons.security import (
     TokenExchangeError,
 )
 from ads_engine.chat import StreamDelta
+from ads_engine.config import Settings
 from ads_engine.listener import EngineListener
 from ads_engine.service import EngineService
 from ads_engine.store import ActiveSessionStore
@@ -75,6 +76,26 @@ class OneDeltaChat:
 
 def _run(coro: Any) -> None:
     asyncio.run(coro)
+
+
+def _settings() -> Settings:
+    return Settings(
+        kafka_bootstrap_servers="kafka.test:9092",
+        request_topic="ads.engine.request",
+        output_topic="ads.engine.output",
+        consumer_group="ads-engine",
+        database_url="sqlite:///:memory:",
+        ping_interval_seconds=10,
+        ack_timeout_seconds=10,
+        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
+        keycloak_issuer="https://keycloak.test/realms/ads",
+        keycloak_audience="ads-engine",
+        keycloak_client_id="ads",
+        keycloak_client_secret="engine-client-secret",
+        ack_audience="ads",
+        allowed_callers=frozenset({ENGINE_CLIENT_ID}),
+        tls_ca_bundle=None,
+    )
 
 
 def _ack_bytes(request: EngineRequest) -> bytes:
@@ -160,7 +181,7 @@ def _listener(
         service=resolved,
         publisher=publisher,
         authenticator=jwt_verifier,
-        allowed_callers=(ENGINE_CLIENT_ID,),
+        settings=_settings(),
     )
 
 

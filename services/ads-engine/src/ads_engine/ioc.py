@@ -21,7 +21,7 @@ from ads_commons_beans import (
 from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
 from ads_engine.kafka import SeekToEndListener
-from ads_engine.listener import EngineListener
+from ads_engine.listener import EngineListener, TokenAuthenticator
 from ads_engine.service import EngineService, OutputPublisher
 from ads_engine.store import ActiveSessionStore
 
@@ -103,19 +103,10 @@ class AppProvider(Provider):
         )
 
     @provide(scope=Scope.APP)
-    def engine_listener(
-        self,
-        service: EngineService,
-        publisher: OutputPublisher,
-        authenticator: JwtVerifier,
-        settings: Settings,
-    ) -> EngineListener:
-        return EngineListener(
-            service=service,
-            publisher=publisher,
-            authenticator=authenticator,
-            allowed_callers=settings.allowed_callers,
-        )
+    def authenticator(self, verifier: JwtVerifier) -> TokenAuthenticator:
+        return verifier
+
+    engine_listener = provide(EngineListener, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def jwt_verifier_settings(self, settings: Settings) -> JwtVerifierSettings:

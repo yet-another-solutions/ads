@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from typing import Protocol
 
 from ads_commons.engine import (
@@ -21,6 +21,7 @@ from ads_commons.security import (
     SecurityContextHolder,
     ensure_caller,
 )
+from ads_engine.config import Settings
 from ads_engine.service import EngineService, OutputPublisher
 
 SESSION_ID = "session_id"
@@ -39,12 +40,12 @@ class EngineListener:
         service: EngineService,
         publisher: OutputPublisher,
         authenticator: TokenAuthenticator,
-        allowed_callers: Collection[str],
+        settings: Settings,
     ) -> None:
         self._service = service
         self._publisher = publisher
         self._authenticator = authenticator
-        self._allowed_callers = frozenset(allowed_callers)
+        self._allowed_callers = settings.allowed_callers
 
     async def on_message(
         self,
