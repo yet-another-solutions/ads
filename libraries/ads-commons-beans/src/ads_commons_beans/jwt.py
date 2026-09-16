@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ssl
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import jwt
@@ -19,20 +21,26 @@ class SigningKeySource(Protocol):
     def get_signing_key_from_jwt(self, token: str) -> Any: ...
 
 
+@dataclass(frozen=True)
+class JwtVerifierSettings:
+    issuer: str
+    audience: str
+    client_id: str
+    jwks_uri: str
+    ssl_context: ssl.SSLContext | None
+
+
 class JwtVerifier:
     """Verify RS256 Keycloak JWTs against JWKS (iss / aud / exp / signature)."""
 
     def __init__(
         self,
-        *,
-        issuer: str,
-        audience: str,
-        client_id: str,
+        settings: JwtVerifierSettings,
         jwks_client: SigningKeySource,
     ) -> None:
-        self._issuer = issuer
-        self._audience = audience
-        self._client_id = client_id
+        self._issuer = settings.issuer
+        self._audience = settings.audience
+        self._client_id = settings.client_id
         self._jwks_client = jwks_client
 
     def decode(

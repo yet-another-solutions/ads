@@ -6,17 +6,8 @@ from dataclasses import dataclass
 from dishka import Provider, Scope, provide
 from jwt import PyJWKClient
 
-from ads_commons_beans.jwt import JwtVerifier, SigningKeySource
+from ads_commons_beans.jwt import JwtVerifier, JwtVerifierSettings, SigningKeySource
 from ads_commons_beans.token_exchange import TokenExchange
-
-
-@dataclass(frozen=True)
-class JwtVerifierSettings:
-    issuer: str
-    audience: str
-    client_id: str
-    jwks_uri: str
-    ssl_context: ssl.SSLContext | None
 
 
 @dataclass(frozen=True)
@@ -34,18 +25,7 @@ class CommonsBeansProvider(Provider):
     def signing_key_source(self, settings: JwtVerifierSettings) -> SigningKeySource:
         return PyJWKClient(settings.jwks_uri, ssl_context=settings.ssl_context)
 
-    @provide(scope=Scope.APP)
-    def jwt_verifier(
-        self,
-        settings: JwtVerifierSettings,
-        jwks_client: SigningKeySource,
-    ) -> JwtVerifier:
-        return JwtVerifier(
-            issuer=settings.issuer,
-            audience=settings.audience,
-            client_id=settings.client_id,
-            jwks_client=jwks_client,
-        )
+    jwt_verifier = provide(JwtVerifier, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def token_exchange(

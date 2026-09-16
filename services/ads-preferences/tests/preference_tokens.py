@@ -9,7 +9,7 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from ads_commons_beans import JwtVerifier
+from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 
 ISSUER = "https://keycloak.test/realms/ads"
 AUDIENCE = "ads-preferences"
@@ -48,8 +48,12 @@ def encode_token(private_key: RSAPrivateKey, **claims: Any) -> str:
 
 def make_verifier(private_key: RSAPrivateKey) -> JwtVerifier:
     return JwtVerifier(
-        issuer=ISSUER,
-        audience=AUDIENCE,
-        client_id=CLIENT_ID,
-        jwks_client=StaticJwks(private_key),
+        JwtVerifierSettings(
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            client_id=CLIENT_ID,
+            jwks_uri="https://unused.test/certs",
+            ssl_context=None,
+        ),
+        StaticJwks(private_key),
     )
