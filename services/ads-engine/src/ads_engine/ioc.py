@@ -22,7 +22,7 @@ from ads_engine.chat import ChatStreamer, LangChainChatStreamer
 from ads_engine.config import Settings
 from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener, TokenAuthenticator
-from ads_engine.service import EngineService, OutputPublisher
+from ads_engine.service import EngineService, OutputPublisher, TokenMinter
 from ads_engine.store import ActiveSessionStore
 
 
@@ -81,24 +81,10 @@ class AppProvider(Provider):
     publisher = provide(KafkaPublisher, scope=Scope.APP, provides=OutputPublisher)
 
     @provide(scope=Scope.APP)
-    def engine_service(
-        self,
-        store: ActiveSessionStore,
-        publisher: OutputPublisher,
-        chat: ChatStreamer,
-        tokens: TokenExchange,
-        settings: Settings,
-    ) -> EngineService:
-        return EngineService(
-            store=store,
-            publisher=publisher,
-            chat=chat,
-            ping_interval_seconds=settings.ping_interval_seconds,
-            allowed_callers=settings.allowed_callers,
-            tokens=tokens,
-            ack_timeout_seconds=settings.ack_timeout_seconds,
-            ack_audience=settings.ack_audience,
-        )
+    def tokens(self, exchange: TokenExchange) -> TokenMinter:
+        return exchange
+
+    engine_service = provide(EngineService, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def authenticator(self, verifier: JwtVerifier) -> TokenAuthenticator:

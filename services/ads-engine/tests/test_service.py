@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -78,15 +78,19 @@ def _run(coro: Any) -> None:
     asyncio.run(coro)
 
 
-def _settings() -> Settings:
+def _settings(
+    *,
+    ping_interval_seconds: float = 10,
+    ack_timeout_seconds: float = 10,
+) -> Settings:
     return Settings(
         kafka_bootstrap_servers="kafka.test:9092",
         request_topic="ads.engine.request",
         output_topic="ads.engine.output",
         consumer_group="ads-engine",
         database_url="sqlite:///:memory:",
-        ping_interval_seconds=10,
-        ack_timeout_seconds=10,
+        ping_interval_seconds=ping_interval_seconds,
+        ack_timeout_seconds=ack_timeout_seconds,
         keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
         keycloak_issuer="https://keycloak.test/realms/ads",
         keycloak_audience="ads-engine",
@@ -143,17 +147,16 @@ def _service(
     ping_interval_seconds: float = 10,
     ack_timeout_seconds: float = 10,
     tokens: FakeTokenExchange | None = None,
-    sleep: Callable[[float], Any] = asyncio.sleep,
 ) -> EngineService:
     return EngineService(
         store=store,
         publisher=publisher,
         chat=chat,
-        ping_interval_seconds=ping_interval_seconds,
-        allowed_callers=(ENGINE_CLIENT_ID,),
         tokens=tokens or FakeTokenExchange(),
-        ack_timeout_seconds=ack_timeout_seconds,
-        sleep=sleep,
+        settings=_settings(
+            ping_interval_seconds=ping_interval_seconds,
+            ack_timeout_seconds=ack_timeout_seconds,
+        ),
     )
 
 
@@ -166,7 +169,6 @@ def _listener(
     ping_interval_seconds: float = 10,
     ack_timeout_seconds: float = 10,
     tokens: FakeTokenExchange | None = None,
-    sleep: Callable[[float], Any] = asyncio.sleep,
 ) -> EngineListener:
     resolved = service or _service(
         store,
@@ -175,7 +177,6 @@ def _listener(
         ping_interval_seconds=ping_interval_seconds,
         ack_timeout_seconds=ack_timeout_seconds,
         tokens=tokens,
-        sleep=sleep,
     )
     return EngineListener(
         service=resolved,
@@ -303,9 +304,8 @@ def test_access_denied_handler_reads_ids_from_bound_attributes(
         store=store,
         publisher=publisher,
         chat=ScriptedChat(),
-        ping_interval_seconds=10,
-        allowed_callers=(ENGINE_CLIENT_ID,),
         tokens=FakeTokenExchange(),
+        settings=_settings(),
     )
     listener = _listener(store, publisher, jwt_verifier, service=service)
     request = make_request(authorization_token=access_token)
@@ -542,7 +542,6 @@ def test_ping_is_emitted_for_active_session(
         jwt_verifier,
         chat=OneDeltaChat(pinged),
         ping_interval_seconds=0.01,
-        sleep=lambda _: asyncio.sleep(0),
     )
     request = make_request(authorization_token=access_token)
     _handle_accepted(listener, publisher, request, access_token)
