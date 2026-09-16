@@ -6,7 +6,7 @@ import uuid
 from typing import Annotated
 
 from dishka.integrations.litestar import FromDishka
-from litestar import delete, patch, post
+from litestar import delete, get, patch, post
 from litestar.enums import RequestEncodingType
 from litestar.params import Body
 from litestar.response import Template
@@ -15,18 +15,20 @@ from ads.authenticated import AuthenticatedController
 from ads.catalog_service import CatalogService
 from ads.inject import inject
 from ads.views import ModelView
+from ads_commons.preferences import ModelTypeList
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
 
 
 async def _dialog(catalog: CatalogService, selected: ModelView | None) -> Template:
     models = await catalog.list_models()
+    types = await catalog.list_model_types()
     keep = None
     if selected is not None:
         keep = next((row for row in models if row.id == selected.id), None)
     return Template(
         template_name="partials/settings.html",
-        context={"models": models, "selected": keep},
+        context={"models": models, "selected": keep, "types": types},
     )
 
 
@@ -43,6 +45,7 @@ class ModelsController(AuthenticatedController):
             data.get("url", ""),
             data.get("bearer", ""),
             data.get("model-name", ""),
+            data.get("type", ""),
         )
         return await _dialog(self.catalog, created)
 
@@ -59,6 +62,7 @@ class ModelsController(AuthenticatedController):
             data.get("url"),
             data.get("bearer"),
             data.get("model-name"),
+            data.get("type"),
         )
         return await _dialog(self.catalog, edited)
 
@@ -69,3 +73,13 @@ class ModelsController(AuthenticatedController):
     ) -> Template:
         await self.catalog.delete_model(model_id)
         return await _dialog(self.catalog, None)
+
+
+@inject
+class ModelTypesController(AuthenticatedController):
+    path = "/settings/model-types"
+    catalog: FromDishka[CatalogService]
+
+    @get("/")
+    async def list_types(self) -> ModelTypeList:
+        return ModelTypeList(types=await self.catalog.list_model_types())

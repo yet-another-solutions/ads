@@ -2,18 +2,23 @@
   <div class="dlg-head">
     <h2 id="settings-title">Settings</h2>
   </div>
+  <nav class="dlg-tabs" aria-label="Settings sections">
+    <button type="button" class="dlg-tab active" aria-current="page">Models</button>
+  </nav>
   <div class="dlg-body">
-    <nav class="dlg-nav" aria-label="Models">
-      {% for model in models %}
-      <button type="button" class="{% if selected and model.id == selected.id %}active{% endif %}"
-              hx-get="/settings?model_id={{ model.id }}" hx-target="#dialog-host"
-              hx-swap="innerHTML">{{ model.description }}</button>
-      {% endfor %}
-      <button type="button" class="{% if not selected %}active{% endif %}"
+    <div class="dlg-nav">
+      <nav class="dlg-nav-list" aria-label="Models">
+        {% for model in models %}
+        <button type="button" class="{% if selected and model.id == selected.id %}active{% endif %}"
+                hx-get="/settings?model_id={{ model.id }}" hx-target="#dialog-host"
+                hx-swap="innerHTML">{{ model.description }}</button>
+        {% endfor %}
+      </nav>
+      <button type="button" class="dlg-add{% if not selected %} active{% endif %}"
               hx-get="/settings?model_id=" hx-target="#dialog-host" hx-swap="innerHTML">
-        + Add model
+        Add new model
       </button>
-    </nav>
+    </div>
     {% if selected %}
     <form class="fields" id="model-form"
           hx-patch="/settings/models/{{ selected.id }}"
@@ -25,13 +30,17 @@
         <input name="name" value="{{ selected.name }}">
       </label>
       <label>Type
-        <input name="type" value="{{ selected.type }}" readonly>
+        <select name="type" required>
+          {% for type in types %}
+          <option value="{{ type }}" {% if selected.type == type %}selected{% endif %}>{{ type }}</option>
+          {% endfor %}
+        </select>
       </label>
       <label>Model name
         <input name="model-name" value="{{ selected.model_name }}">
       </label>
       <label>URL
-        <input name="url" value="{{ selected.url }}">
+        <input name="url" type="url" value="{{ selected.url }}" placeholder="https://" autocomplete="off">
       </label>
       <label>Bearer token
         <input name="bearer" type="password" autocomplete="off"
@@ -50,19 +59,23 @@
         <input name="name" required autocomplete="off">
       </label>
       <label>Type
-        <input name="type" value="openai-stream" readonly>
+        <select name="type" required>
+          {% for type in types %}
+          <option value="{{ type }}">{{ type }}</option>
+          {% endfor %}
+        </select>
       </label>
       <label>Model name
         <input name="model-name" required autocomplete="off">
       </label>
       <label>URL
-        <input name="url" required autocomplete="off">
+        <input name="url" type="url" required placeholder="https://" autocomplete="off">
       </label>
       <label>Bearer token
         <input name="bearer" type="password" required autocomplete="off"
                placeholder="Write only. Stored by ads-preferences.">
       </label>
-      <p class="note">v1 supports openai-stream only. The bearer is forwarded once and never
+      <p class="note">Type comes from ads-preferences. The bearer is forwarded once and never
         rendered back. Model name is the openai-stream API id.</p>
     </form>
     {% endif %}

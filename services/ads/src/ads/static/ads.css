@@ -427,9 +427,32 @@ dialog::backdrop { background: rgb(0 0 0 / 0.62); }
 }
 .dlg-foot { border-bottom: 0; border-top: 1px solid var(--line); justify-content: flex-end; }
 .dlg-head h2 { margin: 0; font-size: 14px; }
+.dlg-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.dlg-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 8px 10px;
+  margin-bottom: -1px;
+  cursor: default;
+}
+.dlg-tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .dlg-body { display: grid; grid-template-columns: 148px minmax(0, 1fr); min-height: 240px; }
-.dlg-nav { border-right: 1px solid var(--line); padding: 8px; }
-.dlg-nav button {
+.dlg-nav {
+  border-right: 1px solid var(--line);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+.dlg-nav-list { overflow: auto; padding: 8px; }
+.dlg-nav-list button,
+.dlg-add {
   display: block;
   width: 100%;
   text-align: left;
@@ -440,7 +463,15 @@ dialog::backdrop { background: rgb(0 0 0 / 0.62); }
   color: var(--muted);
   cursor: pointer;
 }
-.dlg-nav button.active { background: var(--accent-soft); color: var(--text); }
+.dlg-nav-list button.active,
+.dlg-add.active { background: var(--accent-soft); color: var(--text); }
+.dlg-add {
+  width: auto;
+  margin: 8px;
+  text-align: center;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
 .fields { padding: 16px; display: grid; gap: 12px; }
 .fields label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
 .fields input, .fields select {

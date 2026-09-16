@@ -6,7 +6,14 @@ import msgspec
 import pytest
 
 from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication, OpenAiStreamOptions
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelWrite, PreferencesApi
+from ads_commons.preferences import (
+    ModelInfo,
+    ModelList,
+    ModelPatch,
+    ModelTypeList,
+    ModelWrite,
+    PreferencesApi,
+)
 
 
 def test_model_info_json_uses_openai_bearer_key() -> None:
@@ -78,3 +85,8 @@ def test_model_list_and_patch_round_trip() -> None:
 
 def test_preferences_api_is_a_protocol() -> None:
     assert getattr(PreferencesApi, "_is_protocol", False) or issubclass(PreferencesApi, object)
+
+
+def test_model_type_list_round_trip() -> None:
+    listing = ModelTypeList(types=["openai-stream"])
+    assert msgspec.json.decode(msgspec.json.encode(listing)) == {"types": ["openai-stream"]}

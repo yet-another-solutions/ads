@@ -18,6 +18,7 @@ from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.session_service import SessionService
 from ads.views import ModelOption, ModelView, ProjectView, TranscriptView
+from ads_commons.security import AccessDenied, AuthenticationRequired
 
 log = structlog.get_logger("ads.shell")
 
@@ -35,10 +36,14 @@ def is_htmx(request: Request[Any, Any, Any]) -> bool:
     return request.headers.get("HX-Request") == "true"
 
 
-async def model_options(catalog: CatalogService) -> list[ModelOption]:
+async def model_options(catalog: CatalogService, identity: Identity) -> list[ModelOption]:
     """An empty or unreachable catalog keeps the composer inactive, never a 500."""
+    if "user" not in identity.roles:
+        return []
     try:
         return await catalog.options()
+    except (AuthenticationRequired, AccessDenied):
+        raise
     except Exception as exc:
         log.info("model_options_unavailable", error=str(exc))
         return []
@@ -69,7 +74,7 @@ class ShellController(FrontendController):
             "project": project,
             "active_session_id": active_session_id,
             "active_project_id": project.id if project is not None else None,
-            "models": await model_options(self.catalog),
+            "models": await model_options(self.catalog, identity),
             "warn": None,
             "selected_model_id": None,
         }
@@ -156,18 +161,31 @@ class ShellController(FrontendController):
     ) -> Template:
         del identity
         models = await _catalog_views(self.catalog)
+        types = await _model_types(self.catalog)
         selected = _selected(models, model_id)
         return Template(
             template_name="partials/settings.html",
-            context={"models": models, "selected": selected},
+            context={"models": models, "selected": selected, "types": types},
         )
 
 
 async def _catalog_views(catalog: CatalogService) -> list[ModelView]:
     try:
         return await catalog.list_models()
+    except (AuthenticationRequired, AccessDenied):
+        raise
     except Exception as exc:
         log.info("model_list_unavailable", error=str(exc))
+        return []
+
+
+async def _model_types(catalog: CatalogService) -> list[str]:
+    try:
+        return await catalog.list_model_types()
+    except (AuthenticationRequired, AccessDenied):
+        raise
+    except Exception as exc:
+        log.info("model_types_unavailable", error=str(exc))
         return []
 
 

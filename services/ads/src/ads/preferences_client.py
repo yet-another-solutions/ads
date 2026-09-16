@@ -11,7 +11,13 @@ import msgspec
 from ads.config import Settings
 from ads.exceptions import NotFound
 from ads.tokens import TokenMinter, ssl_context_for
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelWrite
+from ads_commons.preferences import (
+    ModelInfo,
+    ModelList,
+    ModelPatch,
+    ModelTypeList,
+    ModelWrite,
+)
 
 
 class PreferencesUnavailable(Exception):
@@ -66,6 +72,10 @@ class PreferencesClient:
         if response.status_code >= 400:
             raise PreferencesUnavailable(f"ads-preferences returned {response.status_code}")
         return bytes(response.content)
+
+    async def list_model_types(self) -> ModelTypeList:
+        raw = await self._call("GET", "/v1/model-types")
+        return _decode(raw, ModelTypeList)
 
     async def list_models(self) -> ModelList:
         raw = await self._call("GET", "/v1/models")

@@ -189,3 +189,13 @@ def test_list_and_logs_omit_bearer(client: TestClient, user_token: str, capsys: 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert "sk-secret" not in captured.out
     assert "sk-secret" not in captured.err
+
+
+def test_model_types_is_openai_stream(client: TestClient, user_token: str) -> None:
+    response = client.get("/v1/model-types", headers=_auth(user_token))
+    assert response.status_code == 200
+    assert response.json() == {"types": ["openai-stream"]}
+
+
+def test_model_types_without_bearer_is_401(client: TestClient) -> None:
+    assert client.get("/v1/model-types").status_code == 401
