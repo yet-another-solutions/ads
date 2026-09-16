@@ -26,6 +26,7 @@ async def run(settings: Settings | None = None) -> None:
         database_url=resolved.database_url,
         tables=mapped_tables(ActiveSessionRow),
     )
+    configure_logging()
     container = make_container(CommonsBeansProvider(), AppProvider(resolved))
     store = container.get(ActiveSessionStore)
     await store.reset()
@@ -35,6 +36,12 @@ async def run(settings: Settings | None = None) -> None:
     consumer.subscribe(
         topics=[resolved.request_topic],
         listener=seek_to_end_listener,
+    )
+    log.info(
+        "ads_engine_kafka_starting",
+        bootstrap_servers=resolved.kafka_bootstrap_servers,
+        request_topic=resolved.request_topic,
+        consumer_group=resolved.consumer_group,
     )
     await producer.start()
     await consumer.start()

@@ -4,6 +4,8 @@ import uuid
 from collections.abc import Sequence
 from typing import Protocol
 
+import structlog
+
 from ads_commons.engine import (
     Abort,
     AckResponse,
@@ -26,6 +28,8 @@ from ads_engine.service import EngineService, OutputPublisher
 
 SESSION_ID = "session_id"
 MESSAGE_ID = "message_id"
+
+log = structlog.get_logger("ads_engine")
 
 
 class TokenAuthenticator(Protocol):
@@ -54,11 +58,18 @@ class EngineListener:
     ) -> None:
         ids = peek_request_ids(raw)
         if ids is None:
+            log.info("request_dropped")
             return
         session_id, message_id = ids
         try:
             inbound = decode_inbound(raw)
         except Exception as exc:
+            log.info(
+                "invalid_request",
+                session_id=str(session_id),
+                message_id=str(message_id),
+                error=str(exc),
+            )
             await self.emit_error(session_id, message_id, f"invalid request: {exc}")
             return
         if isinstance(inbound, Abort):
@@ -67,6 +78,11 @@ class EngineListener:
         if isinstance(inbound, AckResponse):
             await self._accept_ack_response(inbound, headers)
             return
+        log.info(
+            "request_received",
+            session_id=str(session_id),
+            message_id=str(message_id),
+        )
         await self._bind_and_run(inbound)
 
     async def _accept_abort(
@@ -75,6 +91,11 @@ class EngineListener:
         headers: Sequence[tuple[str | bytes, bytes | None]] | None,
     ) -> None:
         if not self._authorized_control(headers):
+            log.info(
+                "abort_unauthorized",
+                session_id=str(inbound.session_id),
+                message_id=str(inbound.message_id),
+            )
             return
         await self._service.handle_abort(inbound)
 
@@ -84,6 +105,11 @@ class EngineListener:
         headers: Sequence[tuple[str | bytes, bytes | None]] | None,
     ) -> None:
         if not self._authorized_control(headers):
+            log.info(
+                "ack_response_unauthorized",
+                session_id=str(inbound.session_id),
+                message_id=str(inbound.message_id),
+            )
             return
         await self._service.handle_ack_response(inbound)
 
@@ -105,6 +131,12 @@ class EngineListener:
         try:
             context = self._bind_context(request)
         except InvalidAccessToken as exc:
+            log.info(
+                "invalid_authorization",
+                session_id=str(request.session_id),
+                message_id=str(request.message_id),
+                error=exc.detail,
+            )
             await self.emit_error(
                 request.session_id,
                 request.message_id,
@@ -112,6 +144,12 @@ class EngineListener:
             )
             return
         except AccessDenied as exc:
+            log.info(
+                "access_denied",
+                session_id=str(request.session_id),
+                message_id=str(request.message_id),
+                error=exc.detail,
+            )
             await self.emit_error(request.session_id, request.message_id, exc.detail)
             return
         with SecurityContextHolder.bound(context):
@@ -135,10 +173,22 @@ class EngineListener:
 
     async def handle_access_denied(self, exception: AccessDenied | AuthenticationRequired) -> None:
         session_id, message_id = _request_ids(SecurityContextHolder.require())
+        log.info(
+            "access_denied",
+            session_id=str(session_id),
+            message_id=str(message_id),
+            error=exception.detail,
+        )
         await self.emit_error(session_id, message_id, exception.detail)
 
     async def handle_exception(self, exception: Exception) -> None:
         session_id, message_id = _request_ids(SecurityContextHolder.require())
+        log.info(
+            "request_failed",
+            session_id=str(session_id),
+            message_id=str(message_id),
+            error=str(exception),
+        )
         await self.emit_error(session_id, message_id, str(exception))
 
     async def emit_error(self, session_id: uuid.UUID, message_id: uuid.UUID, text: str) -> None:
