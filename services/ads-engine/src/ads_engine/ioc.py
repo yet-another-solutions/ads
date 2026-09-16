@@ -54,9 +54,7 @@ class AppProvider(Provider):
     def settings(self) -> Settings:
         return self._settings
 
-    @provide(scope=Scope.APP)
-    def store(self, settings: Settings) -> ActiveSessionStore:
-        return ActiveSessionStore(settings.database_url)
+    store = provide(ActiveSessionStore, scope=Scope.APP)
 
     chat = provide(LangChainChatStreamer, scope=Scope.APP, provides=ChatStreamer)
 

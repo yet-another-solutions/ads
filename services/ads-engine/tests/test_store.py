@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from ads_engine.config import Settings
 from ads_engine.store import ActiveSessionStore
 
 
-def test_claim_is_unique_per_session() -> None:
-    store = ActiveSessionStore("sqlite:///:memory:")
+def test_claim_is_unique_per_session(settings: Settings) -> None:
+    store = ActiveSessionStore(settings)
     session_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
     async def _body() -> None:
@@ -19,8 +20,8 @@ def test_claim_is_unique_per_session() -> None:
     asyncio.run(_body())
 
 
-def test_reset_clears_inflight_rows() -> None:
-    store = ActiveSessionStore("sqlite:///:memory:")
+def test_reset_clears_inflight_rows(settings: Settings) -> None:
+    store = ActiveSessionStore(settings)
     session_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
     async def _body() -> None:

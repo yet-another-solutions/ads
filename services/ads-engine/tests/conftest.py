@@ -54,5 +54,5 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def store() -> Iterator[ActiveSessionStore]:
-    yield ActiveSessionStore("sqlite:///:memory:")
+def store(settings: Settings) -> Iterator[ActiveSessionStore]:
+    yield ActiveSessionStore(settings)
