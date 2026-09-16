@@ -20,7 +20,8 @@ from ads_commons.engine import (
     OpenAiStreamModel,
     OpenAiStreamOptions,
 )
-from ads_commons.security import JwtVerifier, SecurityContext
+from ads_commons.security import SecurityContext
+from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 from ads_engine.chat import StreamDelta
 
 ENGINE_ISSUER = "https://keycloak.test/realms/ads"
@@ -84,10 +85,14 @@ def encode_access_token(private_key: RSAPrivateKey, **claims: Any) -> str:
 
 def make_verifier(private_key: RSAPrivateKey) -> JwtVerifier:
     return JwtVerifier(
-        issuer=ENGINE_ISSUER,
-        audience=ENGINE_AUDIENCE,
-        client_id=ENGINE_CLIENT_ID,
-        jwks_client=StaticJwks(private_key),
+        JwtVerifierSettings(
+            issuer=ENGINE_ISSUER,
+            audience=ENGINE_AUDIENCE,
+            client_id=ENGINE_CLIENT_ID,
+            jwks_uri="https://unused.test/certs",
+            ssl_context=None,
+        ),
+        StaticJwks(private_key),
     )
 
 

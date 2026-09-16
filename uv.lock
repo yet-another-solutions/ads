@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "ads",
     "ads-commons",
+    "ads-commons-beans",
     "ads-egress-controlplane",
     "ads-engine",
     "ads-preferences",
@@ -22,6 +23,7 @@ version = "0.0.1"
 source = { editable = "services/ads" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "advanced-alchemy" },
     { name = "aiokafka" },
     { name = "alembic" },
@@ -40,6 +42,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "alembic", specifier = "==1.16.5" },
@@ -61,12 +64,25 @@ version = "0.0.1"
 source = { editable = "libraries/ads-commons" }
 dependencies = [
     { name = "msgspec" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "msgspec", specifier = "==0.21.1" }]
+
+[[package]]
+name = "ads-commons-beans"
+version = "0.0.1"
+source = { editable = "libraries/ads-commons-beans" }
+dependencies = [
+    { name = "ads-commons" },
+    { name = "dishka" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "msgspec", specifier = "==0.21.1" },
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "dishka", specifier = "==1.10.1" },
     { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
 ]
 
@@ -81,6 +97,7 @@ version = "0.0.1"
 source = { editable = "services/ads-engine" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "aiokafka" },
     { name = "dishka" },
     { name = "langchain-core" },
@@ -93,6 +110,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "langchain-core", specifier = "==1.6.3" },
@@ -108,6 +126,7 @@ version = "0.0.1"
 source = { editable = "services/ads-preferences" }
 dependencies = [
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "advanced-alchemy" },
     { name = "alembic" },
     { name = "dishka" },
@@ -122,6 +141,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "alembic", specifier = "==1.16.5" },
     { name = "dishka", specifier = "==1.10.1" },
@@ -140,6 +160,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "ads" },
     { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "ads-egress-controlplane" },
     { name = "ads-engine" },
     { name = "ads-preferences" },
@@ -167,6 +188,7 @@ typecheck = [
 requires-dist = [
     { name = "ads", editable = "services/ads" },
     { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "ads-egress-controlplane", editable = "services/ads-egress-controlplane" },
     { name = "ads-engine", editable = "services/ads-engine" },
     { name = "ads-preferences", editable = "services/ads-preferences" },

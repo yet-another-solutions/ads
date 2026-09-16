@@ -9,7 +9,7 @@ from litestar import Litestar
 from litestar.testing import TestClient
 from sqlalchemy import Engine, event
 
-from ads_commons.security import JwtVerifier
+from ads_commons_beans import JwtVerifier
 from ads_preferences.app import create_app, create_schema
 from ads_preferences.config import Settings
 from ads_preferences.db import create_db_engine

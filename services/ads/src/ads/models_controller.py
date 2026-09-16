@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from dishka.integrations.litestar import FromDishka, inject
+from dishka.integrations.litestar import FromDishka
 from litestar import delete, patch, post
 from litestar.enums import RequestEncodingType
 from litestar.params import Body
@@ -13,6 +13,7 @@ from litestar.response import Template
 
 from ads.authenticated import AuthenticatedController
 from ads.catalog_service import CatalogService
+from ads.inject import inject
 from ads.views import ModelView
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
@@ -29,30 +30,29 @@ async def _dialog(catalog: CatalogService, selected: ModelView | None) -> Templa
     )
 
 
+@inject
 class ModelsController(AuthenticatedController):
     path = "/settings/models"
+    catalog: FromDishka[CatalogService]
 
     @post("/")
-    @inject
-    async def add_model(self, data: Form, catalog: FromDishka[CatalogService]) -> Template:
-        created = await catalog.add_model(
+    async def add_model(self, data: Form) -> Template:
+        created = await self.catalog.add_model(
             data.get("description", ""),
             data.get("name", ""),
             data.get("url", ""),
             data.get("bearer", ""),
             data.get("model-name", ""),
         )
-        return await _dialog(catalog, created)
+        return await _dialog(self.catalog, created)
 
     @patch("/{model_id:uuid}")
-    @inject
     async def edit_model(
         self,
         model_id: uuid.UUID,
         data: Form,
-        catalog: FromDishka[CatalogService],
     ) -> Template:
-        edited = await catalog.edit_model(
+        edited = await self.catalog.edit_model(
             model_id,
             data.get("description"),
             data.get("name"),
@@ -60,14 +60,12 @@ class ModelsController(AuthenticatedController):
             data.get("bearer"),
             data.get("model-name"),
         )
-        return await _dialog(catalog, edited)
+        return await _dialog(self.catalog, edited)
 
     @delete("/{model_id:uuid}", status_code=200)
-    @inject
     async def delete_model(
         self,
         model_id: uuid.UUID,
-        catalog: FromDishka[CatalogService],
     ) -> Template:
-        await catalog.delete_model(model_id)
-        return await _dialog(catalog, None)
+        await self.catalog.delete_model(model_id)
+        return await _dialog(self.catalog, None)

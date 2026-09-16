@@ -6,15 +6,26 @@ import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import cast
 
 import httpx2
 import pytest
 
 from ads.config import Settings
 from ads.oidc import OidcClient
+from ads_commons_beans import JwtVerifier
 from tests.certs import issue_tls, openssl_available
 
 pytestmark = pytest.mark.skipif(not openssl_available(), reason="openssl required")
+
+
+class _UnusedVerifier:
+    def decode(self, token: str, *, nonce: str | None = None) -> None:
+        raise AssertionError("metadata tests must not decode tokens")
+
+
+def _oidc_client(settings: Settings) -> OidcClient:
+    return OidcClient(settings, cast(JwtVerifier, _UnusedVerifier()))
 
 
 def _settings(*, cert: Path, key: Path, ca: Path, well_known: str) -> Settings:
@@ -70,7 +81,7 @@ def test_oidc_accepts_configured_ca_bundle(tmp_path: Path) -> None:
     httpd, url = _serve_https(server_crt, server_key, payload)
     try:
         settings = _settings(cert=server_crt, key=server_key, ca=ca_crt, well_known=url)
-        metadata = asyncio.run(OidcClient(settings).metadata())
+        metadata = asyncio.run(_oidc_client(settings).metadata())
         assert metadata["jwks_uri"] == "https://kc/jwks"
     finally:
         httpd.shutdown()
@@ -88,6 +99,6 @@ def test_oidc_rejects_unknown_ca_bundle(tmp_path: Path) -> None:
     try:
         settings = _settings(cert=other_cert, key=other_key, ca=trusted_ca, well_known=url)
         with pytest.raises(httpx2.HTTPError):
-            asyncio.run(OidcClient(settings).metadata())
+            asyncio.run(_oidc_client(settings).metadata())
     finally:
         httpd.shutdown()

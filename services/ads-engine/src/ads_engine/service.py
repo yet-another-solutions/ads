@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Sequence
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 import structlog
@@ -27,12 +27,12 @@ from ads_commons.security import (
     require_caller,
 )
 from ads_engine.chat import ChatStreamer, StreamDelta
+from ads_engine.config import Settings
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
 
 OPENAI_ATTEMPTS = 3
-ACK_TIMEOUT_SECONDS = 10
 
 
 class SessionAlreadyActive(Exception):
@@ -69,22 +69,17 @@ class EngineService:
         store: ActiveSessionStore,
         publisher: OutputPublisher,
         chat: ChatStreamer,
-        ping_interval_seconds: float,
-        allowed_callers: Collection[str],
         tokens: TokenMinter,
-        ack_timeout_seconds: float = ACK_TIMEOUT_SECONDS,
-        ack_audience: str = "ads",
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        settings: Settings,
     ) -> None:
         self._store = store
         self._publisher = publisher
         self._chat = chat
-        self._ping_interval_seconds = ping_interval_seconds
-        self._ack_timeout_seconds = ack_timeout_seconds
+        self._ping_interval_seconds = settings.ping_interval_seconds
+        self._ack_timeout_seconds = settings.ack_timeout_seconds
         self._tokens = tokens
-        self._ack_audience = ack_audience
-        self.allowed_callers = frozenset(allowed_callers)
-        self._sleep = sleep
+        self._ack_audience = settings.ack_audience
+        self.allowed_callers = frozenset(settings.allowed_callers)
         self._ack_waiters: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Event]] = {}
         self._runs: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Task[Any]]] = {}
         self._aborted: set[uuid.UUID] = set()
@@ -200,7 +195,7 @@ class EngineService:
 
     async def _ping(self, session_id: uuid.UUID) -> None:
         while True:
-            await self._sleep(self._ping_interval_seconds)
+            await asyncio.sleep(self._ping_interval_seconds)
             await self._publisher.publish(session_id, Ping(session_id=session_id))
 
 

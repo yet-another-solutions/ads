@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from ads_engine.config import Settings
+
 
 class Base(DeclarativeBase):
     pass
@@ -35,8 +37,8 @@ def _create_engine(database_url: str) -> Engine:
 
 
 class ActiveSessionStore:
-    def __init__(self, database_url: str) -> None:
-        self._engine = _create_engine(database_url)
+    def __init__(self, settings: Settings) -> None:
+        self._engine = _create_engine(settings.database_url)
         Base.metadata.create_all(self._engine)
         self._sessions = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._lock = asyncio.Lock()

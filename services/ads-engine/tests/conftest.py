@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
-from ads_commons.security import JwtVerifier
+from ads_commons_beans import JwtVerifier
 from ads_engine.config import Settings
 from ads_engine.logconfig import configure_logging
 from ads_engine.store import ActiveSessionStore
@@ -54,5 +54,5 @@ def settings() -> Settings:
 
 
 @pytest.fixture
-def store() -> Iterator[ActiveSessionStore]:
-    yield ActiveSessionStore("sqlite:///:memory:")
+def store(settings: Settings) -> Iterator[ActiveSessionStore]:
+    yield ActiveSessionStore(settings)

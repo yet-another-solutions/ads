@@ -6,7 +6,8 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 
 ## Layout
 
-- `libraries/ads-commons` — shared Kafka DTOs and common types
+- `libraries/ads-commons` — shared Kafka DTOs, dataclasses, and plain common logic
+- `libraries/ads-commons-beans` — shared Dishka beans
 - `services/ads` — Threadline UI, domain memory (SQLAlchemy + Alembic), engine request/output, preferences facade
 - `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)

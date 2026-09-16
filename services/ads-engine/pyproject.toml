@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-commons",
+    "ads-commons-beans",
     "aiokafka==0.14.0",
     "dishka==1.10.1",
     "langchain-core==1.6.3",
@@ -30,6 +31,7 @@ known_first_party = ["ads_engine"]
 
 [tool.deptry.package_module_name_map]
 ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["psycopg"]

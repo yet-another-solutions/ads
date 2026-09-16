@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-commons",
+    "ads-commons-beans",
     "advanced-alchemy==1.8.1",
     "alembic==1.16.5",
     "dishka==1.10.1",
@@ -32,6 +33,7 @@ known_first_party = ["ads_preferences"]
 
 [tool.deptry.package_module_name_map]
 ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
 advanced-alchemy = ["advanced_alchemy"]
 
 [tool.deptry.per_rule_ignores]

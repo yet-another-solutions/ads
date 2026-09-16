@@ -59,7 +59,7 @@ class SendService:
         kafka: EngineRequests,
         tokens: TokenMinter,
         settings: Settings,
-        subjects: AbortSubjects | None = None,
+        subjects: AbortSubjects,
     ) -> None:
         self._session = session
         self._sessions = sessions
@@ -69,7 +69,7 @@ class SendService:
         self._kafka = kafka
         self._tokens = tokens
         self._settings = settings
-        self._subjects = subjects if subjects is not None else AbortSubjects()
+        self._subjects = subjects
 
     def _load_owned(self, session_id: uuid.UUID) -> ChatSession:
         user_id = SecurityContextHolder.require().user_id

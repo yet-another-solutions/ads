@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka.abc import ConsumerRebalanceListener
 
 from ads.config import Settings
 from ads_commons.engine import (
@@ -40,7 +41,7 @@ class OffsetSeeker(Protocol):
     def seek(self, partition: Any, offset: int) -> None: ...
 
 
-class SeekToEndListener:
+class SeekToEndListener(ConsumerRebalanceListener):  # type: ignore[misc]
     """On assign, skip everything already in the topic. No replay."""
 
     def __init__(self, consumer: OffsetSeeker) -> None:
@@ -65,22 +66,22 @@ async def seek_assigned_to_end(consumer: OffsetSeeker, assigned: Collection[Any]
 class AiokafkaEngineRequests:
     """aiokafka producer for ``ads.engine.request``, keyed by session id."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, producer: AIOKafkaProducer) -> None:
         self._settings = settings
-        self._producer: AIOKafkaProducer | None = None
+        self._producer = producer
+        self._started = False
 
     async def start(self) -> None:
-        if self._producer is not None:
+        if self._started:
             return
-        producer = AIOKafkaProducer(bootstrap_servers=self._settings.kafka_bootstrap_servers)
-        await producer.start()
-        self._producer = producer
+        await self._producer.start()
+        self._started = True
 
     async def stop(self) -> None:
-        producer = self._producer
-        self._producer = None
-        if producer is not None:
-            await producer.stop()
+        if not self._started:
+            return
+        self._started = False
+        await self._producer.stop()
 
     async def _send(
         self,
@@ -89,11 +90,8 @@ class AiokafkaEngineRequests:
         token: str | None = None,
     ) -> None:
         await self.start()
-        producer = self._producer
-        if producer is None:  # pragma: no cover - start() always assigns
-            raise RuntimeError("kafka producer is not started")
         headers = authorization_headers(token) if token is not None else []
-        await producer.send_and_wait(
+        await self._producer.send_and_wait(
             self._settings.engine_request_topic,
             key=str(session_id).encode("utf-8"),
             value=value,
@@ -113,40 +111,40 @@ class AiokafkaEngineRequests:
 class EngineOutputConsumer:
     """Consume ``ads.engine.output``, seek to end on assign, commit after the service."""
 
-    def __init__(self, settings: Settings, on_record: Any) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        on_record: Any,
+        consumer: AIOKafkaConsumer,
+        listener: SeekToEndListener,
+    ) -> None:
         self._settings = settings
         self._on_record = on_record
-        self._consumer: AIOKafkaConsumer | None = None
+        self._consumer = consumer
+        self._listener = listener
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None:
             return
-        consumer = AIOKafkaConsumer(
-            bootstrap_servers=self._settings.kafka_bootstrap_servers,
-            group_id=self._settings.engine_consumer_group,
-            enable_auto_commit=False,
-            auto_offset_reset="latest",
-        )
+        consumer = self._consumer
         consumer.subscribe(
             topics=[self._settings.engine_output_topic],
-            listener=SeekToEndListener(consumer),
+            listener=self._listener,
         )
         await consumer.start()
-        self._consumer = consumer
         self._task = asyncio.create_task(self._loop(consumer))
 
     async def stop(self) -> None:
-        task, consumer = self._task, self._consumer
-        self._task, self._consumer = None, None
+        task = self._task
+        self._task = None
         if task is not None:
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        if consumer is not None:
-            await consumer.stop()
+        await self._consumer.stop()
 
     async def _loop(self, consumer: AIOKafkaConsumer) -> None:
         log.info("ads_engine_output_consumer_started", topic=self._settings.engine_output_topic)

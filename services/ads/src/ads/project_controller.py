@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from dishka.integrations.litestar import FromDishka, inject
+from dishka.integrations.litestar import FromDishka
 from litestar import post
 from litestar.di import NamedDependency
 from litestar.enums import RequestEncodingType
@@ -13,30 +13,31 @@ from litestar.response import Template
 
 from ads.authenticated import AuthenticatedController
 from ads.identity import Identity
+from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.shell_controller import initials
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
 
 
+@inject
 class ProjectController(AuthenticatedController):
     path = "/projects"
+    projects: FromDishka[ProjectService]
 
     @post("/")
-    @inject
     async def create_project(
         self,
         data: Form,
         identity: NamedDependency[Identity],
-        projects: FromDishka[ProjectService],
     ) -> Template:
-        await projects.create(data.get("name", ""), data.get("description", ""))
+        await self.projects.create(data.get("name", ""), data.get("description", ""))
         return Template(
             template_name="fragment_rail_closed.html",
             context={
                 "identity": identity,
                 "initials": initials(identity.name),
-                "projects": await projects.list_tree(None),
+                "projects": await self.projects.list_tree(None),
                 "q": None,
                 "active_session_id": None,
             },

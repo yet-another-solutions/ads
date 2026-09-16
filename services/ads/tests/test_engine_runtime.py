@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import timedelta
+from typing import cast
 
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
+from aiokafka.abc import ConsumerRebalanceListener
 from litestar import Litestar
 from litestar.testing import TestClient
 from sqlalchemy import Engine
@@ -12,7 +15,12 @@ from sqlalchemy.orm import Session
 from ads.config import Settings
 from ads.domain import utc_now
 from ads.ioc import session_factory_for
-from ads.kafka import SeekToEndListener, seek_assigned_to_end
+from ads.kafka import (
+    AiokafkaEngineRequests,
+    EngineOutputConsumer,
+    SeekToEndListener,
+    seek_assigned_to_end,
+)
 from ads.models import STATUS_PENDING
 from ads.repository import SessionRunRepository
 from ads.watchdog import Watchdog
@@ -20,6 +28,71 @@ from ads_commons.engine import AssistantMessage, PartialResponse, Ping, encode_o
 from tests.threadline_db import emit_raw, parts_of, run_of, runs_of
 from tests.threadline_fakes import FakePreferences, RecordingKafka, login
 from tests.threadline_flows import create_project, create_session, send
+
+
+class _FakeProducer:
+    def __init__(self) -> None:
+        self.starts = 0
+
+    async def start(self) -> None:
+        self.starts += 1
+
+    async def stop(self) -> None:
+        return None
+
+
+def test_engine_requests_start_does_not_construct_producer(settings: Settings) -> None:
+    producer = _FakeProducer()
+    requests = AiokafkaEngineRequests(settings, cast(AIOKafkaProducer, producer))
+    asyncio.run(requests.start())
+    asyncio.run(requests.start())
+    assert producer.starts == 1
+
+
+class _FakeOutputConsumer:
+    def __init__(self) -> None:
+        self.starts = 0
+        self.stops = 0
+        self.subscribes: list[tuple[list[str], object]] = []
+
+    def subscribe(self, topics: list[str], listener: object = None) -> None:
+        self.subscribes.append((list(topics), listener))
+
+    async def start(self) -> None:
+        self.starts += 1
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+    def __aiter__(self) -> _FakeOutputConsumer:
+        return self
+
+    async def __anext__(self) -> object:
+        raise StopAsyncIteration
+
+
+def test_output_consumer_start_does_not_construct_consumer(settings: Settings) -> None:
+    consumer = _FakeOutputConsumer()
+
+    async def on_record(*_args: object) -> None:
+        return None
+
+    async def run() -> None:
+        kafka_consumer = cast(AIOKafkaConsumer, consumer)
+        listener = SeekToEndListener(kafka_consumer)
+        output = EngineOutputConsumer(settings, on_record, kafka_consumer, listener)
+        await output.start()
+        await output.start()
+        assert consumer.starts == 1
+        assert len(consumer.subscribes) == 1
+        topics, subscribed = consumer.subscribes[0]
+        assert topics == [settings.engine_output_topic]
+        assert isinstance(subscribed, SeekToEndListener)
+        assert subscribed is listener
+        await output.stop()
+        assert consumer.stops == 1
+
+    asyncio.run(run())
 
 
 class _FakeConsumer:
@@ -35,7 +108,9 @@ class _FakeConsumer:
 
 def test_output_consumer_seeks_assigned_partitions_to_end() -> None:
     consumer = _FakeConsumer()
-    asyncio.run(SeekToEndListener(consumer).on_partitions_assigned(["p0", "p1"]))
+    listener = SeekToEndListener(consumer)
+    assert isinstance(listener, ConsumerRebalanceListener)
+    asyncio.run(listener.on_partitions_assigned(["p0", "p1"]))
     assert sorted(consumer.seeks) == [("p0", 42), ("p1", 42)]
     asyncio.run(seek_assigned_to_end(consumer, []))
     assert len(consumer.seeks) == 2

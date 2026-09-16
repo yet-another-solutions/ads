@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import ssl
 from typing import Any
 
 from litestar.enums import ScopeType
@@ -17,11 +16,10 @@ from litestar.types import (
 from ads_commons.security import (
     AccessDenied,
     InvalidAccessToken,
-    JwtVerifier,
     SecurityContextHolder,
     ensure_caller,
-    jwks_uri_from_well_known,
 )
+from ads_commons_beans import JwtVerifier
 from ads_preferences.config import Settings
 
 
@@ -55,35 +53,11 @@ class JwtCallerMiddleware:
         self,
         app: ASGIApp,
         settings: Settings,
-        verifier: JwtVerifier | None = None,
+        verifier: JwtVerifier,
     ) -> None:
         self.app = app
         self._settings = settings
         self._verifier = verifier
-        self._loaded: JwtVerifier | None = None
-
-    def _jwks_ssl_context(self) -> ssl.SSLContext | None:
-        if self._settings.tls_ca_bundle is None:
-            return None
-        return ssl.create_default_context(cafile=str(self._settings.tls_ca_bundle))
-
-    def verifier(self) -> JwtVerifier:
-        if self._verifier is not None:
-            return self._verifier
-        if self._loaded is None:
-            ssl_context = self._jwks_ssl_context()
-            jwks_uri = jwks_uri_from_well_known(
-                self._settings.keycloak_well_known_url,
-                ssl_context=ssl_context,
-            )
-            self._loaded = JwtVerifier(
-                issuer=self._settings.keycloak_issuer,
-                audience=self._settings.keycloak_audience,
-                client_id=self._settings.keycloak_client_id,
-                ssl_context=ssl_context,
-                jwks_uri=jwks_uri,
-            )
-        return self._loaded
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != ScopeType.HTTP:
@@ -100,7 +74,7 @@ class JwtCallerMiddleware:
             await _send_json(send, 401, "unauthorized")
             return
         try:
-            context = self.verifier().authenticate(token)
+            context = self._verifier.authenticate(token)
         except InvalidAccessToken:
             await _send_json(send, 401, "unauthorized")
             return
@@ -116,7 +90,7 @@ class JwtCallerMiddleware:
             SecurityContextHolder.reset(bound)
 
 
-def jwt_caller_middleware(settings: Settings, verifier: JwtVerifier | None = None) -> Any:
+def jwt_caller_middleware(settings: Settings, verifier: JwtVerifier) -> Any:
     def factory(app: ASGIApp) -> JwtCallerMiddleware:
         return JwtCallerMiddleware(app, settings=settings, verifier=verifier)
 

@@ -7,6 +7,7 @@ authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads",
     "ads-commons",
+    "ads-commons-beans",
     "ads-engine",
     "ads-egress-controlplane",
     "ads-preferences",
@@ -22,6 +23,7 @@ exclude-dependencies = []
 [tool.uv.workspace]
 members = [
     "libraries/ads-commons",
+    "libraries/ads-commons-beans",
     "services/ads",
     "services/ads-engine",
     "services/ads-egress-controlplane",
@@ -31,6 +33,7 @@ members = [
 [tool.uv.sources]
 ads = { workspace = true }
 ads-commons = { workspace = true }
+ads-commons-beans = { workspace = true }
 ads-engine = { workspace = true }
 ads-egress-controlplane = { workspace = true }
 ads-preferences = { workspace = true }
@@ -62,6 +65,8 @@ dev = [
 src = [
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",
+    "libraries/ads-commons-beans/src",
+    "libraries/ads-commons-beans/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-engine/src",
@@ -78,8 +83,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src"
-packages = ["ads_commons", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences"]
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src"
+packages = ["ads_commons", "ads_commons_beans", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences"]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
@@ -99,6 +104,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = [
     "libraries/ads-commons/tests",
+    "libraries/ads-commons-beans/tests",
     "services/ads/tests",
     "services/ads-engine/tests",
     "services/ads-preferences/tests",
@@ -109,4 +115,4 @@ markers = [
 ]
 
 [tool.deptry]
-known_first_party = ["ads", "ads_commons", "ads_engine", "ads_egress_controlplane", "ads_preferences"]
+known_first_party = ["ads", "ads_commons", "ads_commons_beans", "ads_engine", "ads_egress_controlplane", "ads_preferences"]
