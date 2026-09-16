@@ -62,10 +62,5 @@ class AppProvider(Provider):
         finally:
             session.close()
 
-    @provide(scope=Scope.REQUEST)
-    def repository(self, session: Session) -> UserModelRepository:
-        return UserModelRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def service(self, session: Session, repository: UserModelRepository) -> PreferencesService:
-        return PreferencesService(session=session, repository=repository)
+    repository = provide(UserModelRepository, scope=Scope.REQUEST)
+    service = provide(PreferencesService, scope=Scope.REQUEST)

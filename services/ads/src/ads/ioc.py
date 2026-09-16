@@ -209,83 +209,15 @@ class AppProvider(Provider):
         finally:
             session.close()
 
-    @provide(scope=Scope.REQUEST)
-    def projects_repository(self, session: Session) -> ProjectRepository:
-        return ProjectRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def sessions_repository(self, session: Session) -> SessionRepository:
-        return SessionRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def entries_repository(self, session: Session) -> SessionEntryRepository:
-        return SessionEntryRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def runs_repository(self, session: Session) -> SessionRunRepository:
-        return SessionRunRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def buffer_repository(self, session: Session) -> SessionRunBufferRepository:
-        return SessionRunBufferRepository(session=session)
-
-    @provide(scope=Scope.REQUEST)
-    def project_service(
-        self,
-        session: Session,
-        projects: ProjectRepository,
-        sessions: SessionRepository,
-        runs: SessionRunRepository,
-    ) -> ProjectService:
-        return ProjectService(session=session, projects=projects, sessions=sessions, runs=runs)
-
-    @provide(scope=Scope.REQUEST)
-    def session_service(
-        self,
-        session: Session,
-        projects: ProjectRepository,
-        sessions: SessionRepository,
-        entries: SessionEntryRepository,
-        runs: SessionRunRepository,
-        buffer: SessionRunBufferRepository,
-    ) -> SessionService:
-        return SessionService(
-            session=session,
-            projects=projects,
-            sessions=sessions,
-            entries=entries,
-            runs=runs,
-            buffer=buffer,
-        )
-
-    @provide(scope=Scope.REQUEST)
-    def send_service(
-        self,
-        session: Session,
-        sessions: SessionRepository,
-        entries: SessionEntryRepository,
-        runs: SessionRunRepository,
-        preferences: PreferencesApi,
-        kafka: EngineRequests,
-        tokens: TokenMinter,
-        settings: Settings,
-        subjects: AbortSubjects,
-    ) -> SendService:
-        return SendService(
-            session=session,
-            sessions=sessions,
-            entries=entries,
-            runs=runs,
-            preferences=preferences,
-            kafka=kafka,
-            tokens=tokens,
-            settings=settings,
-            subjects=subjects,
-        )
-
-    @provide(scope=Scope.REQUEST)
-    def catalog_service(self, preferences: PreferencesApi) -> CatalogService:
-        return CatalogService(preferences=preferences)
+    project_repository = provide(ProjectRepository, scope=Scope.REQUEST)
+    session_repository = provide(SessionRepository, scope=Scope.REQUEST)
+    entry_repository = provide(SessionEntryRepository, scope=Scope.REQUEST)
+    run_repository = provide(SessionRunRepository, scope=Scope.REQUEST)
+    buffer_repository = provide(SessionRunBufferRepository, scope=Scope.REQUEST)
+    project_service = provide(ProjectService, scope=Scope.REQUEST)
+    session_service = provide(SessionService, scope=Scope.REQUEST)
+    send_service = provide(SendService, scope=Scope.REQUEST)
+    catalog_service = provide(CatalogService, scope=Scope.REQUEST)
 
 
 def session_factory_for(engine: Engine) -> Callable[[], Session]:

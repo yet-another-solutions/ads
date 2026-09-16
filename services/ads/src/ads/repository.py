@@ -4,6 +4,7 @@ import uuid
 
 from advanced_alchemy.repository import SQLAlchemySyncRepository
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from ads.models import (
     IN_FLIGHT_STATUSES,
@@ -19,6 +20,9 @@ class ProjectRepository(SQLAlchemySyncRepository[Project]):
     """Data layer. Requires an open transaction and never begins one."""
 
     model_type = Project
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
 
     def list_for_user(self, user_id: uuid.UUID) -> list[Project]:
         statement = (
@@ -42,6 +46,9 @@ class SessionRepository(SQLAlchemySyncRepository[ChatSession]):
     """Data layer. Requires an open transaction and never begins one."""
 
     model_type = ChatSession
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
 
     def list_for_project(self, user_id: uuid.UUID, project_id: uuid.UUID) -> list[ChatSession]:
         statement = (
@@ -70,6 +77,9 @@ class SessionEntryRepository(SQLAlchemySyncRepository[SessionEntry]):
     """Data layer. Requires an open transaction and never begins one."""
 
     model_type = SessionEntry
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
 
     def insert(self, row: SessionEntry) -> SessionEntry:
         self.session.add(row)
@@ -127,6 +137,9 @@ class SessionRunRepository(SQLAlchemySyncRepository[SessionRun]):
 
     model_type = SessionRun
 
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
+
     def insert(self, row: SessionRun) -> SessionRun:
         self.session.add(row)
         self.session.flush()
@@ -164,6 +177,9 @@ class SessionRunBufferRepository(SQLAlchemySyncRepository[SessionRunBuffer]):
     """Data layer. Requires an open transaction and never begins one."""
 
     model_type = SessionRunBuffer
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
 
     def get_delta(self, run_id: uuid.UUID, order_no: int) -> SessionRunBuffer | None:
         statement = select(SessionRunBuffer).where(

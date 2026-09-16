@@ -4,6 +4,7 @@ import uuid
 
 from advanced_alchemy.repository import SQLAlchemySyncRepository
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from ads_preferences.models import UserModel
 
@@ -12,6 +13,9 @@ class UserModelRepository(SQLAlchemySyncRepository[UserModel]):
     """Data layer. Requires an open transaction and never begins one."""
 
     model_type = UserModel
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session=session)
 
     def list_for_user(self, user_id: uuid.UUID) -> list[UserModel]:
         statement = (
