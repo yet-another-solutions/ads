@@ -12,7 +12,6 @@ from sqlalchemy import Engine
 from ads.app import build_session_config, create_app, create_schema
 from ads.config import Settings, load_settings
 from ads.db import create_db_engine
-from ads.identity import Identity
 from ads.logconfig import configure_logging
 from ads_commons_beans import JwtVerifier
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
@@ -20,21 +19,11 @@ from ads_policy.service import PolicyService
 from tests.policy import DirectPolicyClient, policy_service
 from tests.threadline_fakes import (
     FakeAuthenticator,
+    FakeOidcVerifier,
     FakePreferences,
     FakeTokens,
     RecordingKafka,
 )
-
-
-class FakeOidcVerifier:
-    def decode(
-        self,
-        token: str,
-        *,
-        nonce: str | None = None,
-        audience: str | None = None,
-    ) -> Identity:
-        raise AssertionError("unit tests must not decode an OIDC token")
 
 
 @pytest.fixture(scope="session", autouse=True)

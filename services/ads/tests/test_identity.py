@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from ads.identity import (
+    access_token_from_session,
     identity_from_claims,
-    identity_from_session,
+    identity_from_security_context,
     security_context_from_identity,
-    security_context_from_session,
 )
+from ads_commons.security import SecurityContext
 
 
 def test_roles_from_realm_and_client() -> None:
@@ -26,24 +27,25 @@ def test_roles_from_realm_and_client() -> None:
     assert context.has_role("user")
 
 
-def test_session_without_identity() -> None:
-    assert identity_from_session({}) is None
-    assert identity_from_session({"identity": "bad"}) is None
-    assert security_context_from_session({}) is None
+def test_access_token_from_session() -> None:
+    assert access_token_from_session({}) is None
+    assert access_token_from_session({"access_token": "  "}) is None
+    assert access_token_from_session({"identity": {"sub": "alice"}}) is None
+    assert access_token_from_session({"access_token": "user-access-token"}) == "user-access-token"
 
 
-def test_session_context_includes_access_token() -> None:
-    session = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        },
-        "access_token": "user-access-token",
-    }
-    context = security_context_from_session(session)
-    assert context is not None
-    assert context.subject == "alice"
-    assert context.access_token == "user-access-token"
-    assert "user-access-token" not in repr(context)
+def test_identity_from_bound_security_context() -> None:
+    context = SecurityContext(
+        subject="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        name="Alice",
+        roles=frozenset({"user"}),
+        email="alice@example.com",
+        authorized_party="ads",
+        access_token="user-access-token",
+    )
+    identity = identity_from_security_context(context)
+    assert identity.sub == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert identity.name == "Alice"
+    assert identity.roles == ("user",)
+    assert identity.email == "alice@example.com"
+    assert identity.azp == "ads"

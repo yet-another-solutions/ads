@@ -11,7 +11,7 @@ from litestar.handlers import BaseRouteHandler
 from litestar.response import Redirect
 
 from ads.authenticated import provide_identity, provide_security_context
-from ads.identity import identity_from_session
+from ads.security_holder import SecurityContextHolder
 
 RETURN_TO_SESSION_KEY = "return_to"
 _BLOCKED_RETURN_PATHS = frozenset({"/login", "/auth/callback", "/logout"})
@@ -19,7 +19,7 @@ _FRONTEND_METHODS = frozenset({"GET", "HEAD"})
 
 
 class LoginRequired(Exception):
-    """No session identity; the frontend redirects to /login."""
+    """No bound access token; the frontend redirects to /login."""
 
 
 def safe_return_to(value: object) -> str:
@@ -62,7 +62,8 @@ def require_frontend_login(
     method = str(connection.scope.get("method", ""))
     if method not in _FRONTEND_METHODS:
         raise MethodNotAllowedException()
-    if identity_from_session(connection.session) is None:
+    context = SecurityContextHolder.get()
+    if context is None or not context.access_token:
         raise LoginRequired
 
 

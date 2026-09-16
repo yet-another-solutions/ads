@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from logging.config import fileConfig
 
@@ -11,7 +12,9 @@ from ads_engine.store import ActiveSessionRow, Base
 _ = ActiveSessionRow
 
 config = context.config
-if config.config_file_name is not None:
+# In-process startup already configured structlog. fileConfig would replace
+# root handlers and set root to WARN, swallowing ads_engine INFO.
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name)
 
 database_url = os.environ.get("ADS_ENGINE_DATABASE_URL", "")

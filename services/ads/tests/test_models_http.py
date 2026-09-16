@@ -23,7 +23,13 @@ def test_settings_dialog_never_renders_a_stored_bearer(
     assert "https://llm.example/v1" in selected.text
     assert STORED_BEARER not in selected.text
     assert 'placeholder="Write only. Leave blank to keep."' in selected.text
-    assert 'value="openai-stream" readonly' in selected.text
+    assert '<select name="type" required>' in selected.text
+    assert '<option value="openai-stream" selected>openai-stream</option>' in selected.text
+    assert 'type="url"' in selected.text
+    assert "Add new model" in selected.text
+    assert "+ Add model" not in selected.text
+    assert "dlg-tabs" in selected.text
+    assert ">Models</button>" in selected.text
     assert 'name="model-name"' in selected.text
 
 
@@ -48,6 +54,7 @@ def test_add_model_forwards_the_typed_bearer_once(
         data={
             "description": "Lab vLLM",
             "name": "qwen",
+            "type": "openai-stream",
             "model-name": "qwen-api",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
@@ -134,7 +141,72 @@ def test_unauthenticated_model_writes_are_401(client: TestClient) -> None:
     assert client.delete(f"/settings/models/{uuid.uuid4()}").status_code == 401
 
 
+def test_identity_only_settings_page_redirects_to_login(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    response = client.get("/settings", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("/login")
+
+
+def test_identity_only_model_writes_are_401(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    assert client.post("/settings/models", data={"description": "x"}).status_code == 401
+
+
 def test_unknown_model_edit_is_404(client: TestClient) -> None:
     login(client)
     response = client.patch(f"/settings/models/{uuid.uuid4()}", data={"name": "x"})
     assert response.status_code == 404
+
+
+def test_model_types_endpoint_is_role_guarded(client: TestClient) -> None:
+    assert client.get("/settings/model-types").status_code == 401
+    login(client, roles=[])
+    assert client.get("/settings/model-types").status_code == 403
+    login(client)
+    response = client.get("/settings/model-types")
+    assert response.status_code == 200
+    assert response.json() == {"types": ["openai-stream"]}
+
+
+def test_settings_list_requires_the_user_role(client: TestClient) -> None:
+    login(client, roles=[])
+    assert client.get("/settings").status_code == 403
+
+
+def test_add_model_rejects_unknown_type(
+    client: TestClient,
+    preferences: FakePreferences,
+) -> None:
+    login(client)
+    response = client.post(
+        "/settings/models",
+        data={
+            "description": "Lab vLLM",
+            "name": "qwen",
+            "type": "not-a-type",
+            "model-name": "qwen-api",
+            "url": "https://lab.example/v1",
+            "bearer": "sk-typed-now",
+        },
+    )
+    assert response.status_code == 400
+    assert preferences.writes == []

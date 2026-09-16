@@ -89,7 +89,17 @@ class EngineService:
         _validate_request(request)
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
+            log.info(
+                "session_already_active",
+                session_id=str(request.session_id),
+                message_id=str(request.message_id),
+            )
             raise SessionAlreadyActive()
+        log.info(
+            "session_claimed",
+            session_id=str(request.session_id),
+            message_id=str(request.message_id),
+        )
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("engine handle requires a running task")
@@ -113,6 +123,11 @@ class EngineService:
                     Acknowledge(session_id=request.session_id, message_id=request.message_id),
                     headers=authorization_headers(token),
                 )
+                log.info(
+                    "acknowledge_published",
+                    session_id=str(request.session_id),
+                    message_id=str(request.message_id),
+                )
                 await self._wait_for_ack_response(request.session_id, waiter)
                 self._ack_waiters.pop(request.session_id, None)
                 last_order = await self._run_model(request)
@@ -120,6 +135,11 @@ class EngineService:
                 await self._publisher.publish(
                     request.session_id,
                     Finish(session_id=request.session_id, last_order=last_order),
+                )
+                log.info(
+                    "finish_published",
+                    session_id=str(request.session_id),
+                    last_order=last_order,
                 )
         except asyncio.CancelledError:
             if request.session_id not in self._aborted:
@@ -140,6 +160,11 @@ class EngineService:
         if message_id != ack.message_id:
             return
         waiter.set()
+        log.info(
+            "ack_response_accepted",
+            session_id=str(ack.session_id),
+            message_id=str(ack.message_id),
+        )
 
     async def handle_abort(self, abort: Abort) -> None:
         run = self._runs.get(abort.session_id)
@@ -148,6 +173,11 @@ class EngineService:
         message_id, task = run
         if message_id != abort.message_id:
             return
+        log.info(
+            "abort_accepted",
+            session_id=str(abort.session_id),
+            message_id=str(abort.message_id),
+        )
         self._aborted.add(abort.session_id)
         current = asyncio.current_task()
         task.cancel()

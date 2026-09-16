@@ -63,7 +63,7 @@ class SessionController(AuthenticatedController):
             "project": None,
             "active_session_id": created.id,
             "active_project_id": project_id,
-            "models": await model_options(self.catalog),
+            "models": await model_options(self.catalog, identity),
             "warn": None,
             "selected_model_id": None,
         }
@@ -94,7 +94,7 @@ class SessionController(AuthenticatedController):
             "project": None,
             "active_session_id": session_id,
             "active_project_id": transcript.session.project_id,
-            "models": await model_options(self.catalog),
+            "models": await model_options(self.catalog, identity),
             "warn": None,
             "selected_model_id": model_id,
         }

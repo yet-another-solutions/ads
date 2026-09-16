@@ -30,6 +30,7 @@ from ads.repository import (
     SessionRunRepository,
 )
 from ads.send_service import SendService
+from ads.session_binder import SessionBinder
 from ads.session_service import SessionService
 from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
 from ads.watchdog import Watchdog
@@ -152,6 +153,21 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def session_factory(self, engine: Engine) -> SessionFactory:
         return session_factory_for(engine)
+
+    @provide(scope=Scope.APP)
+    def session_binder(
+        self,
+        settings: Settings,
+        verifier: JwtVerifier,
+        oidc: OidcClient,
+        engine: Engine,
+    ) -> SessionBinder:
+        return SessionBinder(
+            verifier,
+            oidc,
+            session_factory_for(engine),
+            settings.keycloak_client_id,
+        )
 
     engine_output = provide(EngineOutputService, scope=Scope.APP)
     engine_output_controller = provide(EngineOutputController, scope=Scope.APP)

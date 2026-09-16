@@ -15,8 +15,11 @@ from ads.authenticated import (
 )
 from ads.config import Settings
 from ads.identity import Identity
+from ads.security_context import SecurityContext
+from ads.security_holder import SecurityContextHolder
 from ads.security_middleware import SecurityContextMiddleware
 from ads_commons.security import AccessDenied, AuthenticationRequired, require_role
+from tests.threadline_fakes import USER_ACCESS_TOKEN, USER_ID, attach_fake_session_binder, login
 
 
 class _ProbeController(AuthenticatedController):
@@ -41,54 +44,66 @@ class _DenyController(AuthenticatedController):
         return {"result": _DenyService().deny()}
 
 
-def test_missing_session_identity_is_unauthorized() -> None:
-    request = RequestFactory().get("/")
-    request.scope["session"] = {}
+def test_missing_bound_context_is_unauthorized() -> None:
     with pytest.raises(AuthenticationRequired):
-        provide_identity(request)
+        provide_identity()
 
 
-def test_provide_identity_and_security_context_from_session() -> None:
-    request = RequestFactory().get("/")
-    request.scope["session"] = {
-        "identity": {
-            "sub": "alice",
-            "name": "Alice",
-            "roles": ["user"],
-            "email": "alice@example.com",
-        }
-    }
-    identity = provide_identity(request)
-    assert identity == Identity(
-        sub="alice",
-        name="Alice",
-        roles=("user",),
+def test_provide_identity_and_security_context_from_holder() -> None:
+    context = SecurityContext(
+        subject=str(USER_ID),
+        name="Alice Operator",
+        roles=frozenset({"user"}),
         email="alice@example.com",
+        authorized_party="ads",
+        access_token=USER_ACCESS_TOKEN,
     )
-    context = provide_security_context(identity, request)
-    assert context.subject == "alice"
-    assert context.has_role("user")
-    assert context.access_token is None
-    request.session["access_token"] = "user-access-token"
-    with_token = provide_security_context(identity, request)
-    assert with_token.access_token == "user-access-token"
+    with SecurityContextHolder.bound(context):
+        identity = provide_identity()
+        assert identity == Identity(
+            sub=str(USER_ID),
+            name="Alice Operator",
+            roles=("user",),
+            email="alice@example.com",
+            azp="ads",
+        )
+        bound = provide_security_context()
+        assert bound is context
+        assert bound.access_token == USER_ACCESS_TOKEN
+
+
+def test_provide_security_context_without_token_is_unauthorized() -> None:
+    context = SecurityContext(
+        subject=str(USER_ID),
+        name="Alice",
+        roles=frozenset({"user"}),
+    )
+    with SecurityContextHolder.bound(context):
+        with pytest.raises(AuthenticationRequired):
+            provide_security_context()
 
 
 def test_authenticated_controller_returns_401_without_session(settings: Settings) -> None:
     session_config = build_session_config(settings)
     app = Litestar(
         route_handlers=[_ProbeController],
-        middleware=[session_config.middleware],
+        middleware=[session_config.middleware, SecurityContextMiddleware],
         exception_handlers=AUTH_EXCEPTION_HANDLERS,
     )
+    attach_fake_session_binder(app)
     with TestClient(app=app, session_config=session_config) as client:
         response = client.get("/api/ping")
         assert response.status_code == 401
 
 
-def test_authenticated_controller_returns_body_when_logged_in(settings: Settings) -> None:
+def test_authenticated_controller_returns_401_without_access_token(settings: Settings) -> None:
     session_config = build_session_config(settings)
-    app = Litestar(route_handlers=[_ProbeController], middleware=[session_config.middleware])
+    app = Litestar(
+        route_handlers=[_ProbeController],
+        middleware=[session_config.middleware, SecurityContextMiddleware],
+        exception_handlers=AUTH_EXCEPTION_HANDLERS,
+    )
+    attach_fake_session_binder(app)
     with TestClient(app=app, session_config=session_config) as client:
         client.set_session_data(
             {
@@ -100,6 +115,19 @@ def test_authenticated_controller_returns_body_when_logged_in(settings: Settings
                 }
             }
         )
+        response = client.get("/api/ping")
+        assert response.status_code == 401
+
+
+def test_authenticated_controller_returns_body_when_logged_in(settings: Settings) -> None:
+    session_config = build_session_config(settings)
+    app = Litestar(
+        route_handlers=[_ProbeController],
+        middleware=[session_config.middleware, SecurityContextMiddleware],
+    )
+    attach_fake_session_binder(app)
+    with TestClient(app=app, session_config=session_config) as client:
+        login(client)
         response = client.get("/api/ping")
         assert response.status_code == 200
         assert response.json() == {"ok": True}
@@ -112,17 +140,9 @@ def test_access_denied_handler_maps_bound_role_failure(settings: Settings) -> No
         middleware=[session_config.middleware, SecurityContextMiddleware],
         exception_handlers=AUTH_EXCEPTION_HANDLERS,
     )
+    attach_fake_session_binder(app)
     with TestClient(app=app, session_config=session_config) as client:
-        client.set_session_data(
-            {
-                "identity": {
-                    "sub": "alice",
-                    "name": "Alice",
-                    "roles": ["user"],
-                    "email": "alice@example.com",
-                }
-            }
-        )
+        login(client)
         response = client.post("/api/deny")
         assert response.status_code == 403
         assert response.json()["detail"] == "role nobody required"

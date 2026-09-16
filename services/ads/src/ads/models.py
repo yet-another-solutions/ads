@@ -149,3 +149,16 @@ class SessionRunBuffer(Base):
     order_no: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class OidcRefreshToken(Base):
+    """Keycloak refresh token for a browser SSO session. Never stored in the cookie."""
+
+    __tablename__ = "oidc_refresh_token"
+    __table_args__ = (Index("oidc_refresh_token_user_id_idx", "user_id"),)
+
+    sid: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

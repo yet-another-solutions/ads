@@ -27,7 +27,7 @@ from ads.live import LiveHub
 from ads.live_controller import live_socket
 from ads.logconfig import configure_logging
 from ads.models import Project
-from ads.models_controller import ModelsController
+from ads.models_controller import ModelsController, ModelTypesController
 from ads.project_controller import ProjectController
 from ads.security_middleware import SecurityContextMiddleware
 from ads.session_controller import SessionController
@@ -167,6 +167,7 @@ def create_app(
             ProjectController,
             SessionController,
             ModelsController,
+            ModelTypesController,
             AuthController,
             live_socket,
             live,

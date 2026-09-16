@@ -55,6 +55,15 @@ def test_expired_token_is_rejected() -> None:
         verifier(key).authenticate(token)
 
 
+def test_expired_token_claims_can_skip_exp() -> None:
+    key = new_rsa_key()
+    token = encode_token(key, exp=int(time.time()) - 10)
+    claims = verifier(key).verified_claims(token, verify_exp=False)
+    assert claims["sub"] == SUBJECT
+    with pytest.raises(InvalidAccessToken):
+        verifier(key).verified_claims(token)
+
+
 def test_non_uuid_sub_is_rejected() -> None:
     key = new_rsa_key()
     token = encode_token(key, sub="alice")

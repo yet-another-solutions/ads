@@ -21,6 +21,10 @@ class ModelList(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     models: list[ModelSummary]
 
 
+class ModelTypeList(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    types: list[str]
+
+
 class ModelInfo(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     id: UUID
     description: str
@@ -51,6 +55,8 @@ class ModelPatch(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_d
 
 @runtime_checkable
 class PreferencesApi(Protocol):
+    async def list_model_types(self) -> ModelTypeList: ...
+
     async def list_models(self) -> ModelList: ...
 
     async def get_model(self, model_id: UUID) -> ModelInfo: ...

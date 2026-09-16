@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
 from litestar.testing import TestClient
 
+from ads.identity import (
+    ACCESS_TOKEN_SESSION_KEY,
+    identity_from_claims,
+    security_context_from_identity,
+)
+from ads.session_binder import SessionBinder
 from ads_commons.engine import (
     Abort,
     AckResponse,
@@ -13,10 +20,18 @@ from ads_commons.engine import (
     OpenAiStreamAuthentication,
     OpenAiStreamOptions,
 )
-from ads_commons.preferences import ModelInfo, ModelList, ModelPatch, ModelSummary, ModelWrite
+from ads_commons.preferences import (
+    ModelInfo,
+    ModelList,
+    ModelPatch,
+    ModelSummary,
+    ModelTypeList,
+    ModelWrite,
+)
 from ads_commons.security import InvalidAccessToken, SecurityContext
 
 USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+USER_ACCESS_TOKEN = "user-access-token"
 OTHER_USER_ID = uuid.UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 ENGINE_TOKEN = "engine-acknowledge-jwt"
 STORED_BEARER = "sk-stored-secret"
@@ -70,6 +85,9 @@ class FakePreferences:
         )
         self.models[model_id] = info
         return info
+
+    async def list_model_types(self) -> ModelTypeList:
+        return ModelTypeList(types=["openai-stream"])
 
     async def list_models(self) -> ModelList:
         return ModelList(
@@ -167,18 +185,121 @@ class FakeAuthenticator:
         )
 
 
-def login(client: TestClient, sub: uuid.UUID = USER_ID, roles: list[str] | None = None) -> None:
-    client.set_session_data(
-        {
-            "identity": {
-                "sub": str(sub),
-                "name": "Alice Operator",
-                "roles": roles if roles is not None else ["user"],
-                "email": "alice@example.com",
-            },
-            "access_token": "user-access-token",
+class FakeOidcVerifier:
+    def __init__(self) -> None:
+        self.extra_claims: dict[str, dict[str, Any]] = {}
+
+    def verified_claims(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+        verify_exp: bool = True,
+    ) -> dict[str, Any]:
+        del audience
+        if not token.strip():
+            raise InvalidAccessToken("token is required")
+        claims = self._claims_for(token)
+        if nonce is not None and claims.get("nonce") != nonce:
+            raise InvalidAccessToken("nonce mismatch")
+        exp = claims.get("exp")
+        if verify_exp and isinstance(exp, int | float) and float(exp) < time.time():
+            raise InvalidAccessToken("expired")
+        return claims
+
+    def decode(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+    ) -> Any:
+        try:
+            return identity_from_claims(
+                self.verified_claims(token, nonce=nonce, audience=audience),
+                "ads",
+            )
+        except ValueError as exc:
+            raise InvalidAccessToken(str(exc)) from exc
+
+    def authenticate(self, token: str, *, audience: str | None = None) -> SecurityContext:
+        return security_context_from_identity(
+            self.decode(token, audience=audience)
+        ).with_access_token(token)
+
+    def _claims_for(self, token: str) -> dict[str, Any]:
+        if token in self.extra_claims:
+            return dict(self.extra_claims[token])
+        now = int(time.time())
+        sub = str(USER_ID)
+        roles = ["user"]
+        if token.startswith("user:"):
+            parts = token.split(":", 2)
+            if len(parts) == 3:
+                sub = parts[1]
+                roles = [item for item in parts[2].split(",") if item]
+        elif token not in {USER_ACCESS_TOKEN, "id-token"}:
+            raise InvalidAccessToken("unknown token")
+        return {
+            "sub": sub,
+            "name": "Alice Operator",
+            "email": "alice@example.com",
+            "azp": "ads",
+            "sid": f"sid-{sub}",
+            "exp": now + 3600,
+            "iat": now,
+            "iss": "http://keycloak.test/realms/ads",
+            "aud": "ads",
+            "realm_access": {"roles": roles},
         }
+
+
+class FakeTokenRefresher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.response: dict[str, Any] = {
+            "access_token": "user-access-token-rotated",
+            "refresh_token": "refresh-2",
+        }
+        self.error: Exception | None = None
+
+    async def refresh_tokens(self, refresh_token: str) -> dict[str, Any]:
+        self.calls.append(refresh_token)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
+
+class _NoRefresh:
+    async def refresh_tokens(self, refresh_token: str) -> dict[str, Any]:
+        del refresh_token
+        raise AssertionError("OIDC refresh should not run")
+
+
+def _unused_session_factory() -> Any:
+    raise AssertionError("refresh token store should not open")
+
+
+def attach_fake_session_binder(
+    app: Any, verifier: FakeOidcVerifier | None = None
+) -> FakeOidcVerifier:
+    oidc_verifier = verifier or FakeOidcVerifier()
+    app.state.session_binder = SessionBinder(
+        oidc_verifier,  # type: ignore[arg-type]
+        _NoRefresh(),
+        _unused_session_factory,
+        "ads",
     )
+    return oidc_verifier
+
+
+def login(client: TestClient, sub: uuid.UUID = USER_ID, roles: list[str] | None = None) -> None:
+    if sub == USER_ID and (roles is None or roles == ["user"]):
+        token = USER_ACCESS_TOKEN
+    else:
+        token = f"user:{sub}:{','.join(roles or [])}"
+    client.set_session_data({ACCESS_TOKEN_SESSION_KEY: token})
 
 
 def headers(token: str = ENGINE_TOKEN) -> list[tuple[str, bytes]]:
