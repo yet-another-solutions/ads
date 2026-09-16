@@ -15,6 +15,7 @@
   --sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --rail: 232px;
+  --plate: 52px;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -37,8 +38,11 @@ a { color: inherit; }
   background: var(--side);
   border-right: 1px solid var(--line);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto 1fr auto;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 .brand {
   height: 44px;
@@ -47,41 +51,70 @@ a { color: inherit; }
   gap: 8px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
+  min-width: 0;
+  overflow: hidden;
 }
 .mark { width: 18px; color: var(--accent); flex: none; }
-.brand b { font-weight: 600; letter-spacing: 0.04em; font-size: 12px; }
-.brand code { margin-left: auto; color: var(--faint); font: 10px var(--mono); }
+.brand b { font-weight: 600; letter-spacing: 0.04em; font-size: 12px; flex: none; }
+.brand code {
+  margin-left: auto;
+  color: var(--faint);
+  font: 10px var(--mono);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .search-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 26px;
-  gap: 6px;
-  align-items: center;
   padding: 8px 10px;
+  min-width: 0;
 }
-.search-row input[type=search] {
-  width: 100%;
+.search-box {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
-  padding: 6px 8px;
-  outline: none;
 }
-.search-row input[type=search]:focus { border-color: var(--accent); }
+.search-box:focus-within { border-color: var(--accent); }
+.search-box input[type=search] {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: transparent;
+  border: 0;
+  padding: 6px 4px 6px 8px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.search-box input[type=search]::-webkit-search-decoration,
+.search-box input[type=search]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
 .icon-plus {
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
   border-radius: 4px;
   color: var(--muted);
   cursor: pointer;
   padding: 0;
   line-height: 1;
+  flex: none;
 }
-.icon-plus:hover { color: var(--text); border-color: var(--accent); }
+.icon-plus:hover,
+.icon-plus:focus-visible {
+  color: var(--accent);
+  outline: none;
+  text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 85%, transparent);
+}
+.search-box .icon-plus { margin-right: 2px; }
 
-.projects { overflow: auto; padding: 4px 8px 12px; }
+.projects { overflow: auto; padding: 4px 8px 12px; min-width: 0; }
 .projects-head {
   display: flex;
   align-items: center;
@@ -92,13 +125,15 @@ a { color: inherit; }
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  min-width: 0;
 }
 .projects-head .icon-plus { margin-left: auto; }
-.project { margin-bottom: 6px; }
+.project { margin-bottom: 6px; min-width: 0; }
 .project-head {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 .project-name {
   display: flex;
@@ -106,6 +141,7 @@ a { color: inherit; }
   flex: 1;
   align-items: center;
   gap: 6px;
+  overflow: hidden;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -117,8 +153,14 @@ a { color: inherit; }
   text-transform: uppercase;
   cursor: pointer;
 }
-.project-name .chev { margin-left: auto; color: var(--faint); font-weight: 400; }
-.sessions { border-left: 1px solid var(--line); margin: 0 0 0 12px; padding-left: 4px; }
+.project-name .label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-name .chev { margin-left: 4px; color: var(--faint); font-weight: 400; flex: none; }
+.sessions { border-left: 1px solid var(--line); margin: 0 0 0 12px; padding-left: 4px; min-width: 0; }
 .session {
   display: flex;
   align-items: center;
@@ -129,6 +171,8 @@ a { color: inherit; }
   border-radius: 4px;
   margin: 1px 0;
   min-height: 28px;
+  min-width: 0;
+  overflow: hidden;
 }
 .session:hover { background: var(--surface); color: var(--text); }
 .session.active {
@@ -136,7 +180,13 @@ a { color: inherit; }
   color: var(--text);
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.session .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
 .session .running {
   margin-left: auto;
   width: 6px;
@@ -151,9 +201,12 @@ a { color: inherit; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 0 10px;
   border-top: 1px solid var(--line);
-  min-height: 52px;
+  height: var(--plate);
+  min-height: var(--plate);
+  min-width: 0;
+  overflow: hidden;
 }
 .avatar {
   width: 26px;
@@ -166,9 +219,23 @@ a { color: inherit; }
   color: var(--accent);
   flex: none;
 }
-.identity { min-width: 0; flex: 1; }
-.identity b { display: block; font-size: 12px; font-weight: 600; }
-.identity small { display: block; color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity { min-width: 0; flex: 1; overflow: hidden; }
+.identity b {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.identity small {
+  display: block;
+  color: var(--faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .gear {
   width: 28px;
   height: 28px;
@@ -177,6 +244,7 @@ a { color: inherit; }
   border-radius: 4px;
   color: var(--muted);
   cursor: pointer;
+  flex: none;
 }
 .gear:hover { color: var(--text); border-color: var(--accent); }
 
@@ -297,8 +365,9 @@ html { color-scheme: dark; }
 
 .composer-wrap {
   border-top: 1px solid var(--line);
-  padding: 10px 16px 14px;
+  padding: 7px 16px 8px;
   background: var(--bg);
+  min-height: var(--plate);
 }
 .composer {
   display: grid;
