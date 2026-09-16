@@ -40,6 +40,21 @@ def test_authenticated_shell_renders_threadline(client: TestClient) -> None:
     assert 'id="session-tree"' in response.text
 
 
+def test_rail_keeps_plus_and_identity_inside_the_rail(client: TestClient) -> None:
+    login(client)
+    project = _create_project(client, name="longprojectnamethatmustellipsis")
+    _create_session(client, project, name="verylongsessionnamethatmustellipsis")
+    page = client.get("/")
+    assert page.status_code == 200
+    assert 'class="search-box"' in page.text
+    search_new = page.text.split('class="icon-plus search-new"', 1)[1].split("</button>", 1)[0]
+    assert "hx-get" not in search_new
+    assert '<span class="label">longprojectnamethatmustellipsis</span>' in page.text
+    assert '<span class="name">verylongsessionnamethatmustellipsis</span>' in page.text
+    assert 'id="open-settings"' in page.text
+    assert "--plate: 52px" in (client.get("/static/ads.css").text)
+
+
 def test_shell_is_visible_without_the_user_role(client: TestClient) -> None:
     login(client, roles=[])
     response = client.get("/")

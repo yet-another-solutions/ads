@@ -8,14 +8,15 @@
     <code>threadline</code>
   </header>
   <div class="search-row">
-    <input type="search" placeholder="Search sessions" aria-label="Search sessions" name="q"
-           value="{{ q or '' }}"
-           hx-get="/"
-           hx-trigger="input changed delay:250ms, search"
-           hx-target="#session-tree"
-           hx-swap="outerHTML">
-    <button class="icon-plus search-new" type="button" aria-label="New session"
-            hx-get="/dialogs/new-session" hx-target="#dialog-host" hx-swap="innerHTML">+</button>
+    <div class="search-box">
+      <input type="search" placeholder="Search sessions" aria-label="Search sessions" name="q"
+             value="{{ q or '' }}"
+             hx-get="/"
+             hx-trigger="input changed delay:250ms, search"
+             hx-target="#session-tree"
+             hx-swap="outerHTML">
+      <button class="icon-plus search-new" type="button" aria-label="New session">+</button>
+    </div>
   </div>
   <nav class="projects scroll" aria-label="Projects and sessions">
     <div class="projects-head">Projects
@@ -27,7 +28,7 @@
       <div class="project-head">
         <button class="project-name" type="button"
                 hx-get="/projects/{{ project.id }}" hx-target="#main-pane" hx-swap="outerHTML"
-                hx-push-url="true">{{ project.name }} <span class="chev">⌄</span></button>
+                hx-push-url="true"><span class="label">{{ project.name }}</span> <span class="chev">⌄</span></button>
         <button class="icon-plus project-new" type="button"
                 aria-label="New session in {{ project.name }}"
                 hx-get="/dialogs/new-session?project_id={{ project.id }}"
