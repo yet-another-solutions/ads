@@ -2,17 +2,39 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 from litestar import Litestar
 from litestar.testing import TestClient
+from sqlalchemy import Engine
 
-from ads.app import build_session_config, create_app
+from ads.app import build_session_config, create_app, create_schema
 from ads.config import Settings, load_settings
+from ads.db import create_db_engine
+from ads.identity import Identity
 from ads.logconfig import configure_logging
+from ads_commons_beans import JwtVerifier
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.service import PolicyService
 from tests.policy import DirectPolicyClient, policy_service
+from tests.threadline_fakes import (
+    FakeAuthenticator,
+    FakePreferences,
+    FakeTokens,
+    RecordingKafka,
+)
+
+
+class FakeOidcVerifier:
+    def decode(
+        self,
+        token: str,
+        *,
+        nonce: str | None = None,
+        audience: str | None = None,
+    ) -> Identity:
+        raise AssertionError("unit tests must not decode an OIDC token")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -43,18 +65,68 @@ def settings(tmp_path: Path) -> Settings:
         keycloak_role="user",
         session_secret="test-session-secret-32b!",
         public_base_url="http://testserver",
-        data_dir=tmp_path / "data",
         tls_cert_path=cert,
         tls_key_path=key,
         tls_ca_bundle=None,
         bind_host="127.0.0.1",
         port=8080,
+        database_url="sqlite:///:memory:",
+        kafka_bootstrap_servers="",
     )
 
 
 @pytest.fixture
-def app(settings: Settings) -> Litestar:
-    return create_app(settings)
+def db_engine(settings: Settings) -> Iterator[Engine]:
+    engine = create_db_engine(settings.database_url)
+    create_schema(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def preferences() -> FakePreferences:
+    return FakePreferences()
+
+
+@pytest.fixture
+def kafka() -> RecordingKafka:
+    return RecordingKafka()
+
+
+@pytest.fixture
+def tokens() -> FakeTokens:
+    return FakeTokens()
+
+
+@pytest.fixture
+def authenticator() -> FakeAuthenticator:
+    return FakeAuthenticator()
+
+
+@pytest.fixture
+def oidc_verifier() -> JwtVerifier:
+    return cast(JwtVerifier, FakeOidcVerifier())
+
+
+@pytest.fixture
+def app(
+    settings: Settings,
+    db_engine: Engine,
+    preferences: FakePreferences,
+    kafka: RecordingKafka,
+    tokens: FakeTokens,
+    authenticator: FakeAuthenticator,
+    oidc_verifier: JwtVerifier,
+) -> Litestar:
+    return create_app(
+        settings,
+        engine=db_engine,
+        preferences=preferences,
+        kafka=kafka,
+        tokens=tokens,
+        jwt_verifier=authenticator,
+        oidc_verifier=oidc_verifier,
+    )
 
 
 @pytest.fixture

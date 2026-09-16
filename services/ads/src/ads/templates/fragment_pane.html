@@ -1,0 +1,4 @@
+{% include "partials/main_pane.html" %}
+{% with oob = true %}{% include "partials/rail.html" %}{% endwith %}
+{% with oob = true %}{% include "partials/composer.html" %}{% endwith %}
+<div id="dialog-host" hx-swap-oob="true"></div>

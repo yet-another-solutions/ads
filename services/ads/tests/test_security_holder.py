@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import pytest
-from litestar.exceptions import NotAuthorizedException
 
-from ads.hello.service import HelloService
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AuthenticationRequired, require_role
 from ads_commons.security import SecurityContextHolder as CommonsHolder
+
+
+class _MutatingService:
+    """Stand-in for any ads service that mutates on behalf of a user."""
+
+    @require_role("user")
+    def touch(self) -> str:
+        return "touched"
 
 
 def _ctx(*roles: str) -> SecurityContext:
@@ -14,7 +21,7 @@ def _ctx(*roles: str) -> SecurityContext:
 
 
 def test_require_without_bind_is_unauthorized() -> None:
-    with pytest.raises(NotAuthorizedException):
+    with pytest.raises(AuthenticationRequired):
         SecurityContextHolder.require()
 
 
@@ -32,11 +39,13 @@ def test_capture_from_live_session_when_holder_empty() -> None:
             "name": "Alice",
             "roles": ["user"],
             "email": "alice@example.com",
-        }
+        },
+        "access_token": "user-access-token",
     }
     captured = SecurityContextHolder.capture(session)
     assert captured.subject == "alice"
     assert captured.has_role("user")
+    assert captured.access_token == "user-access-token"
 
 
 def test_capture_prefers_holder_over_session() -> None:
@@ -64,12 +73,12 @@ def test_detached_picks_session_and_stores_in_work_context() -> None:
     }
     with SecurityContextHolder.detached(session) as context:
         assert SecurityContextHolder.require() is context
-        assert HelloService().press_button() == "button was pressed"
+        assert _MutatingService().touch() == "touched"
     assert SecurityContextHolder.get() is None
 
 
 def test_detached_without_session_or_holder_is_unauthorized() -> None:
-    with pytest.raises(NotAuthorizedException):
+    with pytest.raises(AuthenticationRequired):
         with SecurityContextHolder.detached():
             raise AssertionError("must not enter")
 

@@ -35,11 +35,5 @@ levels exist, not whether ADS can be installed: see ads.sandboxAvailable.
 {{- if not (lookup "v1" "Service" $pgNs $pgSvc) -}}
 {{- fail (printf "ADS audit requires PostgreSQL Service %s/%s for the journal" $pgNs $pgSvc) -}}
 {{- end -}}
-{{- if and .Values.persistence.enabled (not .Values.persistence.pv.enabled) .Values.persistence.storageClass -}}
-{{- $sc := lookup "storage.k8s.io/v1" "StorageClass" "" .Values.persistence.storageClass -}}
-{{- if not $sc -}}
-{{- fail (printf "ADS requires StorageClass %s" .Values.persistence.storageClass) -}}
-{{- end -}}
-{{- end -}}
 {{- end -}}
 {{- end -}}

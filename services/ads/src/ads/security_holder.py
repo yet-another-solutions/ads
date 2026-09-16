@@ -5,15 +5,13 @@ from contextlib import contextmanager
 from contextvars import Token
 from typing import Any
 
-from litestar.exceptions import NotAuthorizedException
-
-from ads.identity import identity_from_session, security_context_from_identity
+from ads.identity import security_context_from_session
 from ads_commons.security import AuthenticationRequired, SecurityContext
 from ads_commons.security import SecurityContextHolder as CommonsHolder
 
 
 class SecurityContextHolder:
-    """HTTP-facing holder. Maps missing context to Litestar 401."""
+    """HTTP-facing holder. Capture may fall back to the session identity."""
 
     @staticmethod
     def get() -> SecurityContext | None:
@@ -21,10 +19,7 @@ class SecurityContextHolder:
 
     @staticmethod
     def require() -> SecurityContext:
-        try:
-            return CommonsHolder.require()
-        except AuthenticationRequired as exc:
-            raise NotAuthorizedException(detail=exc.detail) from exc
+        return CommonsHolder.require()
 
     @staticmethod
     def set(context: SecurityContext | None) -> Token[SecurityContext | None]:
@@ -47,10 +42,10 @@ class SecurityContextHolder:
         if context is not None:
             return context
         if session is not None:
-            identity = identity_from_session(session)
-            if identity is not None:
-                return security_context_from_identity(identity)
-        raise NotAuthorizedException(detail="authentication required")
+            from_session = security_context_from_session(session)
+            if from_session is not None:
+                return from_session
+        raise AuthenticationRequired()
 
     @staticmethod
     @contextmanager

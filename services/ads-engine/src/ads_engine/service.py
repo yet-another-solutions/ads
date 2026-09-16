@@ -2,30 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
-from typing import Protocol
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 import structlog
 
 from ads_commons.engine import (
+    Abort,
     Acknowledge,
+    AckResponse,
     AssistantMessage,
     EngineOutput,
     EngineRequest,
-    ErrorOutput,
     Finish,
     PartialResponse,
     Ping,
     Reasoning,
-    decode_request,
-    peek_request_ids,
+    authorization_headers,
 )
 from ads_commons.security import (
-    InvalidAccessToken,
     SecurityContext,
     SecurityContextHolder,
+    TokenExchangeError,
+    require_caller,
 )
 from ads_engine.chat import ChatStreamer, StreamDelta
+from ads_engine.config import Settings
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
@@ -33,12 +35,32 @@ log = structlog.get_logger("ads_engine")
 OPENAI_ATTEMPTS = 3
 
 
+class SessionAlreadyActive(Exception):
+    def __init__(self) -> None:
+        super().__init__("session already active")
+
+
+class AckTimedOut(Exception):
+    def __init__(self) -> None:
+        super().__init__("ack-response timed out")
+
+
+class NoPartialResponse(Exception):
+    def __init__(self) -> None:
+        super().__init__("no partial-response")
+
+
 class OutputPublisher(Protocol):
-    async def publish(self, session_id: uuid.UUID, message: EngineOutput) -> None: ...
+    async def publish(
+        self,
+        session_id: uuid.UUID,
+        message: EngineOutput,
+        headers: Sequence[tuple[str, bytes]] | None = None,
+    ) -> None: ...
 
 
-class TokenAuthenticator(Protocol):
-    def authenticate(self, token: str) -> SecurityContext: ...
+class TokenMinter(Protocol):
+    def mint(self, audience: str) -> SecurityContext: ...
 
 
 class EngineService:
@@ -47,89 +69,100 @@ class EngineService:
         store: ActiveSessionStore,
         publisher: OutputPublisher,
         chat: ChatStreamer,
-        authenticator: TokenAuthenticator,
-        ping_interval_seconds: float,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        tokens: TokenMinter,
+        settings: Settings,
     ) -> None:
         self._store = store
         self._publisher = publisher
         self._chat = chat
-        self._authenticator = authenticator
-        self._ping_interval_seconds = ping_interval_seconds
-        self._sleep = sleep
+        self._ping_interval_seconds = settings.ping_interval_seconds
+        self._ack_timeout_seconds = settings.ack_timeout_seconds
+        self._tokens = tokens
+        self._ack_audience = settings.ack_audience
+        self.allowed_callers = frozenset(settings.allowed_callers)
+        self._ack_waiters: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Event]] = {}
+        self._runs: dict[uuid.UUID, tuple[uuid.UUID, asyncio.Task[Any]]] = {}
+        self._aborted: set[uuid.UUID] = set()
 
-    async def handle_raw(self, raw: bytes) -> None:
-        ids = peek_request_ids(raw)
-        if ids is None:
-            return
-        session_id, message_id = ids
-        try:
-            request = decode_request(raw)
-            _validate_request(request)
-        except Exception as exc:
-            await self._publisher.publish(
-                session_id,
-                ErrorOutput(
-                    session_id=session_id,
-                    message_id=message_id,
-                    text=f"invalid request: {exc}",
-                ),
-            )
-            return
-        await self.handle(request)
-
+    @require_caller()
     async def handle(self, request: EngineRequest) -> None:
-        try:
-            context = self._authenticator.authenticate(request.authorization.token)
-        except InvalidAccessToken as exc:
-            await self._publisher.publish(
-                request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text=f"invalid authorization: {exc.detail}",
-                ),
-            )
-            return
+        _validate_request(request)
         claimed = await self._store.claim(request.session_id, request.message_id)
         if not claimed:
-            await self._publisher.publish(
-                request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text="session already active",
-                ),
-            )
-            return
-        ping_task = asyncio.create_task(self._ping(request.session_id))
+            raise SessionAlreadyActive()
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("engine handle requires a running task")
+        self._runs[request.session_id] = (request.message_id, task)
+        ping_task: asyncio.Task[None] | None = None
         try:
-            with SecurityContextHolder.bound(context):
+            minted = self._tokens.mint(self._ack_audience)
+            token = minted.access_token
+            if not token:
+                raise TokenExchangeError("exchanged token is missing")
+            minted = minted.with_attributes(
+                session_id=request.session_id,
+                message_id=request.message_id,
+            )
+            waiter = asyncio.Event()
+            self._ack_waiters[request.session_id] = (request.message_id, waiter)
+            ping_task = asyncio.create_task(self._ping(request.session_id))
+            with SecurityContextHolder.bound(minted):
                 await self._publisher.publish(
                     request.session_id,
                     Acknowledge(session_id=request.session_id, message_id=request.message_id),
+                    headers=authorization_headers(token),
                 )
-                await self._run_model(request)
+                await self._wait_for_ack_response(request.session_id, waiter)
+                self._ack_waiters.pop(request.session_id, None)
+                last_order = await self._run_model(request)
                 await _cancel(ping_task)
                 await self._publisher.publish(
                     request.session_id,
-                    Finish(session_id=request.session_id),
+                    Finish(session_id=request.session_id, last_order=last_order),
                 )
-        except Exception as exc:
-            await _cancel(ping_task)
-            await self._publisher.publish(
-                request.session_id,
-                ErrorOutput(
-                    session_id=request.session_id,
-                    message_id=request.message_id,
-                    text=str(exc),
-                ),
-            )
+        except asyncio.CancelledError:
+            if request.session_id not in self._aborted:
+                raise
         finally:
-            await _cancel(ping_task)
+            self._runs.pop(request.session_id, None)
+            self._aborted.discard(request.session_id)
+            self._ack_waiters.pop(request.session_id, None)
+            if ping_task is not None:
+                await _cancel(ping_task)
             await self._store.release(request.session_id)
 
-    async def _run_model(self, request: EngineRequest) -> None:
+    async def handle_ack_response(self, ack: AckResponse) -> None:
+        pending = self._ack_waiters.get(ack.session_id)
+        if pending is None:
+            return
+        message_id, waiter = pending
+        if message_id != ack.message_id:
+            return
+        waiter.set()
+
+    async def handle_abort(self, abort: Abort) -> None:
+        run = self._runs.get(abort.session_id)
+        if run is None:
+            return
+        message_id, task = run
+        if message_id != abort.message_id:
+            return
+        self._aborted.add(abort.session_id)
+        current = asyncio.current_task()
+        task.cancel()
+        if task is current:
+            return
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _wait_for_ack_response(self, session_id: uuid.UUID, waiter: asyncio.Event) -> None:
+        try:
+            await asyncio.wait_for(waiter.wait(), timeout=self._ack_timeout_seconds)
+        except TimeoutError:
+            log.info("ack_response_timeout", session_id=str(session_id))
+            raise AckTimedOut() from None
+
+    async def _run_model(self, request: EngineRequest) -> int:
         order = 0
         emitted_partial = False
         last_error: Exception | None = None
@@ -142,7 +175,7 @@ class EngineService:
                     )
                     order += 1
                     emitted_partial = True
-                return
+                break
             except Exception as exc:
                 last_error = exc
                 if emitted_partial:
@@ -152,11 +185,17 @@ class EngineService:
                     session_id=str(request.session_id),
                     attempt=attempt + 1,
                 )
-        raise RuntimeError(str(last_error) if last_error is not None else "openai request failed")
+        else:
+            raise RuntimeError(
+                str(last_error) if last_error is not None else "openai request failed"
+            )
+        if not emitted_partial:
+            raise NoPartialResponse()
+        return order - 1
 
     async def _ping(self, session_id: uuid.UUID) -> None:
         while True:
-            await self._sleep(self._ping_interval_seconds)
+            await asyncio.sleep(self._ping_interval_seconds)
             await self._publisher.publish(session_id, Ping(session_id=session_id))
 
 
@@ -187,11 +226,9 @@ def _partial(session_id: uuid.UUID, order: int, delta: StreamDelta) -> PartialRe
 def _validate_request(request: EngineRequest) -> None:
     if not request.user_input:
         raise ValueError("user_input is required")
-    if not request.model.name.strip():
-        raise ValueError("model.name is required")
+    if not request.model.options.model_name.strip():
+        raise ValueError("model.options.model-name is required")
     if not request.model.url.strip():
         raise ValueError("model.url is required")
     if not request.model.authentication.openai_bearer.token.strip():
         raise ValueError("model authentication token is required")
-    if not request.authorization.token.strip():
-        raise ValueError("authorization.token is required")

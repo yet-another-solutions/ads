@@ -97,13 +97,47 @@ engine:
     outputTopic: ads.engine.output
     consumerGroup: ads-engine
   database:
-    url: sqlite:////tmp/ads-engine.db
+    url: postgresql+psycopg://ads_engine:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_engine
   keycloak:
     wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
     issuer: https://keycloak.interlab/realms/ads
     audience: ads-engine
     clientId: ads
+    allowedCallers:
+      - ads
+    ackAudience: ads
+    allowedAzp: ads-engine
   pingIntervalSeconds: 10
+  ackTimeoutSeconds: 10
+
+# ads consumes ads.engine.output and produces ads.engine.request.
+kafka:
+  bootstrapServers: kafka.kafka.svc.cluster.local:9092
+  requestTopic: ads.engine.request
+  outputTopic: ads.engine.output
+  consumerGroup: ads
+
+preferences:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-preferences
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  baseUrl: ""
+  audience: ads-preferences
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-preferences
+    clientId: ads
+    allowedCallers:
+      - ads
+  database:
+    url: postgresql+psycopg://ads_preferences:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_preferences
+  tls:
+    serviceSecretName: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -161,20 +195,10 @@ keycloak:
 secrets:
   keycloakClientSecret: change-me
   sessionSecret: change-me-change-me-32b
+  engineKeycloakClientSecret: change-me
   policyApiToken: change-me-change-me-32b
   auditApiToken: change-me-change-me-32b
   supervisorApiToken: change-me-change-me-32b
-
-persistence:
-  enabled: true
-  storageClass: local-path
-  size: 1Gi
-  accessMode: ReadWriteOnce
-  mountPath: /data
-  pv:
-    enabled: false
-    hostPath: /storage/ads
-    name: ""
 
 nodes:
   application:

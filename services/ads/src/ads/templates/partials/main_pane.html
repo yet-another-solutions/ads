@@ -1,0 +1,41 @@
+<div id="main-pane" class="main-pane">
+  {% if transcript and transcript.run %}
+  <div class="runbar">
+    <i class="pulse" aria-hidden="true"></i>
+    <span>run {{ transcript.run.message_id }} · {{ transcript.run.status }}</span>
+    <span class="eta">{{ transcript.run.status | upper }}</span>
+  </div>
+  {% endif %}
+  <section class="transcript scroll" id="transcript">
+    {% if transcript %}
+    {% for turn in transcript.turns %}
+    <article class="turn{% if turn.parts | selectattr('live') | list %} live{% endif %}"
+             {% if turn.entry_id %}id="entry-{{ turn.entry_id }}" data-entry-id="{{ turn.entry_id }}"{% endif %}>
+      <div class="meta">
+        <span class="who">{{ turn.who }}</span>
+        {% if turn.at %}<time datetime="{{ turn.at.isoformat() }}">{{ turn.at.strftime('%H:%M') }}</time>{% endif %}
+      </div>
+      {% for part in turn.parts %}
+      {% if part.kind == 'reasoning' %}
+      <details class="reasoning"{% if part.live %} open{% endif %}>
+        <summary>Reasoning</summary>
+        <p>{{ part.text }}</p>
+      </details>
+      {% elif part.role == 'user' %}
+      <p class="user">{{ part.text }}</p>
+      {% else %}
+      <p>{{ part.text }}</p>
+      {% endif %}
+      {% endfor %}
+    </article>
+    {% endfor %}
+    {% if not transcript.turns %}
+    <p class="note">No messages yet. Pick a model and send the first turn.</p>
+    {% endif %}
+    {% elif project %}
+    <p class="note">{{ project.name }} — pick a session in the rail, or add one with +.</p>
+    {% else %}
+    <p class="note">No session selected. Pick one in the rail, or create a project.</p>
+    {% endif %}
+  </section>
+</div>

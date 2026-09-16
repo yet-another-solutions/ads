@@ -1,0 +1,75 @@
+<aside class="side" id="session-tree"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <header class="brand">
+    <svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M6 24V8l10-5 10 5v16l-10 5-10-5Z" stroke="currentColor" stroke-width="2"/>
+      <path d="m10 20 6-10 6 10M12 17h8" stroke="currentColor" stroke-width="2"/>
+    </svg>
+    <b>ADS</b>
+    <code>threadline</code>
+  </header>
+  <div class="search-row">
+    <div class="search-box">
+      <input type="search" placeholder="Search sessions" aria-label="Search sessions" name="q"
+             value="{{ q or '' }}"
+             hx-get="/"
+             hx-trigger="input changed delay:250ms, search"
+             hx-target="#session-tree"
+             hx-swap="outerHTML">
+      <button class="icon-plus search-new" type="button" aria-label="New session">+</button>
+    </div>
+  </div>
+  <nav class="projects scroll" aria-label="Projects and sessions">
+    <div class="projects-head">Projects
+      <button class="icon-plus projects-new" type="button" aria-label="New project"
+              hx-get="/dialogs/new-project" hx-target="#dialog-host" hx-swap="innerHTML">+</button>
+    </div>
+    {% for project in projects %}
+    <section class="project" data-project-id="{{ project.id }}">
+      <div class="project-head">
+        <button class="project-name" type="button"
+                hx-get="/projects/{{ project.id }}" hx-target="#main-pane" hx-swap="outerHTML"
+                hx-push-url="true"><span class="label">{{ project.name }}</span> <span class="chev">⌄</span></button>
+        <button class="icon-plus project-new" type="button"
+                aria-label="New session in {{ project.name }}"
+                hx-get="/dialogs/new-session?project_id={{ project.id }}"
+                hx-target="#dialog-host" hx-swap="innerHTML">+</button>
+      </div>
+      {% if project.sessions %}
+      <div class="sessions">
+        {% for session in project.sessions %}
+        <a class="session{% if active_session_id and session.id == active_session_id %} active{% endif %}"
+           href="/projects/{{ project.id }}/sessions/{{ session.id }}"
+           hx-get="/projects/{{ project.id }}/sessions/{{ session.id }}"
+           hx-target="#main-pane" hx-swap="outerHTML" hx-push-url="true">
+          <span class="name">{{ session.name }}</span>
+          {% if session.running %}<i class="running" title="Run in flight"></i>{% endif %}
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+    {% if not projects %}
+    <div class="empty-rail">
+      {% if q %}
+      <p class="rail-empty-note">No session matches “{{ q }}”.</p>
+      {% else %}
+      <p class="rail-empty-note">No projects yet.</p>
+      <button class="primary" type="button"
+              hx-get="/dialogs/new-project" hx-target="#dialog-host" hx-swap="innerHTML">
+        New project
+      </button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </nav>
+  <footer class="account">
+    <span class="avatar" aria-hidden="true">{{ initials }}</span>
+    <span class="identity">
+      <b>{{ identity.name }}</b>
+      <small>{{ identity.email or '' }}</small>
+    </span>
+    <button class="gear" id="open-settings" type="button" aria-haspopup="dialog"
+            hx-get="/settings" hx-target="#dialog-host" hx-swap="innerHTML">⚙</button>
+  </footer>
+</aside>

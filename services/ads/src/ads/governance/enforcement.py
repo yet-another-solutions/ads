@@ -7,9 +7,9 @@ from contextvars import ContextVar, Token
 from typing import Any, TypeVar
 
 import wrapt
-from litestar.exceptions import PermissionDeniedException
 
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AccessDenied
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
 from ads_policy.config import GovernanceSettings
@@ -76,7 +76,7 @@ class EnforcerHolder:
     def require() -> Enforcer:
         enforcer = _current.get()
         if enforcer is None:
-            raise PermissionDeniedException(detail="policy enforcement unavailable")
+            raise AccessDenied("policy enforcement unavailable")
         return enforcer
 
     @staticmethod
@@ -116,7 +116,7 @@ def require_permission(
             capability, _resource(wrapped, args, kwargs, resource_arg, resource)
         )
         if not decision.permitted:
-            raise PermissionDeniedException(detail=decision.message)
+            raise AccessDenied(decision.message)
         return wrapped(*args, **kwargs)
 
     return wrapper  # type: ignore[return-value]

@@ -38,10 +38,6 @@ spec:
             - secretRef:
                 name: {{ include "ads.fullname" . }}
           volumeMounts:
-            {{- if .Values.persistence.enabled }}
-            - name: data
-              mountPath: {{ .Values.persistence.mountPath }}
-            {{- end }}
             - name: tls
               mountPath: /certs
               readOnly: true
@@ -67,11 +63,6 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        {{- if .Values.persistence.enabled }}
-        - name: data
-          persistentVolumeClaim:
-            claimName: {{ include "ads.fullname" . }}
-        {{- end }}
         - name: tls
           secret:
             secretName: {{ include "ads.serviceSecretName" . }}

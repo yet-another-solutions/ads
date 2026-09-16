@@ -6,7 +6,10 @@ import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx2
@@ -28,11 +31,12 @@ def _base_env(
     key: Path,
     port: int,
     ca: Path | None = None,
+    keycloak_well_known_url: str = "https://kc/realms/ads/.well-known/openid-configuration",
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
         {
-            "ADS_KEYCLOAK_WELL_KNOWN_URL": "https://kc/realms/ads/.well-known/openid-configuration",
+            "ADS_KEYCLOAK_WELL_KNOWN_URL": keycloak_well_known_url,
             "ADS_KEYCLOAK_ISSUER": "https://kc/realms/ads",
             "ADS_KEYCLOAK_CLIENT_ID": "ads",
             "ADS_KEYCLOAK_CLIENT_SECRET": "secret",
@@ -42,7 +46,9 @@ def _base_env(
             "ADS_TLS_KEY_PATH": str(key),
             "ADS_BIND_HOST": "127.0.0.1",
             "ADS_PORT": str(port),
-            "ADS_DATA_DIR": str(tmp_path / "data"),
+            "ADS_DATABASE_URL": f"sqlite:///{tmp_path / 'ads.db'}",
+            "ADS_KAFKA_BOOTSTRAP_SERVERS": "",
+            "ADS_PREFERENCES_BASE_URL": "https://ads-preferences.invalid",
         }
     )
     if ca is None:
@@ -50,6 +56,32 @@ def _base_env(
     else:
         env["ADS_TLS_CA_BUNDLE"] = str(ca)
     return env
+
+
+@pytest.fixture
+def keycloak_well_known_url() -> Iterator[str]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            origin = f"http://127.0.0.1:{self.server.server_port}"
+            body = (f'{{"jwks_uri":"{origin}/certs","token_endpoint":"{origin}/token"}}').encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/.well-known/openid-configuration"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def _run_ads(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -98,14 +130,24 @@ def test_uvicorn_exits_on_garbage_ca_bundle(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not openssl_available(), reason="openssl required")
-def test_uvicorn_serves_https_health_then_exits(tmp_path: Path) -> None:
+def test_uvicorn_serves_https_health_then_exits(
+    tmp_path: Path,
+    keycloak_well_known_url: str,
+) -> None:
     ca_crt, server_crt, server_key = issue_tls(tmp_path)
     port = _free_port()
     log_path = tmp_path / "uvicorn.log"
     with log_path.open("w", encoding="utf-8") as log_file:
         proc = subprocess.Popen(
             [sys.executable, "-m", "ads"],
-            env=_base_env(tmp_path, cert=server_crt, key=server_key, port=port, ca=ca_crt),
+            env=_base_env(
+                tmp_path,
+                cert=server_crt,
+                key=server_key,
+                port=port,
+                ca=ca_crt,
+                keycloak_well_known_url=keycloak_well_known_url,
+            ),
             stdout=log_file,
             stderr=log_file,
             text=True,

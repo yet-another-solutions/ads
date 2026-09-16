@@ -1,0 +1,19 @@
+<dialog id="new-project" aria-labelledby="new-project-title">
+  <div class="dlg-head">
+    <h2 id="new-project-title">New project</h2>
+  </div>
+  <form class="fields" id="new-project-form" method="post" action="/projects"
+        hx-post="/projects" hx-target="#session-tree" hx-swap="outerHTML">
+    <label>Name
+      <input name="name" required autocomplete="off">
+    </label>
+    <label>Description
+      <input name="description" required autocomplete="off">
+    </label>
+    <p class="note">Both fields are required. v1 does not delete projects.</p>
+  </form>
+  <div class="dlg-foot">
+    <button class="ghost" type="button" data-close-dialog>Cancel</button>
+    <button class="primary" type="submit" form="new-project-form">Create</button>
+  </div>
+</dialog>

@@ -15,8 +15,9 @@ import httpx2
 import pytest
 import uvicorn
 
-from ads.app import create_app
+from ads.app import create_app, create_schema
 from ads.config import Settings
+from ads.db import create_db_engine
 from tests.certs import issue_tls, openssl_available
 
 docker_ok = shutil.which("docker") is not None
@@ -271,13 +272,12 @@ def _provision_realm(base: str, redirect_uri: str, verify: ssl.SSLContext) -> No
 
 @pytest.fixture(scope="module")
 def running_app(
-    keycloak_tls: KeycloakTls, tmp_path_factory: pytest.TempPathFactory
+    keycloak_tls: KeycloakTls,
 ) -> Iterator[str]:
     app_port = _free_port()
     public_base = f"https://127.0.0.1:{app_port}"
     verify = _ca_context(keycloak_tls.ca_crt)
     _provision_realm(keycloak_tls.base, f"{public_base}/auth/callback", verify)
-    data_dir = tmp_path_factory.mktemp("data")
     settings = Settings(
         keycloak_well_known_url=f"{keycloak_tls.base}/realms/{REALM}/.well-known/openid-configuration",
         keycloak_issuer=f"{keycloak_tls.base}/realms/{REALM}",
@@ -287,16 +287,17 @@ def running_app(
         keycloak_role="user",
         session_secret="integration-session-secret!",
         public_base_url=public_base,
-        data_dir=Path(data_dir),
         tls_cert_path=keycloak_tls.server_crt,
         tls_key_path=keycloak_tls.server_key,
         tls_ca_bundle=keycloak_tls.ca_crt,
         bind_host="127.0.0.1",
         port=app_port,
     )
+    db_engine = create_db_engine(settings.database_url)
+    create_schema(db_engine)
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(settings),
+            create_app(settings, engine=db_engine),
             host="127.0.0.1",
             port=app_port,
             ssl_certfile=str(keycloak_tls.server_crt),
@@ -322,7 +323,9 @@ def running_app(
 
 
 @pytest.mark.integration
-def test_keycloak_login_hello_world_and_button(running_app: str, keycloak_tls: KeycloakTls) -> None:
+def test_keycloak_login_shows_the_threadline_shell(
+    running_app: str, keycloak_tls: KeycloakTls
+) -> None:
     with _http_client(verify=_ca_context(keycloak_tls.ca_crt)) as client:
         page = client.get(running_app + "/")
         assert page.status_code == 200
@@ -332,13 +335,12 @@ def test_keycloak_login_hello_world_and_button(running_app: str, keycloak_tls: K
         fields.setdefault("credentialId", "")
         fields["login"] = fields.get("login") or "Sign In"
         origin = f"{urlsplit(str(page.url)).scheme}://{urlsplit(str(page.url)).netloc}"
-        hello = client.post(
+        shell = client.post(
             action,
             data=fields,
             headers={"Origin": origin, "Referer": str(page.url)},
         )
-        assert hello.status_code == 200, hello.text[:800]
-        assert "hello world" in hello.text
-        pressed = client.post(running_app + "/hello/press", follow_redirects=True)
-        assert pressed.status_code == 200
-        assert "button was pressed" in pressed.text
+        assert shell.status_code == 200, shell.text[:800]
+        assert "<b>ADS</b>" in shell.text
+        assert "Projects" in shell.text
+        assert 'id="composer"' in shell.text

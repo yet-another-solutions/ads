@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-preferences
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-preferences
+data:
+  ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.preferences.keycloak.wellKnownUrl | quote }}
+  ADS_PREFERENCES_KEYCLOAK_ISSUER: {{ .Values.preferences.keycloak.issuer | quote }}
+  ADS_PREFERENCES_KEYCLOAK_AUDIENCE: {{ .Values.preferences.keycloak.audience | quote }}
+  ADS_PREFERENCES_KEYCLOAK_CLIENT_ID: {{ .Values.preferences.keycloak.clientId | quote }}
+  ADS_PREFERENCES_ALLOWED_CALLERS: {{ .Values.preferences.keycloak.allowedCallers | join "," | quote }}
+  ADS_PREFERENCES_BIND_HOST: "0.0.0.0"
+  ADS_PREFERENCES_PORT: {{ .Values.preferences.service.port | quote }}
+  ADS_PREFERENCES_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_PREFERENCES_TLS_KEY_PATH: "/certs/tls.key"
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}

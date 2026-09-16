@@ -12,6 +12,10 @@ nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 _SRC = (
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",
+    "libraries/ads-commons-beans/src",
+    "libraries/ads-commons-beans/tests",
+    "libraries/ads-commons-schema/src",
+    "libraries/ads-commons-schema/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-audit/src",
@@ -21,6 +25,8 @@ _SRC = (
     "services/ads-egress-controlplane/src",
     "services/ads-policy/src",
     "services/ads-policy/tests",
+    "services/ads-preferences/src",
+    "services/ads-preferences/tests",
     "services/ads-supervisor/src",
     "services/ads-supervisor/tests",
     "noxfile.py",
@@ -30,8 +36,11 @@ _PACKAGES = (
     "services/ads",
     "services/ads-engine",
     "libraries/ads-commons",
+    "libraries/ads-commons-beans",
+    "libraries/ads-commons-schema",
     "services/ads-audit",
     "services/ads-policy",
+    "services/ads-preferences",
     "services/ads-supervisor",
 )
 
@@ -83,8 +92,11 @@ def test(session: nox.Session) -> None:
 def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads", external=True)
     session.run("uv", "build", "--package", "ads-commons", external=True)
+    session.run("uv", "build", "--package", "ads-commons-beans", external=True)
+    session.run("uv", "build", "--package", "ads-commons-schema", external=True)
     session.run("uv", "build", "--package", "ads-engine", external=True)
     session.run("uv", "build", "--package", "ads-egress-controlplane", external=True)
     session.run("uv", "build", "--package", "ads-policy", external=True)
     session.run("uv", "build", "--package", "ads-audit", external=True)
+    session.run("uv", "build", "--package", "ads-preferences", external=True)
     session.run("uv", "build", "--package", "ads-supervisor", external=True)

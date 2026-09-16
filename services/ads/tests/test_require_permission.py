@@ -3,10 +3,10 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
 from ads.governance.enforcement import Enforcer, EnforcerHolder, require_permission
 from ads.security_holder import SecurityContextHolder
+from ads_commons.security import AccessDenied, AuthenticationRequired
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import Capability, Effect, IsolationLevel
@@ -43,13 +43,13 @@ def test_without_a_security_context_it_is_unauthorized(
     policy_client: DirectPolicyClient, audit: BufferedAuditSink
 ) -> None:
     with EnforcerHolder.bound(_enforcer(policy_client, audit)):
-        with pytest.raises(NotAuthorizedException):
+        with pytest.raises(AuthenticationRequired):
             _AgentTools().read_file("/workspace/src/app.py")
 
 
 def test_without_an_enforcer_it_fails_closed() -> None:
     with SecurityContextHolder.bound(security_context("user")):
-        with pytest.raises(PermissionDeniedException):
+        with pytest.raises(AccessDenied):
             _AgentTools().read_file("/workspace/src/app.py")
 
 
@@ -66,7 +66,7 @@ def test_a_denied_call_is_forbidden_and_says_nothing_useful(
 ) -> None:
     with SecurityContextHolder.bound(security_context("user")):
         with EnforcerHolder.bound(_enforcer(policy_client, audit)):
-            with pytest.raises(PermissionDeniedException) as denied:
+            with pytest.raises(AccessDenied) as denied:
                 _AgentTools().read_secret()
     assert denied.value.detail == GovernanceSettings().denied_message
     assert Capability.SECRET_READ.value not in denied.value.detail
@@ -80,7 +80,7 @@ def test_the_resource_comes_from_the_named_argument(
 ) -> None:
     with SecurityContextHolder.bound(security_context("user")):
         with EnforcerHolder.bound(_enforcer(policy_client, audit)):
-            with pytest.raises(PermissionDeniedException):
+            with pytest.raises(AccessDenied):
                 _AgentTools().read_file("/home/dev/other/.env")
     journalled(service)
     assert service_journal.events()[-1].resource == "/home/dev/other/.env"
@@ -120,7 +120,7 @@ def test_another_subject_cannot_use_the_run(
     enforcer = Enforcer(client=policy_client, run=run, audit=audit, attributes=ATTRIBUTES)
     with SecurityContextHolder.bound(security_context("user")):
         with EnforcerHolder.bound(enforcer):
-            with pytest.raises(PermissionDeniedException):
+            with pytest.raises(AccessDenied):
                 _AgentTools().read_file("/workspace/src/app.py")
     journalled(service)
     assert service_journal.events()[-1].rule_id == "run.subject"
@@ -134,7 +134,7 @@ def test_a_revoked_run_forbids_the_next_call(
     enforcer = Enforcer(client=policy_client, run=revoked, audit=audit, attributes=ATTRIBUTES)
     with SecurityContextHolder.bound(security_context("user")):
         with EnforcerHolder.bound(enforcer):
-            with pytest.raises(PermissionDeniedException):
+            with pytest.raises(AccessDenied):
                 _AgentTools().read_file("/workspace/src/app.py")
 
 
@@ -146,7 +146,7 @@ def test_an_answered_call_is_journalled_once(
     with SecurityContextHolder.bound(security_context("user")):
         with EnforcerHolder.bound(_enforcer(policy_client, audit)):
             tools.read_file("/workspace/src/app.py")
-            with pytest.raises(PermissionDeniedException):
+            with pytest.raises(AccessDenied):
                 tools.read_secret()
     assert audit.pending == ()
     assert journalled(service) == 2
@@ -158,5 +158,5 @@ def test_the_decorator_keeps_the_signature() -> None:
 
 def test_the_holder_is_empty_outside_the_binding() -> None:
     assert EnforcerHolder.get() is None
-    with pytest.raises(PermissionDeniedException):
+    with pytest.raises(AccessDenied):
         EnforcerHolder.require()

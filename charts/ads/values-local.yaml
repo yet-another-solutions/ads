@@ -50,10 +50,6 @@ egressControlplane:
     tag: local
     pullPolicy: Never
 
-# No StorageClass either, and nothing writes to /data yet.
-persistence:
-  enabled: false
-
 # A throwaway cluster has no Gateway API CRDs, and helm install fails outright on an
 # unknown kind rather than leaving the route inert. The serving certificates do not
 # depend on it, so the pods still come up with TLS; there is simply no way in from

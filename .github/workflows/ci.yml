@@ -39,9 +39,10 @@ jobs:
           - services/ads/Containerfile
           - services/ads-audit/Containerfile
           - services/ads-egress-controlplane/Containerfile
-          - services/ads-policy/Containerfile
-          - services/ads-supervisor/Containerfile
           - services/ads-engine/Containerfile
+          - services/ads-policy/Containerfile
+          - services/ads-preferences/Containerfile
+          - services/ads-supervisor/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Hadolint
@@ -64,18 +65,21 @@ jobs:
           - image: ads-egress-controlplane
             file: services/ads-egress-controlplane/Containerfile
             smoke: "import ads_egress_controlplane; print(ads_egress_controlplane.__version__)"
+          - image: ads-engine
+            file: services/ads-engine/Containerfile
+            smoke: "import ads_engine; print(ads_engine.__version__)"
           - image: ads-policy
             file: services/ads-policy/Containerfile
             smoke: "import ads_policy; print(ads_policy.__version__)"
           - image: ads-audit
             file: services/ads-audit/Containerfile
             smoke: "import ads_audit; print(ads_audit.__version__)"
+          - image: ads-preferences
+            file: services/ads-preferences/Containerfile
+            smoke: "import ads_preferences; print(ads_preferences.__version__)"
           - image: ads-supervisor
             file: services/ads-supervisor/Containerfile
             smoke: "import ads_supervisor; print(ads_supervisor.__version__)"
-          - image: ads-engine
-            file: services/ads-engine/Containerfile
-            smoke: "import ads_engine; print(ads_engine.__version__)"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -104,7 +108,9 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 5
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 6
+          test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 4
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
@@ -147,7 +153,7 @@ jobs:
           fi
           helm template ads charts/ads \
             --set supervisor.enabled=true --set supervisor.subject=alice >/tmp/ads-sup.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 6
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-sup.yaml)" -eq 7
           grep -q 'app.kubernetes.io/component: ads-supervisor' /tmp/ads-sup.yaml
           grep -q 'ADS_PLACEMENT: "cluster"' /tmp/ads-sup.yaml
           if helm template ads charts/ads --set supervisor.enabled=true >/tmp/ads-sup-bad.yaml; then
@@ -156,6 +162,22 @@ jobs:
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml
           grep -q 'app.kubernetes.io/component: ads-engine' /tmp/ads-cm.yaml
+          grep -q 'app.kubernetes.io/component: ads-preferences' /tmp/ads-cm.yaml
+          grep -q 'ADS_PREFERENCES_BASE_URL: "https://ads-preferences:8080"' /tmp/ads-cm.yaml
+          grep -q 'ADS_PREFERENCES_KEYCLOAK_AUDIENCE: "ads-preferences"' /tmp/ads-cm.yaml
+          grep -q 'ADS_PREFERENCES_TLS_CERT_PATH' /tmp/ads-cm.yaml
+          if grep -qE 'kind: PersistentVolume(Claim)?$' /tmp/ads-cm.yaml; then
+            echo 'PV/PVC must not be rendered' >&2
+            exit 1
+          fi
+          if grep -q 'ADS_DATA_DIR' /tmp/ads-cm.yaml; then
+            echo 'ADS_DATA_DIR must not be rendered' >&2
+            exit 1
+          fi
+          if awk '/^kind: HTTPRoute$/{p=1} p && /^kind: / && !/^kind: HTTPRoute$/{p=0} p && /ads-preferences/{found=1} END{exit found?0:1}' /tmp/ads-cm.yaml; then
+            echo 'ads-preferences must not have HTTPRoute' >&2
+            exit 1
+          fi
           grep -q 'ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"' /tmp/ads-cm.yaml
           grep -q 'ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-cm.yaml
           grep -q 'ADS_ENGINE_KEYCLOAK_AUDIENCE: "ads-engine"' /tmp/ads-cm.yaml
@@ -180,6 +202,7 @@ jobs:
             --set tls.serviceSecretName=byo-service \
             --set tls.policySecretName=byo-policy \
             --set tls.auditSecretName=byo-audit \
+            --set preferences.tls.serviceSecretName=byo-preferences \
             >/tmp/ads-byo.yaml
           if grep -q 'kind: Certificate' /tmp/ads-byo.yaml; then
             echo 'BYO template still issues Certificates' >&2
@@ -188,6 +211,7 @@ jobs:
           grep -q 'secretName: byo-service' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-policy' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-audit' /tmp/ads-byo.yaml
+          grep -q 'secretName: byo-preferences' /tmp/ads-byo.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-byo.yaml
           if helm template ads charts/ads --set tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
             echo 'BYO without secrets should fail' >&2
@@ -198,3 +222,4 @@ jobs:
             >/tmp/ads-ca.yaml
           grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
           grep -q 'ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
+          grep -q 'ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml

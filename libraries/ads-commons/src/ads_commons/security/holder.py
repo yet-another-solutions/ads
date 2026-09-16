@@ -17,6 +17,14 @@ class AuthenticationRequired(Exception):
         self.detail = detail
 
 
+class AccessDenied(Exception):
+    """The bound caller or role is not allowed for this operation."""
+
+    def __init__(self, detail: str = "access denied") -> None:
+        super().__init__(detail)
+        self.detail = detail
+
+
 class SecurityContextHolder:
     """Current SecurityContext for this request or detached work."""
 
