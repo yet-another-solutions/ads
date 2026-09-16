@@ -24,6 +24,7 @@ __all__ = [
     "roles_from_claims",
     "security_context_from_identity",
     "security_context_from_session",
+    "session_is_authenticated",
 ]
 
 
@@ -48,12 +49,18 @@ def access_token_from_session(session: Mapping[str, Any] | None) -> str | None:
     return None
 
 
+def session_is_authenticated(session: Mapping[str, Any] | None) -> bool:
+    return (
+        identity_from_session(session) is not None
+        and access_token_from_session(session) is not None
+    )
+
+
 def security_context_from_session(session: Mapping[str, Any] | None) -> SecurityContext | None:
     identity = identity_from_session(session)
     if identity is None:
         return None
-    context = security_context_from_identity(identity)
     token = access_token_from_session(session)
     if token is None:
-        return context
-    return context.with_access_token(token)
+        return None
+    return security_context_from_identity(identity).with_access_token(token)

@@ -67,3 +67,18 @@ def test_websocket_join_requires_ownership(client: TestClient, app: Litestar) ->
 def test_anonymous_websocket_is_rejected(client: TestClient) -> None:
     with client.websocket_connect("/ws") as socket:
         assert socket.receive_json() == {"type": "unauthorized"}
+
+
+def test_identity_only_websocket_is_rejected(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    with client.websocket_connect("/ws") as socket:
+        assert socket.receive_json() == {"type": "unauthorized"}

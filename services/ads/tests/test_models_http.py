@@ -141,6 +141,36 @@ def test_unauthenticated_model_writes_are_401(client: TestClient) -> None:
     assert client.delete(f"/settings/models/{uuid.uuid4()}").status_code == 401
 
 
+def test_identity_only_settings_page_redirects_to_login(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    response = client.get("/settings", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"].endswith("/login")
+
+
+def test_identity_only_model_writes_are_401(client: TestClient) -> None:
+    client.set_session_data(
+        {
+            "identity": {
+                "sub": "alice",
+                "name": "Alice",
+                "roles": ["user"],
+                "email": "alice@example.com",
+            }
+        }
+    )
+    assert client.post("/settings/models", data={"description": "x"}).status_code == 401
+
+
 def test_unknown_model_edit_is_404(client: TestClient) -> None:
     login(client)
     response = client.patch(f"/settings/models/{uuid.uuid4()}", data={"name": "x"})

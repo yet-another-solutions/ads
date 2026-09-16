@@ -86,6 +86,28 @@ def test_authenticated_controller_returns_401_without_session(settings: Settings
         assert response.status_code == 401
 
 
+def test_authenticated_controller_returns_401_without_access_token(settings: Settings) -> None:
+    session_config = build_session_config(settings)
+    app = Litestar(
+        route_handlers=[_ProbeController],
+        middleware=[session_config.middleware],
+        exception_handlers=AUTH_EXCEPTION_HANDLERS,
+    )
+    with TestClient(app=app, session_config=session_config) as client:
+        client.set_session_data(
+            {
+                "identity": {
+                    "sub": "alice",
+                    "name": "Alice",
+                    "roles": ["user"],
+                    "email": "alice@example.com",
+                }
+            }
+        )
+        response = client.get("/api/ping")
+        assert response.status_code == 401
+
+
 def test_authenticated_controller_returns_body_when_logged_in(settings: Settings) -> None:
     session_config = build_session_config(settings)
     app = Litestar(route_handlers=[_ProbeController], middleware=[session_config.middleware])
@@ -97,7 +119,8 @@ def test_authenticated_controller_returns_body_when_logged_in(settings: Settings
                     "name": "Alice",
                     "roles": ["user"],
                     "email": "alice@example.com",
-                }
+                },
+                "access_token": "user-access-token",
             }
         )
         response = client.get("/api/ping")
@@ -120,7 +143,8 @@ def test_access_denied_handler_maps_bound_role_failure(settings: Settings) -> No
                     "name": "Alice",
                     "roles": ["user"],
                     "email": "alice@example.com",
-                }
+                },
+                "access_token": "user-access-token",
             }
         )
         response = client.post("/api/deny")

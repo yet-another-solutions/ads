@@ -69,12 +69,27 @@ def test_detached_picks_session_and_stores_in_work_context() -> None:
             "name": "Alice",
             "roles": ["user"],
             "email": "alice@example.com",
-        }
+        },
+        "access_token": "user-access-token",
     }
     with SecurityContextHolder.detached(session) as context:
         assert SecurityContextHolder.require() is context
         assert _MutatingService().touch() == "touched"
     assert SecurityContextHolder.get() is None
+
+
+def test_detached_identity_only_session_is_unauthorized() -> None:
+    session = {
+        "identity": {
+            "sub": "alice",
+            "name": "Alice",
+            "roles": ["user"],
+            "email": "alice@example.com",
+        }
+    }
+    with pytest.raises(AuthenticationRequired):
+        with SecurityContextHolder.detached(session):
+            raise AssertionError("must not enter")
 
 
 def test_detached_without_session_or_holder_is_unauthorized() -> None:
