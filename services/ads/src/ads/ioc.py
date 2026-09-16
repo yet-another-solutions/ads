@@ -165,15 +165,7 @@ class AppProvider(Provider):
             listener,
         )
 
-    @provide(scope=Scope.APP)
-    def watchdog(
-        self,
-        session_factory: SessionFactory,
-        engine_output: EngineOutputService,
-        settings: Settings,
-    ) -> Watchdog:
-        return Watchdog(session_factory, engine_output, settings)
-
+    watchdog = provide(Watchdog, scope=Scope.APP)
     abort_subjects = provide(AbortSubjects, scope=Scope.APP)
 
     @provide(scope=Scope.REQUEST)

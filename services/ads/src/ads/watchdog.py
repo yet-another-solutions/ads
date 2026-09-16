@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -17,8 +16,6 @@ from ads.repository import SessionRunRepository
 
 log = structlog.get_logger("ads.watchdog")
 
-Clock = Callable[[], datetime]
-
 
 class Watchdog:
     """1s tick. Aborts ping death, kills a gapped finish that never filled."""
@@ -28,16 +25,14 @@ class Watchdog:
         session_factory: SessionFactory,
         service: EngineOutputService,
         settings: Settings,
-        clock: Clock = utc_now,
     ) -> None:
         self._session_factory = session_factory
         self._service = service
         self._settings = settings
-        self._clock = clock
         self._task: asyncio.Task[None] | None = None
 
     async def tick(self, now: datetime | None = None) -> None:
-        moment = now if now is not None else self._clock()
+        moment = now if now is not None else utc_now()
         dead, gapped = self._due(moment)
         for run_id in dead:
             await self._service.abort_and_break(run_id)

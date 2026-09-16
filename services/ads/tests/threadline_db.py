@@ -40,7 +40,6 @@ def tick(app: Litestar, engine: Engine, settings: Settings, at: datetime) -> Non
         session_factory_for(engine),
         app.state.engine_output,
         settings,
-        clock=lambda: at,
     )
     asyncio.run(watchdog.tick(now=at))
 
