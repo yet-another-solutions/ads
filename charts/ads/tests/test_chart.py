@@ -173,7 +173,7 @@ class ChartTests(unittest.TestCase):
                     if kind[1] == "Namespace":
                         namespace_names.append(re.search(r'  name: "?([^"\n]+)', metadata)[1])
                         self.assertNotIn("resource-policy", metadata)
-                    elif kind[1] == "ClusterPolicy":
+                    elif kind[1] in ("ClusterPolicy", "ClusterRole", "ClusterRoleBinding"):
                         self.assertNotIn("namespace:", metadata)
                     else:
                         namespace = re.search(r'  namespace: "?([^"\n]+)', metadata)[1]
