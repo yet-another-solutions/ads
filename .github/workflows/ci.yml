@@ -40,6 +40,7 @@ jobs:
           - services/ads-egress-controlplane/Containerfile
           - services/ads-engine/Containerfile
           - services/ads-preferences/Containerfile
+          - services/ads-sandbox-mcp/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
           - services/ads-sandbox-base/Containerfile
@@ -84,6 +85,11 @@ jobs:
             context: services/ads-sandbox-golden
             smoke: ""
             pack: "true"
+          - image: ads-sandbox-mcp
+            file: services/ads-sandbox-mcp/Containerfile
+            context: .
+            smoke: "import ads_sandbox_mcp; print(ads_sandbox_mcp.__version__)"
+            pack: "false"
           - image: ads-sandbox-base
             file: services/ads-sandbox-base/Containerfile
             context: services/ads-sandbox-base

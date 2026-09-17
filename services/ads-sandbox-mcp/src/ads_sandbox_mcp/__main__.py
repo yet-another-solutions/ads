@@ -1,0 +1,40 @@
+from __future__ import annotations
+
+import socket
+import sys
+
+import uvicorn
+
+from ads_commons_schema import alembic_ini_for, mapped_tables, prepare_schema
+from ads_sandbox_mcp.app import create_app
+from ads_sandbox_mcp.config import load_settings
+from ads_sandbox_mcp.store import InFlight
+
+
+class FailFastServer(uvicorn.Server):
+    def run(self, sockets: list[socket.socket] | None = None) -> None:
+        super().run(sockets=sockets)
+        if not self.started:
+            sys.exit(3)
+
+
+def main() -> None:
+    settings = load_settings()  # TLS certificate/key/CA loaded on the main thread first.
+    prepare_schema(
+        alembic_ini=alembic_ini_for("ads-sandbox-mcp"),
+        database_url=settings.database_url,
+        tables=mapped_tables(InFlight),
+    )
+    FailFastServer(
+        uvicorn.Config(
+            create_app(settings),
+            host=settings.bind_host,
+            port=settings.port,
+            ssl_certfile=str(settings.tls_cert_path),
+            ssl_keyfile=str(settings.tls_key_path),
+        )
+    ).run()
+
+
+if __name__ == "__main__":
+    main()
