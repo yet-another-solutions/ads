@@ -1,7 +1,9 @@
+# hadolint ignore=DL3007
 FROM debian:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# hadolint ignore=DL4005
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
