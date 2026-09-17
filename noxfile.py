@@ -10,6 +10,7 @@ nox.options.default_venv_backend = "uv"
 nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 
 _SRC = (
+    "deploy/keycloak/tests",
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/src",

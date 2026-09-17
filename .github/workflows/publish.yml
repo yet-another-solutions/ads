@@ -173,9 +173,27 @@ jobs:
           cache-from: type=gha,scope=publish-${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}
 
+  realm-sample:
+    needs: [channel, python]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Stage standalone Keycloak sample
+        env:
+          IMAGE_TAG: ${{ needs.channel.outputs.image_tag }}
+        run: |
+          mkdir -p dist
+          cp deploy/keycloak/ads-realm-import.sample.yaml "dist/ads-keycloak-realm-${IMAGE_TAG}.yaml"
+          cp deploy/keycloak/README.md "dist/ads-keycloak-realm-${IMAGE_TAG}.README.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ads-keycloak-realm-${{ needs.channel.outputs.image_tag }}
+          path: dist/ads-keycloak-realm-*
+          if-no-files-found: error
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [channel, python, publish-image]
+    needs: [channel, python, publish-image, realm-sample]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -192,10 +210,17 @@ jobs:
           sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" charts/ads/Chart.yaml
           mkdir -p dist
           helm package charts/ads --destination dist
-      - name: Attach chart to GitHub Release
+      - uses: actions/download-artifact@v4
+        with:
+          name: ads-keycloak-realm-${{ needs.channel.outputs.image_tag }}
+          path: dist
+      - name: Attach chart and standalone Keycloak sample to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tgz
+          files: |
+            dist/*.tgz
+            dist/ads-keycloak-realm-*.yaml
+            dist/ads-keycloak-realm-*.README.md
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ needs.channel.outputs.prerelease == 'true' }}
