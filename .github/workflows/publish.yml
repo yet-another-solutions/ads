@@ -86,6 +86,10 @@ jobs:
             file: services/ads-preferences/Containerfile
           - image: ads-guardrail
             file: services/ads-guardrail/Containerfile
+          - image: ads-mcp-probe
+            file: services/ads-mcp-probe/Containerfile
+          - image: ads-injection-scanner
+            file: services/ads-injection-scanner/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner

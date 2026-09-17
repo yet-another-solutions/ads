@@ -13,6 +13,8 @@ dependencies = [
     "ads-engine",
     "ads-egress-controlplane",
     "ads-guardrail",
+    "ads-injection-scanner",
+    "ads-mcp-probe",
     "ads-policy",
     "ads-preferences",
 ]
@@ -34,6 +36,8 @@ members = [
     "services/ads-engine",
     "services/ads-egress-controlplane",
     "services/ads-guardrail",
+    "services/ads-injection-scanner",
+    "services/ads-mcp-probe",
     "services/ads-policy",
     "services/ads-preferences",
 ]
@@ -47,6 +51,8 @@ ads-commons-schema = { workspace = true }
 ads-engine = { workspace = true }
 ads-egress-controlplane = { workspace = true }
 ads-guardrail = { workspace = true }
+ads-injection-scanner = { workspace = true }
+ads-mcp-probe = { workspace = true }
 ads-policy = { workspace = true }
 ads-preferences = { workspace = true }
 
@@ -91,10 +97,15 @@ src = [
     "services/ads-egress-controlplane/src",
     "services/ads-guardrail/src",
     "services/ads-guardrail/tests",
+    "services/ads-injection-scanner/src",
+    "services/ads-injection-scanner/tests",
+    "services/ads-mcp-probe/src",
+    "services/ads-mcp-probe/tests",
     "services/ads-policy/src",
     "services/ads-policy/tests",
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
+    "tests/chain",
 ]
 line-length = 100
 target-version = "py312"
@@ -104,7 +115,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-policy/src:services/ads-preferences/src"
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-mcp-probe/src:services/ads-policy/src:services/ads-preferences/src"
 packages = [
     "ads_commons",
     "ads_commons_beans",
@@ -114,6 +125,8 @@ packages = [
     "ads_engine",
     "ads_egress_controlplane",
     "ads_guardrail",
+    "ads_injection_scanner",
+    "ads_mcp_probe",
     "ads_policy",
     "ads_preferences",
 ]
@@ -133,6 +146,10 @@ ignore_missing_imports = true
 module = ["advanced_alchemy", "advanced_alchemy.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "onnxruntime.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = [
     "libraries/ads-commons/tests",
@@ -142,8 +159,11 @@ testpaths = [
     "services/ads-audit/tests",
     "services/ads-engine/tests",
     "services/ads-guardrail/tests",
+    "services/ads-injection-scanner/tests",
+    "services/ads-mcp-probe/tests",
     "services/ads-policy/tests",
     "services/ads-preferences/tests",
+    "tests/chain",
 ]
 addopts = "-q"
 markers = [
@@ -160,6 +180,8 @@ known_first_party = [
   "ads_egress_controlplane",
   "ads_engine",
   "ads_guardrail",
+  "ads_injection_scanner",
+  "ads_mcp_probe",
   "ads_policy",
   "ads_preferences",
 ]

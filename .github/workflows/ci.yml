@@ -41,6 +41,8 @@ jobs:
           - services/ads-egress-controlplane/Containerfile
           - services/ads-engine/Containerfile
           - services/ads-guardrail/Containerfile
+          - services/ads-injection-scanner/Containerfile
+          - services/ads-mcp-probe/Containerfile
           - services/ads-policy/Containerfile
           - services/ads-preferences/Containerfile
     steps:
@@ -80,6 +82,12 @@ jobs:
           - image: ads-guardrail
             file: services/ads-guardrail/Containerfile
             smoke: "import ads_guardrail; print(ads_guardrail.__version__)"
+          - image: ads-mcp-probe
+            file: services/ads-mcp-probe/Containerfile
+            smoke: "import ads_mcp_probe; print(ads_mcp_probe.__version__)"
+          - image: ads-injection-scanner
+            file: services/ads-injection-scanner/Containerfile
+            smoke: "import ads_injection_scanner.classifier, onnxruntime; print(onnxruntime.__version__)"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -178,6 +186,40 @@ jobs:
           if helm template ads charts/ads --set guardrail.enabled=true \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"x"}]' >/tmp/ads-apps-bad.yaml; then
             echo 'an application rendered without a workspace' >&2
+            exit 1
+          fi
+          helm template ads charts/ads --set guardrail.enabled=true \
+            --set injectionScanner.enabled=true --set mcpProbe.enabled=true \
+            --set engine.tools.enabled=true --set tls.caBundle.secretName=lab-ca \
+            --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
+            --set engine.tools.workspace.env=test >/tmp/ads-chain.yaml
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-chain.yaml)" -eq 10
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-chain.yaml)" -eq 8
+          grep -q 'app.kubernetes.io/component: ads-injection-scanner' /tmp/ads-chain.yaml
+          grep -q 'ADS_INJECTION_SCANNER_URL: "https://ads-injection-scanner:8085"' /tmp/ads-chain.yaml
+          grep -q 'ADS_INJECTION_SCANNER_API_TOKEN' /tmp/ads-chain.yaml
+          grep -q 'ADS_SCANNER_API_TOKEN' /tmp/ads-chain.yaml
+          grep -q 'runtimeClassName: kata-qemu' /tmp/ads-chain.yaml
+          grep -q '\\"name\\":\\"probe-vm\\"' /tmp/ads-chain.yaml
+          grep -q '\\"url\\":\\"https://ads-mcp-probe-container:8084/mcp\\"' /tmp/ads-chain.yaml
+          grep -q 'ADS_ENGINE_MCP_SERVERS: "probe-vm,probe-container"' /tmp/ads-chain.yaml
+          grep -q 'ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"' /tmp/ads-chain.yaml
+          grep -q 'ADS_ENGINE_GUARDRAIL_API_TOKEN' /tmp/ads-chain.yaml
+          if helm template ads charts/ads --set engine.tools.enabled=true \
+            --set tls.caBundle.secretName=lab-ca >/tmp/ads-tools-no-guardrail.yaml 2>&1; then
+            echo 'engine tools rendered without a guardrail to go through' >&2
+            exit 1
+          fi
+          if helm template ads charts/ads --set guardrail.enabled=true \
+            --set engine.tools.enabled=true --set-json 'engine.tools.mcpServers=["probe"]' \
+            --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
+            --set engine.tools.workspace.env=test >/tmp/ads-tools-no-ca.yaml 2>&1; then
+            echo 'engine tools rendered without a CA to trust the guardrail' >&2
+            exit 1
+          fi
+          if helm template ads charts/ads --set mcpProbe.enabled=true \
+            --set-json 'mcpProbe.sites=[{"name":"nowhere"}]' >/tmp/ads-probe-nowhere.yaml 2>&1; then
+            echo 'a probe rendered without saying where it runs' >&2
             exit 1
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml

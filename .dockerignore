@@ -11,6 +11,8 @@ services/ads-policy/tests
 services/ads-guardrail/tests
 services/ads-preferences/tests
 services/ads-engine/tests
+services/ads-injection-scanner/tests
+services/ads-mcp-probe/tests
 libraries/ads-commons/tests
 charts
 dist
