@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -83,15 +83,22 @@ async def test_postack_timeout_aborts_and_late_ack_resets(harness: Harness) -> N
 
 
 @pytest.mark.anyio
-async def test_ack_resets_deadline_once_and_duplicate_cannot_extend(harness: Harness) -> None:
-    h = harness
+async def test_ack_resets_deadline_once_and_duplicate_cannot_extend(
+    long_harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = long_harness
+    # Control the persisted deadline clock, not event-loop or database timing.
+    # The real watchdog still polls and expires the real PostgreSQL row.
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(UTC)
+    monkeypatch.setattr("ads_sandbox_mcp.service.datetime", clock)
     h.publisher.mode = "none"
     task = start(h)
     request = await wait_for_message(h, SandboxRequest)
     assert isinstance(request, SandboxRequest)
     before = await row(h, request.execution_id)
     assert before
-    await asyncio.sleep(0.15)
+    clock.now.return_value = before.created_at + timedelta(seconds=1)
     await h.publisher.reply(SandboxAcknowledge(request.execution_id))
     after = await row(h, request.execution_id)
     assert after and after.deadline > before.deadline
@@ -99,10 +106,13 @@ async def test_ack_resets_deadline_once_and_duplicate_cannot_extend(harness: Har
     await h.publisher.reply(SandboxAcknowledge(request.execution_id))
     duplicate = await row(h, request.execution_id)
     assert duplicate and duplicate.deadline == after.deadline
-    await asyncio.sleep(0.15)
+    clock.now.return_value = before.deadline
+    assert not await h.service._expire(request.execution_id, h.identity().access_token, force=False)
     assert not task.done()
-    result = await task
-    assert result.is_error
+    clock.now.return_value = after.deadline
+    async with asyncio.timeout(5):
+        result = await task
+    assert result.is_error and "timed out" in result.text
     assert sum(isinstance(x, SandboxAckReply) for x in h.publisher.messages) == 1
     assert sum(isinstance(x, SandboxAbort) for x in h.publisher.messages) == 1
 
