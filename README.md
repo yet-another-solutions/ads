@@ -13,6 +13,7 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
+- `services/ads-sandbox-manager`: golden-ensure service, included in workspace Nox gates and CI image builds; application deployment wiring follows in a later slice
 - `charts/ads` — Helm chart (ADS + engine + preferences + egress-controlplane Deployments, ClusterIP Services, ConfigMap, Secret, ads HTTPRoute)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
 

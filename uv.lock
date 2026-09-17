@@ -17,6 +17,7 @@ members = [
     "ads-engine",
     "ads-preferences",
     "ads-sandbox-ipc",
+    "ads-sandbox-manager",
     "ads-sandbox-mcp",
     "ads-workspace",
 ]
@@ -210,6 +211,31 @@ requires-dist = [
 ]
 
 [[package]]
+name = "ads-sandbox-manager"
+version = "0.0.1"
+source = { editable = "services/ads-sandbox-manager" }
+dependencies = [
+    { name = "aiokafka" },
+    { name = "dishka" },
+    { name = "kubernetes" },
+    { name = "litestar" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiokafka", specifier = "==0.14.0" },
+    { name = "dishka", specifier = "==1.10.1" },
+    { name = "kubernetes", specifier = "==36.0.3" },
+    { name = "litestar", specifier = "==2.24.0" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
+    { name = "sqlalchemy", specifier = "==2.0.43" },
+    { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
+]
+
+[[package]]
 name = "ads-sandbox-mcp"
 version = "0.0.1"
 source = { editable = "services/ads-sandbox-mcp" }
@@ -261,6 +287,7 @@ dependencies = [
     { name = "ads-engine" },
     { name = "ads-preferences" },
     { name = "ads-sandbox-ipc" },
+    { name = "ads-sandbox-manager" },
     { name = "ads-sandbox-mcp" },
 ]
 
@@ -293,6 +320,7 @@ requires-dist = [
     { name = "ads-engine", editable = "services/ads-engine" },
     { name = "ads-preferences", editable = "services/ads-preferences" },
     { name = "ads-sandbox-ipc", editable = "services/ads-sandbox-ipc" },
+    { name = "ads-sandbox-manager", editable = "services/ads-sandbox-manager" },
     { name = "ads-sandbox-mcp", editable = "services/ads-sandbox-mcp" },
 ]
 

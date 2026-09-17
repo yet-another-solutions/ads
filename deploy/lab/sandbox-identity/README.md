@@ -19,7 +19,11 @@ non-superuser login, and is checked using a real password-authenticated TCP logi
 No migrations run here.
 
 The manager Role can create/delete/get/list/watch Jobs, Deployments, and PVCs only
-in `ads-sandbox`. It has no exec or RBAC-management permission. IPC can read Pods
+in `ads-sandbox`. Slice 7 adds namespace Pod list and a separate read-only
+ClusterRole for PV/Node get and VolumeAttachment list, used to observe golden
+volume release. These manifest changes require an approved chart upgrade before
+they take effect in the lab; source changes do not amend live permissions.
+The manager has no exec or RBAC-management permission. IPC can read Pods
 and get/create `pods/exec`, but cannot mutate labels, create workloads, mint tokens,
 or access exec in `ads`.
 

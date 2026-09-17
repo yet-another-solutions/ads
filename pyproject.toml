@@ -14,6 +14,7 @@ dependencies = [
     "ads-preferences",
     "ads-sandbox-mcp",
     "ads-sandbox-ipc",
+    "ads-sandbox-manager",
 ]
 
 [tool.uv]
@@ -34,6 +35,7 @@ members = [
     "services/ads-preferences",
     "services/ads-sandbox-mcp",
     "services/ads-sandbox-ipc",
+    "services/ads-sandbox-manager",
 ]
 
 [tool.uv.sources]
@@ -46,6 +48,7 @@ ads-egress-controlplane = { workspace = true }
 ads-preferences = { workspace = true }
 ads-sandbox-mcp = { workspace = true }
 ads-sandbox-ipc = { workspace = true }
+ads-sandbox-manager = { workspace = true }
 
 [[tool.uv.index]]
 name = "pypi"
@@ -90,6 +93,8 @@ src = [
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/src",
     "services/ads-sandbox-ipc/tests",
+    "services/ads-sandbox-manager/src",
+    "services/ads-sandbox-manager/tests",
 ]
 line-length = 100
 target-version = "py312"
@@ -99,8 +104,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src"
-packages = ["ads_commons", "ads_commons_beans", "ads_commons_schema", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_sandbox_mcp", "ads_sandbox_ipc"]
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
+packages = ["ads_commons", "ads_commons_beans", "ads_commons_schema", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager"]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
@@ -134,6 +139,7 @@ testpaths = [
     "services/ads-preferences/tests",
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/tests",
+    "services/ads-sandbox-manager/tests",
 ]
 addopts = "-q"
 markers = [
@@ -141,4 +147,4 @@ markers = [
 ]
 
 [tool.deptry]
-known_first_party = ["ads", "ads_commons", "ads_commons_beans", "ads_commons_schema", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_sandbox_mcp", "ads_sandbox_ipc"]
+known_first_party = ["ads", "ads_commons", "ads_commons_beans", "ads_commons_schema", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager"]

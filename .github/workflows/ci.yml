@@ -41,6 +41,7 @@ jobs:
           - services/ads-preferences/Containerfile
           - services/ads-sandbox-mcp/Containerfile
           - services/ads-sandbox-ipc/Containerfile
+          - services/ads-sandbox-manager/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
           - services/ads-sandbox-base/Containerfile
@@ -99,6 +100,11 @@ jobs:
             file: services/ads-sandbox-ipc/Containerfile
             context: .
             smoke: "import ads_sandbox_ipc; print(ads_sandbox_ipc.__version__)"
+            pack: "false"
+          - image: ads-sandbox-manager
+            file: services/ads-sandbox-manager/Containerfile
+            context: .
+            smoke: "import ads_sandbox_manager; print(ads_sandbox_manager.__version__)"
             pack: "false"
     steps:
       - uses: actions/checkout@v7
