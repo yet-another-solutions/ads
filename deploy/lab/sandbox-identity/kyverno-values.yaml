@@ -1,0 +1,26 @@
+# Lab prerequisite, not ADS Helm wiring. Install pinned chart 3.9.1.
+global:
+  image:
+    registry: ghcr.io
+  nodeSelector:
+    kubernetes.io/os: linux
+    ads.io/application-node: "true"
+admissionController:
+  replicas: 1
+  rbac:
+    createViewRoleBinding: false
+backgroundController:
+  enabled: false
+cleanupController:
+  enabled: false
+reportsController:
+  enabled: false
+features:
+  admissionReports:
+    enabled: false
+  backgroundScan:
+    enabled: false
+  policyReports:
+    enabled: false
+  validatingAdmissionPolicyReports:
+    enabled: false
