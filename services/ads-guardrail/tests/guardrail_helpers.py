@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from ads_commons_beans import JwtVerifier, JwtVerifierSettings
-from ads_guardrail.contract import Opening, Sandbox
+from ads_guardrail.contract import Opening, Workspace
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     DecisionRequest,
@@ -21,19 +21,20 @@ from ads_policy.contract import (
     PolicyDecision,
     Run,
     RunRequest,
+    Site,
     ToolCallRequest,
 )
 from ads_policy.service import PolicyService
 
-TOKEN = "guardrail-api-token-32-bytes"
+API_TOKEN = "guardrail-api-token-32-bytes"
 GOVERNANCE = GovernanceSettings()
+WORKDIR_FILE = f"{GOVERNANCE.workdir}/src/app.py"
 
-#: A Kata pod on a sandbox node, as the launcher that created it describes it.
-VM_SANDBOX = Sandbox(
-    project="ads",
-    repo="yet-another-solutions/ads",
-    env="dev",
-    workdir=GOVERNANCE.workdir,
+WORKSPACE = Workspace(
+    project="ads", repo="yet-another-solutions/ads", env="dev", workdir=GOVERNANCE.workdir
+)
+
+KATA_VM_SITE = Site(
     placement=Placement.CLUSTER,
     runtime_class_name=GOVERNANCE.vm_runtime_class,
     node_labels={
@@ -41,26 +42,32 @@ VM_SANDBOX = Sandbox(
         GOVERNANCE.application_node_label: GOVERNANCE.node_label_value,
     },
 )
-WORKSTATION = msgspec.structs.replace(
-    VM_SANDBOX, placement=Placement.WORKSTATION, runtime_class_name=None, node_labels={}
+APPLICATION_NODE_SITE = Site(
+    placement=Placement.CLUSTER,
+    node_labels={GOVERNANCE.application_node_label: GOVERNANCE.node_label_value},
+)
+WORKSTATION_SITE = Site(placement=Placement.WORKSTATION)
+KATA_ON_UNLABELLED_NODE_SITE = Site(
+    placement=Placement.CLUSTER, runtime_class_name=GOVERNANCE.vm_runtime_class
 )
 
 ISSUER = "https://keycloak.test/realms/ads"
-#: Who the sandbox service's tokens are issued for.
 AUDIENCE = "ads-mcp"
 ALICE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 BOB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
-#: Keycloak's signing key, and one that is not Keycloak's.
-SIGNING_KEY: RSAPrivateKey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+KEYCLOAK_SIGNING_KEY: RSAPrivateKey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 FORGING_KEY: RSAPrivateKey = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
 
-def token(
-    sub: str = ALICE, *, key: RSAPrivateKey = SIGNING_KEY, issued: int = 0, **claims: Any
+def person_token(
+    sub: str = ALICE,
+    *,
+    key: RSAPrivateKey = KEYCLOAK_SIGNING_KEY,
+    issued_seconds_from_now: int = 0,
+    **claims: Any,
 ) -> str:
-    """A person's access token. ``issued`` shifts it in time, as a refresh would."""
-    now = int(time.time()) + issued
+    now = int(time.time()) + issued_seconds_from_now
     payload: dict[str, Any] = {
         "sub": sub,
         "name": "Alice" if sub == ALICE else "Bob",
@@ -74,12 +81,12 @@ def token(
     return jwt.encode(payload, key, algorithm="RS256")
 
 
-class _KeycloakKeys:
+class _KeycloakSigningKeys:
     def get_signing_key_from_jwt(self, token: str) -> SimpleNamespace:
-        return SimpleNamespace(key=SIGNING_KEY.public_key())
+        return SimpleNamespace(key=KEYCLOAK_SIGNING_KEY.public_key())
 
 
-VERIFIER = JwtVerifier(
+PERSON_TOKEN_VERIFIER = JwtVerifier(
     JwtVerifierSettings(
         issuer=ISSUER,
         audience=AUDIENCE,
@@ -87,63 +94,56 @@ VERIFIER = JwtVerifier(
         jwks_uri="https://keycloak.test/certs",
         ssl_context=None,
     ),
-    _KeycloakKeys(),
+    _KeycloakSigningKeys(),
 )
 
-#: What hermes calls its MCP servers with: the application's own key, not a person's.
-APP_KEY = "api-server-key-of-the-application"
-#: What our sandbox service calls with: the token of the person it acts for.
-USER_TOKEN = token()
+APPLICATION_KEY = "api-server-key-of-the-application"
+ALICE_TOKEN = person_token()
 
 
-def opening(sandbox: Sandbox = VM_SANDBOX, bearer: str = USER_TOKEN) -> Opening:
-    return Opening(bearer=bearer, sandbox=sandbox)
+def opening(bearer: str = ALICE_TOKEN, workspace: Workspace = WORKSPACE) -> Opening:
+    return Opening(bearer=bearer, workspace=workspace)
 
 
-def opening_body(sandbox: Sandbox = VM_SANDBOX, bearer: str = USER_TOKEN) -> dict[str, Any]:
-    return dict(msgspec.to_builtins(opening(sandbox, bearer)))
+def opening_body(bearer: str = ALICE_TOKEN) -> dict[str, Any]:
+    return dict(msgspec.to_builtins(opening(bearer)))
 
 
-def blocking[T](coroutine: Coroutine[Any, Any, T]) -> T:
-    """The guardrail is synchronous, so the policy service runs on a loop of its own."""
+def run_blocking[T](coroutine: Coroutine[Any, Any, T]) -> T:
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coroutine).result()
 
 
-class DirectPolicyClient:
-    """The policy service without the network, for tests that are not about transport."""
-
+class InProcessPolicyClient:
     def __init__(self, service: PolicyService) -> None:
         self.service = service
 
     def start_run(self, request: RunRequest) -> Run:
-        return blocking(self.service.start(request))
+        return run_blocking(self.service.start(request))
 
     def run(self, run_id: str) -> Run | None:
-        return blocking(self.service.run(run_id))
+        return run_blocking(self.service.run(run_id))
 
     def runs_held(self, holder: str) -> list[Run]:
-        return blocking(self.service.held_by(holder))
+        return run_blocking(self.service.held_by(holder))
 
     def finish_run(self, run_id: str) -> Run | None:
-        return blocking(self.service.finish(run_id))
+        return run_blocking(self.service.finish(run_id))
 
     def revoke_run(self, run_id: str) -> Run:
-        run = blocking(self.service.revoke(run_id))
+        run = run_blocking(self.service.revoke(run_id))
         if run is None:
             raise KeyError(run_id)
         return run
 
     def decide(self, request: DecisionRequest) -> PolicyDecision:
-        return blocking(self.service.decide(request))
+        return run_blocking(self.service.decide(request))
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
-        return blocking(self.service.decide_call(call))
+        return run_blocking(self.service.decide_call(call))
 
 
-class RefusingPolicyClient:
-    """Stands in for a policy service that cannot be reached at all."""
-
+class UnreachablePolicyClient:
     def start_run(self, request: RunRequest) -> Run:
         raise ConnectionError("no route to the policy service")
 

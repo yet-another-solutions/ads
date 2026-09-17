@@ -8,15 +8,14 @@ from pathlib import Path
 
 import msgspec
 
-from ads_guardrail.contract import Application
+from ads_guardrail.contract import Application, McpServer
 
-SHA256 = re.compile(r"[0-9a-f]{64}")
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    """Every tunable of the guardrail. Modules read them, never redefine them."""
-
     api_token: str
     tls_cert_path: Path
     tls_key_path: Path
@@ -28,22 +27,11 @@ class Settings:
     bind_host: str = "0.0.0.0"
     port: int = 8080
     audit_flush_seconds: float = 1.0
-    #: The MCP servers this stands in front of, by name. An agent reaches one at
-    #: ``/mcp/<name>`` instead of its real address, which is the whole installation: one
-    #: URL per server in its config, and nothing in its code. The name is also what
-    #: bindings call the server, as ``mcp:<name>`` — two servers may both offer `search`.
-    mcp_servers: dict[str, str] | None = None
+    mcp_servers: tuple[McpServer, ...] = ()
     mcp_timeout_seconds: float = 60.0
-    #: Where a caller may name its run. A proxied call is matched to its run by the
-    #: credentials it carries; this is only needed when the same credentials hold
-    #: several runs at once, and the named run must still be one of theirs.
     run_header: str = "x-ads-run"
-    #: Applications that call with their own key. Their runs are opened here.
     applications: tuple[Application, ...] = ()
-    #: Who a person's token must be issued for. Empty means no person's token is
-    #: accepted at all: without it any token of theirs — issued to some other
-    #: application entirely — would act in their runs.
-    mcp_audience: str = ""
+    person_token_audience: str = ""
     keycloak_well_known_url: str = ""
     keycloak_issuer: str = ""
 
@@ -69,8 +57,7 @@ def _existing_file(name: str, raw: str) -> Path:
     return path
 
 
-def _pairs(name: str) -> dict[str, str]:
-    """``key=value,key=value`` — how a controller hands over what it read off the pod."""
+def _key_value_pairs(name: str) -> dict[str, str]:
     raw = os.environ.get(name, "").strip()
     if not raw:
         return {}
@@ -82,37 +69,45 @@ def _pairs(name: str) -> dict[str, str]:
     return pairs
 
 
-def _mcp_servers() -> dict[str, str]:
-    """``name=url,name=url``. A name becomes a path segment, so it has to be one."""
-    servers = {name: url.rstrip("/") for name, url in _pairs("ADS_MCP_SERVERS").items()}
-    for name, url in servers.items():
-        if not name.replace("-", "").replace("_", "").isalnum():
-            raise RuntimeError(f"ADS_MCP_SERVERS: {name!r} is not usable as a path segment")
-        if not url.startswith(("http://", "https://")):
-            raise RuntimeError(f"ADS_MCP_SERVERS: {name!r} needs an http(s) URL")
-    return servers
-
-
-def _applications() -> tuple[Application, ...]:
-    """A JSON list. Each key fingerprint names one application, and only one."""
-    raw = os.environ.get("ADS_APPLICATIONS", "").strip()
+def _json_list[T](name: str, item_type: type[T]) -> tuple[T, ...]:
+    raw = os.environ.get(name, "").strip()
     if not raw:
         return ()
     try:
-        applications = msgspec.json.decode(raw, type=tuple[Application, ...])
+        return msgspec.json.decode(raw, type=tuple[item_type, ...])  # type: ignore[valid-type]
     except msgspec.DecodeError as exc:
-        raise RuntimeError(f"ADS_APPLICATIONS is unreadable: {exc}") from exc
-    seen: set[str] = set()
+        raise RuntimeError(f"{name} is unreadable: {exc}") from exc
+
+
+def _mcp_servers() -> tuple[McpServer, ...]:
+    servers = _json_list("ADS_MCP_SERVERS", McpServer)
+    names: set[str] = set()
+    checked: list[McpServer] = []
+    for server in servers:
+        if not PATH_SEGMENT.fullmatch(server.name):
+            raise RuntimeError(f"ADS_MCP_SERVERS: {server.name!r} is not usable as a path segment")
+        if not server.url.startswith(("http://", "https://")):
+            raise RuntimeError(f"ADS_MCP_SERVERS: {server.name!r} needs an http(s) URL")
+        if server.name in names:
+            raise RuntimeError(f"ADS_MCP_SERVERS: {server.name!r} is listed twice")
+        names.add(server.name)
+        checked.append(msgspec.structs.replace(server, url=server.url.rstrip("/")))
+    return tuple(checked)
+
+
+def _applications() -> tuple[Application, ...]:
+    applications = _json_list("ADS_APPLICATIONS", Application)
+    fingerprints: set[str] = set()
     for application in applications:
         if not application.name.strip():
             raise RuntimeError("ADS_APPLICATIONS: an application needs a name")
-        if not SHA256.fullmatch(application.key_sha256):
+        if not SHA256_HEX.fullmatch(application.key_sha256):
             raise RuntimeError(
                 f"ADS_APPLICATIONS: {application.name!r} needs key_sha256 as 64 lowercase hex"
             )
-        if application.key_sha256 in seen:
+        if application.key_sha256 in fingerprints:
             raise RuntimeError(f"ADS_APPLICATIONS: {application.name!r} reuses another's key")
-        seen.add(application.key_sha256)
+        fingerprints.add(application.key_sha256)
     return applications
 
 
@@ -144,7 +139,7 @@ def load_settings() -> Settings:
         policy_url=_required("ADS_POLICY_URL").rstrip("/"),
         policy_api_token=_required("ADS_POLICY_API_TOKEN"),
         amqp_url=_required("ADS_AMQP_URL"),
-        attributes=_pairs("ADS_ATTRIBUTES"),
+        attributes=_key_value_pairs("ADS_ATTRIBUTES"),
         tls_ca_bundle=_existing_file("ADS_TLS_CA_BUNDLE", ca_raw) if ca_raw else None,
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
@@ -152,16 +147,15 @@ def load_settings() -> Settings:
         mcp_timeout_seconds=float(_env("ADS_MCP_TIMEOUT_SECONDS", "60")),
         run_header=_env("ADS_RUN_HEADER", "x-ads-run").lower(),
         applications=_applications(),
-        mcp_audience=_env("ADS_MCP_AUDIENCE", "").strip(),
+        person_token_audience=_env("ADS_MCP_AUDIENCE", "").strip(),
         keycloak_well_known_url=_env("ADS_KEYCLOAK_WELL_KNOWN_URL", "").strip(),
         keycloak_issuer=_env("ADS_KEYCLOAK_ISSUER", "").strip(),
     )
-    if settings.mcp_audience and not (
+    if settings.person_token_audience and not (
         settings.keycloak_well_known_url and settings.keycloak_issuer
     ):
         raise RuntimeError(
-            "ADS_MCP_AUDIENCE needs ADS_KEYCLOAK_WELL_KNOWN_URL and ADS_KEYCLOAK_ISSUER:"
-            " a person's token cannot be checked without them"
+            "ADS_MCP_AUDIENCE needs ADS_KEYCLOAK_WELL_KNOWN_URL and ADS_KEYCLOAK_ISSUER"
         )
     load_tls_context(settings)
     return settings

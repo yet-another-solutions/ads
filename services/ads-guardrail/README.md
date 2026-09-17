@@ -40,14 +40,30 @@ secret is found and cutting one out leaves valid JSON.
 The server's name is what bindings call it: `mcp:<name>`. Two servers may both offer
 `search`, and they need not mean the same thing by it.
 
+Each server is configured with its `site` — where it executes the tools it offers. The
+isolation level of a call follows from the site of the server it goes to, not from the
+run: one agent may use a server in a Kata VM and another on an ordinary node, and the
+same tool is allowed at the first and refused at the second.
+
+```
+ADS_MCP_SERVERS='[{"name": "sandbox", "url": "http://ads-sandbox-mcp:8080/mcp",
+                   "site": {"placement": "cluster", "runtime_class_name": "kata-clh",
+                            "node_labels": {"ads.io/sandbox-node": "true",
+                                            "ads.io/application-node": "true"}}}]'
+```
+
+A site the policy service cannot place is refused as `site.unknown`; a call with no site
+at all, into a run that has no level of its own, is refused as `site.missing`.
+
 ## What it does not do
 
 It does not decide, and it does not translate. The tool call goes on in the agent's own
 words — `{source, tool, arguments}` — and the policy service says both what that amounts
 to and whether it is allowed.
 
-It does not describe where an agent runs, or for whom, either. It stands outside every
-sandbox and cannot see one; whoever creates the sandbox says both when opening the run.
+It does not guess who a task is for or what it works on: whoever creates the sandbox
+says that when opening the run. Where tools execute is not the run's business either —
+that is the server table's.
 
 ## Which run a call belongs to
 
@@ -69,9 +85,7 @@ the service refreshes it and carries on in the same run.
 ```
 POST /guardrail/runs
 {"bearer": "<the person's token>",
- "sandbox": {"project": "ads", "repo": "…", "env": "dev", "workdir": "/workspace",
-             "placement": "cluster", "runtime_class_name": "kata-clh",
-             "node_labels": {"ads.io/sandbox-node": "true", "ads.io/application-node": "true"}}}
+ "workspace": {"project": "ads", "repo": "…", "env": "dev", "workdir": "/workspace"}}
 ```
 
 The person comes from the token, never from the caller's say-so. Neither the token
@@ -88,7 +102,7 @@ server.
 ### What the sandbox service does
 
 1. On creating a sandbox, opens a run: `POST /guardrail/runs` with the person's token
-   and the sandbox. The answer carries the run id.
+   and the workspace. The answer carries the run id.
 2. Points the agent's MCP clients at `/mcp/<name>` here.
 3. Sends, on every MCP call, `Authorization: Bearer <the person's token>` and
    `x-ads-run: <run id>`. Always, not only once a second task exists: otherwise a
@@ -102,7 +116,7 @@ server.
 ### Applications
 
 hermes knows nothing about the guardrail, so nobody in its path would open a run for
-it. It is configured here instead — its key's fingerprint and where it runs — and its
+it. It is configured here instead — its key's fingerprint and its workspace — and its
 run is opened on its first call and again whenever the last one has finished or
 expired. A revoked run is kept, not replaced: otherwise revoking an application would
 mean nothing. To stop an application for good, take it out of the configuration.
@@ -110,9 +124,8 @@ mean nothing. To stop an application for good, take it out of the configuration.
 ```
 ADS_APPLICATIONS='[{"name": "hermes",
                     "key_sha256": "<printf %s "$API_SERVER_KEY" | sha256sum>",
-                    "sandbox": {"project": "ads", "repo": "…", "env": "test",
-                                "workdir": "/workspace", "placement": "cluster",
-                                "node_labels": {"ads.io/application-node": "true"}}}]'
+                    "workspace": {"project": "ads", "repo": "…", "env": "test",
+                                  "workdir": "/workspace"}}]'
 ```
 
 ## API
@@ -122,9 +135,9 @@ are public.
 
 | | |
 |---|---|
-| `POST /guardrail/runs` | a person's token and where → a run. For the launcher only |
+| `POST /guardrail/runs` | a person's token and the workspace → a run. For the launcher only |
 | `POST /guardrail/runs/{id}/finish` | the task is over → the finished run |
-| `POST /guardrail/permissions` | `{run_id, source, tool, arguments}` → the decision |
+| `POST /guardrail/permissions` | `{run_id, source, tool, arguments}` → the decision; a source `mcp:<name>` is decided at that server's site |
 | `GET /health/live`, `/health/ready` | the process is up |
 
 ## Configuration
@@ -132,7 +145,7 @@ are public.
 Required: `ADS_GUARDRAIL_API_TOKEN` (at least 16 characters), `ADS_POLICY_URL`,
 `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`.
 
-Optional: `ADS_MCP_SERVERS` (`name=url,…`), `ADS_APPLICATIONS` (JSON, above),
+Optional: `ADS_MCP_SERVERS` (JSON, above), `ADS_APPLICATIONS` (JSON, above),
 `ADS_MCP_TIMEOUT_SECONDS` (`60`, the longest silence from a server), `ADS_RUN_HEADER`
 (`x-ads-run`), `ADS_ATTRIBUTES` (`key=value,…`),
 `ADS_TLS_CA_BUNDLE`, `ADS_BIND_HOST` (`0.0.0.0`), `ADS_PORT` (`8080`), `ADS_BUILD`.

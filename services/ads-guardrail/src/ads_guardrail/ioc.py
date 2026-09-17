@@ -19,9 +19,9 @@ from ads_policy.client import PolicyClient, build_policy_client
 from ads_policy.config import GovernanceSettings
 
 
-def build_verifier(settings: Settings) -> AccessTokenVerifier | None:
-    """A checker for people's tokens, or none when no audience says whose to accept."""
-    if not settings.mcp_audience:
+def build_person_token_verifier(settings: Settings) -> AccessTokenVerifier | None:
+    audience = settings.person_token_audience
+    if not audience:
         return None
     context = (
         ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
@@ -32,9 +32,8 @@ def build_verifier(settings: Settings) -> AccessTokenVerifier | None:
     return JwtVerifier(
         JwtVerifierSettings(
             issuer=settings.keycloak_issuer,
-            audience=settings.mcp_audience,
-            # Roles are not read here: who a person is decides their run, not what.
-            client_id=settings.mcp_audience,
+            audience=audience,
+            client_id=audience,
             jwks_uri=jwks_uri,
             ssl_context=context,
         ),
@@ -48,13 +47,13 @@ class AppProvider(Provider):
         settings: Settings,
         client: PolicyClient | None = None,
         sink: AuditSink | None = None,
-        verifier: AccessTokenVerifier | None = None,
+        person_token_verifier: AccessTokenVerifier | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
         self._client = client
         self._sink = sink
-        self._verifier = verifier
+        self._person_token_verifier = person_token_verifier
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -107,13 +106,15 @@ class AppProvider(Provider):
             client=client,
             audit=audit,
             governance=governance,
-            verifier=self._verifier or build_verifier(settings),
+            person_token_verifier=(
+                self._person_token_verifier or build_person_token_verifier(settings)
+            ),
         )
 
     @provide(scope=Scope.APP)
     async def proxy(self, settings: Settings, guardrail: Guardrail) -> AsyncIterator[Proxy]:
-        standing_in = Proxy(settings, guardrail)
+        proxy = Proxy(settings, guardrail)
         try:
-            yield standing_in
+            yield proxy
         finally:
-            await standing_in.close()
+            await proxy.close()

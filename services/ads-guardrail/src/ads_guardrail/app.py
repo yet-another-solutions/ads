@@ -25,20 +25,17 @@ def create_app(
     settings: Settings,
     client: PolicyClient | None = None,
     sink: AuditSink | None = None,
-    verifier: AccessTokenVerifier | None = None,
+    person_token_verifier: AccessTokenVerifier | None = None,
 ) -> Litestar:
-    """``client``, ``sink`` and ``verifier`` let a caller bring their own, as tests do."""
     configure_logging()
     container = make_async_container(
-        AppProvider(settings, client, sink, verifier), LitestarProvider()
+        AppProvider(settings, client, sink, person_token_verifier), LitestarProvider()
     )
     flusher: list[asyncio.Task[None]] = []
 
     async def _start(app: Litestar) -> None:
         del app
-        # Built now, not on the first call: a Keycloak that cannot be reached should stop
-        # the process from starting, not turn every later request into a server error.
-        await container.get(Proxy)
+        await _fail_fast_if_keycloak_is_unreachable(container)
         flusher.append(asyncio.create_task(_publish_audit(container, settings)))
 
     async def _stop(app: Litestar) -> None:
@@ -59,6 +56,10 @@ def create_app(
     app.state.api_token = settings.api_token
     setup_dishka(container, app)
     return app
+
+
+async def _fail_fast_if_keycloak_is_unreachable(container: AsyncContainer) -> None:
+    await container.get(Proxy)
 
 
 async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:

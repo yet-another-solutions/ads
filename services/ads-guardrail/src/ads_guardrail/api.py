@@ -18,28 +18,17 @@ from litestar.exceptions import (
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Stream
 
-from ads_guardrail.contract import Opening, Sandbox
+from ads_guardrail.contract import Opening
 from ads_guardrail.guardrail import Guardrail, NotAPerson, RunNotOpen
 from ads_guardrail.proxy import Proxy, UnknownServer, UpstreamUnavailable
-from ads_policy.contract import PolicyDecision, Run
+from ads_policy.contract import PolicyDecision, Run, Site
 
-BEARER = "Bearer "
-
-#: Where an agent's MCP clients are pointed, one ``/mcp/<name>`` per server.
+BEARER_PREFIX = "Bearer "
 MCP_PATH = "/mcp"
+MCP_SOURCE_PREFIX = "mcp:"
 
 
 class PermissionRequest(msgspec.Struct, frozen=True):
-    """A tool call asked about directly, for an agent with no HTTP to intercept.
-
-    The proxy is the usual way in. This exists for a caller that reaches the PEP by
-    hand — a loop that dispatches its tools in-process, where there is no request to
-    stand in front of.
-
-    No capability here: naming it would mean this side translating, and the binding
-    that does the translating is policy, versioned with the run.
-    """
-
     run_id: str
     source: str
     tool: str
@@ -49,15 +38,13 @@ class PermissionRequest(msgspec.Struct, frozen=True):
 def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
     expected = str(connection.app.state.api_token)
     header = connection.headers.get("authorization", "")
-    if not header.startswith(BEARER):
+    if not header.startswith(BEARER_PREFIX):
         raise NotAuthorizedException(detail="bearer token required")
-    if not secrets.compare_digest(header[len(BEARER) :], expected):
+    if not secrets.compare_digest(header[len(BEARER_PREFIX) :], expected):
         raise NotAuthorizedException(detail="bearer token required")
 
 
 class McpController(Controller):
-    """Stands where the MCP servers used to be. An agent knows only the URL."""
-
     path = MCP_PATH
 
     @route(
@@ -69,7 +56,6 @@ class McpController(Controller):
     async def relay(
         self, server: str, request: Request[Any, Any, Any], proxy: FromDishka[Proxy]
     ) -> Response[Any]:
-        """The three methods of MCP's Streamable HTTP transport, on one path."""
         body = await request.body() if request.method == HttpMethod.POST else b""
         try:
             relayed = await proxy.handle(request.method, server, body, dict(request.headers))
@@ -96,32 +82,22 @@ class McpController(Controller):
 
 
 class GuardrailController(Controller):
-    """The decision API, for callers that ask rather than being proxied."""
-
     path = "/guardrail"
     guards = [require_api_token]
 
     @post("/runs")
     @inject
     async def open_run(self, data: Opening, guardrail: FromDishka[Guardrail]) -> Run:
-        """Whoever creates an agent's sandbox opens a run for each task put in it.
-
-        The API token is what makes the placement believable: the agent must not hold
-        it, or it could open a run somewhere it is not. Who the run is for comes from
-        the person's own token, which has to verify.
-        """
         try:
-            return await anyio.to_thread.run_sync(guardrail.open, data)
+            return await anyio.to_thread.run_sync(guardrail.open_run, data)
         except NotAPerson as exc:
             raise ClientException(detail=str(exc)) from exc
 
     @post("/runs/{run_id:str}/finish", status_code=200)
     @inject
     async def finish_run(self, run_id: str, guardrail: FromDishka[Guardrail]) -> Run:
-        """The task is over. Without this a run lingers until its lifetime ends, and the
-        next task on the same credentials would find two."""
         try:
-            finished = await anyio.to_thread.run_sync(guardrail.finish, run_id)
+            finished = await anyio.to_thread.run_sync(guardrail.finish_run, run_id)
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc
         if finished is None:
@@ -134,23 +110,25 @@ class GuardrailController(Controller):
         self, data: PermissionRequest, guardrail: FromDishka[Guardrail]
     ) -> PolicyDecision:
         try:
-            # The policy client is synchronous, and a hung policy service must not
-            # take the event loop down with it — health probes answer from here too.
-            return await anyio.to_thread.run_sync(_permit, guardrail, data)
+            return await anyio.to_thread.run_sync(_decide_permission_request, guardrail, data)
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc
 
 
-def _permit(guardrail: Guardrail, data: PermissionRequest) -> PolicyDecision:
-    run = guardrail.run(data.run_id)
-    return guardrail.permit(run, data.source, data.tool, data.arguments)
+def _decide_permission_request(guardrail: Guardrail, data: PermissionRequest) -> PolicyDecision:
+    run = guardrail.get_run(data.run_id)
+    site = _site_of_source(guardrail, data.source)
+    return guardrail.decide_tool_call(run, data.source, data.tool, data.arguments, site=site)
 
 
-__all__ = [
-    "MCP_PATH",
-    "GuardrailController",
-    "McpController",
-    "Opening",
-    "PermissionRequest",
-    "Sandbox",
-]
+def _site_of_source(guardrail: Guardrail, source: str) -> Site | None:
+    if not source.startswith(MCP_SOURCE_PREFIX):
+        return None
+    server_name = source.removeprefix(MCP_SOURCE_PREFIX)
+    for server in guardrail.settings.mcp_servers:
+        if server.name == server_name:
+            return server.site
+    return None
+
+
+__all__ = ["MCP_PATH", "GuardrailController", "McpController", "Opening", "PermissionRequest"]
