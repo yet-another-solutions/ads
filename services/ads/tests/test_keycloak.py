@@ -355,7 +355,8 @@ def test_keycloak_login_shows_the_threadline_shell(
 @pytest.mark.integration
 def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -> None:
     """Import the actual sample, not a second hand-built approximation of its clients."""
-    sample_path = Path(__file__).resolve().parents[3] / "deploy/keycloak/ads-realm-import.sample.yaml"
+    root = Path(__file__).resolve().parents[3]
+    sample_path = root / "deploy/keycloak/ads-realm-import.sample.yaml"
     document = yaml.safe_load(sample_path.read_text())
     # Values exist only in this disposable CI realm; no lab credentials are read.
     rendered = json.dumps(document["spec"]["realm"])
@@ -545,9 +546,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 context = checked.authenticate(lifecycle)
                 assert context.user_id == UUID(clients[caller]["id"])
                 ensure_caller(context, caller)
-                assert (
-                    "user"
-                    not in checked.verified_claims(lifecycle).get("realm_access", {}).get("roles", [])
-                )
+                claims = checked.verified_claims(lifecycle)
+                assert "user" not in claims.get("realm_access", {}).get("roles", [])
         finally:
             admin("DELETE", admin_path)

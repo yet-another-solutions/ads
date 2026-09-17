@@ -74,7 +74,8 @@ def test_flows_scopes_audiences_and_role_assignment():
         audience_mappers = [
             m for m in client["protocolMappers"] if m["protocolMapper"] == "oidc-audience-mapper"
         ]
-        assert {m["config"]["included.client.audience"] for m in audience_mappers} == AUDIENCES[name]
+        actual_audiences = {m["config"]["included.client.audience"] for m in audience_mappers}
+        assert actual_audiences == AUDIENCES[name]
         assert all(m["config"]["access.token.claim"] == "true" for m in audience_mappers)
     browser = next(c for c in realm["clients"] if c["clientId"] == "ads")
     assert browser["redirectUris"] == ["https://ads.example.com/auth/callback"]
@@ -88,7 +89,8 @@ def test_lifecycle_subjects_are_service_only_and_admin_protected():
     assert {u["serviceAccountClientId"] for u in users} == lifecycle
     for user in users:
         assert "credentials" not in user and "realmRoles" not in user
-        client = next(c for c in realm["clients"] if c["clientId"] == user["serviceAccountClientId"])
+        client_id = user["serviceAccountClientId"]
+        client = next(c for c in realm["clients"] if c["clientId"] == client_id)
         assert UUID(client["id"])
         assert user["attributes"]["ads_service_client_uuid"] == [client["id"]]
     for client in realm["clients"]:
@@ -120,9 +122,13 @@ def test_cd_publishes_unchanged_sample_separately_from_helm():
     assert upload["with"]["if-no-files-found"] == "error"
     release = jobs["release"]
     assert "realm-sample" in release["needs"]
-    download = next(s for s in release["steps"] if "actions/download-artifact@" in s.get("uses", ""))
+    download = next(
+        s for s in release["steps"] if "actions/download-artifact@" in s.get("uses", "")
+    )
     assert upload["with"]["name"] == download["with"]["name"]
-    publish = next(s for s in release["steps"] if "softprops/action-gh-release@" in s.get("uses", ""))
+    publish = next(
+        s for s in release["steps"] if "softprops/action-gh-release@" in s.get("uses", "")
+    )
     assert "dist/*.tgz" in publish["with"]["files"]
     assert "dist/ads-keycloak-realm-*.yaml" in publish["with"]["files"]
     assert "dist/ads-keycloak-realm-*.README.md" in publish["with"]["files"]
