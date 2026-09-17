@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+from msgspec.structs import replace
 
 from ads_commons.sandbox import (
     SandboxAbort,
@@ -31,6 +32,59 @@ from ipc_support import SUBJECT, eventually
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("field", ["session_id", "message_id"])
+@pytest.mark.parametrize("control", [SandboxAckReply, SandboxAckReset, SandboxAbort])
+@pytest.mark.parametrize("executing", [False, True])
+async def test_mismatched_control_cannot_change_current(ipc, field, control, executing) -> None:
+    async with ipc.running():
+        request = ipc.request()
+        await ipc.send(request)
+        valid = SandboxAckReply(request.execution_id, request.session_id, request.message_id)
+        if executing:
+            await ipc.send(valid)
+            await eventually(lambda: bool(ipc.store.entries()))
+        unit = ipc.service.current
+        count = len(ipc.publisher.messages)
+        wrong = replace(
+            control(request.execution_id, request.session_id, request.message_id),
+            **{field: uuid4()},
+        )
+        await ipc.send(wrong)
+        assert ipc.service.current is unit
+        assert unit is not None and unit.executing is executing
+        assert not unit.abort.is_set()
+        assert len(ipc.publisher.messages) == count
+        assert len(ipc.kube.calls) == (2 if executing else 1)
+        if not executing:
+            await ipc.send(valid)
+            await eventually(lambda: bool(ipc.store.entries()))
+        ipc.finish()
+        await eventually(lambda: ipc.service.last_result is not None)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("field", ["session_id", "message_id"])
+@pytest.mark.parametrize("kind", ["request", "ack-reply"])
+async def test_terminal_replay_requires_full_tuple(ipc, field, kind) -> None:
+    async with ipc.running():
+        request = ipc.request()
+        ack = SandboxAckReply(request.execution_id, request.session_id, request.message_id)
+        await ipc.send(request)
+        await ipc.send(ack)
+        await eventually(lambda: bool(ipc.store.entries()))
+        ipc.finish()
+        await eventually(lambda: ipc.service.last_result is not None)
+        valid = request if kind == "request" else ack
+        count = len(ipc.publisher.messages)
+        await ipc.send(replace(valid, **{field: uuid4()}))
+        assert len(ipc.publisher.messages) == count
+        await ipc.send(valid)
+        assert len(ipc.publisher.messages) == count + 1
+        assert ipc.publisher.messages[-1] == ipc.service.last_result
+        assert len(ipc.kube.calls) == 2
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     "changes",
     [
@@ -51,9 +105,18 @@ async def test_every_inbound_auth_path_fails_closed(ipc, changes, kind, ipc_logs
             await ipc.send(request)
         message, topic = {
             "request": (request, ipc.settings.request_topic),
-            "ack-reply": (SandboxAckReply(request.execution_id), ipc.settings.request_topic),
-            "ack-reset": (SandboxAckReset(request.execution_id), ipc.settings.request_topic),
-            "abort": (SandboxAbort(request.execution_id), ipc.settings.request_topic),
+            "ack-reply": (
+                SandboxAckReply(request.execution_id, request.session_id, request.message_id),
+                ipc.settings.request_topic,
+            ),
+            "ack-reset": (
+                SandboxAckReset(request.execution_id, request.session_id, request.message_id),
+                ipc.settings.request_topic,
+            ),
+            "abort": (
+                SandboxAbort(request.execution_id, request.session_id, request.message_id),
+                ipc.settings.request_topic,
+            ),
             "shutdown": (SandboxShutdown(ipc.settings.sandbox_id), READY_TOPIC),
             "ping": (SandboxPing(uuid4(), ipc.settings.sandbox_id), PING_REQUEST_TOPIC),
         }[kind]
@@ -105,12 +168,20 @@ async def test_invalid_abort_does_not_abort_active_exec_and_subject_cannot_switc
         request = ipc.request()
         await ipc.send(request)
         other = ipc.keys.token(sub=str(uuid4()))
-        await ipc.send(SandboxAckReply(request.execution_id), other)
+        await ipc.send(
+            SandboxAckReply(request.execution_id, request.session_id, request.message_id), other
+        )
         assert len(ipc.kube.calls) == 1
-        await ipc.send(SandboxAckReply(request.execution_id))
+        await ipc.send(
+            SandboxAckReply(request.execution_id, request.session_id, request.message_id)
+        )
         await eventually(lambda: bool(ipc.store.entries()))
-        await ipc.send(SandboxAbort(request.execution_id), "garbage")
-        await ipc.send(SandboxAbort(request.execution_id), other)
+        await ipc.send(
+            SandboxAbort(request.execution_id, request.session_id, request.message_id), "garbage"
+        )
+        await ipc.send(
+            SandboxAbort(request.execution_id, request.session_id, request.message_id), other
+        )
         assert not ipc.kube.killed
         ipc.finish()
         await eventually(lambda: ipc.service.last_result is not None)
@@ -146,7 +217,7 @@ async def test_publisher_mints_at_produce_time_for_each_message_and_routes_commo
     messages = [
         SandboxReady(ipc.settings.sandbox_id),
         SandboxIpcError(ipc.settings.sandbox_id, "failed"),
-        SandboxAcknowledge(execution_id),
+        SandboxAcknowledge(execution_id, uuid4(), uuid4()),
         SandboxResult(execution_id, 0, "", "", False, 0, False),
         SandboxShutdownAck(ipc.settings.sandbox_id),
         SandboxPing(uuid4(), ipc.settings.sandbox_id),

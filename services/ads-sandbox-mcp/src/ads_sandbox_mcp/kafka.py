@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Collection, Sequence
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -30,11 +30,17 @@ class KafkaPublisher:
         self._settings = settings
 
     async def publish(
-        self, message: SandboxExecInbound, headers: Sequence[tuple[str, bytes]]
+        self,
+        message: SandboxExecInbound,
+        headers: Sequence[tuple[str, bytes]],
+        *,
+        session_id: UUID,
     ) -> None:
+        if session_id != message.session_id:
+            raise ValueError("Kafka key must match message session_id")
         await self._producer.send_and_wait(
             self._settings.request_topic,
-            key=str(message.execution_id).encode(),
+            key=str(session_id).encode(),
             value=encode_inbound(message),
             headers=list(headers),
         )

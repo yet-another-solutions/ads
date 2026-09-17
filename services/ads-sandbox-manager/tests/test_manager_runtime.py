@@ -12,10 +12,15 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from ads_sandbox_manager.app import create_app
 from ads_sandbox_manager.health import Dependencies, DependencyHealth
+from ads_sandbox_manager.kafka import KafkaRuntime
 from ads_sandbox_manager.kube import Kubernetes
 from ads_sandbox_manager.runtime import ManagerRuntime
 
 pytestmark = pytest.mark.anyio
+
+
+def fake_kafka():
+    return Mock(ready=True, start=AsyncMock(), stop=AsyncMock())
 
 
 async def test_probes_transition_only_after_release_and_dependencies(baked):
@@ -23,6 +28,10 @@ async def test_probes_transition_only_after_release_and_dependencies(baked):
     dependency.check.return_value = True
 
     class Overrides(Provider):
+        @provide(scope=Scope.APP, override=True)
+        def kafka(self) -> KafkaRuntime:
+            return fake_kafka()
+
         @provide(scope=Scope.APP, override=True)
         def kube(self) -> Kubernetes:
             return baked.kube
@@ -64,7 +73,7 @@ async def test_probes_transition_only_after_release_and_dependencies(baked):
 async def test_poll_errors_fail_closed_and_next_pass_recovers(manager_settings, caplog, error):
     golden, dependencies = AsyncMock(), AsyncMock()
     golden.poll.side_effect = error
-    runtime = ManagerRuntime(manager_settings, golden, dependencies)
+    runtime = ManagerRuntime(manager_settings, golden, dependencies, fake_kafka())
     await runtime.start()
     try:
         await runtime.check()
@@ -90,7 +99,7 @@ async def test_bounded_poll_process_live_and_no_stale_ready(manager_settings):
         return True
 
     golden.poll.side_effect = stuck
-    runtime = ManagerRuntime(settings, golden, dependency)
+    runtime = ManagerRuntime(settings, golden, dependency, fake_kafka())
     await runtime.start()
     await asyncio.wait_for(runtime.check(), timeout=1)
     assert not runtime.ready
@@ -99,7 +108,7 @@ async def test_bounded_poll_process_live_and_no_stale_ready(manager_settings):
 
 
 async def test_cancel_stops_without_deleting_cluster_objects(baked):
-    runtime = ManagerRuntime(baked.settings, baked.golden, AsyncMock())
+    runtime = ManagerRuntime(baked.settings, baked.golden, AsyncMock(), fake_kafka())
     await runtime.start()
     task = runtime._task
     await runtime.start()
@@ -110,7 +119,7 @@ async def test_cancel_stops_without_deleting_cluster_objects(baked):
 
 
 async def test_completed_or_stale_background_task_cannot_report_ready(manager_settings):
-    runtime = ManagerRuntime(manager_settings, AsyncMock(), AsyncMock())
+    runtime = ManagerRuntime(manager_settings, AsyncMock(), AsyncMock(), fake_kafka())
     runtime._ready = True
     assert not runtime.ready
     runtime._task = asyncio.create_task(asyncio.sleep(100))

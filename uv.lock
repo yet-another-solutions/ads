@@ -215,12 +215,15 @@ name = "ads-sandbox-manager"
 version = "0.0.1"
 source = { editable = "services/ads-sandbox-manager" }
 dependencies = [
+    { name = "ads-commons" },
+    { name = "ads-commons-beans" },
     { name = "ads-commons-schema" },
     { name = "aiokafka" },
     { name = "alembic" },
     { name = "dishka" },
     { name = "kubernetes" },
     { name = "litestar" },
+    { name = "msgspec" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
@@ -228,12 +231,15 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "alembic", specifier = "==1.16.5" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "kubernetes", specifier = "==36.0.3" },
     { name = "litestar", specifier = "==2.24.0" },
+    { name = "msgspec", specifier = "==0.21.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },

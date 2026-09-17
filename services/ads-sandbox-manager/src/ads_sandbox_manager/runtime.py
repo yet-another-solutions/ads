@@ -10,17 +10,23 @@ from kubernetes.client.exceptions import ApiException
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.health import Dependencies
+from ads_sandbox_manager.kafka import KafkaRuntime
 
 log = logging.getLogger(__name__)
 
 
 class ManagerRuntime:
     def __init__(
-        self, settings: Settings, golden: GoldenEnsure, dependencies: Dependencies
+        self,
+        settings: Settings,
+        golden: GoldenEnsure,
+        dependencies: Dependencies,
+        kafka: KafkaRuntime,
     ) -> None:
         self.settings = settings
         self.golden = golden
         self.dependencies = dependencies
+        self.kafka = kafka
         self._ready = False
         self._checked = 0.0
         self._task: asyncio.Task[None] | None = None
@@ -31,6 +37,7 @@ class ManagerRuntime:
             self._task is not None
             and not self._task.done()
             and self._ready
+            and self.kafka.ready
             and monotonic() - self._checked
             < self.settings.poll_seconds + self.settings.control_seconds * 3
         )
@@ -60,6 +67,7 @@ class ManagerRuntime:
 
     async def start(self) -> None:
         if self._task is None:
+            await self.kafka.start()
             self._task = asyncio.create_task(self._run(), name="manager-golden-ensure")
 
     async def stop(self) -> None:
@@ -69,3 +77,4 @@ class ManagerRuntime:
             with suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
+        await self.kafka.stop()

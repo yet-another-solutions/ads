@@ -8,6 +8,7 @@ from dishka import Provider, make_async_container
 from litestar import Litestar, Request, get
 from litestar.response import Response
 
+from ads_commons_beans import CommonsBeansProvider
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.ioc import AppProvider
 from ads_sandbox_manager.runtime import ManagerRuntime
@@ -27,7 +28,7 @@ def ready(request: Request[Any, Any, Any]) -> Response[dict[str, str]]:
 
 
 def create_app(settings: Settings, *, overrides: tuple[Provider, ...] = ()) -> Litestar:
-    container = make_async_container(AppProvider(settings), *overrides)
+    container = make_async_container(CommonsBeansProvider(), AppProvider(settings), *overrides)
 
     @asynccontextmanager
     async def lifecycle(app: Litestar) -> AsyncIterator[None]:

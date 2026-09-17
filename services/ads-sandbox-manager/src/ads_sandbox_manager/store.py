@@ -43,6 +43,35 @@ class SandboxSession(Base):
 class SessionRepository:
     """Data methods require a caller-owned transaction; never call Kubernetes here."""
 
+    async def by_sandbox(self, db: AsyncSession, sandbox_id: UUID) -> SandboxSession | None:
+        result: SandboxSession | None = await db.scalar(
+            select(SandboxSession).where(SandboxSession.sandbox_id == sandbox_id)
+        )
+        return result
+
+    async def mark_ready(self, db: AsyncSession, sandbox_id: UUID, now: datetime) -> bool:
+        result = await db.scalar(
+            update(SandboxSession)
+            .where(
+                SandboxSession.sandbox_id == sandbox_id,
+                SandboxSession.status == "creating",
+                SandboxSession.pvc_uid.is_not(None),
+                SandboxSession.ipc_pvc_uid.is_not(None),
+                SandboxSession.guest_deployment_uid.is_not(None),
+                SandboxSession.ipc_deployment_uid.is_not(None),
+            )
+            .values(status="ready", status_changed_at=now, last_execution_at=now, last_ping_at=now)
+            .returning(SandboxSession.session_id)
+        )
+        return result is not None
+
+    async def stamp_result(self, db: AsyncSession, sandbox_id: UUID, now: datetime) -> None:
+        await db.execute(
+            update(SandboxSession)
+            .where(SandboxSession.sandbox_id == sandbox_id)
+            .values(last_execution_at=now)
+        )
+
     async def get(self, db: AsyncSession, session_id: UUID) -> SandboxSession | None:
         result: SandboxSession | None = await db.scalar(
             select(SandboxSession)

@@ -108,6 +108,12 @@ class Settings:
     kafka_sasl_password: str | None = field(default=None, repr=False)
     kafka_ca_bundle: Path | None = None
     session_objects: SessionSettings | None = None
+    keycloak_issuer: str = ""
+    keycloak_well_known_url: str = ""
+    keycloak_client_secret: str = field(default="", repr=False)
+    ready_seconds: float = 120
+    barrier_seconds: float = 3
+    topic_replication_factor: int = 1
 
     def __post_init__(self) -> None:
         if (
@@ -127,11 +133,19 @@ class Settings:
             raise ValueError("golden slack must be at least 2Gi")
         if self.golden_bytes >= 2**63:
             raise ValueError("golden size exceeds signed 64-bit bytes")
-        for value in (self.poll_seconds, self.control_seconds, self.node_fresh_seconds):
+        for value in (
+            self.poll_seconds,
+            self.control_seconds,
+            self.node_fresh_seconds,
+            self.ready_seconds,
+            self.barrier_seconds,
+        ):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("poll and timeout settings must be finite and positive")
         if self.bake_seconds <= 0:
             raise ValueError("bake timeout must be positive")
+        if self.topic_replication_factor < 1:
+            raise ValueError("topic replication factor must be positive")
         if (
             not isinstance(self.node_selector, dict)
             or not self.node_selector
@@ -223,6 +237,19 @@ def load_settings() -> Settings:
             if os.environ.get(prefix + "SESSION_OBJECTS", "").strip()
             else None
         ),
+        keycloak_issuer=os.environ.get(prefix + "KEYCLOAK_ISSUER", ""),
+        keycloak_well_known_url=os.environ.get(prefix + "KEYCLOAK_WELL_KNOWN_URL", ""),
+        keycloak_client_secret=os.environ.get(prefix + "KEYCLOAK_CLIENT_SECRET", ""),
+        ready_seconds=float(os.environ.get(prefix + "READY_SECONDS", "120")),
+        barrier_seconds=float(os.environ.get(prefix + "BARRIER_SECONDS", "3")),
+        topic_replication_factor=int(os.environ.get(prefix + "TOPIC_REPLICATION_FACTOR", "1")),
     )
     load_tls_context(settings)
+    if settings.session_objects is None:
+        raise RuntimeError("ADS_SANDBOX_MANAGER_SESSION_OBJECTS is required")
+    if not settings.keycloak_client_secret or not all(
+        value.startswith("https://")
+        for value in (settings.keycloak_issuer, settings.keycloak_well_known_url)
+    ):
+        raise RuntimeError("manager Keycloak HTTPS issuer, discovery and client secret required")
     return settings

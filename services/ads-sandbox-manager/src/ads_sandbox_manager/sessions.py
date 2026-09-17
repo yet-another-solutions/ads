@@ -26,7 +26,7 @@ from ads_sandbox_manager.store import SandboxSession, SessionRepository
 
 
 class TopicPreparation(Protocol):
-    """Slice 9 supplies topic creation + result subscription/seek BEFORE IPC exists."""
+    """Topics, local result subscription/seek, and best-effort replica barrier."""
 
     async def prepare(self, sandbox_id: UUID) -> None: ...
 
@@ -55,10 +55,8 @@ def contains(actual: object, expected: object) -> bool:
 
 
 class SessionProvisioner:
-    """Internal lifecycle worker, NOT an authenticated request API or ready waiter.
+    """Lifecycle worker called by authenticated transit with detached lifetime.
 
-    The future ingress owns authorization and detached worker lifetime. No consumer
-    or HTTP route calls this in slice 8. TopicPreparation has no production fake.
     A losing call returns durable status; it does not create or steal a worker.
     """
 

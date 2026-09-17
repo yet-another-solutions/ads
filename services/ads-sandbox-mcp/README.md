@@ -57,6 +57,11 @@ The service mints an execution UUID and a fresh STE token for audience
 then publishes `request` to `ads.sandbox.exec.request`. All outbound messages use
 the raw STE JWT in Kafka header `authorization`. STE is performed separately for
 `request`, `ack-reply`, `ack-reset` and `abort`, without caching.
+All four carry the required `execution_id`, `session_id`, `message_id` tuple and
+use `session_id` as the Kafka key. Controls are populated from the durable row,
+not from the reply token or an HTTP holder. Incoming `acknowledge` also carries
+that tuple and must match the durable row before changing the deadline, replying,
+or clearing a timeout tombstone. Missing or malformed IDs fail wire decoding.
 
 The reply controller verifies audience `ads-sandbox-mcp` and caller
 `ads-sandbox-manager` on `ads.sandbox.exec.reply`. It never binds the reply token

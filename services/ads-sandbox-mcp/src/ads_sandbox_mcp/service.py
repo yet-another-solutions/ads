@@ -32,7 +32,11 @@ MANAGER = "ads-sandbox-manager"
 
 class Publisher(Protocol):
     async def publish(
-        self, message: SandboxExecInbound, headers: Sequence[tuple[str, bytes]]
+        self,
+        message: SandboxExecInbound,
+        headers: Sequence[tuple[str, bytes]],
+        *,
+        session_id: UUID,
     ) -> None: ...
 
 
@@ -166,7 +170,7 @@ class ExecService:
             # After insert, publication failure is resolved by the watchdog, not an early return.
             try:
                 async with asyncio.timeout(self._settings.timeout_seconds):
-                    await self._publisher.publish(request, headers)
+                    await self._publisher.publish(request, headers, session_id=session_id)
             except Exception:
                 log.warning("request_publish_failed", execution_id=str(execution_id))
             return await asyncio.shield(waiter.result)
@@ -188,7 +192,7 @@ class ExecService:
         """Authenticated Kafka entry, intentionally without a user holder bind."""
         message = reply.message
         if isinstance(message, SandboxAcknowledge):
-            await self._acknowledge(message.execution_id, reply.subject_token)
+            await self._acknowledge(message, reply.subject_token)
             return
         waiter = self._waiters.get(message.execution_id)
         if waiter is None or waiter.result.done():
@@ -205,12 +209,17 @@ class ExecService:
             if not waiter.result.done():
                 waiter.result.set_result(message)
 
-    async def _acknowledge(self, execution_id: UUID, subject_token: str) -> None:
+    async def _acknowledge(self, message: SandboxAcknowledge, subject_token: str) -> None:
         # Serialize across pods with the same row lock used by expiry. The bounded send
         # is inside this transaction so timeout cannot cross a successful ack-reply.
+        execution_id = message.execution_id
         async with self._sessions.begin() as session:
             row = await self._repository.locked(session, execution_id)
-            if row is None:
+            if (
+                row is None
+                or row.session_id != message.session_id
+                or row.message_id != message.message_id
+            ):
                 return
             if row.ack_replied and not row.timed_out:
                 # A duplicate must neither extend the deadline nor preempt the
@@ -221,14 +230,18 @@ class ExecService:
             if row.timed_out:
                 async with asyncio.timeout(self._settings.timeout_seconds):
                     await self._publisher.publish(
-                        SandboxAckReset(execution_id), await self._headers(subject_token)
+                        SandboxAckReset(execution_id, row.session_id, row.message_id),
+                        await self._headers(subject_token),
+                        session_id=row.session_id,
                     )
                 await self._repository.remove(session, row)
                 return
             row.deadline = datetime.now(UTC) + timedelta(seconds=self._settings.timeout_seconds)
             async with asyncio.timeout(self._settings.timeout_seconds):
                 await self._publisher.publish(
-                    SandboxAckReply(execution_id), await self._headers(subject_token)
+                    SandboxAckReply(execution_id, row.session_id, row.message_id),
+                    await self._headers(subject_token),
+                    session_id=row.session_id,
                 )
             row.ack_replied = True
 
@@ -243,6 +256,8 @@ class ExecService:
         self, execution_id: UUID, subject_token: str | None, *, force: bool
     ) -> bool:
         acknowledged = False
+        session_id: UUID
+        message_id: UUID
         async with self._sessions.begin() as session:
             row = await self._repository.locked(session, execution_id)
             if row is None:
@@ -250,13 +265,17 @@ class ExecService:
             if not force and not row.timed_out and datetime.now(UTC) < row.deadline:
                 return False
             acknowledged = row.ack_replied and not row.timed_out
+            session_id = row.session_id
+            message_id = row.message_id
             row.timed_out = True
         # Tombstone commits before best-effort control publication.
         if acknowledged:
             try:
                 async with asyncio.timeout(self._settings.timeout_seconds):
                     await self._publisher.publish(
-                        SandboxAbort(execution_id), await self._headers(subject_token)
+                        SandboxAbort(execution_id, session_id, message_id),
+                        await self._headers(subject_token),
+                        session_id=session_id,
                     )
             except Exception:
                 log.warning("abort_publish_failed", execution_id=str(execution_id))

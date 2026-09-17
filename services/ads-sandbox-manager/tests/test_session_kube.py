@@ -8,6 +8,7 @@ from dishka import Provider, Scope, make_async_container, provide
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ads_commons_beans import CommonsBeansProvider
 from ads_sandbox_manager.ioc import AppProvider
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
 from ads_sandbox_manager.session_objects import guest_deployment, ipc_name, session_name
@@ -89,7 +90,9 @@ async def test_dishka_shares_client_and_supplies_durable_repository(session_api,
         def kube(self) -> KubeClient:
             return session_api
 
-    container = make_async_container(AppProvider(object_settings), Overrides())
+    container = make_async_container(
+        CommonsBeansProvider(), AppProvider(object_settings), Overrides()
+    )
     try:
         assert await container.get(Kubernetes) is session_api
         assert await container.get(SessionKubernetes) is session_api

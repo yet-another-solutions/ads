@@ -167,17 +167,19 @@ async def test_cleanup_failure_retains_pid_and_prevents_next_exec(ipc) -> None:
     async with ipc.running():
         request = ipc.request()
         await ipc.send(request)
-        await ipc.send(SandboxAckReply(request.execution_id))
+        await ipc.send(
+            SandboxAckReply(request.execution_id, request.session_id, request.message_id)
+        )
         await eventually(lambda: bool(ipc.store.entries()))
         ipc.kube.fail_kill = True
-        await ipc.send(SandboxAbort(request.execution_id))
+        await ipc.send(SandboxAbort(request.execution_id, request.session_id, request.message_id))
         await eventually(lambda: ipc.service.last_result is not None)
         assert ipc.store.entries()[0][1].pid == 420
         assert not ipc.guest.clean
         assert ipc.service.last_result.text == "guest cleanup failed"
         second = ipc.request()
         await ipc.send(second)
-        await ipc.send(SandboxAckReply(second.execution_id))
+        await ipc.send(SandboxAckReply(second.execution_id, second.session_id, second.message_id))
         await eventually(lambda: ipc.service.last_id == second.execution_id)
         assert len(ipc.kube.calls) == 2
         assert ipc.service.last_result.is_error
