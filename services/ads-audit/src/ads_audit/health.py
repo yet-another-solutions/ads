@@ -16,7 +16,6 @@ def live() -> dict[str, str]:
 @get("/health/ready")
 @inject
 async def ready(engine: FromDishka[AsyncEngine]) -> dict[str, str]:
-    """Not ready without the journal: accepted events would have nowhere to land."""
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))

@@ -12,14 +12,12 @@ from ads_audit.schema import (
 )
 
 
-def test_the_journal_is_partitioned_by_time() -> None:
-    """Retention drops a partition, so the table must be ranged on the timestamp."""
+def test_the_journal_is_partitioned_by_time_so_retention_can_drop_a_partition() -> None:
     assert "PARTITION BY RANGE (recorded_at)" in CREATE_TABLE
     assert "PRIMARY KEY (recorded_at, id)" in CREATE_TABLE
 
 
-def test_the_written_row_carries_the_time_the_index_is_keyed_on() -> None:
-    """A redelivery only conflicts if recorded_at comes from the event, not from now()."""
+def test_the_written_row_takes_recorded_at_from_the_event_so_a_redelivery_conflicts() -> None:
     statement = audit_decisions.insert().values(
         recorded_at=datetime(2026, 9, 14, tzinfo=UTC),
         event_id="e1",
@@ -75,17 +73,14 @@ def test_the_table_carries_what_the_event_carries() -> None:
 
 
 def test_the_journal_says_which_check_produced_the_row() -> None:
-    """One call can leave two rows — the matrix permitted it, the payload refused it."""
     assert "point" in CREATE_TABLE
     assert "DEFAULT 'call'" in CREATE_TABLE
 
 
 def test_the_journal_says_which_build_wrote_the_row() -> None:
-    """The payload checks ship in the image, outside the policy hash."""
     assert "decided_by" in CREATE_TABLE
 
 
-def test_a_journal_that_predates_the_build_column_gets_it() -> None:
-    """``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it was."""
+def test_an_existing_journal_without_the_build_column_gets_it_added() -> None:
     assert "ADD COLUMN IF NOT EXISTS decided_by" in ADD_DECIDED_BY
     assert "DEFAULT ''" in ADD_DECIDED_BY

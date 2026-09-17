@@ -16,20 +16,14 @@ from ads_policy.contract import AuditEvent, Capability, Effect, InterceptionPoin
 
 @dataclass(frozen=True, slots=True)
 class Cursor:
-    """Where a page of the journal ended. Keyset, because offsets lie.
-
-    ``(recorded_at, event_id)`` carries a unique index and the journal only ever
-    grows, so a cursor still points at the same row however much has landed since.
-    """
-
     recorded_at: datetime
     event_id: str
 
     def encode(self) -> str:
-        # Zulu rather than +00:00: a plus sign in a query string decodes as a space,
-        # and this ends up on curl command lines.
-        moment = self.recorded_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
-        return f"{moment}|{self.event_id}"
+        query_string_safe_moment = (
+            self.recorded_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        )
+        return f"{query_string_safe_moment}|{self.event_id}"
 
     @staticmethod
     def decode(raw: str) -> Cursor:
@@ -41,15 +35,11 @@ class Cursor:
 
 @dataclass(frozen=True, slots=True)
 class Page:
-    """One page of the journal, newest first, and where to carry on from."""
-
     events: tuple[AuditEvent, ...]
     next_cursor: str | None
 
 
 class AuditRepository(Protocol):
-    """Append and read. There is deliberately no way to remove a row."""
-
     async def append(self, event: AuditEvent) -> None: ...
 
     async def for_run(self, run_id: str) -> Sequence[AuditEvent]: ...
@@ -60,8 +50,6 @@ class AuditRepository(Protocol):
 
 
 class UnitOfWork(Protocol):
-    """One transaction on the boundary: the consumer opens it per delivery."""
-
     def __call__(self) -> AbstractAsyncContextManager[AuditRepository]: ...
 
 
@@ -84,8 +72,6 @@ def fixed_unit_of_work(repository: AuditRepository) -> UnitOfWork:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class SqlAuditRepository:
-    """The journal in PostgreSQL. Redelivered events are ignored, never duplicated."""
-
     session: AsyncSession
 
     async def append(self, event: AuditEvent) -> None:
@@ -113,7 +99,6 @@ class SqlAuditRepository:
         return await self._select(audit_decisions.c.subject == subject)
 
     async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
-        """Newest first, because a reviewer starts from what just happened."""
         keyset = tuple_(audit_decisions.c.recorded_at, audit_decisions.c.event_id)
         statement = (
             select(audit_decisions)
@@ -122,12 +107,10 @@ class SqlAuditRepository:
         )
         if cursor is not None:
             statement = statement.where(keyset < (cursor.recorded_at, cursor.event_id))
-        rows = (await self.session.execute(statement)).mappings().all()
-        events = [_event(dict(row)) for row in rows[:limit]]
-        # One row past the page is how we know whether there is another one, without
-        # a second count query over a partitioned table.
-        more = len(rows) > limit
-        following = Cursor(events[-1].recorded_at, events[-1].event_id) if more else None
+        page_and_one_more = (await self.session.execute(statement)).mappings().all()
+        events = [_event(dict(row)) for row in page_and_one_more[:limit]]
+        has_next_page = len(page_and_one_more) > limit
+        following = Cursor(events[-1].recorded_at, events[-1].event_id) if has_next_page else None
         return Page(tuple(events), following.encode() if following else None)
 
     async def _select(self, condition: object) -> Sequence[AuditEvent]:
@@ -141,8 +124,6 @@ class SqlAuditRepository:
 
 
 class InMemoryAuditRepository:
-    """Single-process stand-in for tests, with the same append-only surface."""
-
     def __init__(self) -> None:
         self._events: list[AuditEvent] = []
         self._seen: set[str] = set()

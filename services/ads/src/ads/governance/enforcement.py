@@ -17,17 +17,10 @@ from ads_policy.contract import Capability, DecisionRequest, PolicyDecision, Run
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-_current: ContextVar[Enforcer | None] = ContextVar("ads_policy_enforcer", default=None)
+_current_enforcer: ContextVar[Enforcer | None] = ContextVar("ads_policy_enforcer", default=None)
 
 
 class Enforcer:
-    """Asks the PDP on behalf of the current run, and records what the PDP could not.
-
-    The journal belongs to the policy service, which sees both the question and its
-    own verdict. Only a decision made here instead of it — because it was out of
-    reach — would otherwise leave no trace, so only that one is published.
-    """
-
     def __init__(
         self,
         *,
@@ -44,7 +37,6 @@ class Enforcer:
         self._denied_message = denied_message or GovernanceSettings().denied_message
 
     def check(self, capability: Capability, resource: str) -> PolicyDecision:
-        """The level and the context live in the run, so a caller cannot declare its own."""
         context = SecurityContextHolder.require()
         request = DecisionRequest(
             run_id=self._run.id,
@@ -54,9 +46,8 @@ class Enforcer:
             attributes=dict(self._attributes),
         )
         decision = self._client.decide(request)
-        if decision.rule_id != UNREACHABLE:
-            # The policy service journalled its own answer; recording it again would
-            # read as a second attempt and charge the budget twice.
+        journalled_by_policy_service = decision.rule_id != UNREACHABLE
+        if journalled_by_policy_service:
             return decision
         try:
             self._audit.enqueue(record(request, decision))
@@ -66,42 +57,38 @@ class Enforcer:
 
 
 class EnforcerHolder:
-    """Current Enforcer for this HTTP request or detached work."""
-
     @staticmethod
     def get() -> Enforcer | None:
-        return _current.get()
+        return _current_enforcer.get()
 
     @staticmethod
     def require() -> Enforcer:
-        enforcer = _current.get()
+        enforcer = _current_enforcer.get()
         if enforcer is None:
             raise AccessDenied("policy enforcement unavailable")
         return enforcer
 
     @staticmethod
     def set(enforcer: Enforcer | None) -> Token[Enforcer | None]:
-        return _current.set(enforcer)
+        return _current_enforcer.set(enforcer)
 
     @staticmethod
     def reset(token: Token[Enforcer | None]) -> None:
-        _current.reset(token)
+        _current_enforcer.reset(token)
 
     @staticmethod
     @contextmanager
     def bound(enforcer: Enforcer) -> Iterator[Enforcer]:
-        token = _current.set(enforcer)
+        token = _current_enforcer.set(enforcer)
         try:
             yield enforcer
         finally:
-            _current.reset(token)
+            _current_enforcer.reset(token)
 
 
 def require_permission(
     capability: Capability, *, resource: str = "", resource_arg: str | None = None
 ) -> Callable[[F], F]:
-    """wrapt advice: the PDP must permit ``capability`` on the resource in hand."""
-
     @wrapt.decorator
     def wrapper(
         wrapped: Callable[..., Any],
@@ -113,7 +100,7 @@ def require_permission(
         SecurityContextHolder.require()
         enforcer = EnforcerHolder.require()
         decision = enforcer.check(
-            capability, _resource(wrapped, args, kwargs, resource_arg, resource)
+            capability, _resource_of_call(wrapped, args, kwargs, resource_arg, resource)
         )
         if not decision.permitted:
             raise AccessDenied(decision.message)
@@ -122,7 +109,7 @@ def require_permission(
     return wrapper  # type: ignore[return-value]
 
 
-def _resource(
+def _resource_of_call(
     wrapped: Callable[..., Any],
     args: tuple[Any, ...],
     kwargs: dict[str, Any],

@@ -27,8 +27,6 @@ def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRou
 
 
 class AuditController(Controller):
-    """Read side of the journal. Writing happens only through the queue."""
-
     path = "/audit"
     guards = [require_api_token]
 
@@ -40,7 +38,6 @@ class AuditController(Controller):
         limit: int = 100,
         cursor: str | None = None,
     ) -> Page:
-        """The whole journal, newest first. Carry `next_cursor` back to go on."""
         try:
             return await service.journal(limit, cursor)
         except ValueError as exc:
@@ -51,7 +48,6 @@ class AuditController(Controller):
     async def run_events(
         self, run_id: str, service: FromDishka[AuditService]
     ) -> Sequence[AuditEvent]:
-        """One run in the order it happened; a run is bounded by its own lifetime."""
         return await service.for_run(run_id)
 
     @get("/subjects/{subject:str}")

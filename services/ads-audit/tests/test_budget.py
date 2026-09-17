@@ -87,7 +87,6 @@ async def test_a_redelivered_event_is_counted_once(
 
 
 async def test_a_redelivery_keeps_the_time_the_decision_was_made() -> None:
-    """The journal keys on it, so it must survive the trip and not be reassigned."""
     event = _denied(Capability.SECRET_READ, "ads-client-secret", 5)
     carried = msgspec.json.decode(msgspec.json.encode(event), type=AuditEvent)
     assert carried.recorded_at == event.recorded_at

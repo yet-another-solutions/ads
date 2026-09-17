@@ -60,7 +60,6 @@ class AppProvider(Provider):
     async def repository(
         self, sessions: async_sessionmaker[AsyncSession]
     ) -> AsyncIterator[AuditRepository]:
-        """Transaction on the service boundary: one request, one unit of work."""
         if self._repository is not None:
             yield self._repository
             return

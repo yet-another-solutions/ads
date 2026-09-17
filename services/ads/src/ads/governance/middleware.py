@@ -11,8 +11,6 @@ from ads.governance.enforcement import Enforcer, EnforcerHolder
 
 @dataclass(frozen=True, slots=True, eq=False)
 class PolicyEnforcementMiddleware:
-    """Bind an Enforcer for the request, then clear it."""
-
     app: ASGIApp
     provider: Callable[[Scope], Enforcer | None]
 

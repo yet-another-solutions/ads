@@ -8,8 +8,6 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    """Every tunable of the audit service. Modules read them, never redefine them."""
-
     api_token: str
     tls_cert_path: Path
     tls_key_path: Path

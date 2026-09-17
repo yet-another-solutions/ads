@@ -17,8 +17,6 @@ logger = structlog.get_logger("ads.audit")
 
 @dataclass(frozen=True, slots=True, eq=False)
 class AuditConsumer:
-    """Drains the audit queue into the journal, acknowledging only what landed."""
-
     connection: AbstractRobustConnection
     unit_of_work: UnitOfWork
     prefetch: int = 100
@@ -35,12 +33,9 @@ class AuditConsumer:
         await queue.consume(self.handle)
 
     async def handle(self, message: AbstractIncomingMessage) -> None:
-        """Ack after the commit, so a crash in between replays rather than loses."""
         try:
             event = msgspec.json.decode(message.body, type=AuditEvent)
         except msgspec.DecodeError:
-            # DecodeError is the wider one: ValidationError alone lets a body that is
-            # not even JSON escape, and an unsettled message blocks the queue behind it.
             logger.error("audit event rejected", body=message.body[:512])
             await message.reject(requeue=False)
             return

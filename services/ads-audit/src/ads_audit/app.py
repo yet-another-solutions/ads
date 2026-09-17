@@ -27,7 +27,6 @@ def create_app(
     repository: AuditRepository | None = None,
     connection: AbstractRobustConnection | None = None,
 ) -> Litestar:
-    """``repository`` and ``connection`` let a caller bring their own, as tests do."""
     configure_logging()
     container = make_async_container(
         AppProvider(settings, repository, connection), LitestarProvider()
@@ -39,7 +38,9 @@ def create_app(
         del app
         await _open_journal(container, settings, repository)
         if repository is None:
-            keeper.append(asyncio.create_task(_keep_partitions(container, settings)))
+            keeper.append(
+                asyncio.create_task(_keep_creating_upcoming_partitions(container, settings))
+            )
 
     async def _stop(app: Litestar) -> None:
         del app
@@ -77,8 +78,7 @@ async def _open_journal(
     ).start()
 
 
-async def _keep_partitions(container: AsyncContainer, settings: Settings) -> None:
-    """Rows land in a partition or not at all, so the next ones are made in advance."""
+async def _keep_creating_upcoming_partitions(container: AsyncContainer, settings: Settings) -> None:
     engine = await container.get(AsyncEngine)
     while True:
         await asyncio.sleep(settings.partition_check_seconds)

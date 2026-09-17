@@ -17,8 +17,6 @@ from audit_helpers import TOKEN, denied
 
 
 class _Broker:
-    """No RabbitMQ in the fast suite: the consumer is started against this."""
-
     async def channel(self) -> _Channel:
         return _Channel()
 
@@ -158,8 +156,9 @@ def test_an_unreadable_cursor_is_refused(api: TestClient) -> None:
     assert api.get("/audit/events?cursor=nonsense").status_code == 400
 
 
-def test_the_page_size_is_capped(api: TestClient, repository: InMemoryAuditRepository) -> None:
-    """The journal is unbounded, so the ceiling belongs to the service, not the caller."""
+def test_the_service_caps_the_page_size_the_caller_asks_for(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
     _seed(repository, *(_at(minute, f"e{minute}") for minute in range(1, 6)))
     page = api.get(f"/audit/events?limit={MAX_PAGE * 10}").json()
     assert len(page["events"]) == 5

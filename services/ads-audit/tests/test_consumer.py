@@ -11,8 +11,6 @@ pytestmark = pytest.mark.anyio
 
 
 class _Delivery:
-    """Stands in for one RabbitMQ message and remembers how it was settled."""
-
     def __init__(self, body: bytes) -> None:
         self.body = body
         self.acked = False
@@ -83,10 +81,9 @@ async def test_nothing_is_acknowledged_before_it_lands() -> None:
 
 
 @pytest.mark.parametrize("body", [b'{"run_id": 42}', b"not json at all", b"", b"\xff\xfe"])
-async def test_a_malformed_body_leaves_the_queue(
+async def test_a_malformed_body_is_rejected_so_it_does_not_block_the_queue(
     body: bytes, repository: InMemoryAuditRepository
 ) -> None:
-    """A body nothing can parse must be settled, or it blocks everything behind it."""
     delivery = _Delivery(body)
     await _consumer(repository).handle(delivery)  # type: ignore[arg-type]
     assert delivery.rejected
