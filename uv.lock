@@ -276,6 +276,7 @@ lint = [
 ]
 test = [
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "testcontainers" },
 ]
 typecheck = [
@@ -301,6 +302,7 @@ dev = [{ name = "nox", specifier = "==2026.8.17" }]
 lint = [{ name = "ruff", specifier = "==0.16.7" }]
 test = [
     { name = "pytest", specifier = "==9.1.1" },
+    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "testcontainers", specifier = "==4.15.0" },
 ]
 typecheck = [{ name = "mypy", specifier = "==2.3.1" }]

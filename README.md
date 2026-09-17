@@ -56,9 +56,15 @@ ads-preferences is a TLS-only JSON resource server (`python -m ads_preferences`)
 
 ## Tests
 
+The workspace declares public PyPI as its single default Python package index.
+Local uv/Nox commands, GitHub CI/CD, and image builds use that same configuration;
+they do not depend on lab DNS, a private package proxy, or index credentials.
+
 ```sh
-UV_DEFAULT_INDEX=https://pypi.org/simple uv sync --group test
-UV_DEFAULT_INDEX=https://pypi.org/simple uv run --group test pytest
+uv sync --group test
+uv run --group test pytest
+# Full lifecycle:
+uv run --group dev nox -s lint deps typecheck test package
 ```
 
 Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is HTTPS. Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.

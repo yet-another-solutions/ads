@@ -22,7 +22,6 @@ permissions:
 env:
   REGISTRY: ghcr.io
   OWNER: ${{ github.repository_owner }}
-  UV_DEFAULT_INDEX: https://pypi.org/simple
   ADS_SESSION_SIZE: ${{ github.event.inputs.session_size || '20Gi' }}
 
 jobs:
