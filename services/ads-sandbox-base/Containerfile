@@ -1,0 +1,53 @@
+# hadolint ignore=DL3007
+FROM debian:latest AS pause-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY scripts/pause.c /src/pause.c
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && gcc -O2 -static -o /pause /src/pause.c \
+    && rm -rf /var/lib/apt/lists/*
+
+# hadolint ignore=DL3007
+FROM debian:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bind9-dnsutils \
+        ca-certificates \
+        crun \
+        curl \
+        dnsutils \
+        fuse-overlayfs \
+        iproute2 \
+        libcap2-bin \
+        passt \
+        podman \
+        slirp4netns \
+        uidmap \
+        util-linux \
+    && rm -rf /var/lib/apt/lists/* \
+    && if ! id -u podman >/dev/null 2>&1; then \
+           useradd --create-home --home-dir /home/podman --shell /bin/bash podman; \
+       fi \
+    && if ! grep -q '^podman:' /etc/subuid; then echo 'podman:100000:65536' >> /etc/subuid; fi \
+    && if ! grep -q '^podman:' /etc/subgid; then echo 'podman:100000:65536' >> /etc/subgid; fi \
+    && mkdir -p /etc/containers \
+    && printf '%s\n' \
+        '[storage]' \
+        'driver = "overlay"' \
+        'graphroot = "/session/outer-podman"' \
+        'runroot = "/run/ads-podman"' \
+        > /etc/containers/storage.conf
+
+COPY --from=pause-builder /pause /usr/local/sbin/pause
+COPY scripts/ads-sandbox-boot /usr/local/sbin/ads-sandbox-boot
+COPY scripts/ads-session-exec /usr/local/sbin/ads-session-exec
+
+RUN chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/pause \
+    && test -x /usr/local/sbin/pause
+
+ENTRYPOINT ["/usr/local/sbin/ads-sandbox-boot"]
