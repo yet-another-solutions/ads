@@ -63,6 +63,7 @@ typecheck = [
     "mypy==2.3.1",
 ]
 test = [
+    "PyYAML==6.0.3",
     "pytest==9.1.1",
     "testcontainers==4.15.0",
 ]
@@ -122,6 +123,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = [
+    "deploy/keycloak/tests",
     "deploy/lab/sandbox-identity/tests",
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/tests",

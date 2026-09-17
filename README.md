@@ -85,3 +85,7 @@ Install requires:
 - Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<httpRoute.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
 
 Application pods (ADS, engine, preferences, and egress-controlplane) schedule on application nodes.
+
+A standalone [Keycloak Operator realm-import sample](deploy/keycloak/README.md)
+provides the six ADS clients and identity configuration for a new realm. CD
+publishes it beside the chart, but Helm never applies it or owns the realm.

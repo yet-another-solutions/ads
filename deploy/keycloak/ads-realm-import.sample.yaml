@@ -1,0 +1,321 @@
+# Standalone, create-only Keycloak Operator sample; NOT an ADS Helm template.
+# See README.md before applying. No live credentials or live client UUIDs.
+apiVersion: k8s.keycloak.org/v2beta1
+kind: KeycloakRealmImport
+metadata:
+  name: ads-realm-sample
+  namespace: keycloak
+spec:
+  keycloakCRName: keycloak
+  placeholders:
+    ADS_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads}
+    ADS_ENGINE_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-engine}
+    ADS_PREFERENCES_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-preferences}
+    ADS_SANDBOX_MCP_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-sandbox-mcp}
+    ADS_SANDBOX_MANAGER_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-sandbox-manager}
+    ADS_SANDBOX_IPC_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-sandbox-ipc}
+  realm:
+    realm: ads
+    displayName: ADS
+    enabled: true
+    sslRequired: all
+    registrationAllowed: false
+    resetPasswordAllowed: false
+    rememberMe: false
+    accessTokenLifespan: 300
+    ssoSessionIdleTimeout: 1800
+    ssoSessionMaxLifespan: 36000
+    roles:
+      realm:
+        - name: user
+          description: ADS application access; assign explicitly to authorized users.
+          composite: false
+    # Scope mappings allow preservation of an existing user's role. They do NOT
+    # grant that role to a user or to a service account.
+    scopeMappings:
+      - {client: ads, roles: [user]}
+      - {client: ads-engine, roles: [user]}
+      - {client: ads-preferences, roles: [user]}
+      - {client: ads-sandbox-mcp, roles: [user]}
+      - {client: ads-sandbox-manager, roles: [user]}
+      - {client: ads-sandbox-ipc, roles: [user]}
+    # Built-in basic/roles/profile/email/service_account scopes are created by
+    # Keycloak on new-realm import. No custom replacement or offline_access.
+    clients:
+      - clientId: ads
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        consentRequired: false
+        rootUrl: https://ads.example.com
+        baseUrl: https://ads.example.com
+        redirectUris: [https://ads.example.com/auth/callback]
+        webOrigins: [https://ads.example.com]
+        defaultClientScopes: [basic, roles, profile, email, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+          post.logout.redirect.uris: https://ads.example.com/
+        protocolMappers:
+          - name: audience-ads
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads
+              access.token.claim: "true"
+              id.token.claim: "true"
+          - name: audience-ads-engine
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-engine
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: audience-ads-preferences
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-preferences
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - clientId: ads-engine
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_ENGINE_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, roles, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: audience-ads-engine
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-engine
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: audience-ads
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: audience-ads-sandbox-mcp
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-mcp
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - clientId: ads-preferences
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_PREFERENCES_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, roles, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "false"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: audience-ads-preferences
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-preferences
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - clientId: ads-sandbox-mcp
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_SANDBOX_MCP_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, roles, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: audience-ads-sandbox-manager
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-manager
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - id: 10000000-0000-4000-8000-000000000005
+        clientId: ads-sandbox-manager
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_SANDBOX_MANAGER_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, roles, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: ads-service-subject
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-attribute-mapper
+            config:
+              user.attribute: ads_service_client_uuid
+              claim.name: sub
+              jsonType.label: String
+              multivalued: "false"
+              access.token.claim: "true"
+              id.token.claim: "false"
+              userinfo.token.claim: "false"
+              introspection.token.claim: "true"
+          - name: audience-ads-sandbox-manager
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-manager
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: audience-ads-sandbox-ipc
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-ipc
+              access.token.claim: "true"
+              id.token.claim: "false"
+          - name: audience-ads-sandbox-mcp
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-mcp
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - id: 10000000-0000-4000-8000-000000000006
+        clientId: ads-sandbox-ipc
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_SANDBOX_IPC_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, roles, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: ads-service-subject
+            protocol: openid-connect
+            protocolMapper: oidc-usermodel-attribute-mapper
+            config:
+              user.attribute: ads_service_client_uuid
+              claim.name: sub
+              jsonType.label: String
+              multivalued: "false"
+              access.token.claim: "true"
+              id.token.claim: "false"
+              userinfo.token.claim: "false"
+              introspection.token.claim: "true"
+          - name: audience-ads-sandbox-manager
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-manager
+              access.token.claim: "true"
+              id.token.claim: "false"
+    # These are service-account records only, not human login/test users.
+    # Replace each example client UUID above AND its matching attribute below
+    # together when adapting the sample to another realm.
+    users:
+      - username: service-account-ads-sandbox-manager
+        enabled: true
+        serviceAccountClientId: ads-sandbox-manager
+        attributes:
+          ads_service_client_uuid: ["10000000-0000-4000-8000-000000000005"]
+      - username: service-account-ads-sandbox-ipc
+        enabled: true
+        serviceAccountClientId: ads-sandbox-ipc
+        attributes:
+          ads_service_client_uuid: ["10000000-0000-4000-8000-000000000006"]
+    components:
+      org.keycloak.userprofile.UserProfileProvider:
+        - providerId: declarative-user-profile
+          config:
+            kc.user.profile.config:
+              - |
+                {
+                  "attributes": [
+                    {
+                      "name": "username",
+                      "validations": {"length": {"min": 3, "max": 255}, "username-prohibited-characters": {}, "up-username-not-idn-homograph": {}},
+                      "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+                      "multivalued": false
+                    },
+                    {
+                      "name": "email",
+                      "validations": {"email": {}, "length": {"max": 255}},
+                      "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+                      "multivalued": false
+                    },
+                    {
+                      "name": "firstName",
+                      "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+                      "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+                      "multivalued": false
+                    },
+                    {
+                      "name": "lastName",
+                      "validations": {"length": {"max": 255}, "person-name-prohibited-characters": {}},
+                      "permissions": {"view": ["admin", "user"], "edit": ["admin", "user"]},
+                      "multivalued": false
+                    },
+                    {
+                      "name": "ads_service_client_uuid",
+                      "permissions": {"view": ["admin"], "edit": ["admin"]},
+                      "multivalued": false
+                    }
+                  ]
+                }
