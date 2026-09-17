@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import uuid
 
+import msgspec
+
 from ads_commons.engine import (
     AUTHORIZATION_HEADER,
     Abort,
@@ -11,9 +13,11 @@ from ads_commons.engine import (
     AssistantHistoryTurn,
     AssistantMessage,
     Authorization,
+    EngineOutput,
     EngineRequest,
     ErrorOutput,
     Finish,
+    Notice,
     OpenAiBearerToken,
     OpenAiStreamAuthentication,
     OpenAiStreamModel,
@@ -130,6 +134,27 @@ def test_output_tags() -> None:
         encode_output(ErrorOutput(session_id=SESSION, message_id=MESSAGE, text="boom"))
     )
     assert error["type"] == "error"
+
+
+def test_a_notice_travels_as_its_own_part() -> None:
+    encoded = encode_output(
+        PartialResponse(
+            session_id=SESSION,
+            order=2,
+            notice=Notice(kind="prompt-injection", tool="probe/inject", text="withheld"),
+        )
+    )
+    payload = json.loads(encoded)
+    assert payload["notice"] == {
+        "kind": "prompt-injection",
+        "tool": "probe/inject",
+        "text": "withheld",
+    }
+    assert "message" not in payload
+    decoded = msgspec.json.decode(encoded, type=EngineOutput)
+    assert isinstance(decoded, PartialResponse)
+    assert decoded.notice is not None
+    assert decoded.notice.kind == "prompt-injection"
 
 
 def test_peek_request_ids_ignores_incomplete_payloads() -> None:

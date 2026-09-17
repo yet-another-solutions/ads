@@ -81,6 +81,15 @@ class AssistantMessage(msgspec.Struct, frozen=True):
     type: Literal["assistant"] = "assistant"
 
 
+NoticeKind = Literal["tool-refused", "prompt-injection", "tools-unavailable"]
+
+
+class Notice(msgspec.Struct, frozen=True):
+    kind: NoticeKind
+    tool: str
+    text: str
+
+
 class PartialResponse(
     msgspec.Struct,
     frozen=True,
@@ -92,6 +101,7 @@ class PartialResponse(
     order: int
     reasoning: Reasoning | None = None
     message: AssistantMessage | None = None
+    notice: Notice | None = None
 
 
 class Ping(msgspec.Struct, frozen=True, tag="ping", tag_field="type"):
