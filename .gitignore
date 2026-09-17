@@ -13,3 +13,4 @@ htmlcov/
 .python-version
 *.tgz
 charts/*.tgz
+docs/
