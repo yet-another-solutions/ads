@@ -1,0 +1,88 @@
+#!/bin/bash
+set -euo pipefail
+
+fail() {
+  echo "ads-sandbox-golden: $*" >&2
+  exit 1
+}
+
+parse_size() {
+  local s=$1 n suffix
+  [[ $s =~ ^([0-9]+)(Ki|Mi|Gi|Ti|Pi|k|M|G|T|P)?$ ]] || return 1
+  n=${BASH_REMATCH[1]}
+  suffix=${BASH_REMATCH[2]}
+  case $suffix in
+    '') printf '%s\n' "$n" ;;
+    Ki) printf '%s\n' $((n * 1024)) ;;
+    Mi) printf '%s\n' $((n * 1024 * 1024)) ;;
+    Gi) printf '%s\n' $((n * 1024 * 1024 * 1024)) ;;
+    Ti) printf '%s\n' $((n * 1024 * 1024 * 1024 * 1024)) ;;
+    Pi) printf '%s\n' $((n * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+    k) printf '%s\n' $((n * 1000)) ;;
+    M) printf '%s\n' $((n * 1000 * 1000)) ;;
+    G) printf '%s\n' $((n * 1000 * 1000 * 1000)) ;;
+    T) printf '%s\n' $((n * 1000 * 1000 * 1000 * 1000)) ;;
+    P) printf '%s\n' $((n * 1000 * 1000 * 1000 * 1000 * 1000)) ;;
+    *) return 1 ;;
+  esac
+}
+
+hex_to_dec() {
+  printf '%d' "0x$1"
+}
+
+device_in_use() {
+  local mm=$1
+  awk -v mm="$mm" '$3 == mm { found = 1; exit } END { exit !found }' /proc/self/mountinfo
+}
+
+[[ -n ${ADS_SESSION_DEVICE:-} ]] || fail "ADS_SESSION_DEVICE unset"
+[[ -n ${ADS_SESSION_SIZE:-} ]] || fail "ADS_SESSION_SIZE unset"
+[[ -b $ADS_SESSION_DEVICE ]] || fail "$ADS_SESSION_DEVICE is not a block device"
+[[ -f /ci/rootfs.tar.zst && -s /ci/rootfs.tar.zst ]] || fail "/ci/rootfs.tar.zst missing"
+
+session_mm=$(stat -c '%t:%T' "$ADS_SESSION_DEVICE")
+session_dec="$(hex_to_dec "${session_mm%%:*}"):$(hex_to_dec "${session_mm##*:}")"
+session_seen=0
+
+for syspath in /sys/class/block/*; do
+  [[ -e $syspath ]] || continue
+  name=${syspath##*/}
+  [[ -f $syspath/partition ]] && continue
+  case $name in
+    ram*|zram*|fd*|sr*|nbd*) continue ;;
+  esac
+  mm=$(cat "$syspath/dev")
+  if [[ $mm == "$session_dec" ]]; then
+    session_seen=1
+    if device_in_use "$mm"; then
+      fail "session device already mounted"
+    fi
+    continue
+  fi
+  if ! device_in_use "$mm"; then
+    fail "unexpected unmounted disk $name"
+  fi
+done
+
+[[ $session_seen == 1 ]] || fail "session device not in /sys/class/block"
+
+want=$(parse_size "$ADS_SESSION_SIZE") || fail "invalid ADS_SESSION_SIZE $ADS_SESSION_SIZE"
+dev_bytes=$(blockdev --getsize64 "$ADS_SESSION_DEVICE")
+[[ $dev_bytes -gt $want ]] || fail "device $dev_bytes bytes is not larger than ADS_SESSION_SIZE $ADS_SESSION_SIZE ($want bytes)"
+
+cleanup() {
+  if findmnt -n /session >/dev/null 2>&1; then
+    umount /session || true
+  fi
+}
+trap cleanup EXIT
+
+mkfs.ext4 -F "$ADS_SESSION_DEVICE"
+mkdir -p /session
+mount "$ADS_SESSION_DEVICE" /session
+mkdir -p /session/rootfs /session/outer-podman
+tar --zstd -C /session/rootfs -xf /ci/rootfs.tar.zst
+umount /session
+trap - EXIT
+exit 0

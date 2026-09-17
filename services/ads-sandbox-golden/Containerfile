@@ -1,0 +1,20 @@
+FROM debian:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        e2fsprogs \
+        tar \
+        util-linux \
+        zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY rootfs.tar.zst /ci/rootfs.tar.zst
+COPY scripts/ads-sandbox-golden /usr/local/sbin/ads-sandbox-golden
+
+RUN chmod 0755 /usr/local/sbin/ads-sandbox-golden \
+    && test -s /ci/rootfs.tar.zst \
+    && test "$(stat -c '%s' /ci/rootfs.tar.zst)" -lt 1073741824
+
+ENTRYPOINT ["/usr/local/sbin/ads-sandbox-golden"]

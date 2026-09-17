@@ -13,3 +13,5 @@ htmlcov/
 .python-version
 *.tgz
 charts/*.tgz
+services/ads-sandbox-golden/rootfs.tar.zst
+services/ads-sandbox-golden/*.tar.gz
