@@ -122,6 +122,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = [
+    "deploy/lab/sandbox-identity/tests",
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/tests",
     "libraries/ads-commons-schema/tests",

@@ -1,0 +1,84 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: ads-sandbox-ipc-exec
+  annotations:
+    pod-policies.kyverno.io/autogen-controllers: none
+spec:
+  admission: true
+  background: false
+  validationFailureAction: Enforce
+  failurePolicy: Fail
+  webhookTimeoutSeconds: 10
+  rules:
+    - name: require-bound-pod-identity
+      match:
+        any:
+          - resources:
+              kinds: [Pod/exec]
+              namespaces: [ads-sandbox]
+              operations: [CONNECT]
+            subjects:
+              - kind: ServiceAccount
+                name: ads-sandbox-ipc
+                namespace: ads-sandbox
+      validate:
+        message: "IPC exec requires a pod-bound identity and the sandbox container."
+        deny:
+          conditions:
+            any:
+              - key: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-name"[0] || `""` }}'
+                operator: Equals
+                value: ""
+              - key: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-uid"[0] || `""` }}'
+                operator: Equals
+                value: ""
+              - key: '{{ request.object.container || `""` }}'
+                operator: NotEquals
+                value: sandbox
+    - name: same-sandbox-only
+      match:
+        any:
+          - resources:
+              kinds: [Pod/exec]
+              namespaces: [ads-sandbox]
+              operations: [CONNECT]
+            subjects:
+              - kind: ServiceAccount
+                name: ads-sandbox-ipc
+                namespace: ads-sandbox
+      context:
+        # GET the caller named by verified token extras; UID check defeats name reuse.
+        # A missing extra resolves to an impossible Pod name and fails closed on 404.
+        - name: caller
+          apiCall:
+            urlPath: '/api/v1/namespaces/ads-sandbox/pods/{{ request.userInfo.extra."authentication.kubernetes.io/pod-name"[0] || `"missing-bound-pod"` }}'
+        - name: target
+          apiCall:
+            urlPath: "/api/v1/namespaces/{{ request.namespace }}/pods/{{ request.name }}"
+      validate:
+        message: "IPC exec denied: caller and guest must have the same nonempty sandbox-id."
+        deny:
+          conditions:
+            any:
+              - key: "{{ caller.metadata.uid }}"
+                operator: NotEquals
+                value: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-uid"[0] || `""` }}'
+              - key: "{{ caller.spec.serviceAccountName }}"
+                operator: NotEquals
+                value: ads-sandbox-ipc
+              - key: '{{ caller.metadata.labels."ads.io/sandbox-id" || `""` }}'
+                operator: Equals
+                value: ""
+              - key: '{{ target.metadata.labels."ads.io/sandbox-id" || `""` }}'
+                operator: NotEquals
+                value: '{{ caller.metadata.labels."ads.io/sandbox-id" || `""` }}'
+              - key: "{{ target.metadata.uid }}"
+                operator: Equals
+                value: "{{ caller.metadata.uid }}"
+              - key: '{{ target.spec.serviceAccountName || `"default"` }}'
+                operator: Equals
+                value: ads-sandbox-ipc
+              - key: "{{ target.spec.containers[].name }}"
+                operator: AllNotIn
+                value: [sandbox]
