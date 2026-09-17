@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 
 from ads_audit.models import TABLE, audit_decisions
 from ads_audit.schema import (
+    ADD_CONVERSATION,
     ADD_DECIDED_BY,
+    CREATE_BLOCKS_TABLE,
+    CREATE_CONVERSATION_INDEX,
     CREATE_TABLE,
     create_partition,
     month_bounds,
@@ -69,6 +72,7 @@ def test_the_table_carries_what_the_event_carries() -> None:
         "content",
         "point",
         "decided_by",
+        "conversation",
     } <= columns
 
 
@@ -79,6 +83,18 @@ def test_the_journal_says_which_check_produced_the_row() -> None:
 
 def test_the_journal_says_which_build_wrote_the_row() -> None:
     assert "decided_by" in CREATE_TABLE
+
+
+def test_the_journal_says_which_conversation_the_row_belongs_to() -> None:
+    assert "conversation varchar(64)" in CREATE_TABLE
+    assert "ADD COLUMN IF NOT EXISTS conversation" in ADD_CONVERSATION
+    assert "(conversation)" in CREATE_CONVERSATION_INDEX
+
+
+def test_conversation_blocks_live_in_their_own_table() -> None:
+    assert "CREATE TABLE IF NOT EXISTS conversation_blocks" in CREATE_BLOCKS_TABLE
+    assert "conversation varchar(64) PRIMARY KEY" in CREATE_BLOCKS_TABLE
+    assert "PARTITION" not in CREATE_BLOCKS_TABLE
 
 
 def test_an_existing_journal_without_the_build_column_gets_it_added() -> None:

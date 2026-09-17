@@ -57,6 +57,25 @@ class AuditController(Controller):
     ) -> Sequence[AuditEvent]:
         return await service.for_subject(subject)
 
+    @get("/conversations/{conversation:str}")
+    @inject
+    async def conversation_events(
+        self, conversation: str, service: FromDishka[AuditService]
+    ) -> Sequence[AuditEvent]:
+        return await service.for_conversation(conversation)
+
+    @get("/conversations/{conversation:str}/budget")
+    @inject
+    async def conversation_budget(
+        self, conversation: str, service: FromDishka[AuditService]
+    ) -> dict[str, object]:
+        block = await service.conversation_block(conversation)
+        return {
+            "conversation": conversation,
+            "budget": await service.budget_for_conversation(conversation),
+            "blocked_at": None if block is None else block.blocked_at.isoformat(),
+        }
+
     @get("/runs/{run_id:str}/budget")
     @inject
     async def run_budget(self, run_id: str, service: FromDishka[AuditService]) -> dict[str, object]:

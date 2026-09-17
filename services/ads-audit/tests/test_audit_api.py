@@ -89,6 +89,33 @@ def test_the_subject_budget_is_served(api: TestClient, repository: InMemoryAudit
     assert api.get("/audit/subjects/bob/budget").json()["budget"] == 0
 
 
+def test_the_events_and_budget_of_a_conversation_are_served(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    chat = "3f2b6c1e-0000-4000-8000-000000000001"
+    _seed(
+        repository,
+        denied(run_id="run-1", resource="one", conversation=chat),
+        denied(run_id="run-2", resource="two", weight=3, conversation=chat),
+        denied(run_id="run-3", resource="elsewhere"),
+    )
+    events = api.get(f"/audit/conversations/{chat}").json()
+    assert {event["run_id"] for event in events} == {"run-1", "run-2"}
+    assert api.get(f"/audit/conversations/{chat}/budget").json() == {
+        "conversation": chat,
+        "budget": 8,
+        "blocked_at": None,
+    }
+
+
+def test_a_blocked_conversation_says_when_it_was_blocked(
+    api: TestClient, repository: InMemoryAuditRepository
+) -> None:
+    chat = "3f2b6c1e-0000-4000-8000-000000000001"
+    asyncio.run(repository.block_conversation(chat, 31))
+    assert api.get(f"/audit/conversations/{chat}/budget").json()["blocked_at"] is not None
+
+
 def _at(minute: int, event_id: str) -> AuditEvent:
     return msgspec.structs.replace(
         denied(),

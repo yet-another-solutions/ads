@@ -11,6 +11,7 @@ def denied(
     weight: int = 5,
     subject: str = "alice",
     capability: Capability = Capability.SECRET_READ,
+    conversation: str = "",
 ) -> AuditEvent:
     return AuditEvent(
         run_id=run_id,
@@ -21,4 +22,5 @@ def denied(
         rule_id=capability.value,
         weight=weight,
         policy_hash="hash",
+        conversation=conversation,
     )

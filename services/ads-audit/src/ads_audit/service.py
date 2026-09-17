@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import msgspec
 
 from ads_audit.budget import DEFAULT_REPEAT_MULTIPLIER, deny_budget
-from ads_audit.repository import AuditRepository, Cursor, Page
+from ads_audit.repository import AuditRepository, ConversationBlockRecord, Cursor, Page
 from ads_policy.contract import AuditEvent
 
 MAX_PAGE = 500
@@ -27,6 +27,17 @@ class AuditService:
 
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]:
         return await self.repository.for_subject(subject)
+
+    async def for_conversation(self, conversation: str) -> Sequence[AuditEvent]:
+        return await self.repository.for_conversation(conversation)
+
+    async def budget_for_conversation(self, conversation: str) -> int:
+        return deny_budget(
+            await self.repository.for_conversation(conversation), self.repeat_multiplier
+        )
+
+    async def conversation_block(self, conversation: str) -> ConversationBlockRecord | None:
+        return await self.repository.conversation_block(conversation)
 
     async def journal(self, limit: int, cursor: str | None = None) -> Page:
         page_size = max(1, min(limit, MAX_PAGE))

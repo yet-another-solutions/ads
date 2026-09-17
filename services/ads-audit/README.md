@@ -49,6 +49,8 @@ forever would block everything behind it.
 | `GET /audit/subjects/{subject}` | everything one subject did |
 | `GET /audit/runs/{run_id}/budget` | the accumulated cost of denials within one run |
 | `GET /audit/subjects/{subject}/budget` | the same across a subject's runs |
+| `GET /audit/conversations/{id}` | every run of one chat |
+| `GET /audit/conversations/{id}/budget` | the chat's budget, and when it was blocked if it was |
 
 Only the journal is paged, because only it is unbounded; a run is bounded by its own
 lifetime. Paging is keyset on `(recorded_at, event_id)` rather than an offset: the
@@ -63,16 +65,26 @@ cannot drift away from the events it summarises. Accumulation per subject is a s
 for whoever reviews the journal, not an automatic block: blocking a person for what an
 agent did is a guaranteed argument.
 
+A chat is different. Every refusal carrying a `conversation` recomputes that chat's
+budget, and once it reaches `ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` the chat is blocked
+for good: the block is written to `conversation_blocks` in the same transaction as the
+event, then sent to the policy service, which refuses every later decision in the chat.
+The table is the record; the policy service's copy is re-sent at start and every
+`ADS_AUDIT_BLOCK_DELIVERY_SECONDS`, so a lost copy comes back. There is no unblocking
+yet.
+
 ## Configuration
 
 Required:
 
 - `ADS_AUDIT_API_TOKEN` — at least 16 characters
 - `ADS_AMQP_URL`, `ADS_DATABASE_URL` (`postgresql+asyncpg://…`)
+- `ADS_POLICY_URL` (https), `ADS_POLICY_API_TOKEN` — where chat blocks are sent
 - `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`
 
 Optional: `ADS_TLS_CA_BUNDLE`, `ADS_BIND_HOST` (`0.0.0.0`), `ADS_PORT` (`8080`),
-`ADS_AUDIT_PREFETCH` (`100`), `ADS_AUDIT_PARTITIONS_AHEAD` (`2`).
+`ADS_AUDIT_PREFETCH` (`100`), `ADS_AUDIT_PARTITIONS_AHEAD` (`2`),
+`ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` (`30`), `ADS_AUDIT_BLOCK_DELIVERY_SECONDS` (`300`).
 
 ## Not built yet
 

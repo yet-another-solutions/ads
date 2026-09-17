@@ -10,7 +10,7 @@ from sqlalchemy import desc, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ads_audit.models import audit_decisions
+from ads_audit.models import audit_decisions, conversation_blocks
 from ads_policy.contract import AuditEvent, Capability, Effect, InterceptionPoint
 
 
@@ -39,6 +39,13 @@ class Page:
     next_cursor: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationBlockRecord:
+    conversation: str
+    blocked_at: datetime
+    budget: int
+
+
 class AuditRepository(Protocol):
     async def append(self, event: AuditEvent) -> None: ...
 
@@ -46,7 +53,17 @@ class AuditRepository(Protocol):
 
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]: ...
 
+    async def for_conversation(self, conversation: str) -> Sequence[AuditEvent]: ...
+
     async def page(self, limit: int, cursor: Cursor | None = None) -> Page: ...
+
+    async def block_conversation(
+        self, conversation: str, budget: int
+    ) -> ConversationBlockRecord | None: ...
+
+    async def conversation_block(self, conversation: str) -> ConversationBlockRecord | None: ...
+
+    async def conversation_blocks(self) -> Sequence[ConversationBlockRecord]: ...
 
 
 class UnitOfWork(Protocol):
@@ -89,6 +106,7 @@ class SqlAuditRepository:
             content=event.content,
             point=event.point.value,
             decided_by=event.decided_by,
+            conversation=event.conversation,
         )
         await self.session.execute(statement.on_conflict_do_nothing())
 
@@ -97,6 +115,33 @@ class SqlAuditRepository:
 
     async def for_subject(self, subject: str) -> Sequence[AuditEvent]:
         return await self._select(audit_decisions.c.subject == subject)
+
+    async def for_conversation(self, conversation: str) -> Sequence[AuditEvent]:
+        return await self._select(audit_decisions.c.conversation == conversation)
+
+    async def block_conversation(
+        self, conversation: str, budget: int
+    ) -> ConversationBlockRecord | None:
+        statement = (
+            insert(conversation_blocks)
+            .values(conversation=conversation, budget=budget)
+            .on_conflict_do_nothing()
+            .returning(conversation_blocks)
+        )
+        row = (await self.session.execute(statement)).mappings().first()
+        return None if row is None else _block(dict(row))
+
+    async def conversation_block(self, conversation: str) -> ConversationBlockRecord | None:
+        statement = select(conversation_blocks).where(
+            conversation_blocks.c.conversation == conversation
+        )
+        row = (await self.session.execute(statement)).mappings().first()
+        return None if row is None else _block(dict(row))
+
+    async def conversation_blocks(self) -> Sequence[ConversationBlockRecord]:
+        statement = select(conversation_blocks).order_by(conversation_blocks.c.blocked_at)
+        rows = (await self.session.execute(statement)).mappings().all()
+        return [_block(dict(row)) for row in rows]
 
     async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
         keyset = tuple_(audit_decisions.c.recorded_at, audit_decisions.c.event_id)
@@ -127,6 +172,25 @@ class InMemoryAuditRepository:
     def __init__(self) -> None:
         self._events: list[AuditEvent] = []
         self._seen: set[str] = set()
+        self._blocks: dict[str, ConversationBlockRecord] = {}
+
+    async def for_conversation(self, conversation: str) -> Sequence[AuditEvent]:
+        return [event for event in self._events if event.conversation == conversation]
+
+    async def block_conversation(
+        self, conversation: str, budget: int
+    ) -> ConversationBlockRecord | None:
+        if conversation in self._blocks:
+            return None
+        block = ConversationBlockRecord(conversation, datetime.now(UTC), budget)
+        self._blocks[conversation] = block
+        return block
+
+    async def conversation_block(self, conversation: str) -> ConversationBlockRecord | None:
+        return self._blocks.get(conversation)
+
+    async def conversation_blocks(self) -> Sequence[ConversationBlockRecord]:
+        return list(self._blocks.values())
 
     async def append(self, event: AuditEvent) -> None:
         if event.event_id in self._seen:
@@ -170,6 +234,15 @@ def _event(row: Mapping[str, Any]) -> AuditEvent:
         content=None if row["content"] is None else str(row["content"]),
         point=InterceptionPoint(str(row["point"])),
         decided_by=str(row["decided_by"]),
+        conversation=str(row["conversation"]),
         event_id=str(row["event_id"]),
         recorded_at=row["recorded_at"],
+    )
+
+
+def _block(row: Mapping[str, Any]) -> ConversationBlockRecord:
+    return ConversationBlockRecord(
+        conversation=str(row["conversation"]),
+        blocked_at=row["blocked_at"],
+        budget=int(str(row["budget"])),
     )

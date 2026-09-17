@@ -21,6 +21,10 @@ class Settings:
     partitions_ahead: int = 2
     partition_check_seconds: float = 86400.0
     deny_repeat_multiplier: int = 3
+    policy_url: str = ""
+    policy_api_token: str = ""
+    conversation_budget_limit: int = 30
+    block_delivery_seconds: float = 300.0
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -77,6 +81,12 @@ def load_settings() -> Settings:
     database_url = _env("ADS_DATABASE_URL").strip()
     if not database_url:
         raise RuntimeError("ADS_DATABASE_URL is required")
+    policy_url = _env("ADS_POLICY_URL").strip()
+    if not policy_url.startswith("https://"):
+        raise RuntimeError("ADS_POLICY_URL must be an https URL: conversation blocks go there")
+    policy_api_token = _env("ADS_POLICY_API_TOKEN").strip()
+    if not policy_api_token:
+        raise RuntimeError("ADS_POLICY_API_TOKEN is required")
     settings = Settings(
         api_token=api_token,
         tls_cert_path=cert_path,
@@ -88,6 +98,10 @@ def load_settings() -> Settings:
         port=int(_env("ADS_PORT", "8080")),
         prefetch=_seconds("ADS_AUDIT_PREFETCH", 100),
         partitions_ahead=_seconds("ADS_AUDIT_PARTITIONS_AHEAD", 2),
+        policy_url=policy_url,
+        policy_api_token=policy_api_token,
+        conversation_budget_limit=_seconds("ADS_AUDIT_CONVERSATION_BUDGET_LIMIT", 30),
+        block_delivery_seconds=_seconds("ADS_AUDIT_BLOCK_DELIVERY_SECONDS", 300),
     )
     load_tls_context(settings)
     return settings
