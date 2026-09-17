@@ -54,13 +54,17 @@ class GoldenEnsure:
         )
 
     async def poll(self) -> bool:
+        return await self.clone_source() is not None
+
+    async def clone_source(self) -> Object | None:
+        """Return the exact fenced PVC observation, not a later same-name replacement."""
         job, pvc = await self.kube.job(), await self.kube.pvc()
         if job is not None and not self._owned(job):
             raise RuntimeError("foreign golden Job; refusing adoption or deletion")
         if pvc is not None and not self._valid_pvc(pvc):
             raise RuntimeError("foreign or incompatible golden PVC; refusing adoption or deletion")
         if any(o is not None and o["metadata"].get("deletionTimestamp") for o in (job, pvc)):
-            return False
+            return None
         if (
             job is not None
             and pvc is not None
@@ -76,7 +80,7 @@ class GoldenEnsure:
             else:
                 # Acquire the Kubernetes name lock BEFORE creating the claim.
                 await self.kube.create_job(golden_job(self.settings))
-            return False
+            return None
         failed, complete = condition(job, "Failed"), condition(job, "Complete")
         if failed or (complete and pvc is None):
             # Keep the old Job name locked until its partial disk has disappeared.
@@ -85,28 +89,29 @@ class GoldenEnsure:
                     await self.kube.delete_pvc(pvc)
             else:
                 await self.kube.delete_job(job)
-            return False
+            return None
         if pvc is None:
             # Pending/unscheduled is in progress, not a failed bake. Any replica can
             # repair a winner's crash between Job creation and PVC creation.
             await self.kube.create_pvc(golden_pvc(self.settings, job["metadata"]["uid"]))
-            return False
+            return None
         if (
             not complete
             or job.get("status", {}).get("active", 0)
             or job.get("status", {}).get("terminating", 0)
         ):
-            return False
+            return None
         if pvc.get("status", {}).get("phase") != "Bound":
-            return False
+            return None
         if not await self.kube.released(pvc, job):
-            return False
+            return None
         # Fence the multi-resource observation against replacements during release checks.
         current_job, current_pvc = await self.kube.job(), await self.kube.pvc()
-        return all(
+        unchanged = all(
             current is not None
             and current["metadata"]["uid"] == old["metadata"]["uid"]
             and current["metadata"]["resourceVersion"] == old["metadata"]["resourceVersion"]
             and not current["metadata"].get("deletionTimestamp")
             for current, old in ((current_job, job), (current_pvc, pvc))
         )
+        return pvc if unchanged else None

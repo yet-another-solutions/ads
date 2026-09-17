@@ -144,6 +144,8 @@ def test_tls_failure_exits_before_any_network(monkeypatch, manager_tls, tmp_path
 
 def test_entrypoint_always_uses_tls(monkeypatch, manager_tls):
     monkeypatch.setattr(entrypoint, "load_settings", Mock(return_value=manager_tls))
+    schema = Mock()
+    monkeypatch.setattr(entrypoint, "prepare_schema", schema)
     app = Mock()
     monkeypatch.setattr(entrypoint, "create_app", Mock(return_value=app))
     server = Mock()
@@ -154,4 +156,7 @@ def test_entrypoint_always_uses_tls(monkeypatch, manager_tls):
     assert config.ssl_certfile == str(manager_tls.tls_cert_path)
     assert config.ssl_keyfile == str(manager_tls.tls_key_path)
     assert config.app is app
+    schema.assert_called_once()
+    assert schema.call_args.kwargs["database_url"] == manager_tls.database_url
+    assert schema.call_args.kwargs["tables"][0].name == "sandbox_session"
     server.run.assert_called_once()
