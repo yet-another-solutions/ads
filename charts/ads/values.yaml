@@ -56,33 +56,27 @@ guardrail:
   attributes:
     - repo.write=true
     - agent=true
-  # The audience a person's token must be issued for to act in their runs, e.g. the
-  # client our sandbox service obtains tokens as. Checked against `keycloak.*` below.
-  # Empty: no person's token is accepted; configured applications still are.
-  mcpAudience: ""
-  # name: URL. Point an agent's MCP client for `name` at
-  # https://<release>-guardrail:<port>/mcp/<name>; bindings know the server as
-  # `mcp:<name>`.
-  mcpServers: {}
-  #   retriever: http://retriever.agents:8006/mcp
-  # Applications that call with their own key and act for no person, such as hermes.
-  # Nothing in their path knows the guardrail is there, so the guardrail opens their
-  # runs itself: on the first call, and again once the last one has ended. A revoked
-  # run is not replaced. Configure the key's fingerprint, never the key:
-  #   printf %s "$API_SERVER_KEY" | sha256sum
-  # and where the application runs, the same way a launcher describes a sandbox.
+  # Empty accepts no person's token; configured applications still work.
+  personTokenAudience: ""
+  # An agent reaches each server at /mcp/<name>; bindings call it mcp:<name>.
+  # `site` is where the server executes its tools; the isolation level follows from it.
+  mcpServers: []
+  #   - name: sandbox
+  #     url: http://ads-sandbox-mcp:8080/mcp
+  #     site:
+  #       placement: cluster
+  #       runtimeClassName: kata-clh
+  #       nodeLabels:
+  #         ads.io/sandbox-node: "true"
+  #         ads.io/application-node: "true"
+  # keySha256: printf %s "$API_SERVER_KEY" | sha256sum
   applications: []
   #   - name: hermes
   #     keySha256: "<64 lowercase hex>"
-  #     sandbox:
+  #     workspace:
   #       project: ads
   #       repo: yet-another-solutions/ads
   #       env: test
-  #       workdir: /workspace
-  #       placement: cluster
-  #       runtimeClassName: ""
-  #       nodeLabels:
-  #         ads.io/application-node: "true"
 
 audit:
   replicaCount: 1

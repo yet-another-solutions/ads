@@ -151,13 +151,14 @@ jobs:
             echo 'audit rendered without a journal' >&2
             exit 1
           fi
-          helm template ads charts/ads \
-            --set guardrail.enabled=true \
-            --set guardrail.mcpServers.retriever=http://retriever:8006/mcp >/tmp/ads-guard.yaml
+          helm template ads charts/ads --set guardrail.enabled=true \
+            --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp","site":{"runtimeClassName":"kata-clh","nodeLabels":{"ads.io/sandbox-node":"true"}}}]' \
+            >/tmp/ads-guard.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-guard.yaml)" -eq 7
           grep -q 'app.kubernetes.io/component: ads-guardrail' /tmp/ads-guard.yaml
           grep -q 'ADS_GUARDRAIL_API_TOKEN' /tmp/ads-guard.yaml
-          grep -q 'ADS_MCP_SERVERS: "retriever=http://retriever:8006/mcp"' /tmp/ads-guard.yaml
+          grep -q '\\"name\\":\\"sandbox\\"' /tmp/ads-guard.yaml
+          grep -q '\\"runtime_class_name\\":\\"kata-clh\\"' /tmp/ads-guard.yaml
           if grep -qE 'ADS_PLACEMENT|ADS_SUBJECT' /tmp/ads-guard.yaml; then
             echo 'the shared service must not describe a sandbox or a person it does not serve' >&2
             exit 1
@@ -165,13 +166,18 @@ jobs:
           grep -q 'ADS_APPLICATIONS: "\[\]"' /tmp/ads-guard.yaml
           grep -q 'ADS_MCP_AUDIENCE: ""' /tmp/ads-guard.yaml
           grep -q 'ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-guard.yaml
+          if helm template ads charts/ads --set guardrail.enabled=true \
+            --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp"}]' >/tmp/ads-guard-bad.yaml; then
+            echo 'an MCP server rendered without saying where its tools execute' >&2
+            exit 1
+          fi
           helm template ads charts/ads --set guardrail.enabled=true \
-            --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"'"$(printf 'a%.0s' $(seq 64))"'","sandbox":{"project":"ads","repo":"r","env":"test"}}]' \
+            --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"'"$(printf 'a%.0s' $(seq 64))"'","workspace":{"project":"ads","repo":"r","env":"test"}}]' \
             >/tmp/ads-apps.yaml
           grep -q '\\"name\\":\\"hermes\\"' /tmp/ads-apps.yaml
           if helm template ads charts/ads --set guardrail.enabled=true \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"x"}]' >/tmp/ads-apps-bad.yaml; then
-            echo 'an application rendered without saying where it runs' >&2
+            echo 'an application rendered without a workspace' >&2
             exit 1
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml

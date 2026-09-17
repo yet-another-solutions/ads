@@ -151,6 +151,13 @@ https://{{ .Values.httpRoute.hostname }}
 {{- end -}}
 {{- end }}
 
+{{- define "ads.guardrailSite" -}}
+{{- toJson (dict
+      "placement" (.placement | default "cluster")
+      "runtime_class_name" (.runtimeClassName | default nil)
+      "node_labels" (.nodeLabels | default dict)) -}}
+{{- end }}
+
 {{- define "ads.auditSecretName" -}}
 {{- if .Values.tls.certManager.enabled -}}
 {{ include "ads.fullname" . }}-audit-tls
