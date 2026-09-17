@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.12-slim-bookworm AS builder
+COPY --from=ghcr.io/astral-sh/uv:0.10.12 /uv /usr/local/bin/uv
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_DEFAULT_INDEX=https://pypi.org/simple \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+COPY pyproject.toml README.md uv.lock /app/
+COPY libraries /app/libraries
+COPY services /app/services
+RUN uv sync --frozen --package ads-injection-scanner --no-dev --no-default-groups --no-editable
+
+FROM python:3.12-slim-bookworm
+RUN adduser --disabled-password --gecos "" --uid 1000 ads \
+    && mkdir -p /app /model \
+    && chown ads:ads /app
+ARG MODEL_REPOSITORY=https://huggingface.co/HikmaAI/hikmaai-mdeberta-v3-base-prompt-injection-multilingual
+ARG MODEL_REVISION=aef60fed9674e497a7ba08e43b41e8666483934e
+ADD --chmod=444 \
+    --checksum=sha256:bed8c765dfada2bc84c43d5eef710f616ccdeb29c2079e5b02c477f8c6d05488 \
+    ${MODEL_REPOSITORY}/resolve/${MODEL_REVISION}/onnx/int8/model_quantized.onnx /model/model.onnx
+ADD --chmod=444 \
+    --checksum=sha256:9ddbe35b768b22d6cd0d61a0a88ea3a188b7c00bbb7b825f9f247cf0b79c2365 \
+    ${MODEL_REPOSITORY}/resolve/${MODEL_REVISION}/tokenizer/tokenizer.json /model/tokenizer.json
+COPY --chmod=444 services/ads-injection-scanner/MODEL_NOTICE /model/NOTICE
+COPY --from=builder --chown=ads:ads /app /app
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 \
+    ADS_SCANNER_MODEL_DIR=/model
+USER 1000
+WORKDIR /app
+EXPOSE 8080
+CMD ["python", "-m", "ads_injection_scanner"]

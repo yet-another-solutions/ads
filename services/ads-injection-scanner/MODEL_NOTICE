@@ -1,0 +1,11 @@
+The files in this directory are the INT8 ONNX build of
+hikmaai-mdeberta-v3-base-prompt-injection-multilingual by HikmaAI,
+fine-tuned from microsoft/mdeberta-v3-base.
+
+Source:   https://huggingface.co/HikmaAI/hikmaai-mdeberta-v3-base-prompt-injection-multilingual
+Revision: aef60fed9674e497a7ba08e43b41e8666483934e
+Files:    onnx/int8/model_quantized.onnx (as model.onnx), tokenizer/tokenizer.json
+License:  Apache License 2.0, as stated by the model card
+          (https://www.apache.org/licenses/LICENSE-2.0)
+
+The files are redistributed unmodified.
