@@ -236,11 +236,14 @@ async def test_expired_duplicate_ack_does_not_suppress_abort(harness: Harness) -
     request = await wait_for_message(h, SandboxRequest)
     assert isinstance(request, SandboxRequest)
     await wait_for_message(h, SandboxAckReply)
-    async with h.sessions.begin() as session:
-        saved = await h.repository.locked(session, request.execution_id)
-        assert saved
-        saved.deadline = datetime.now(UTC) - timedelta(seconds=1)
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    # Deliver the duplicate before the watchdog expires the row. A duplicate
+    # arriving after that transition is a different, legitimately reset case.
+    async with h.service._waiters[request.execution_id].lock:
+        async with h.sessions.begin() as session:
+            saved = await h.repository.locked(session, request.execution_id)
+            assert saved
+            saved.deadline = datetime.now(UTC) - timedelta(seconds=1)
+        await h.publisher.reply(SandboxAcknowledge(request.execution_id))
     assert (await task).is_error
     assert sum(isinstance(x, SandboxAbort) for x in h.publisher.messages) == 1
     assert not any(isinstance(x, SandboxAckReset) for x in h.publisher.messages)
