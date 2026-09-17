@@ -1,0 +1,26 @@
+{{- if .Values.injectionScanner.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-injection-scanner
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-injection-scanner
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.injectionScanner.service.port | quote }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_SCANNER_THRESHOLD: {{ .Values.injectionScanner.threshold | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "ads.fullname" . }}-injection-scanner
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-injection-scanner
+type: Opaque
+stringData:
+  ADS_SCANNER_API_TOKEN: {{ required "secrets.injectionScannerApiToken is required with the injection scanner" .Values.secrets.injectionScannerApiToken | quote }}
+{{- end }}

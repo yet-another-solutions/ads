@@ -151,6 +151,62 @@ https://{{ .Values.httpRoute.hostname }}
 {{- end -}}
 {{- end }}
 
+{{- define "ads.guardrailUrl" -}}
+https://{{ include "ads.fullname" . }}-guardrail:{{ .Values.guardrail.service.port }}
+{{- end }}
+
+{{- define "ads.injectionScannerSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-injection-scanner
+{{- end }}
+
+{{- define "ads.injectionScannerUrl" -}}
+https://{{ include "ads.fullname" . }}-injection-scanner:{{ .Values.injectionScanner.service.port }}
+{{- end }}
+
+{{- define "ads.injectionScannerSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-injection-scanner-tls
+{{- else -}}
+{{ required "injectionScanner.tls.secretName is required when tls.certManager.enabled is false" .Values.injectionScanner.tls.secretName }}
+{{- end -}}
+{{- end }}
+
+{{/*
+One probe per site: the root context and a site from mcpProbe.sites.
+*/}}
+{{- define "ads.mcpProbeName" -}}
+{{ include "ads.fullname" .root }}-mcp-{{ required "mcpProbe.sites[].name is required" .site.name }}
+{{- end }}
+
+{{- define "ads.mcpProbeSelectorLabels" -}}
+{{ include "ads.selectorLabels" .root }}
+app.kubernetes.io/component: ads-mcp-probe
+ads.io/probe-site: {{ .site.name | quote }}
+{{- end }}
+
+{{- define "ads.mcpProbeSecretName" -}}
+{{- if .root.Values.tls.certManager.enabled -}}
+{{ include "ads.mcpProbeName" . }}-tls
+{{- else -}}
+{{ required "mcpProbe.tls.secretName is required when tls.certManager.enabled is false" .root.Values.mcpProbe.tls.secretName }}
+{{- end -}}
+{{- end }}
+
+{{- define "ads.mcpProbeServers" -}}
+{{- $servers := list -}}
+{{- if .Values.mcpProbe.enabled -}}
+{{- range .Values.mcpProbe.sites -}}
+{{- $site := dict "placement" "cluster" "runtimeClassName" .runtimeClassName "nodeLabels" .nodeLabels -}}
+{{- $servers = append $servers (dict
+      "name" .name
+      "url" (printf "https://%s:%v/mcp" (include "ads.mcpProbeName" (dict "root" $ "site" .)) $.Values.mcpProbe.service.port)
+      "site" $site) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $servers -}}
+{{- end }}
+
 {{- define "ads.guardrailSite" -}}
 {{- toJson (dict
       "placement" (.placement | default "cluster")

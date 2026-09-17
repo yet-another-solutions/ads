@@ -18,7 +18,13 @@ data:
   ADS_MCP_AUDIENCE: {{ .Values.guardrail.personTokenAudience | quote }}
   ADS_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.keycloak.wellKnownUrl | quote }}
   ADS_KEYCLOAK_ISSUER: {{ .Values.keycloak.issuer | quote }}
+  {{- if .Values.injectionScanner.enabled }}
+  ADS_INJECTION_SCANNER_URL: {{ include "ads.injectionScannerUrl" . | quote }}
+  {{- end }}
   {{- $servers := list }}
+  {{- range (include "ads.mcpProbeServers" . | fromJsonArray) }}
+  {{- $servers = append $servers (dict "name" .name "url" .url "site" (include "ads.guardrailSite" .site | fromJson)) }}
+  {{- end }}
   {{- range .Values.guardrail.mcpServers }}
   {{- $servers = append $servers (dict
         "name" (required "guardrail.mcpServers[].name is required" .name)
@@ -50,5 +56,8 @@ type: Opaque
 stringData:
   ADS_GUARDRAIL_API_TOKEN: {{ .Values.secrets.guardrailApiToken | quote }}
   ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  {{- if .Values.injectionScanner.enabled }}
+  ADS_INJECTION_SCANNER_API_TOKEN: {{ .Values.secrets.injectionScannerApiToken | quote }}
+  {{- end }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
 {{- end }}

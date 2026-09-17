@@ -1,0 +1,125 @@
+{{- if .Values.mcpProbe.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ads.fullname" . }}-mcp-probe
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-mcp-probe
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: {{ .Values.mcpProbe.service.port | quote }}
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+{{- range .Values.mcpProbe.sites }}
+{{- $probe := dict "root" $ "site" . }}
+{{- $name := include "ads.mcpProbeName" $probe }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ads.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ads-mcp-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ads.mcpProbeSelectorLabels" $probe | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.mcpProbeSelectorLabels" $probe | nindent 8 }}
+    spec:
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
+      serviceAccountName: {{ include "ads.serviceAccountName" $ }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ads-mcp-probe
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          image: "{{ $.Values.mcpProbe.image.repository }}:{{ $.Values.mcpProbe.image.tag }}"
+          imagePullPolicy: {{ $.Values.mcpProbe.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: {{ $.Values.mcpProbe.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ads.fullname" $ }}-mcp-probe
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          resources:
+            {{- toYaml $.Values.mcpProbe.resources | nindent 12 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ads.mcpProbeSecretName" $probe }}
+      nodeSelector:
+        {{- toYaml (required "mcpProbe.sites[].nodeLabels is required: they say where the probe runs" .nodeLabels) | nindent 8 }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ads.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ads-mcp-probe
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ $.Values.mcpProbe.service.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "ads.mcpProbeSelectorLabels" $probe | nindent 4 }}
+{{- if $.Values.tls.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "ads.labels" $ | nindent 4 }}
+spec:
+  secretName: {{ include "ads.mcpProbeSecretName" $probe }}
+  issuerRef:
+    name: {{ $.Values.tls.certManager.issuer.name }}
+    kind: {{ $.Values.tls.certManager.issuer.kind }}
+    group: {{ $.Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ $name | quote }}
+    - {{ printf "%s.%s" $name $.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc" $name $.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $name $.Release.Namespace | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

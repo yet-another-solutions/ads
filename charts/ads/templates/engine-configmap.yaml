@@ -21,3 +21,28 @@ data:
   {{- if .Values.tls.caBundle.secretName }}
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}
+  {{- with .Values.engine.tools }}
+  {{- if .enabled }}
+  {{- if not $.Values.guardrail.enabled }}
+  {{- fail "engine.tools.enabled needs guardrail.enabled: every tool call goes through it" }}
+  {{- end }}
+  {{- if not $.Values.tls.caBundle.secretName }}
+  {{- fail "engine.tools.enabled needs tls.caBundle.secretName: the engine must trust the guardrail's certificate" }}
+  {{- end }}
+  {{- $servers := .mcpServers }}
+  {{- if not $servers }}
+  {{- range (include "ads.mcpProbeServers" $ | fromJsonArray) }}
+  {{- $servers = append $servers .name }}
+  {{- end }}
+  {{- end }}
+  ADS_ENGINE_MCP_SERVERS: {{ required "engine.tools.mcpServers is required (or enable mcpProbe)" (join "," $servers) | quote }}
+  ADS_ENGINE_GUARDRAIL_URL: {{ include "ads.guardrailUrl" $ | quote }}
+  ADS_ENGINE_MCP_AUDIENCE: {{ .mcpAudience | quote }}
+  ADS_ENGINE_WORKSPACE_PROJECT: {{ required "engine.tools.workspace.project is required" .workspace.project | quote }}
+  ADS_ENGINE_WORKSPACE_REPO: {{ required "engine.tools.workspace.repo is required" .workspace.repo | quote }}
+  ADS_ENGINE_WORKSPACE_ENV: {{ required "engine.tools.workspace.env is required" .workspace.env | quote }}
+  ADS_ENGINE_WORKSPACE_WORKDIR: {{ .workspace.workdir | default $.Values.policy.workdir | quote }}
+  ADS_ENGINE_MAX_MODEL_ROUNDS: {{ .maxModelRounds | quote }}
+  ADS_ENGINE_TOOL_CALL_ATTEMPTS: {{ .callAttempts | quote }}
+  {{- end }}
+  {{- end }}

@@ -14,6 +14,9 @@ data:
   {{- end }}
   ADS_AUDIT_PREFETCH: {{ .Values.audit.prefetch | quote }}
   ADS_AUDIT_PARTITIONS_AHEAD: {{ .Values.audit.partitionsAhead | quote }}
+  ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
+  ADS_AUDIT_CONVERSATION_BUDGET_LIMIT: {{ .Values.audit.conversationBudgetLimit | quote }}
+  ADS_AUDIT_BLOCK_DELIVERY_SECONDS: {{ .Values.audit.blockDeliverySeconds | quote }}
 ---
 apiVersion: v1
 kind: Secret
@@ -24,5 +27,6 @@ metadata:
 type: Opaque
 stringData:
   ADS_AUDIT_API_TOKEN: {{ .Values.secrets.auditApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
   ADS_DATABASE_URL: {{ required "audit.postgres.url is required: the journal lives in PostgreSQL" .Values.audit.postgres.url | quote }}

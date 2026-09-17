@@ -1,0 +1,83 @@
+{{- if .Values.injectionScanner.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ads.fullname" . }}-injection-scanner
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-injection-scanner
+spec:
+  replicas: {{ .Values.injectionScanner.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ads.injectionScannerSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.injectionScannerSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ads.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ads-injection-scanner
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.injectionScanner.image.repository }}:{{ .Values.injectionScanner.image.tag }}"
+          imagePullPolicy: {{ .Values.injectionScanner.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.injectionScanner.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ads.fullname" . }}-injection-scanner
+            - secretRef:
+                name: {{ include "ads.fullname" . }}-injection-scanner
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.injectionScanner.resources | nindent 12 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ads.injectionScannerSecretName" . }}
+      nodeSelector:
+        {{- include "ads.applicationNodeSelector" . | nindent 8 }}
+        {{- with .Values.nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

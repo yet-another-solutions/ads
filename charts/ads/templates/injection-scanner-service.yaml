@@ -1,0 +1,38 @@
+{{- if .Values.injectionScanner.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ads.fullname" . }}-injection-scanner
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-injection-scanner
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.injectionScanner.service.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "ads.injectionScannerSelectorLabels" . | nindent 4 }}
+{{- if .Values.tls.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "ads.fullname" . }}-injection-scanner
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "ads.injectionScannerSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ printf "%s-injection-scanner" (include "ads.fullname" .) | quote }}
+    - {{ printf "%s-injection-scanner.%s" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-injection-scanner.%s.svc" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-injection-scanner.%s.svc.cluster.local" (include "ads.fullname" .) .Release.Namespace | quote }}
+{{- end }}
+{{- end }}

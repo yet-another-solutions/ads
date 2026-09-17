@@ -78,6 +78,50 @@ guardrail:
   #       repo: yet-another-solutions/ads
   #       env: test
 
+# Reads tool results for prompt injections for the guardrail. The model is in the image.
+injectionScanner:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-injection-scanner
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8085
+  threshold: "0.5"
+  tls:
+    secretName: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      memory: 1536Mi
+
+# A harmless MCP server for checking the whole chain. One deployment per site; each
+# site is also added to the guardrail's server table as mcp:<name>, and its tools
+# still need bindings in policy.document before they are allowed: policy.example.yaml
+# has them for the two sites below, next to the built-in rules.
+mcpProbe:
+  enabled: false
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-mcp-probe
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8084
+  tls:
+    secretName: ""
+  resources: {}
+  sites:
+    - name: probe-vm
+      runtimeClassName: kata-qemu
+      nodeLabels:
+        ads.io/sandbox-node: "true"
+    - name: probe-container
+      nodeLabels:
+        ads.io/application-node: "true"
+
 audit:
   replicaCount: 1
   image:
@@ -88,6 +132,9 @@ audit:
     port: 8082
   prefetch: 100
   partitionsAhead: 2
+  # A conversation whose weighted refusals reach this loses its tools for good.
+  conversationBudgetLimit: 30
+  blockDeliverySeconds: 300
   # Both are required and neither is installed by this chart.
   rabbitmq:
     service: ads-rabbitmq
@@ -129,6 +176,20 @@ engine:
     allowedAzp: ads-engine
   pingIntervalSeconds: 10
   ackTimeoutSeconds: 10
+  # Tool calls go through the guardrail as the person, with their token exchanged for
+  # mcpAudience. Needs guardrail.enabled and tls.caBundle.secretName.
+  tools:
+    enabled: false
+    # Empty takes the probe's sites when mcpProbe is enabled.
+    mcpServers: []
+    mcpAudience: ads-mcp
+    workspace:
+      project: ""
+      repo: ""
+      env: ""
+      workdir: ""
+    maxModelRounds: 8
+    callAttempts: 3
 
 # ads consumes ads.engine.output and produces ads.engine.request.
 kafka:
@@ -219,6 +280,7 @@ secrets:
   policyApiToken: change-me-change-me-32b
   auditApiToken: change-me-change-me-32b
   guardrailApiToken: change-me-change-me-32b
+  injectionScannerApiToken: change-me-change-me-32b
 
 nodes:
   application:
