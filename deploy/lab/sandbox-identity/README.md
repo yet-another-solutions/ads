@@ -35,16 +35,24 @@ Do not run this against an unrelated cluster.
 
 1. Copy this directory's scripts/manifests to `/opt/src/ads-sandbox-identity` on the
    Kubernetes admin node, excluding `send_credentials.py` and tests.
-2. Apply `kubernetes.yaml` using the admin kubeconfig.
-3. Install the pinned admission controller, then the policy:
+2. Ensure the external Kyverno admission controller is installed. Its lab pin is
+   chart `3.9.1`; `kyverno-values.yaml` configures the deliberately singleton lab
+   installation. Kyverno infrastructure and its namespace are not owned by ADS.
+3. ADS now owns the workload namespaces, ServiceAccounts, RBAC, and exec policy
+   in its [Helm chart](../../../charts/ads/README.md). The policy's canonical data
+   is `charts/ads/files/sandbox-exec-policy.yaml`; the templates parameterize
+   namespace and admission identity without interpreting Kyverno expressions.
+   There is no separate `kubernetes.yaml` or policy copy to apply.
+
+   For a new installation, install the already-built chart with the release
+   record in `default`; the chart creates `ads` and `ads-sandbox`. For the
+   existing lab baseline, retain its working resources until a separate,
+   explicitly approved ownership migration. Do not replay an old bootstrap
+   manifest over Helm-owned resources or uninstall the running release to adopt
+   this layout. Chart/image builds remain GitHub Actions work, not lab work.
+   Before identity proofs, verify `ads-sandbox-ipc-exec` is Ready:
 
    ```sh
-   helm repo add kyverno https://kyverno.github.io/kyverno/
-   helm repo update kyverno
-   helm upgrade --install kyverno kyverno/kyverno --version 3.9.1 \
-     --namespace kyverno --create-namespace --wait --timeout 5m \
-     -f /opt/src/ads-sandbox-identity/kyverno-values.yaml
-   kubectl apply -f /opt/src/ads-sandbox-identity/exec-policy.yaml
    kubectl wait clusterpolicy/ads-sandbox-ipc-exec --for=condition=Ready --timeout=120s
    ```
 

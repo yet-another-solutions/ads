@@ -1,1 +1,2 @@
 {{- include "ads.checkPrerequisites" . }}
+{{- include "ads.checkSandboxAdmission" . }}

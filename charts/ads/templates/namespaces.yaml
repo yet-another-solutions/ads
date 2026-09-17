@@ -1,0 +1,9 @@
+{{- range (list .Values.namespace .Values.sandbox.namespace) }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . | quote }}
+  labels:
+    {{- include "ads.labels" $ | nindent 4 }}
+{{- end }}

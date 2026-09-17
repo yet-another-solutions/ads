@@ -1,26 +1,25 @@
 apiVersion: v1
-kind: Namespace
-metadata:
-  name: ads-sandbox
----
-apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ads-sandbox-manager
-  namespace: ads
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ads-sandbox-ipc
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
 automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ads-sandbox-manager
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 rules:
   - apiGroups: [batch]
     resources: [jobs]
@@ -36,7 +35,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ads-sandbox-manager
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -44,13 +43,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: ads-sandbox-manager
-    namespace: ads
+    namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ads-sandbox-ipc
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 rules:
   - apiGroups: [""]
     resources: [pods]
@@ -63,7 +62,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ads-sandbox-ipc
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -71,14 +70,13 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: ads-sandbox-ipc
-    namespace: ads-sandbox
+    namespace: {{ .Values.sandbox.namespace }}
 ---
-# The policy needs only live Pod reads in this namespace, not cluster-wide view.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ads-sandbox-admission
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 rules:
   - apiGroups: [""]
     resources: [pods]
@@ -88,12 +86,12 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ads-sandbox-admission
-  namespace: ads-sandbox
+  namespace: {{ .Values.sandbox.namespace }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: ads-sandbox-admission
 subjects:
   - kind: ServiceAccount
-    name: kyverno-admission-controller
-    namespace: kyverno
+    name: {{ .Values.sandbox.admission.serviceAccountName }}
+    namespace: {{ .Values.sandbox.admission.kyvernoNamespace }}

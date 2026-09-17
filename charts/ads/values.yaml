@@ -1,3 +1,5 @@
+# Workloads live here; store the Helm release in the existing default namespace.
+namespace: ads
 replicaCount: 1
 
 image:
@@ -129,6 +131,15 @@ nodes:
     labelKey: ads.io/sandbox-node
     labelValue: "true"
     runtimeClassName: kata-qemu
+
+# ADS owns its sandbox policy/RBAC, not the Kyverno installation.
+sandbox:
+  namespace: ads-sandbox
+  admission:
+    policyName: ads-sandbox-ipc-exec
+    kyvernoNamespace: kyverno
+    deploymentName: kyverno-admission-controller
+    serviceAccountName: kyverno-admission-controller
 
 resources: {}
 

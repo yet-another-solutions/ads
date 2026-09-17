@@ -3,6 +3,7 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ $svc }}
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -15,7 +16,7 @@ spec:
     group: {{ .Values.tls.certManager.issuer.group }}
   dnsNames:
     - {{ $svc | quote }}
-    - {{ printf "%s.%s" $svc .Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc" $svc .Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc.cluster.local" $svc .Release.Namespace | quote }}
+    - {{ printf "%s.%s" $svc .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc" $svc .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc .Values.namespace | quote }}
 {{- end }}
