@@ -32,6 +32,12 @@ from where the run was actually scheduled; `local` is asserted by whoever opens 
 on a developer machine, because node labels are a cluster notion. A cluster placement
 that resolves to nothing is a refusal, not a weaker level.
 
+A decision may carry its own `site` — where the tool is actually executed, such as the
+MCP server a call goes to. The level is then derived from that site and outranks the
+run's. A run may be opened with no placement at all (`"placement": null`); it has no
+level of its own, and every call into it must bring a site or is refused as
+`site.missing`.
+
 ## API
 
 All `/policy` routes require `Authorization: Bearer $ADS_POLICY_API_TOKEN`. Health is
@@ -39,7 +45,7 @@ public. Everything is HTTPS; there is no plain-HTTP mode.
 
 | | |
 |---|---|
-| `POST /policy/runs` | open a run. The body describes the placement; the level is derived from it |
+| `POST /policy/runs` | open a run. The body describes the placement, if any; the level is derived from it |
 | `POST /policy/runs/{id}/revoke` | revoke a run. The next decision sees it |
 | `POST /policy/decide` | a decision for one capability and resource within a run |
 | `POST /policy/calls` | a decision for one tool call, named as the agent names it |

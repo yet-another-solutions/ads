@@ -21,16 +21,6 @@ def inspect_payload(
     settings: GovernanceSettings | None = None,
     checks: frozenset[CheckKind] = ALL_CHECKS,
 ) -> PolicyDecision:
-    """Second interception point: a legal call can still carry a dangerous payload.
-
-    Outbound a secret is a leak and the call is refused, because a request with the
-    secret cut out would return nonsense and hide the attempt. Inbound the same secret
-    is redacted and passed on, which is what transform exists for. Injected
-    instructions are only looked for inbound — we write what goes out — and they stay
-    a warning, never a verdict.
-
-    Only the ``checks`` asked for run; the rule that permitted the call names them.
-    """
     config = settings or GovernanceSettings()
     findings = find_secrets(text) if CheckKind.SECRETS in checks else ()
     rules = tuple(sorted({finding.rule_id for finding in findings}))
@@ -50,7 +40,7 @@ def inspect_payload(
             reason="no credential matched",
             point=point,
         )
-    warnings = _injection_warnings(text, config) if CheckKind.INJECTION in checks else ()
+    warnings = _injection_marker_warnings(text, config) if CheckKind.INJECTION in checks else ()
     if findings:
         return PolicyDecision(
             effect=Effect.TRANSFORM,
@@ -74,30 +64,26 @@ def inspect_texts(
     settings: GovernanceSettings | None = None,
     checks: frozenset[CheckKind] = ALL_CHECKS,
 ) -> tuple[PolicyDecision, tuple[str, ...]]:
-    """Inbound, text by text, with one verdict for all of them.
-
-    A structured result is many strings. Read apart, a redaction never has to be
-    mapped back across the boundary between two of them, and the JSON around them is
-    never touched. One verdict means one journal row per result, however many strings.
-
-    Returns the verdict and the texts as they would be after it is applied.
-    """
-    found = [inspect_payload(text, InterceptionPoint.RESPONSE, settings, checks) for text in texts]
+    per_text_decisions = [
+        inspect_payload(text, InterceptionPoint.RESPONSE, settings, checks) for text in texts
+    ]
     cleaned = tuple(
         decision.transform.payload if decision.transform else text
-        for decision, text in zip(found, texts, strict=True)
+        for decision, text in zip(per_text_decisions, texts, strict=True)
     )
     redactions = tuple(
         sorted(
             {
                 rule
-                for decision in found
+                for decision in per_text_decisions
                 if decision.transform
                 for rule in decision.transform.redactions
             }
         )
     )
-    warnings = tuple(dict.fromkeys(warning for decision in found for warning in decision.warnings))
+    warnings = tuple(
+        dict.fromkeys(warning for decision in per_text_decisions for warning in decision.warnings)
+    )
     if redactions:
         return PolicyDecision(
             effect=Effect.TRANSFORM,
@@ -116,12 +102,7 @@ def inspect_texts(
     ), cleaned
 
 
-def _injection_warnings(text: str, config: GovernanceSettings) -> tuple[str, ...]:
-    """Substring markers, and weak: they miss case, encoding and other languages.
-
-    A trained classifier belongs here; until then this is a signal that something
-    should be looked at, never a reason to refuse.
-    """
+def _injection_marker_warnings(text: str, config: GovernanceSettings) -> tuple[str, ...]:
     lowered = text.lower()
     return tuple(
         f"possible injected instruction: {marker}"

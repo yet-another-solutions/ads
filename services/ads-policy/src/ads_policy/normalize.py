@@ -7,11 +7,6 @@ from ads_policy.config import GovernanceSettings
 
 
 def within_workdir(resource: str, workdir: str) -> bool:
-    """Whether a path stays inside the run workdir once traversal is resolved.
-
-    Normalisation for the audit trail and the matrix rows, not the boundary
-    itself: what is out of reach is decided by what gets mounted.
-    """
     candidate = resource.strip()
     if not candidate or candidate.startswith("~") or "\x00" in candidate:
         return False
@@ -23,7 +18,6 @@ def within_workdir(resource: str, workdir: str) -> bool:
 
 
 def egress_host(resource: str) -> str:
-    """Host of an egress target, lowercased and stripped of userinfo and port."""
     raw = resource.strip()
     if not raw:
         return ""
@@ -33,7 +27,6 @@ def egress_host(resource: str) -> str:
 
 
 def branch_name(resource: str, settings: GovernanceSettings | None = None) -> str:
-    """Branch a push targets, with ref and remote prefixes removed."""
     config = settings or GovernanceSettings()
     name = resource.strip()
     for prefix in config.ref_prefixes:

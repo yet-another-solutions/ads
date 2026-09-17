@@ -61,7 +61,6 @@ def test_load_settings_requires_a_run_store(
 def test_load_settings_requires_an_audit_exchange(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Decisions that cannot be published cannot be journalled, so the start is refused."""
     cert, key = _tls(tmp_path)
     _env(monkeypatch, cert, key)
     monkeypatch.delenv("ADS_AMQP_URL")
@@ -100,7 +99,6 @@ def test_the_run_lifetime_defaults_to_an_hour() -> None:
 def test_the_sandbox_is_told_to_the_service_not_discovered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Nothing here inspects the cluster: whoever deploys the service answers."""
     assert load_governance_settings().sandbox_available is True
     monkeypatch.setenv("ADS_SANDBOX_AVAILABLE", "false")
     assert load_governance_settings().sandbox_available is False

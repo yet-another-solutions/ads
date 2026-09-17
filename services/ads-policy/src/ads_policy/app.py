@@ -24,7 +24,6 @@ logger = structlog.get_logger("ads.policy")
 def create_app(
     settings: Settings, redis: Redis | None = None, sink: AuditSink | None = None
 ) -> Litestar:
-    """``redis`` and ``sink`` let a caller bring their own, as tests do."""
     configure_logging()
     container = make_async_container(AppProvider(settings, redis, sink), LitestarProvider())
     flusher: list[asyncio.Task[None]] = []
@@ -55,7 +54,6 @@ def create_app(
 
 
 async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
-    """Decisions are answered at once and journalled just behind."""
     audit = await container.get(BufferedAuditSink)
     while True:
         await asyncio.sleep(settings.audit_flush_seconds)
@@ -66,12 +64,6 @@ async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
 
 
 async def _watch_policy(container: AsyncContainer, settings: Settings) -> None:
-    """Pick up an edited ConfigMap without a restart.
-
-    Reading is a file stat and a parse, so polling is enough and needs no inotify
-    on a volume the kubelet updates by swapping a symlink. Runs already pinned to
-    an older version keep deciding under it.
-    """
     pdp = await container.get(PolicyDecisionPoint)
     while True:
         await asyncio.sleep(settings.policy_reload_seconds)

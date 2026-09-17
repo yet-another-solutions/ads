@@ -66,8 +66,7 @@ async def test_content_travels_only_when_opted_in(service: PolicyService) -> Non
     assert opted_in.content == "the model said ..."
 
 
-def test_every_event_is_identifiable() -> None:
-    """Redelivery must be recognisable, so two events are never the same event."""
+def test_every_event_has_its_own_id_so_a_redelivery_is_recognisable() -> None:
     first = _event(Capability.SECRET_READ, "ads-client-secret", 5)
     second = _event(Capability.SECRET_READ, "ads-client-secret", 5)
     assert first.event_id != second.event_id
@@ -130,7 +129,6 @@ def test_the_backlog_has_a_ceiling() -> None:
 
 @pytest.mark.anyio
 async def test_every_row_names_the_build_that_wrote_it() -> None:
-    """The payload checks ship in the image, so the policy hash alone cannot say."""
     journal = CollectingAuditSink()
     buffered = BufferedAuditSink(journal, decided_by="ads-guardrail 0.2.0@1a2b3c4")
     buffered.enqueue(_event(Capability.SECRET_READ, "a", 5))
@@ -146,7 +144,6 @@ def test_a_build_names_its_release(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_a_build_without_a_release_says_it_is_a_developer_s(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Rather than pass itself off as whatever was released last."""
     monkeypatch.delenv(BUILD_ENV, raising=False)
     assert identity("ads-policy") == "ads-policy dev"
 

@@ -12,6 +12,7 @@ from ads_policy.contract import (
     AuditEvent,
     DecisionRequest,
     Effect,
+    IsolationLevel,
     Mode,
     PolicyDecision,
     PolicyRequest,
@@ -21,7 +22,7 @@ from ads_policy.contract import (
     RunState,
     ToolCallRequest,
 )
-from ads_policy.isolation import assign_isolation_level
+from ads_policy.isolation import UnknownPlacement, assign_isolation_level
 from ads_policy.pdp import PolicyDecisionPoint, Unbound, resolve
 from ads_policy.run import RunStore
 
@@ -30,15 +31,22 @@ logger = structlog.get_logger("ads.policy")
 
 @dataclass(frozen=True, slots=True, eq=False)
 class PolicyService:
-    """What the API exposes: runs, decisions and the version they were made under."""
-
     pdp: PolicyDecisionPoint
     runs: RunStore
     audit: BufferedAuditSink
     settings: GovernanceSettings = field(default_factory=GovernanceSettings)
 
     async def start(self, request: RunRequest) -> Run:
-        """The level follows from where the caller scheduled the run, not from a claim."""
+        level = (
+            None
+            if request.placement is None
+            else assign_isolation_level(
+                placement=request.placement,
+                runtime_class_name=request.runtime_class_name,
+                node_labels=request.node_labels,
+                settings=self.settings,
+            )
+        )
         return await self.runs.start(
             subject=request.subject,
             context=RunContext(
@@ -47,12 +55,7 @@ class PolicyService:
                 env=request.env,
                 workdir=request.workdir,
             ),
-            isolation_level=assign_isolation_level(
-                placement=request.placement,
-                runtime_class_name=request.runtime_class_name,
-                node_labels=request.node_labels,
-                settings=self.settings,
-            ),
+            isolation_level=level,
             policy_hash=self.pdp.policy_hash,
             holder=request.holder,
         )
@@ -61,11 +64,6 @@ class PolicyService:
         return await self.runs.get(run_id)
 
     async def held_by(self, holder: str) -> list[Run]:
-        """Every unexpired run of this holder, whatever its state.
-
-        The caller tells a revoked run from none at all: a call into a revoked run is
-        still refused here, and journalled, rather than treated as belonging nowhere.
-        """
         return await self.runs.held_by(holder)
 
     async def revoke(self, run_id: str) -> Run | None:
@@ -75,41 +73,38 @@ class PolicyService:
             return None
 
     async def finish(self, run_id: str) -> Run | None:
-        """The task is over. A revoked run stays revoked: that is the stronger word."""
         run = await self.runs.get(run_id)
         if run is None:
             return None
-        if run.state is not RunState.RUNNING:
+        already_finished_or_revoked = run.state is not RunState.RUNNING
+        if already_finished_or_revoked:
             return run
         return await self.runs.finish(run_id)
 
     async def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
-        """Recognise an agent's tool call, then decide it like any other.
-
-        Resolution happens against the version the run is pinned to, so a binding
-        added after the run started does not change what that run may do.
-        """
         try:
             run = await self.runs.get(call.run_id)
         except RedisError as exc:
-            return self._journal_call(
+            return self._journal_unresolved_call(
                 call, self._refuse("run.store", f"run store unreachable: {exc}")
             )
         if run is None:
-            return self._journal_call(
+            return self._journal_unresolved_call(
                 call, self._refuse("run.unknown", f"run {call.run_id} is unknown")
             )
         if run.subject != call.subject:
-            return self._journal_call(
+            return self._journal_unresolved_call(
                 call, self._refuse("run.subject", f"run {run.id} belongs to someone else")
             )
-        policy = self.pdp.policy_of(run)
-        if policy is None:
-            return self._journal_call(call, self._refuse("policy.missing", "pinned policy is gone"))
+        pinned_policy = self.pdp.policy_of(run)
+        if pinned_policy is None:
+            return self._journal_unresolved_call(
+                call, self._refuse("policy.missing", "pinned policy is gone")
+            )
         try:
-            capability, resource = resolve(call, policy)
+            capability, resource = resolve(call, pinned_policy)
         except Unbound as exc:
-            return self._journal_call(call, self._refuse(exc.rule_id, str(exc)))
+            return self._journal_unresolved_call(call, self._refuse(exc.rule_id, str(exc)))
         decision = await self.decide(
             DecisionRequest(
                 run_id=call.run_id,
@@ -117,18 +112,14 @@ class PolicyService:
                 capability=capability,
                 resource=resource,
                 attributes=dict(call.attributes),
+                site=call.site,
             )
         )
-        # The caller asked by tool name, so tell it what that turned out to be.
         return msgspec.structs.replace(decision, capability=capability, resource=resource)
 
-    def _journal_call(self, call: ToolCallRequest, decision: PolicyDecision) -> PolicyDecision:
-        """A call nobody could recognise still happened, so it still gets a row.
-
-        No capability, because it never resolved to one. The tool is named in the
-        resource instead, which is what a reviewer needs to see: repeated attempts at
-        tools nothing binds are probing, and the budget should feel them.
-        """
+    def _journal_unresolved_call(
+        self, call: ToolCallRequest, decision: PolicyDecision
+    ) -> PolicyDecision:
         try:
             self.audit.enqueue(
                 AuditEvent(
@@ -160,36 +151,52 @@ class PolicyService:
             )
         elif run.subject != request.subject:
             decision = self._refuse("run.subject", f"run {run.id} belongs to someone else")
+        elif run.state is not RunState.RUNNING:
+            decision = self._refuse("run.state", f"run {run.id} is {run.state.value}")
         else:
-            decision = self.pdp.decide_for_run(
-                run,
-                PolicyRequest(
-                    subject=run.subject,
-                    capability=request.capability,
-                    resource=request.resource,
-                    isolation_level=run.isolation_level,
-                    context=run.context,
-                    attributes=dict(request.attributes),
-                ),
-            )
-            if run.state is RunState.RUNNING:
-                await self._keep_alive(run)
+            decision = self._decide_running(run, request)
+            await self._extend_lifetime_from_now(run)
         return self._journal(request, decision)
 
-    async def _keep_alive(self, run: Run) -> None:
-        """A run lives as long as it is used: its lifetime counts from the last call.
+    def _decide_running(self, run: Run, request: DecisionRequest) -> PolicyDecision:
+        try:
+            level = self._level_of_call(run, request)
+        except UnknownPlacement as exc:
+            return self._refuse("site.unknown", f"the call's site is not confirmed: {exc}")
+        if level is None:
+            return self._refuse(
+                "site.missing", f"run {run.id} has no level and the call names no site"
+            )
+        return self.pdp.decide_for_run(
+            run,
+            PolicyRequest(
+                subject=run.subject,
+                capability=request.capability,
+                resource=request.resource,
+                isolation_level=level,
+                context=run.context,
+                attributes=dict(request.attributes),
+            ),
+        )
 
-        A task may run for hours on refreshed tokens; what should end a run by itself
-        is silence, not age. A failure to extend is not a reason to refuse the call —
-        the run is still there, only its end is not moved.
-        """
+    def _level_of_call(self, run: Run, request: DecisionRequest) -> IsolationLevel | None:
+        site = request.site
+        if site is None:
+            return run.isolation_level
+        return assign_isolation_level(
+            placement=site.placement,
+            runtime_class_name=site.runtime_class_name,
+            node_labels=site.node_labels,
+            settings=self.settings,
+        )
+
+    async def _extend_lifetime_from_now(self, run: Run) -> None:
         try:
             await self.runs.touch(run)
         except RedisError as exc:
             logger.warning("run lifetime not extended", run_id=run.id, error=str(exc))
 
     def _journal(self, request: DecisionRequest, decision: PolicyDecision) -> PolicyDecision:
-        """A decision nobody can record is a decision nobody may act on."""
         try:
             self.audit.enqueue(record(request, decision))
         except AuditBacklogFull as exc:

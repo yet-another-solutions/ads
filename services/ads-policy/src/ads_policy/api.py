@@ -23,7 +23,6 @@ BEARER = "Bearer "
 
 
 def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
-    """Only the controller and the guardrail reach this API."""
     expected = str(connection.app.state.api_token)
     header = connection.headers.get("authorization", "")
     if not header.startswith(BEARER):
@@ -33,8 +32,6 @@ def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRou
 
 
 class PolicyController(Controller):
-    """The decision API. Nothing here trusts what the executor says about itself."""
-
     path = "/policy"
     guards = [require_api_token]
 
@@ -49,7 +46,6 @@ class PolicyController(Controller):
     @get("/runs")
     @inject
     async def held_runs(self, holder: str, service: FromDishka[PolicyService]) -> list[Run]:
-        """The runs of one holder, in any state."""
         if not holder:
             raise ClientException(detail="a holder is required")
         return await service.held_by(holder)
@@ -83,7 +79,6 @@ class PolicyController(Controller):
     async def decide(
         self, data: DecisionRequest, service: FromDishka[PolicyService]
     ) -> PolicyDecision:
-        """For a caller that already knows the capability, such as our own decorator."""
         return await service.decide(data)
 
     @post("/calls")
@@ -91,7 +86,6 @@ class PolicyController(Controller):
     async def decide_call(
         self, data: ToolCallRequest, service: FromDishka[PolicyService]
     ) -> PolicyDecision:
-        """For an agent's tool call, named in the agent's vocabulary rather than ours."""
         return await service.decide_call(data)
 
     @get("/version")

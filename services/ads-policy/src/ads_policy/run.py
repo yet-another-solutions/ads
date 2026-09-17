@@ -21,7 +21,6 @@ logger = structlog.get_logger("ads.policy")
 def attributes_from_roles(
     roles: Iterable[str], settings: GovernanceSettings | None = None
 ) -> dict[str, str]:
-    """The only place that knows role names, so policy never has to."""
     config = settings or GovernanceSettings()
     held = set(roles)
     return {
@@ -35,14 +34,12 @@ def _flag(value: bool) -> str:
 
 
 class RunStore(Protocol):
-    """Server-side runs: one session yields many, each revocable at once."""
-
     async def start(
         self,
         *,
         subject: str,
         context: RunContext,
-        isolation_level: IsolationLevel,
+        isolation_level: IsolationLevel | None,
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
@@ -50,13 +47,9 @@ class RunStore(Protocol):
 
     async def get(self, run_id: str) -> Run | None: ...
 
-    async def held_by(self, holder: str) -> list[Run]:
-        """Every unexpired run of this holder, whatever its state."""
-        ...
+    async def held_by(self, holder: str) -> list[Run]: ...
 
-    async def touch(self, run: Run) -> None:
-        """Start the run's lifetime over, and its holder's index with it."""
-        ...
+    async def touch(self, run: Run) -> None: ...
 
     async def revoke(self, run_id: str) -> Run: ...
 
@@ -65,17 +58,6 @@ class RunStore(Protocol):
 
 @dataclass(frozen=True, slots=True, eq=False)
 class RedisRunStore:
-    """Runs in Redis: the lifetime is the key's, so a forgotten run stops deciding.
-
-    The lifetime counts from the last use, not from the start: a run in use is kept,
-    one nobody calls into any more expires. Revocation keeps the remaining lifetime so
-    the audit reads ``run.state`` rather than an expired key; once the lifetime is over
-    the record is simply gone.
-
-    A holder indexes its runs in a set that lives as long as the newest of them. An
-    id in it whose run has expired is dropped when it is next read.
-    """
-
     redis: Redis
     settings: GovernanceSettings = field(default_factory=GovernanceSettings)
 
@@ -84,7 +66,7 @@ class RedisRunStore:
         *,
         subject: str,
         context: RunContext,
-        isolation_level: IsolationLevel,
+        isolation_level: IsolationLevel | None,
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
@@ -111,7 +93,6 @@ class RedisRunStore:
         try:
             return msgspec.json.decode(raw, type=Run)
         except msgspec.DecodeError:
-            # A record written by an older shape is a record we cannot act on.
             logger.error("run record unreadable", run_id=run_id)
             return None
 
@@ -130,17 +111,15 @@ class RedisRunStore:
         lifetime = self.settings.run_ttl_seconds
         await self.redis.expire(_key(run.id), lifetime)
         if run.holder:
-            # The index lives as long as the newest of its runs, and none can now
-            # outlast this one.
             await self.redis.expire(_holder_key(run.holder), lifetime)
 
     async def revoke(self, run_id: str) -> Run:
-        return await self._move(run_id, RunState.REVOKED)
+        return await self._change_state_keeping_lifetime(run_id, RunState.REVOKED)
 
     async def finish(self, run_id: str) -> Run:
-        return await self._move(run_id, RunState.FINISHED)
+        return await self._change_state_keeping_lifetime(run_id, RunState.FINISHED)
 
-    async def _move(self, run_id: str, state: RunState) -> Run:
+    async def _change_state_keeping_lifetime(self, run_id: str, state: RunState) -> Run:
         run = await self.get(run_id)
         if run is None:
             raise KeyError(run_id)
@@ -150,8 +129,6 @@ class RedisRunStore:
 
 
 class InMemoryRunStore:
-    """Single-process stand-in for tests. Keeps every run it is given, forever."""
-
     def __init__(self) -> None:
         self._runs: dict[str, Run] = {}
 
@@ -160,7 +137,7 @@ class InMemoryRunStore:
         *,
         subject: str,
         context: RunContext,
-        isolation_level: IsolationLevel,
+        isolation_level: IsolationLevel | None,
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
@@ -183,15 +160,15 @@ class InMemoryRunStore:
         return [run for run in self._runs.values() if holder and run.holder == holder]
 
     async def touch(self, run: Run) -> None:
-        """Nothing expires here, so there is nothing to put off."""
+        return None
 
     async def revoke(self, run_id: str) -> Run:
-        return await self._move(run_id, RunState.REVOKED)
+        return await self._change_state(run_id, RunState.REVOKED)
 
     async def finish(self, run_id: str) -> Run:
-        return await self._move(run_id, RunState.FINISHED)
+        return await self._change_state(run_id, RunState.FINISHED)
 
-    async def _move(self, run_id: str, state: RunState) -> Run:
+    async def _change_state(self, run_id: str, state: RunState) -> Run:
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError(run_id)

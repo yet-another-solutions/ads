@@ -22,19 +22,12 @@ from ads_policy.normalize import branch_name, egress_host, within_workdir
 
 
 class Unbound(ValueError):
-    """The call does not resolve to a capability, so there is nothing to decide.
-
-    Two ways to get here, and both are refusals rather than guesses: no binding names
-    this tool, or the binding names an argument the call did not carry.
-    """
-
     def __init__(self, rule_id: str, detail: str) -> None:
         super().__init__(detail)
         self.rule_id = rule_id
 
 
 def resolve(call: ToolCallRequest, policy: Policy) -> tuple[Capability, str]:
-    """Turn one agent's tool call into the capability and resource it amounts to."""
     binding = policy.binding_for(call.source, call.tool)
     if binding is None:
         raise Unbound("binding.missing", f"nothing binds {call.tool!r} from {call.source!r}")
@@ -50,12 +43,6 @@ def resolve(call: ToolCallRequest, policy: Policy) -> tuple[Capability, str]:
 def classify(
     request: PolicyRequest, policy: Policy, settings: GovernanceSettings | None = None
 ) -> str:
-    """Turn the raw resource into the class the matrix is written over.
-
-    Which classifier a capability uses comes from the policy; what each classifier
-    means is here. A capability the policy declares nothing for classifies as ``any``
-    and so only matches a rule written over ``any`` — which, absent one, is a denial.
-    """
     config = settings or GovernanceSettings()
     classifier = policy.classifier_for(request.capability)
     if classifier is None:
@@ -64,12 +51,12 @@ def classify(
         return classifier.match
     return (
         classifier.match
-        if _matches(classifier, request, policy, config)
+        if _resource_matches(classifier, request, policy, config)
         else (classifier.otherwise or ResourceClass.ANY)
     )
 
 
-def _matches(
+def _resource_matches(
     classifier: Classifier,
     request: PolicyRequest,
     policy: Policy,
@@ -89,12 +76,10 @@ def _matches(
 
 
 class PolicyDecisionPoint:
-    """The only source of decisions. Keeps every version a live run may be pinned to."""
-
     def __init__(self, policy: Policy, settings: GovernanceSettings | None = None) -> None:
         self._settings = settings or GovernanceSettings()
         self._versions: OrderedDict[str, Policy] = OrderedDict()
-        self._current = self._remember(policy)
+        self._current = self._remember_keeping_recent_versions(policy)
 
     @property
     def policy(self) -> Policy:
@@ -105,33 +90,28 @@ class PolicyDecisionPoint:
         return self._current
 
     def policy_of(self, run: Run) -> Policy | None:
-        """The version this run was pinned to, or nothing if it has aged out."""
         return self._versions.get(run.policy_hash)
 
     def reload(self, policy: Policy) -> str:
-        """Publish a new version without disturbing runs pinned to an older one."""
-        self._current = self._remember(policy)
+        self._current = self._remember_keeping_recent_versions(policy)
         return self._current
 
     def decide(self, request: PolicyRequest) -> PolicyDecision:
         return self._evaluate(self.policy, self._current, request)
 
     def decide_for_run(self, run: Run, request: PolicyRequest) -> PolicyDecision:
-        """Evaluate against the version pinned at the start of the run."""
         if run.state is not RunState.RUNNING:
-            return self._refuse("run.state", f"run {run.id} is {run.state.value}", run.policy_hash)
-        policy = self._versions.get(run.policy_hash)
-        if policy is None:
-            return self._refuse("policy.missing", "pinned policy is gone", run.policy_hash)
-        return self._evaluate(policy, run.policy_hash, request)
+            return self._refuse_in_any_mode(
+                "run.state", f"run {run.id} is {run.state.value}", run.policy_hash
+            )
+        pinned_policy = self._versions.get(run.policy_hash)
+        if pinned_policy is None:
+            return self._refuse_in_any_mode(
+                "policy.missing", "pinned policy is gone", run.policy_hash
+            )
+        return self._evaluate(pinned_policy, run.policy_hash, request)
 
-    def _remember(self, policy: Policy) -> str:
-        """Keep the recent versions runs may still be pinned to, and no more.
-
-        A run outlives its policy by at most its own lifetime, so the oldest versions
-        are eventually unreachable; a run pinned past the horizon is refused rather
-        than decided under a version nobody can produce.
-        """
+    def _remember_keeping_recent_versions(self, policy: Policy) -> str:
         digest = policy.digest()
         self._versions[digest] = policy
         self._versions.move_to_end(digest)
@@ -213,8 +193,7 @@ class PolicyDecisionPoint:
             interception=policy.inspection_for(rule),
         )
 
-    def _refuse(self, rule_id: str, reason: str, policy_hash: str) -> PolicyDecision:
-        """Lifecycle refusal. Applies whatever mode the policy runs in."""
+    def _refuse_in_any_mode(self, rule_id: str, reason: str, policy_hash: str) -> PolicyDecision:
         return PolicyDecision(
             effect=Effect.DENY,
             rule_id=rule_id,

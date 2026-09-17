@@ -38,7 +38,6 @@ def pdp(policy: Policy) -> PolicyDecisionPoint:
 
 @pytest.fixture
 def journal() -> CollectingAuditSink:
-    """Stands in for the audit exchange: whatever was published lands here."""
     return CollectingAuditSink()
 
 
@@ -49,7 +48,6 @@ def audit(journal: CollectingAuditSink) -> BufferedAuditSink:
 
 @pytest.fixture
 def redis() -> Redis:
-    """Redis in process, with the real expiry semantics and no container."""
     return fakeredis.FakeAsyncRedis()
 
 
@@ -67,5 +65,4 @@ def service(pdp: PolicyDecisionPoint, runs: RunStore, audit: BufferedAuditSink) 
 def pdp_service_with_full_backlog(
     pdp: PolicyDecisionPoint, runs: RunStore, journal: CollectingAuditSink
 ) -> PolicyService:
-    """A journal that accepts nothing more, so decisions have nowhere to be recorded."""
     return PolicyService(pdp, runs, BufferedAuditSink(journal, _NO_ROOM))

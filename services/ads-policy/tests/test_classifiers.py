@@ -44,7 +44,6 @@ WORKDIR = SETTINGS.workdir
 def test_the_declared_classifiers_answer_what_the_matrix_expects(
     capability: Capability, resource: str, expected: ResourceClass
 ) -> None:
-    """The built-in declarations have to classify exactly as the hand-written chain did."""
     policy = org_policy()
     assert classify(policy_request(capability, resource), policy) == expected
 
@@ -54,8 +53,7 @@ def test_a_capability_nothing_is_declared_for_falls_to_any() -> None:
     assert classify(policy_request(Capability.FS_READ, "/etc/passwd"), bare) == ResourceClass.ANY
 
 
-def test_a_document_may_classify_a_capability_differently() -> None:
-    """Reclassifying is a policy change: no new image, no new code."""
+def test_a_document_may_classify_a_capability_differently_without_new_code() -> None:
     document = {
         "capabilities": [
             {
@@ -113,7 +111,6 @@ def test_a_document_may_name_a_class_of_its_own() -> None:
 
 
 def test_a_rule_over_an_unreachable_class_is_refused_at_load() -> None:
-    """Deny-by-default hides this mistake, so the document has to be rejected."""
     document = {
         "capabilities": [
             {
@@ -142,7 +139,6 @@ def test_an_unreadable_classifier_is_refused_at_load() -> None:
 
 
 def test_the_hash_follows_the_classifier(policy: Policy) -> None:
-    """Two policies with the same rules can still decide differently."""
     reclassified = Policy(
         schema_version=policy.schema_version,
         version=policy.version,
@@ -161,8 +157,7 @@ def test_the_hash_follows_the_classifier(policy: Policy) -> None:
     assert reclassified.digest() != policy.digest()
 
 
-def test_a_classifier_the_code_does_not_know_is_a_policy_error() -> None:
-    """deny_on_policy_error turns it into a refusal rather than a crash."""
+def test_a_classifier_the_code_does_not_know_is_refused_as_a_policy_error() -> None:
     policy = Policy(
         schema_version="ads.governance/v1",
         version="broken",

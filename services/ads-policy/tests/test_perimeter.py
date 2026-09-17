@@ -81,7 +81,6 @@ def test_commands_are_judged_by_capability_not_by_their_text(pdp: PolicyDecision
 async def test_every_attempt_reaches_the_journal(
     service: PolicyService, journal: CollectingAuditSink
 ) -> None:
-    """What the budget is later computed from is the record of each try, not a counter."""
     run = await service.start(run_request(VM))
     request = decision_request(run.id, Capability.SECRET_READ, "ads-client-secret")
     for _ in range(3):

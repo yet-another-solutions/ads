@@ -35,7 +35,6 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def policy(self, settings: Settings) -> Policy:
-        """The delivered policy when one is mounted, the built-in matrix otherwise."""
         document = read_policy_document(settings.governance)
         if document is None:
             return org_policy(settings.governance)

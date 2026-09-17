@@ -98,7 +98,6 @@ def test_container_and_vm_differ_in_exec_migrate_and_push(pdp: PolicyDecisionPoi
 
 
 def test_without_a_sandbox_the_vm_only_rows_are_out_of_reach(pdp: PolicyDecisionPoint) -> None:
-    """No Kata means no vm placement, so nothing the matrix grants only at vm is left."""
     without = GovernanceSettings(sandbox_available=False)
     claimed = assign_isolation_level(
         runtime_class_name=without.vm_runtime_class,

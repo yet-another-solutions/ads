@@ -81,7 +81,6 @@ def test_an_unreadable_document_keeps_the_current_version(tmp_path: Path) -> Non
 
 @pytest.mark.anyio
 async def test_a_rule_the_new_version_drops_is_not_applied_to_a_pinned_run(tmp_path: Path) -> None:
-    """A run decides under the version it started with, reload or no reload."""
     settings = _settings(tmp_path)
     pdp = _pdp(settings)
     store = InMemoryRunStore()

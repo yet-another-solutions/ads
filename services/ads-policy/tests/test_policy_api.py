@@ -75,7 +75,6 @@ def test_health_is_public(service_settings: Settings, redis: Redis) -> None:
 
 
 def test_readiness_follows_the_run_store(service_settings: Settings) -> None:
-    """A pod that cannot reach the run store would deny everything, so it is not ready."""
     app = create_app(service_settings, _UnreachableRedis(), CollectingAuditSink())
     with TestClient(app=app) as client:
         assert client.get("/health/live").status_code == 200
@@ -104,7 +103,6 @@ def test_the_service_derives_the_level_from_the_placement(api: TestClient) -> No
 
 
 def test_an_unconfirmed_placement_opens_no_run(api: TestClient) -> None:
-    """No labels used to mean local, which granted more than container. Now it is a 400."""
     response = api.post(
         "/policy/runs",
         json={

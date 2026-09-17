@@ -11,10 +11,7 @@ from typing import Any
 
 RULES = Path(__file__).parent / "rules" / "gitleaks.toml"
 
-#: Go's regexp takes three things Python's does not. Everything else carries over,
-#: because RE2 is the smaller language: it has no backreferences or lookaround to
-#: translate away.
-_POSIX = {
+_GO_POSIX_CLASSES_IN_PYTHON = {
     "[:alnum:]": "a-zA-Z0-9",
     "[:alpha:]": "a-zA-Z",
     "[:digit:]": "0-9",
@@ -29,18 +26,19 @@ _INLINE_IGNORECASE = re.compile(r"\(\?i\)")
 
 
 def translate(pattern: str) -> str:
-    """Rewrite a Go pattern into the equivalent Python one."""
-    for posix, expansion in _POSIX.items():
-        pattern = pattern.replace(posix, expansion)
+    for posix_class, python_class in _GO_POSIX_CLASSES_IN_PYTHON.items():
+        pattern = pattern.replace(posix_class, python_class)
     pattern = pattern.replace(r"\z", r"\Z")
     if "(?i)" in pattern:
-        # Go takes the flag anywhere and more than once; Python only at the front.
-        pattern = "(?i)" + _INLINE_IGNORECASE.sub("", pattern)
+        pattern = _with_ignorecase_moved_to_front(pattern)
     return pattern
 
 
+def _with_ignorecase_moved_to_front(pattern: str) -> str:
+    return "(?i)" + _INLINE_IGNORECASE.sub("", pattern)
+
+
 def entropy(value: str) -> float:
-    """Shannon entropy in bits per character. A word scores low, a key high."""
     if not value:
         return 0.0
     counts = Counter(value)
@@ -50,8 +48,6 @@ def entropy(value: str) -> float:
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """One secret, and where in the payload it sits so it can be cut out."""
-
     rule_id: str
     secret: str
     start: int
@@ -59,8 +55,6 @@ class Finding:
 
 
 class _Allowlist:
-    """What a rule refuses to call a secret: known placeholders and example values."""
-
     def __init__(self, raw: dict[str, Any]) -> None:
         self._on_match = raw.get("regexTarget", "secret") in ("match", "line")
         self._regexes = [re.compile(translate(r)) for r in raw.get("regexes", ())]
@@ -73,8 +67,7 @@ class _Allowlist:
         return any(word in secret.lower() for word in self._stopwords)
 
 
-def _allowlists(raw: dict[str, Any]) -> list[_Allowlist]:
-    """The file spells it both ways, singular and plural, and either may be a list."""
+def _allowlists_singular_or_plural(raw: dict[str, Any]) -> list[_Allowlist]:
     blocks: list[_Allowlist] = []
     for key in ("allowlist", "allowlists"):
         value = raw.get(key)
@@ -92,12 +85,10 @@ class _Rule:
         self._keywords = tuple(str(k).lower() for k in raw.get("keywords", ()))
         self._entropy = float(raw.get("entropy", 0.0))
         self._group = int(raw.get("secretGroup", 0)) or None
-        self._allow = _allowlists(raw) + shared
+        self._allow = _allowlists_singular_or_plural(raw) + shared
 
     def find(self, text: str, lowered: str) -> list[Finding]:
-        # The keyword prefilter is what keeps 200-odd regexes affordable: without a
-        # hint of the vendor's name in the payload the pattern cannot match anyway.
-        if self._keywords and not any(word in lowered for word in self._keywords):
+        if self._keywords and not self._mentions_a_keyword(lowered):
             return []
         found: list[Finding] = []
         for match in self._regex.finditer(text):
@@ -112,38 +103,31 @@ class _Rule:
             found.append(Finding(self.id, secret, *match.span(index)))
         return found
 
+    def _mentions_a_keyword(self, lowered: str) -> bool:
+        return any(word in lowered for word in self._keywords)
+
 
 @lru_cache(maxsize=1)
-def _rules() -> tuple[_Rule, ...]:
-    """Parsed once per process: reading and compiling the set costs ~50 ms."""
+def _rules_parsed_once() -> tuple[_Rule, ...]:
     document = tomllib.loads(RULES.read_text())
-    shared = _allowlists(document)
+    shared = _allowlists_singular_or_plural(document)
     return tuple(_Rule(raw, shared) for raw in document["rules"] if "regex" in raw)
 
 
 def find_secrets(text: str) -> tuple[Finding, ...]:
-    """Every credential the rule set recognises, in the order they appear."""
     lowered = text.lower()
-    found = [finding for rule in _rules() for finding in rule.find(text, lowered)]
+    found = [finding for rule in _rules_parsed_once() for finding in rule.find(text, lowered)]
     return tuple(sorted(found, key=lambda f: (f.start, f.end)))
 
 
 def redact(text: str, findings: tuple[Finding, ...]) -> str:
-    """Cut the secrets out, latest first so earlier spans keep their offsets.
-
-    One secret often trips several rules — a key matches both its vendor's pattern and
-    the generic one — and those matches overlap. Cutting each in turn would splice the
-    text through a hole already made, so overlaps are dropped: the widest match wins
-    and the rest are already inside it.
-    """
     payload = text
-    for finding in _widest(findings):
+    for finding in _widest_non_overlapping_latest_first(findings):
         payload = f"{payload[: finding.start]}[redacted:{finding.rule_id}]{payload[finding.end :]}"
     return payload
 
 
-def _widest(findings: tuple[Finding, ...]) -> list[Finding]:
-    """Non-overlapping spans, latest first, preferring the longer of any two."""
+def _widest_non_overlapping_latest_first(findings: tuple[Finding, ...]) -> list[Finding]:
     ordered = sorted(findings, key=lambda f: (f.start, f.start - f.end))
     kept: list[Finding] = []
     for finding in ordered:

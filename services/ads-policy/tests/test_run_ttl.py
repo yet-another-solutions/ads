@@ -91,7 +91,6 @@ def _service(redis: Redis, pdp: PolicyDecisionPoint, audit: BufferedAuditSink) -
 async def test_a_run_in_use_does_not_run_out(
     redis: Redis, pdp: PolicyDecisionPoint, audit: BufferedAuditSink
 ) -> None:
-    """A task may go on for hours; what ends a run by itself is silence, not age."""
     service = _service(redis, pdp, audit)
     run = await service.start(run_request(IsolationLevel.VM))
     await redis.expire(f"{KEY_PREFIX}{run.id}", 5)
@@ -102,7 +101,6 @@ async def test_a_run_in_use_does_not_run_out(
 async def test_a_refusal_is_use_too(
     redis: Redis, pdp: PolicyDecisionPoint, audit: BufferedAuditSink
 ) -> None:
-    """A task being refused is a task still going; ending its run would hide that."""
     service = _service(redis, pdp, audit)
     run = await service.start(run_request(IsolationLevel.VM))
     await redis.expire(f"{KEY_PREFIX}{run.id}", 5)
@@ -114,7 +112,6 @@ async def test_a_refusal_is_use_too(
 async def test_use_keeps_the_holder_s_index_too(
     redis: Redis, pdp: PolicyDecisionPoint, audit: BufferedAuditSink
 ) -> None:
-    """Otherwise the run would outlive the only way a proxied call can find it."""
     service = _service(redis, pdp, audit)
     run = await service.start(run_request(IsolationLevel.VM, holder="user:alice"))
     await redis.expire("ads:holder:user:alice", 5)
@@ -148,7 +145,6 @@ async def test_a_lifetime_that_cannot_be_extended_does_not_refuse_the_call(
 
 
 async def test_a_second_replica_sees_the_same_runs(redis: Redis, pdp: PolicyDecisionPoint) -> None:
-    """The store is shared, so a run opened by one pod is known to the next."""
     first = RedisRunStore(redis)
     second = RedisRunStore(redis)
     run = await first.start(

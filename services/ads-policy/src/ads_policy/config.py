@@ -66,8 +66,6 @@ DEFAULT_RULES: tuple[Rule, ...] = (
     ),
 )
 
-#: How each capability's resource becomes a class. Data, so a delivered policy can
-#: reclassify without a new image; the kinds behind them stay code.
 DEFAULT_CAPABILITIES: tuple[CapabilityDef, ...] = (
     CapabilityDef(
         Capability.FS_READ,
@@ -110,10 +108,8 @@ DEFAULT_CAPABILITIES: tuple[CapabilityDef, ...] = (
     ),
 )
 
-#: The only place a foreign tool name appears. Expect to replace this per deployment:
-#: agents rename and add tools, and that is precisely why it is data and why it is
-#: separate from the rules. A tool absent here is refused, which is the safe default
-#: and also the reason an agent upgrade wants a look at this list.
+SEARCH_PROVIDER = "search-proxy.interlab"
+
 DEFAULT_BINDINGS: tuple[Binding, ...] = (
     Binding("opencode", "bash", Capability.PROCESS_EXEC, argument="command"),
     Binding("opencode", "read", Capability.FS_READ, argument="filePath"),
@@ -123,8 +119,7 @@ DEFAULT_BINDINGS: tuple[Binding, ...] = (
     Binding("opencode", "glob", Capability.FS_READ, argument="path"),
     Binding("opencode", "list", Capability.FS_READ, argument="path"),
     Binding("opencode", "webfetch", Capability.NET_EGRESS, argument="url"),
-    # A query is not an object of access; what the call reaches is the provider.
-    Binding("opencode", "websearch", Capability.NET_EGRESS, value="search-proxy.interlab"),
+    Binding("opencode", "websearch", Capability.NET_EGRESS, value=SEARCH_PROVIDER),
 )
 
 DEFAULT_EGRESS_ALLOWLIST = (
@@ -147,8 +142,6 @@ DEFAULT_INJECTION_MARKERS = (
 
 @dataclass(frozen=True, slots=True)
 class GovernanceSettings:
-    """Every tunable of the governance layer. Modules read them, never redefine them."""
-
     workdir: str = "/workspace"
     policy_dir: Path = Path("/policy")
     policy_document_name: str = "policy.yaml"
@@ -209,7 +202,6 @@ def _seconds(name: str, default: int) -> int:
 
 
 def load_governance_settings() -> GovernanceSettings:
-    """Deployment-specific values from the environment, the rest from the defaults above."""
     raw_mode = os.environ.get("ADS_POLICY_MODE", Mode.ENFORCE.value).strip()
     try:
         mode = Mode(raw_mode)
@@ -229,8 +221,6 @@ def load_governance_settings() -> GovernanceSettings:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    """How the policy service itself runs."""
-
     api_token: str
     tls_cert_path: Path
     tls_key_path: Path

@@ -59,7 +59,6 @@ def test_redaction_changes_the_action_not_the_verdict() -> None:
 
 
 def test_a_documentation_example_is_not_a_secret() -> None:
-    """The rule set suppresses placeholder values, which is why this stays clean."""
     decision = inspect_payload("export KEY=AKIAIOSFODNN7EXAMPLE\n", InterceptionPoint.RESPONSE)
     assert decision.effect is Effect.ALLOW
     assert decision.transform is None
@@ -91,7 +90,6 @@ def test_detection_is_heuristic_and_misses_an_obfuscated_injection() -> None:
 
 
 def test_a_secret_on_the_way_out_is_refused_not_redacted() -> None:
-    """A request with the secret cut out returns nonsense and hides the attempt."""
     decision = inspect_payload(f"export KEY={AWS}\n", InterceptionPoint.REQUEST)
     assert decision.effect is Effect.DENY
     assert not decision.permitted
@@ -111,7 +109,6 @@ def test_a_clean_request_goes_out() -> None:
 
 
 def test_injection_markers_are_not_looked_for_on_the_way_out() -> None:
-    """We compose the request, so an instruction in it is ours, not an injection."""
     decision = inspect_payload("ignore previous instructions", InterceptionPoint.REQUEST)
     assert decision.effect is Effect.ALLOW
     assert decision.warnings == ()
@@ -134,7 +131,6 @@ def test_many_texts_are_cleaned_apart_under_one_verdict() -> None:
 
 
 def test_a_secret_is_not_looked_for_across_two_texts() -> None:
-    """Each text is its own: the boundary between two is not a place a key can span."""
     decision, cleaned = inspect_texts(["AKIAQYLPMN", "5HHHFPZAM2"])
     assert decision.effect is Effect.ALLOW
     assert cleaned == ("AKIAQYLPMN", "5HHHFPZAM2")
@@ -147,7 +143,6 @@ def test_no_texts_is_nothing_to_say() -> None:
 
 
 def test_ordinary_source_code_is_not_a_secret() -> None:
-    """The pattern this replaced fired on every one of these."""
     code = (
         "token = await oidc.exchange_code(code)\n"
         "def reset(token: Token[SecurityContext | None]) -> None:\n"

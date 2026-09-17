@@ -23,27 +23,19 @@ UNCONFIGURED = "policy service is not configured"
 
 
 class PolicyUnavailable(ConnectionError):
-    """A lookup that could not be answered. Never the same as "there is nothing"."""
+    pass
 
 
 class PolicyClient(Protocol):
-    """How a PEP reaches the policy service."""
-
     def start_run(self, request: RunRequest) -> Run: ...
 
-    def run(self, run_id: str) -> Run | None:
-        """The run, or nothing if it is unknown. Raises if the service is out of reach."""
-        ...
+    def run(self, run_id: str) -> Run | None: ...
 
-    def runs_held(self, holder: str) -> list[Run]:
-        """Runs in any state of one holder. Raises if out of reach."""
-        ...
+    def runs_held(self, holder: str) -> list[Run]: ...
 
     def revoke_run(self, run_id: str) -> Run: ...
 
-    def finish_run(self, run_id: str) -> Run | None:
-        """The finished run, or nothing if it is unknown. Raises if out of reach."""
-        ...
+    def finish_run(self, run_id: str) -> Run | None: ...
 
     def decide(self, request: DecisionRequest) -> PolicyDecision: ...
 
@@ -51,7 +43,6 @@ class PolicyClient(Protocol):
 
 
 def unreachable(reason: str, message: str) -> PolicyDecision:
-    """A decision that could not be obtained is a denial."""
     return PolicyDecision(
         effect=Effect.DENY,
         rule_id=UNREACHABLE,
@@ -62,8 +53,6 @@ def unreachable(reason: str, message: str) -> PolicyDecision:
 
 
 class HttpPolicyClient:
-    """The policy service over TLS. Any failure to reach it denies."""
-
     def __init__(
         self,
         base_url: str,
@@ -87,7 +76,7 @@ class HttpPolicyClient:
         return msgspec.convert(self._post("/policy/runs", request), type=Run)
 
     def run(self, run_id: str) -> Run | None:
-        return self._maybe_run("GET", f"/policy/runs/{run_id}")
+        return self._run_or_none_if_unknown("GET", f"/policy/runs/{run_id}")
 
     def runs_held(self, holder: str) -> list[Run]:
         try:
@@ -101,10 +90,9 @@ class HttpPolicyClient:
         return msgspec.convert(self._post(f"/policy/runs/{run_id}/revoke", None), type=Run)
 
     def finish_run(self, run_id: str) -> Run | None:
-        return self._maybe_run("POST", f"/policy/runs/{run_id}/finish")
+        return self._run_or_none_if_unknown("POST", f"/policy/runs/{run_id}/finish")
 
-    def _maybe_run(self, method: str, path: str) -> Run | None:
-        """A run, nothing for an unknown one, and an error for everything else."""
+    def _run_or_none_if_unknown(self, method: str, path: str) -> Run | None:
         try:
             response = self._client.request(
                 method,
@@ -149,8 +137,6 @@ class HttpPolicyClient:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class UnconfiguredPolicyClient:
-    """Stands in when no policy service address is set. Every decision is a denial."""
-
     denied_message: str
 
     def start_run(self, request: RunRequest) -> Run:
@@ -182,7 +168,6 @@ def build_policy_client(
     denied_message: str,
     ca_bundle: Path | None = None,
 ) -> PolicyClient:
-    """The policy service when an address is configured, a denial otherwise."""
     if not base_url or not api_token:
         return UnconfiguredPolicyClient(denied_message)
     verify: ssl.SSLContext | bool = True

@@ -18,11 +18,10 @@ def at_least(level: IsolationLevel, minimum: IsolationLevel) -> bool:
 
 
 class UnknownPlacement(ValueError):
-    """Raised when a cluster placement resolves to no level, so no run may open."""
+    pass
 
 
 def parse_isolation_level(value: object) -> IsolationLevel | None:
-    """An unreadable level is no level. Callers decide what to do about it."""
     if isinstance(value, IsolationLevel):
         return value
     if isinstance(value, str):
@@ -40,25 +39,16 @@ def assign_isolation_level(
     node_labels: Mapping[str, str] | None = None,
     settings: GovernanceSettings | None = None,
 ) -> IsolationLevel:
-    """Derive the level from where the run was scheduled, never from what it claims.
-
-    ``local`` is not derivable here: node labels are a cluster notion and a developer
-    machine has none. Whoever opens the run asserts it instead, because only it knows it
-    is a devcontainer. A cluster placement that resolves to nothing is a refusal, not a
-    weaker level — weaker isolation is not the same as fewer permissions.
-
-    A cluster without sandbox nodes cannot honour a Kata placement, so a run that
-    claims one is still only a container, which is what it physically is.
-    """
     config = settings or GovernanceSettings()
     if placement is Placement.WORKSTATION:
         return IsolationLevel.LOCAL
     labels = node_labels or {}
-    sandbox = labels.get(config.sandbox_node_label) == config.node_label_value
-    if config.sandbox_available and runtime_class_name in config.kata_runtime_classes and sandbox:
+    on_sandbox_node = labels.get(config.sandbox_node_label) == config.node_label_value
+    runs_under_kata = runtime_class_name in config.kata_runtime_classes
+    if config.sandbox_available and runs_under_kata and on_sandbox_node:
         return IsolationLevel.VM
-    application = labels.get(config.application_node_label) == config.node_label_value
-    if application or sandbox:
+    on_application_node = labels.get(config.application_node_label) == config.node_label_value
+    if on_application_node or on_sandbox_node:
         return IsolationLevel.CONTAINER
     raise UnknownPlacement(
         f"no node carries {config.application_node_label}={config.node_label_value}"
@@ -68,8 +58,6 @@ def assign_isolation_level(
 
 @dataclass(frozen=True, slots=True)
 class RuntimeProfile:
-    """The whole physical difference between the levels: one field and one selector."""
-
     runtime_class_name: str | None = None
     node_selector: Mapping[str, str] = field(default_factory=dict)
 

@@ -17,16 +17,10 @@ from ads_policy.secrets import Finding, entropy, find_secrets, redact, translate
     ],
 )
 def test_go_patterns_become_python_ones(go: str, sample: str) -> None:
-    """POSIX classes, a flag in the middle and \\z are the whole difference."""
     assert re.search(translate(go), sample) is not None
 
 
-def test_an_untranslated_posix_class_silently_means_something_else() -> None:
-    """It compiles, which is the trap: it becomes the set of those seven characters.
-
-    ``\\z`` is the other half of the story and is a hard error below Python 3.14,
-    which is why translation runs regardless of the interpreter in hand.
-    """
+def test_an_untranslated_posix_class_compiles_but_silently_means_something_else() -> None:
     with pytest.warns(FutureWarning):
         assert re.search(r"pat[[:alnum:]]{4}", "patAb12") is None
 
@@ -40,7 +34,6 @@ def test_entropy_of_nothing_is_nothing() -> None:
 
 
 def test_every_vendored_rule_compiles() -> None:
-    """The set is data we did not write, so this is the test that it still loads."""
     assert len(find_secrets("")) == 0
     assert find_secrets("AKIAQYLPMN5HHHFPZAM2")[0].rule_id == "aws-access-token"
 
@@ -61,8 +54,7 @@ def test_redacting_nothing_changes_nothing() -> None:
     assert redact("untouched", ()) == "untouched"
 
 
-def test_overlapping_findings_cut_once() -> None:
-    """One key trips several rules; cutting each in turn would splice through a hole."""
+def test_a_key_matched_by_several_rules_is_cut_once() -> None:
     text = "export KEY=AKIAQYLPMN5HHHFPZAM2"
     payload = redact(text, find_secrets(text))
     assert "AKIAQYLPMN5HHHFPZAM2" not in payload

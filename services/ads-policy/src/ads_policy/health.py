@@ -15,7 +15,6 @@ def live() -> dict[str, str]:
 @get("/health/ready")
 @inject
 async def ready(redis: FromDishka[Redis]) -> dict[str, str]:
-    """Not ready without the run store: every decision would be a denial."""
     try:
         await redis.ping()
     except RedisError as exc:

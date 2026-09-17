@@ -32,7 +32,6 @@ def test_application_node_without_runtime_class_is_container() -> None:
 
 
 def test_unconfirmed_placement_opens_no_run() -> None:
-    """Saying less must not get you more, so an unresolved placement is a refusal."""
     for kwargs in ({}, {"node_labels": {}}, {"runtime_class_name": "runc"}):
         with pytest.raises(UnknownPlacement):
             assign_isolation_level(**kwargs)  # type: ignore[arg-type]
@@ -44,7 +43,6 @@ def test_local_is_asserted_by_whoever_opens_the_run_not_derived() -> None:
 
 
 def test_a_workstation_owes_no_cluster_placement() -> None:
-    """Node labels are a cluster notion; a developer machine has none to offer."""
     level = assign_isolation_level(
         placement=Placement.WORKSTATION,
         runtime_class_name=SETTINGS.vm_runtime_class,
@@ -54,7 +52,6 @@ def test_a_workstation_owes_no_cluster_placement() -> None:
 
 
 def test_a_cluster_without_a_sandbox_cannot_produce_a_vm() -> None:
-    """A claimed Kata placement on a cluster that has none is still a container."""
     without = GovernanceSettings(sandbox_available=False)
     level = assign_isolation_level(
         runtime_class_name=SETTINGS.vm_runtime_class,

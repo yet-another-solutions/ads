@@ -36,13 +36,9 @@ async def _start(store: RunStore, holder: str = ALICE) -> Run:
 
 @pytest.fixture(params=["memory", "redis"])
 def store(request: pytest.FixtureRequest, redis: Redis) -> RunStore:
-    """Both stores keep the same promise, so both are held to it."""
     if request.param == "memory":
         return InMemoryRunStore()
     return RedisRunStore(redis)
-
-
-# --- the store ----------------------------------------------------------------------
 
 
 @pytest.mark.anyio
@@ -75,7 +71,6 @@ async def test_a_stranger_holds_nothing(store: RunStore) -> None:
 
 @pytest.mark.anyio
 async def test_an_expired_run_drops_out_of_its_holder(redis: Redis) -> None:
-    """The run's own key expires; the index forgets it the next time it is read."""
     store = RedisRunStore(redis)
     gone = await _start(store)
     kept = await _start(store)
@@ -91,12 +86,8 @@ async def test_the_index_lives_as_long_as_a_run(redis: Redis) -> None:
     assert 0 < await redis.ttl(f"ads:holder:{ALICE}") <= 120
 
 
-# --- the service --------------------------------------------------------------------
-
-
 @pytest.mark.anyio
 async def test_held_runs_come_back_in_whatever_state_they_are(service: PolicyService) -> None:
-    """The caller tells a revoked run from none: a call into it is still refused here."""
     first = await service.start(run_request(IsolationLevel.VM, holder=ALICE))
     second = await service.start(run_request(IsolationLevel.VM, holder=ALICE))
     await service.revoke(first.id)
@@ -115,7 +106,6 @@ async def test_a_finished_run_decides_nothing(service: PolicyService) -> None:
 
 @pytest.mark.anyio
 async def test_finishing_does_not_undo_a_revocation(service: PolicyService) -> None:
-    """Revoked is the stronger word, and the audit should keep reading it."""
     run = await service.start(run_request(IsolationLevel.VM))
     await service.revoke(run.id)
     finished = await service.finish(run.id)
@@ -135,9 +125,6 @@ async def test_a_run_is_looked_up_by_id(service: PolicyService) -> None:
     assert found is not None
     assert found.id == run.id
     assert await service.run("never-opened") is None
-
-
-# --- the API ------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -183,7 +170,6 @@ def test_held_runs_are_listed_by_holder(api: TestClient) -> None:
 
 
 def test_a_listing_without_a_holder_is_refused(api: TestClient) -> None:
-    """Otherwise it would read as "every run nobody holds"."""
     assert api.get("/policy/runs", params={"holder": ""}).status_code == 400
     assert api.get("/policy/runs").status_code == 400
 
@@ -199,9 +185,6 @@ def test_the_lookups_need_the_token(api: TestClient) -> None:
     assert api.get("/policy/runs", params={"holder": ALICE}).status_code == 401
     assert api.get("/policy/runs/anything").status_code == 401
     assert api.post("/policy/runs/anything/finish").status_code == 401
-
-
-# --- the client ---------------------------------------------------------------------
 
 
 def _client(handler: object) -> HttpPolicyClient:
@@ -286,7 +269,6 @@ def test_the_client_fetches_a_run() -> None:
     ],
 )
 def test_a_lookup_that_cannot_be_answered_is_not_an_empty_answer(handler: object) -> None:
-    """ "Nothing is held" and "nobody could say" must not look alike."""
     client = _client(handler)
     with pytest.raises(PolicyUnavailable):
         client.runs_held(ALICE)

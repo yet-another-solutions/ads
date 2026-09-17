@@ -40,7 +40,6 @@ def test_a_bound_tool_resolves_to_what_it_amounts_to(
 
 
 def test_a_search_resolves_to_the_provider_not_the_query() -> None:
-    """A query is not an object of access; what the call reaches is the provider."""
     capability, resource = resolve(_call("websearch", {"query": "litestar guards"}), org_policy())
     assert capability is Capability.NET_EGRESS
     assert resource == "search-proxy.interlab"
@@ -53,7 +52,6 @@ def test_an_unbound_tool_does_not_resolve() -> None:
 
 
 def test_a_tool_from_another_source_does_not_resolve() -> None:
-    """Source is part of the key: the same name means different things elsewhere."""
     with pytest.raises(Unbound) as raised:
         resolve(_call("read", {"filePath": "/x"}, source="mcp:jira"), org_policy())
     assert raised.value.rule_id == "binding.missing"
@@ -91,7 +89,6 @@ def test_a_document_binds_a_tool_of_its_own() -> None:
 
 
 def test_a_document_that_declares_bindings_replaces_the_built_in_ones() -> None:
-    """Otherwise a deployment could not take a tool away, only add to it."""
     policy = load_policy({"bindings": [], "rules": []})
     with pytest.raises(Unbound):
         resolve(_call("bash", {"command": "uv sync"}), policy)
@@ -124,7 +121,6 @@ def test_an_unreadable_binding_is_refused_at_load() -> None:
 
 
 def test_the_hash_follows_the_bindings(policy: Policy) -> None:
-    """Rebinding a tool changes what every rule means, so it changes the version."""
     rebound = load_policy(
         {
             "bindings": [

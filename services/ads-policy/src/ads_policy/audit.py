@@ -22,7 +22,6 @@ def record(
     content: str | None = None,
     include_content: bool = False,
 ) -> AuditEvent:
-    """Decision plus arguments. Prompts and diffs travel only when opted in."""
     return AuditEvent(
         run_id=request.run_id,
         subject=request.subject,
@@ -38,7 +37,7 @@ def record(
 
 
 class AuditBacklogFull(RuntimeError):
-    """Raised when events can no longer be buffered, so the caller must not proceed."""
+    pass
 
 
 class AuditSink(Protocol):
@@ -47,8 +46,6 @@ class AuditSink(Protocol):
 
 @dataclass(frozen=True, slots=True, eq=False)
 class RabbitAuditSink:
-    """Publishes one decision to the audit exchange, durably."""
-
     connection: AbstractRobustConnection
 
     async def send(self, event: AuditEvent) -> None:
@@ -67,12 +64,6 @@ class RabbitAuditSink:
 
 
 class BufferedAuditSink:
-    """Takes events without blocking a decision and publishes them behind it.
-
-    Losing the journal is not an option, so the buffer has a ceiling and refuses
-    once it is reached: a decision that cannot be recorded must not be granted.
-    """
-
     def __init__(
         self,
         sink: AuditSink,
@@ -91,14 +82,11 @@ class BufferedAuditSink:
     def enqueue(self, event: AuditEvent) -> None:
         if len(self._pending) >= self._capacity:
             raise AuditBacklogFull(f"{self._capacity} events are waiting to be journalled")
-        # Stamped here because every row this process writes passes through here, and
-        # every one of them was decided by this build.
         if self._decided_by:
             event = msgspec.structs.replace(event, decided_by=self._decided_by)
         self._pending.append(event)
 
     async def drain(self) -> int:
-        """Publish what is waiting, stopping at the first failure and keeping the rest."""
         sent = 0
         while self._pending:
             try:
@@ -111,8 +99,6 @@ class BufferedAuditSink:
 
 
 class CollectingAuditSink:
-    """Keeps events in the process. For tests and for a single-process run."""
-
     def __init__(self) -> None:
         self._events: list[AuditEvent] = []
 
