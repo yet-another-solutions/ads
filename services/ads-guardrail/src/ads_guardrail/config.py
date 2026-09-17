@@ -34,6 +34,9 @@ class Settings:
     person_token_audience: str = ""
     keycloak_well_known_url: str = ""
     keycloak_issuer: str = ""
+    injection_scanner_url: str = ""
+    injection_scanner_api_token: str = ""
+    injection_scanner_timeout_seconds: float = 30.0
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -150,7 +153,16 @@ def load_settings() -> Settings:
         person_token_audience=_env("ADS_MCP_AUDIENCE", "").strip(),
         keycloak_well_known_url=_env("ADS_KEYCLOAK_WELL_KNOWN_URL", "").strip(),
         keycloak_issuer=_env("ADS_KEYCLOAK_ISSUER", "").strip(),
+        injection_scanner_url=_env("ADS_INJECTION_SCANNER_URL", "").strip().rstrip("/"),
+        injection_scanner_api_token=_env("ADS_INJECTION_SCANNER_API_TOKEN", "").strip(),
+        injection_scanner_timeout_seconds=float(
+            _env("ADS_INJECTION_SCANNER_TIMEOUT_SECONDS", "30")
+        ),
     )
+    if bool(settings.injection_scanner_url) != bool(settings.injection_scanner_api_token):
+        raise RuntimeError(
+            "ADS_INJECTION_SCANNER_URL and ADS_INJECTION_SCANNER_API_TOKEN go together"
+        )
     if settings.person_token_audience and not (
         settings.keycloak_well_known_url and settings.keycloak_issuer
     ):

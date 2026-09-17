@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import msgspec
 
-from ads_policy.contract import Site
+from ads_policy.contract import ConversationId, Site
 
 
 class Workspace(msgspec.Struct, frozen=True):
@@ -15,6 +15,7 @@ class Workspace(msgspec.Struct, frozen=True):
 class Opening(msgspec.Struct, frozen=True):
     bearer: str
     workspace: Workspace
+    conversation: ConversationId = ""
 
 
 class Application(msgspec.Struct, frozen=True):

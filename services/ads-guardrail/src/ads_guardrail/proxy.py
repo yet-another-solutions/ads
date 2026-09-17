@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import ssl
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -13,11 +14,16 @@ import structlog
 from ads_guardrail.config import Settings
 from ads_guardrail.contract import McpServer
 from ads_guardrail.guardrail import Guardrail, Reading, RunNotOpen
-from ads_policy.contract import PolicyDecision, Run
+from ads_guardrail.scanner import InjectionScan, InjectionScanner
+from ads_policy.contract import CheckKind, InterceptionPoint, PolicyDecision, Run, Switch
+from ads_policy.output import PROMPT_INJECTION_RULE
 
 logger = structlog.get_logger("ads.guardrail")
 
 TOOL_CALL_METHOD = "tools/call"
+REFUSED_BY = "ads-guardrail"
+REFUSED_BY_POLICY = "policy"
+REFUSED_FOR_PROMPT_INJECTION = "prompt-injection"
 JSON_RPC_INVALID_REQUEST = -32600
 MESSAGE_CONTENT_KEYS = ("result", "error", "params")
 SSE_EVENT_END = re.compile(rb"\r\n\r\n|\n\n|\r\r")
@@ -61,15 +67,19 @@ class Relayed:
 
 
 class Proxy:
-    def __init__(self, settings: Settings, guardrail: Guardrail) -> None:
+    def __init__(
+        self, settings: Settings, guardrail: Guardrail, injection_scanner: InjectionScanner
+    ) -> None:
         self._settings = settings
         self._servers_by_name = {server.name: server for server in settings.mcp_servers}
         self._guardrail = guardrail
+        self._injection_scanner = injection_scanner
         silence_limit = settings.mcp_timeout_seconds
         self._session = aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=_upstream_tls(settings)),
             timeout=aiohttp.ClientTimeout(
                 total=None, sock_connect=silence_limit, sock_read=silence_limit
-            )
+            ),
         )
         self._listening_stream_timeout = aiohttp.ClientTimeout(
             total=None, sock_connect=silence_limit, sock_read=None
@@ -112,7 +122,13 @@ class Proxy:
             logger.info(
                 "tool call refused", server=server.name, tool=tool, rule_id=decision.rule_id
             )
-            return _json_response(_refusal(request_id, decision.message))
+            return _json_response(
+                _refusal(
+                    request_id,
+                    decision.message,
+                    alternative=self._alternative_in(decision.message),
+                )
+            )
         response = await self._send_upstream(method, server, body, headers)
         response_headers = _forwarded_response_headers(response)
         if response.content_type == SSE_MEDIA_TYPE:
@@ -126,11 +142,14 @@ class Proxy:
             response.release()
         if not answer:
             return Relayed(response.status, response_headers, answer)
-        inspected = self._inspected_message(run, decision, answer)
+        inspected = await self._inspected_message(run, decision, answer)
         return Relayed(response.status, response_headers, inspected)
 
     async def close(self) -> None:
         await self._session.close()
+
+    def _alternative_in(self, message: str) -> str:
+        return "" if message == self._guardrail.governance.denied_message else message
 
     def _find_run_and_decide(
         self,
@@ -185,34 +204,39 @@ class Proxy:
             async for chunk in response.content.iter_any():
                 events, unfinished = _complete_events_and_rest(unfinished + chunk)
                 for event in events:
-                    yield self._inspected_event(event, run, decision)
+                    if inspected := await self._inspected_event(event, run, decision):
+                        yield inspected
                 if len(unfinished) > MAX_EVENT_BYTES:
                     logger.warning("stream cut: an event outgrew the limit", size=len(unfinished))
                     return
-            if unfinished:
-                yield self._inspected_event(unfinished, run, decision)
+            if unfinished and (inspected := await self._inspected_event(unfinished, run, decision)):
+                yield inspected
         except aiohttp.ClientError as exc:
             logger.warning("stream from the MCP server broke off", error=str(exc))
         finally:
             response.release()
 
-    def _inspected_event(self, event: bytes, run: Run, decision: PolicyDecision) -> bytes:
+    async def _inspected_event(self, event: bytes, run: Run, decision: PolicyDecision) -> bytes:
         lines = event.splitlines()
         data = [_sse_field_value(line) for line in lines if line.startswith(b"data:")]
         if not data:
             return event
         payload = b"\n".join(data)
-        inspected = self._inspected_message(run, decision, payload)
+        inspected = await self._inspected_message(run, decision, payload)
         if inspected is payload:
             return event
+        if not inspected:
+            return b""
         other_fields = [line for line in lines if not line.startswith(b"data:")]
         return b"\n".join([*other_fields, b"data: " + inspected]) + b"\n\n"
 
-    def _inspected_message(self, run: Run, decision: PolicyDecision, payload: bytes) -> bytes:
+    async def _inspected_message(self, run: Run, decision: PolicyDecision, payload: bytes) -> bytes:
         message = _json_or_none(payload)
         if message is None:
             text = payload.decode("utf-8", errors="replace")
-            reading = self._read_tool_result(run, decision, [text])
+            reading = await self._read_tool_result(run, decision, [text])
+            if reading.withheld:
+                return _refusal(None, reading.decision.message, _refusal_reason(reading))
             return payload if reading.texts == (text,) else reading.texts[0].encode("utf-8")
         messages = message if isinstance(message, list) else [message]
         texts = [
@@ -225,7 +249,9 @@ class Proxy:
         ]
         if not texts:
             return payload
-        reading = self._read_tool_result(run, decision, texts)
+        reading = await self._read_tool_result(run, decision, texts)
+        if reading.withheld:
+            return _withheld(message, reading)
         if reading.texts == tuple(texts):
             return payload
         replacements = iter(reading.texts)
@@ -236,14 +262,27 @@ class Proxy:
                         item[key] = _with_string_values_replaced(item[key], replacements)
         return msgspec.json.encode(message)
 
-    def _read_tool_result(self, run: Run, decision: PolicyDecision, texts: list[str]) -> Reading:
-        reading = self._guardrail.inspect_tool_result(run, decision, texts)
+    async def _read_tool_result(
+        self, run: Run, decision: PolicyDecision, texts: list[str]
+    ) -> Reading:
+        injection_scan = await self._injection_scan_if_asked(decision, texts)
+        reading = await anyio.to_thread.run_sync(
+            self._guardrail.inspect_tool_result, run, decision, texts, injection_scan
+        )
         found = reading.decision
-        if found.warnings:
-            logger.warning("tool result carries a signal", warnings=list(found.warnings))
-        if found.transform is not None and reading.texts != tuple(texts):
+        if reading.withheld:
+            logger.warning("tool result withheld", rule_id=found.rule_id, reason=found.reason)
+        elif found.transform is not None and reading.texts != tuple(texts):
             logger.info("tool result redacted", redactions=list(found.transform.redactions))
         return reading
+
+    async def _injection_scan_if_asked(
+        self, decision: PolicyDecision, texts: list[str]
+    ) -> InjectionScan | None:
+        inbound = decision.interception.side(InterceptionPoint.RESPONSE)
+        if inbound.switch_for(CheckKind.INJECTION) is Switch.OFF:
+            return None
+        return await self._injection_scanner.scan(texts)
 
 
 async def _passed_through(response: aiohttp.ClientResponse) -> AsyncIterator[bytes]:
@@ -267,6 +306,12 @@ def _complete_events_and_rest(buffer: bytes) -> tuple[list[bytes], bytes]:
 def _sse_field_value(line: bytes) -> bytes:
     value = line.split(b":", 1)[1]
     return value[1:] if value.startswith(b" ") else value
+
+
+def _upstream_tls(settings: Settings) -> ssl.SSLContext | bool:
+    if settings.tls_ca_bundle is None:
+        return True
+    return ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
 
 
 def _bearer_of(headers: dict[str, str]) -> str:
@@ -342,23 +387,48 @@ def _json_response(body: bytes) -> Relayed:
     return Relayed(200, {"content-type": "application/json"}, body)
 
 
-def _refusal(request_id: Any, message: str) -> bytes:
-    return msgspec.json.encode(_json_rpc_error(request_id, message))
+def _refusal(
+    request_id: Any, message: str, reason: str = REFUSED_BY_POLICY, alternative: str = ""
+) -> bytes:
+    return msgspec.json.encode(_json_rpc_error(request_id, message, reason, alternative))
 
 
 def _refusals_for_batch(messages: list[Any], message: str) -> bytes:
     return msgspec.json.encode(
         [
-            _json_rpc_error(item["id"], message)
+            _json_rpc_error(item["id"], message, REFUSED_BY_POLICY)
             for item in messages
             if isinstance(item, dict) and "id" in item and "method" in item
         ]
     )
 
 
-def _json_rpc_error(request_id: Any, message: str) -> dict[str, Any]:
+def _json_rpc_error(
+    request_id: Any, message: str, reason: str, alternative: str = ""
+) -> dict[str, Any]:
+    data = {"refused_by": REFUSED_BY, "reason": reason}
+    if alternative:
+        data["alternative"] = alternative
     return {
         "jsonrpc": "2.0",
         "id": request_id,
-        "error": {"code": JSON_RPC_INVALID_REQUEST, "message": message},
+        "error": {"code": JSON_RPC_INVALID_REQUEST, "message": message, "data": data},
     }
+
+
+def _refusal_reason(reading: Reading) -> str:
+    if reading.decision.rule_id == PROMPT_INJECTION_RULE:
+        return REFUSED_FOR_PROMPT_INJECTION
+    return REFUSED_BY_POLICY
+
+
+def _withheld(message: Any, reading: Reading) -> bytes:
+    items = message if isinstance(message, list) else [message]
+    answers = [
+        _json_rpc_error(item.get("id"), reading.decision.message, _refusal_reason(reading))
+        for item in items
+        if isinstance(item, dict) and ("result" in item or "error" in item)
+    ]
+    if not answers:
+        return b""
+    return msgspec.json.encode(answers if isinstance(message, list) else answers[0])

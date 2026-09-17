@@ -120,6 +120,18 @@ def test_run_is_finished(api: TestClient, run_id: str) -> None:
     assert finished.json()["state"] == "finished"
 
 
+def test_a_run_can_be_looked_up_by_its_launcher(api: TestClient, run_id: str) -> None:
+    found = api.get(f"/guardrail/runs/{run_id}")
+    assert found.status_code == 200
+    assert found.json()["state"] == "running"
+    api.post(f"/guardrail/runs/{run_id}/finish")
+    assert api.get(f"/guardrail/runs/{run_id}").json()["state"] == "finished"
+
+
+def test_looking_up_an_unknown_run_is_not_found(api: TestClient) -> None:
+    assert api.get("/guardrail/runs/never-opened").status_code == 404
+
+
 def test_finishing_unknown_run_is_not_found(api: TestClient) -> None:
     assert api.post("/guardrail/runs/never-opened/finish").status_code == 404
 

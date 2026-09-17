@@ -15,6 +15,7 @@ from ads_guardrail.health import live, ready
 from ads_guardrail.ioc import AppProvider
 from ads_guardrail.logconfig import configure_logging
 from ads_guardrail.proxy import Proxy
+from ads_guardrail.scanner import InjectionScanner
 from ads_policy.audit import AuditSink, BufferedAuditSink
 from ads_policy.client import PolicyClient
 
@@ -26,10 +27,12 @@ def create_app(
     client: PolicyClient | None = None,
     sink: AuditSink | None = None,
     person_token_verifier: AccessTokenVerifier | None = None,
+    injection_scanner: InjectionScanner | None = None,
 ) -> Litestar:
     configure_logging()
     container = make_async_container(
-        AppProvider(settings, client, sink, person_token_verifier), LitestarProvider()
+        AppProvider(settings, client, sink, person_token_verifier, injection_scanner),
+        LitestarProvider(),
     )
     flusher: list[asyncio.Task[None]] = []
 

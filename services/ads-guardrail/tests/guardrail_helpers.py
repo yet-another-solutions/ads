@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 from ads_guardrail.contract import Opening, Workspace
+from ads_guardrail.scanner import InjectionScan
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     DecisionRequest,
@@ -164,3 +165,25 @@ class UnreachablePolicyClient:
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         raise ConnectionError("no route to the policy service")
+
+
+CLEAN_SCAN = InjectionScan(found=False, highest_score=0.01)
+INJECTION_SCAN = InjectionScan(found=True, highest_score=0.98)
+INJECTION_MARKER = "ignore previous instructions"
+
+
+class MarkerInjectionScanner:
+    def __init__(self) -> None:
+        self.scanned: list[list[str]] = []
+        self.unavailable_reason = ""
+
+    async def scan(self, texts: Sequence[str]) -> InjectionScan:
+        self.scanned.append(list(texts))
+        if self.unavailable_reason:
+            return InjectionScan.unavailable(self.unavailable_reason)
+        if any(INJECTION_MARKER in text.lower() for text in texts):
+            return INJECTION_SCAN
+        return CLEAN_SCAN
+
+    async def close(self) -> None:
+        return None

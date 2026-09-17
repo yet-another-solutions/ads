@@ -29,10 +29,7 @@ SANDBOX_SERVER: dict[str, Any] = {
 }
 
 
-@pytest.mark.parametrize("missing", ["ADS_KEYCLOAK_WELL_KNOWN_URL", "ADS_KEYCLOAK_ISSUER"])
-def test_audience_without_keycloak_stops_the_service(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing: str
-) -> None:
+def _minimal_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cert = tmp_path / "tls.crt"
     key = tmp_path / "tls.key"
     cert.write_text("placeholder")
@@ -44,14 +41,45 @@ def test_audience_without_keycloak_stops_the_service(
         "ADS_POLICY_URL": "https://policy.test",
         "ADS_POLICY_API_TOKEN": "policy-api-token",
         "ADS_AMQP_URL": "amqp://unused",
-        "ADS_MCP_AUDIENCE": "ads-mcp",
-        "ADS_KEYCLOAK_WELL_KNOWN_URL": "https://keycloak.test/.well-known/openid-configuration",
-        "ADS_KEYCLOAK_ISSUER": "https://keycloak.test/realms/ads",
     }
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
+
+
+@pytest.mark.parametrize("missing", ["ADS_KEYCLOAK_WELL_KNOWN_URL", "ADS_KEYCLOAK_ISSUER"])
+def test_audience_without_keycloak_stops_the_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, missing: str
+) -> None:
+    _minimal_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("ADS_MCP_AUDIENCE", "ads-mcp")
+    monkeypatch.setenv(
+        "ADS_KEYCLOAK_WELL_KNOWN_URL", "https://keycloak.test/.well-known/openid-configuration"
+    )
+    monkeypatch.setenv("ADS_KEYCLOAK_ISSUER", "https://keycloak.test/realms/ads")
     monkeypatch.delenv(missing)
     with pytest.raises(RuntimeError, match="ADS_MCP_AUDIENCE needs"):
+        load_settings()
+
+
+def test_the_injection_scanner_is_read_with_its_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _minimal_environment(monkeypatch, tmp_path)
+    monkeypatch.setattr("ads_guardrail.config.load_tls_context", lambda settings: None)
+    monkeypatch.setenv("ADS_INJECTION_SCANNER_URL", "https://scanner.test/")
+    monkeypatch.setenv("ADS_INJECTION_SCANNER_API_TOKEN", "scanner-api-token")
+    settings = load_settings()
+    assert settings.injection_scanner_url == "https://scanner.test"
+    assert settings.injection_scanner_api_token == "scanner-api-token"
+
+
+@pytest.mark.parametrize("only", ["ADS_INJECTION_SCANNER_URL", "ADS_INJECTION_SCANNER_API_TOKEN"])
+def test_a_scanner_address_without_a_token_stops_the_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, only: str
+) -> None:
+    _minimal_environment(monkeypatch, tmp_path)
+    monkeypatch.setenv(only, "https://scanner.test")
+    with pytest.raises(RuntimeError, match="go together"):
         load_settings()
 
 

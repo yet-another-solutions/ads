@@ -55,6 +55,31 @@ ADS_MCP_SERVERS='[{"name": "sandbox", "url": "http://ads-sandbox-mcp:8080/mcp",
 A site the policy service cannot place is refused as `site.unknown`; a call with no site
 at all, into a run that has no level of its own, is refused as `site.missing`.
 
+### Reading a result
+
+What a result is read for comes with the decision (`interception`, per rule):
+
+- `secrets` — found here; a credential is cut out and the result goes on.
+- `injection` — every string of the result goes to ads-injection-scanner. When the check
+  is enforced, a result with an injection is withheld: the agent gets a refusal
+  instead, and a streamed notification carrying one is dropped. A result the scanner
+  could not read is withheld too. By default the check is in the side's `review` list,
+  so both only go to the journal, with no weight.
+
+A decision recorded under `review` carries weight 0, so it never adds to a chat's
+budget.
+
+A refusal is a JSON-RPC error with the request's id, the decision's `message`, and
+`data` saying who refused and, broadly, why:
+
+```
+{"code": -32600, "message": "this action is not available",
+ "data": {"refused_by": "ads-guardrail", "reason": "policy" | "prompt-injection"}}
+```
+
+Only `prompt-injection` is meant to be shown to the person; everything else stays
+`policy`, and the details stay in the journal.
+
 ## What it does not do
 
 It does not decide, and it does not translate. The tool call goes on in the agent's own
@@ -85,8 +110,13 @@ the service refreshes it and carries on in the same run.
 ```
 POST /guardrail/runs
 {"bearer": "<the person's token>",
- "workspace": {"project": "ads", "repo": "…", "env": "dev", "workdir": "/workspace"}}
+ "workspace": {"project": "ads", "repo": "…", "env": "dev", "workdir": "/workspace"},
+ "conversation": "<chat id, optional>"}
 ```
+
+`conversation` ties every run of one chat together: it is kept on the run and on every
+journal row, the audit service counts a chat's refusals across its runs, and a chat over
+its budget is blocked in all of them.
 
 The person comes from the token, never from the caller's say-so. Neither the token
 nor the key is kept anywhere; the holder is, in the policy service, where every
@@ -136,6 +166,7 @@ are public.
 | | |
 |---|---|
 | `POST /guardrail/runs` | a person's token and the workspace → a run. For the launcher only |
+| `GET /guardrail/runs/{id}` | the run as it stands, so a launcher can tell a live run from one to replace |
 | `POST /guardrail/runs/{id}/finish` | the task is over → the finished run |
 | `POST /guardrail/permissions` | `{run_id, source, tool, arguments}` → the decision; a source `mcp:<name>` is decided at that server's site |
 | `GET /health/live`, `/health/ready` | the process is up |
@@ -146,6 +177,9 @@ Required: `ADS_GUARDRAIL_API_TOKEN` (at least 16 characters), `ADS_POLICY_URL`,
 `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`.
 
 Optional: `ADS_MCP_SERVERS` (JSON, above), `ADS_APPLICATIONS` (JSON, above),
+`ADS_INJECTION_SCANNER_URL` with `ADS_INJECTION_SCANNER_API_TOKEN` (without them every
+result whose `injection` check is enforced is withheld),
+`ADS_INJECTION_SCANNER_TIMEOUT_SECONDS` (`30`),
 `ADS_MCP_TIMEOUT_SECONDS` (`60`, the longest silence from a server), `ADS_RUN_HEADER`
 (`x-ads-run`), `ADS_ATTRIBUTES` (`key=value,…`),
 `ADS_TLS_CA_BUNDLE`, `ADS_BIND_HOST` (`0.0.0.0`), `ADS_PORT` (`8080`), `ADS_BUILD`.

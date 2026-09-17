@@ -13,6 +13,11 @@ from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 from ads_guardrail.config import Settings
 from ads_guardrail.guardrail import Guardrail
 from ads_guardrail.proxy import Proxy
+from ads_guardrail.scanner import (
+    HttpInjectionScanner,
+    InjectionScanner,
+    UnconfiguredInjectionScanner,
+)
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
 from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
@@ -41,6 +46,20 @@ def build_person_token_verifier(settings: Settings) -> AccessTokenVerifier | Non
     )
 
 
+def build_injection_scanner(settings: Settings) -> InjectionScanner:
+    if not settings.injection_scanner_url:
+        return UnconfiguredInjectionScanner()
+    tls: ssl.SSLContext | bool = True
+    if settings.tls_ca_bundle is not None:
+        tls = ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
+    return HttpInjectionScanner(
+        settings.injection_scanner_url,
+        settings.injection_scanner_api_token,
+        tls,
+        settings.injection_scanner_timeout_seconds,
+    )
+
+
 class AppProvider(Provider):
     def __init__(
         self,
@@ -48,12 +67,14 @@ class AppProvider(Provider):
         client: PolicyClient | None = None,
         sink: AuditSink | None = None,
         person_token_verifier: AccessTokenVerifier | None = None,
+        injection_scanner: InjectionScanner | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
         self._client = client
         self._sink = sink
         self._person_token_verifier = person_token_verifier
+        self._injection_scanner = injection_scanner
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -112,8 +133,18 @@ class AppProvider(Provider):
         )
 
     @provide(scope=Scope.APP)
-    async def proxy(self, settings: Settings, guardrail: Guardrail) -> AsyncIterator[Proxy]:
-        proxy = Proxy(settings, guardrail)
+    async def injection_scanner(self, settings: Settings) -> AsyncIterator[InjectionScanner]:
+        scanner = self._injection_scanner or build_injection_scanner(settings)
+        try:
+            yield scanner
+        finally:
+            await scanner.close()
+
+    @provide(scope=Scope.APP)
+    async def proxy(
+        self, settings: Settings, guardrail: Guardrail, injection_scanner: InjectionScanner
+    ) -> AsyncIterator[Proxy]:
+        proxy = Proxy(settings, guardrail, injection_scanner)
         try:
             yield proxy
         finally:

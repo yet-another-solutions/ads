@@ -11,11 +11,13 @@ import structlog
 from ads_commons.security import AccessTokenVerifier, InvalidAccessToken
 from ads_guardrail.config import Settings
 from ads_guardrail.contract import Application, Opening, Workspace
+from ads_guardrail.scanner import InjectionScan
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     AuditEvent,
+    CheckKind,
     Effect,
     InterceptionPoint,
     Mode,
@@ -27,7 +29,12 @@ from ads_policy.contract import (
     Switch,
     ToolCallRequest,
 )
-from ads_policy.output import inspect_payload, inspect_texts
+from ads_policy.output import (
+    inspect_payload,
+    inspect_texts,
+    prompt_injection_found,
+    prompt_injection_unchecked,
+)
 
 logger = structlog.get_logger("ads.guardrail")
 
@@ -48,8 +55,10 @@ def _newline_joined_argument_values(arguments: Mapping[str, str]) -> str:
     return "\n".join(arguments.values())
 
 
-def _decision_mode_for(switch: Switch) -> Mode:
-    return Mode.ENFORCE if switch is Switch.ENFORCE else Mode.REVIEW
+def _as_recorded_under(switch: Switch, decision: PolicyDecision) -> PolicyDecision:
+    if switch is Switch.ENFORCE:
+        return msgspec.structs.replace(decision, mode=Mode.ENFORCE)
+    return msgspec.structs.replace(decision, mode=Mode.REVIEW, weight=0)
 
 
 class RunNotOpen(RuntimeError):
@@ -71,6 +80,7 @@ class Holder:
 class Reading:
     decision: PolicyDecision
     texts: tuple[str, ...]
+    withheld: bool = False
 
 
 @dataclass(slots=True, eq=False)
@@ -89,7 +99,9 @@ class Guardrail:
         }
 
     def open_run(self, opening: Opening) -> Run:
-        return self._start_run(self._verified_person(opening.bearer), opening.workspace)
+        return self._start_run(
+            self._verified_person(opening.bearer), opening.workspace, opening.conversation
+        )
 
     def finish_run(self, run_id: str) -> Run | None:
         try:
@@ -100,13 +112,16 @@ class Guardrail:
             logger.info("run finished", run_id=finished.id, state=finished.state.value)
         return finished
 
+    def find_run(self, run_id: str) -> Run | None:
+        try:
+            return self.client.run(run_id)
+        except ConnectionError as exc:
+            raise RunNotOpen(f"runs cannot be looked up: {exc}") from exc
+
     def get_run(self, run_id: str) -> Run:
         if not run_id:
             raise RunNotOpen("the call carries no run")
-        try:
-            named = self.client.run(run_id)
-        except ConnectionError as exc:
-            raise RunNotOpen(f"runs cannot be looked up: {exc}") from exc
+        named = self.find_run(run_id)
         if named is None:
             raise RunNotOpen("the call names a run nobody opened")
         return named
@@ -152,7 +167,7 @@ class Guardrail:
         )
         decision = self.client.decide_call(call)
         if decision.rule_id == UNREACHABLE:
-            return self._journal_own_decision(call, decision)
+            return self._journal_own_decision(run, call, decision)
         if not decision.permitted:
             return decision
         outbound = decision.interception.side(InterceptionPoint.REQUEST)
@@ -167,17 +182,22 @@ class Guardrail:
         if leak.effect is not Effect.DENY:
             return decision
         return self._journal_own_decision(
+            run,
             call,
-            msgspec.structs.replace(
-                leak,
-                capability=decision.capability,
-                resource=decision.resource,
-                mode=_decision_mode_for(outbound.on),
+            _as_recorded_under(
+                outbound.switch_for(CheckKind.SECRETS),
+                msgspec.structs.replace(
+                    leak, capability=decision.capability, resource=decision.resource
+                ),
             ),
         )
 
     def inspect_tool_result(
-        self, run: Run, decision: PolicyDecision, texts: Sequence[str]
+        self,
+        run: Run,
+        decision: PolicyDecision,
+        texts: Sequence[str],
+        injection_scan: InjectionScan | None = None,
     ) -> Reading:
         given = tuple(texts)
         inbound = decision.interception.side(InterceptionPoint.RESPONSE)
@@ -189,19 +209,42 @@ class Guardrail:
                 point=InterceptionPoint.RESPONSE,
             )
             return Reading(unread, given)
+        injection_switch = inbound.switch_for(CheckKind.INJECTION)
+        if injection_switch is not Switch.OFF:
+            injection = self._injection_verdict(injection_scan)
+            if injection is not None:
+                recorded = self._journal_result_decision(run, decision, injection_switch, injection)
+                if not recorded.permitted:
+                    return Reading(recorded, (), withheld=True)
+        secrets_switch = inbound.switch_for(CheckKind.SECRETS)
         found, redacted = inspect_texts(given, self.governance, inbound.checks)
-        if found.effect is Effect.ALLOW and not found.warnings:
+        if found.effect is Effect.ALLOW:
             return Reading(found, given)
-        recorded = self._journal_own_decision(
+        recorded = self._journal_result_decision(run, decision, secrets_switch, found)
+        return Reading(recorded, redacted if secrets_switch is Switch.ENFORCE else given)
+
+    def _injection_verdict(self, injection_scan: InjectionScan | None) -> PolicyDecision | None:
+        if injection_scan is None:
+            return prompt_injection_unchecked("the result was not scanned", self.governance)
+        if injection_scan.unavailable_reason:
+            return prompt_injection_unchecked(injection_scan.unavailable_reason, self.governance)
+        if injection_scan.found:
+            return prompt_injection_found(injection_scan.highest_score, self.governance)
+        return None
+
+    def _journal_result_decision(
+        self, run: Run, call_decision: PolicyDecision, switch: Switch, found: PolicyDecision
+    ) -> PolicyDecision:
+        return self._journal_own_decision(
+            run,
             ToolCallRequest(run_id=run.id, subject=run.subject, source="", tool=""),
-            msgspec.structs.replace(
-                found,
-                capability=decision.capability,
-                resource=decision.resource,
-                mode=_decision_mode_for(inbound.on),
+            _as_recorded_under(
+                switch,
+                msgspec.structs.replace(
+                    found, capability=call_decision.capability, resource=call_decision.resource
+                ),
             ),
         )
-        return Reading(recorded, redacted if inbound.on is Switch.ENFORCE else given)
 
     async def flush_audit(self) -> int:
         return await self.audit.drain()
@@ -245,7 +288,7 @@ class Guardrail:
                 return revoked_stays_revoked[0]
             return self._start_run(holder, application.workspace)
 
-    def _start_run(self, holder: Holder, workspace: Workspace) -> Run:
+    def _start_run(self, holder: Holder, workspace: Workspace, conversation: str = "") -> Run:
         started = self.client.start_run(
             RunRequest(
                 subject=holder.subject,
@@ -255,19 +298,26 @@ class Guardrail:
                 workdir=workspace.workdir,
                 placement=None,
                 holder=holder.key,
+                conversation=conversation,
             )
         )
-        logger.info("run opened", run_id=started.id, subject=started.subject, holder=started.holder)
+        logger.info(
+            "run opened",
+            run_id=started.id,
+            subject=started.subject,
+            holder=started.holder,
+            conversation=started.conversation,
+        )
         return started
 
     def _journal_own_decision(
-        self, call: ToolCallRequest, decision: PolicyDecision
+        self, run: Run, call: ToolCallRequest, decision: PolicyDecision
     ) -> PolicyDecision:
         try:
             self.audit.enqueue(
                 AuditEvent(
-                    run_id=call.run_id,
-                    subject=call.subject,
+                    run_id=run.id,
+                    subject=run.subject,
                     capability=decision.capability,
                     resource=decision.resource or f"{call.source}/{call.tool}",
                     effect=decision.effect,
@@ -275,6 +325,7 @@ class Guardrail:
                     weight=decision.weight,
                     policy_hash=decision.policy_hash,
                     point=decision.point,
+                    conversation=run.conversation,
                 )
             )
         except AuditBacklogFull as exc:

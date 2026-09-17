@@ -6,7 +6,7 @@ from typing import Any
 import anyio.to_thread
 import msgspec
 from dishka.integrations.litestar import FromDishka, inject
-from litestar import Controller, HttpMethod, Request, Response, post, route
+from litestar import Controller, HttpMethod, Request, Response, get, post, route
 from litestar.connection import ASGIConnection
 from litestar.exceptions import (
     ClientException,
@@ -92,6 +92,17 @@ class GuardrailController(Controller):
             return await anyio.to_thread.run_sync(guardrail.open_run, data)
         except NotAPerson as exc:
             raise ClientException(detail=str(exc)) from exc
+
+    @get("/runs/{run_id:str}")
+    @inject
+    async def run(self, run_id: str, guardrail: FromDishka[Guardrail]) -> Run:
+        try:
+            found = await anyio.to_thread.run_sync(guardrail.find_run, run_id)
+        except RunNotOpen as exc:
+            raise ServiceUnavailableException(detail=str(exc)) from exc
+        if found is None:
+            raise NotFoundException(detail="no such run")
+        return found
 
     @post("/runs/{run_id:str}/finish", status_code=200)
     @inject

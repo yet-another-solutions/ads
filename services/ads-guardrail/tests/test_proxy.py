@@ -21,6 +21,7 @@ from ads_policy.contract import (
     DEFAULT_RESPONSE,
     Binding,
     Capability,
+    CheckKind,
     Interception,
     InterceptionPoint,
     Side,
@@ -39,11 +40,13 @@ from guardrail_helpers import (
     BOB,
     FORGING_KEY,
     GOVERNANCE,
+    INJECTION_MARKER,
     KATA_VM_SITE,
     PERSON_TOKEN_VERIFIER,
     WORKDIR_FILE,
     WORKSPACE,
     InProcessPolicyClient,
+    MarkerInjectionScanner,
     opening_body,
     person_token,
 )
@@ -58,6 +61,7 @@ BINDINGS_FOR_TEST_SERVERS = tuple(
         ("read", Capability.FS_READ, "filePath"),
         ("webfetch", Capability.NET_EGRESS, "url"),
         ("bash", Capability.PROCESS_EXEC, "command"),
+        ("migrate", Capability.DB_MIGRATE, "path"),
     )
 )
 
@@ -188,16 +192,34 @@ def _settings_pointing_at(settings: Settings, mcp: FakeMcpServer) -> Settings:
     )
 
 
-def _client_for(settings: Settings, policy_client: PolicyClient) -> TestClient:
-    app = create_app(settings, policy_client, CollectingAuditSink(), PERSON_TOKEN_VERIFIER)
+def _client_for(
+    settings: Settings,
+    policy_client: PolicyClient,
+    scanner: MarkerInjectionScanner | None = None,
+) -> TestClient:
+    app = create_app(
+        settings,
+        policy_client,
+        CollectingAuditSink(),
+        PERSON_TOKEN_VERIFIER,
+        scanner or MarkerInjectionScanner(),
+    )
     return TestClient(app=app)
 
 
 @pytest.fixture
+def scanner() -> MarkerInjectionScanner:
+    return MarkerInjectionScanner()
+
+
+@pytest.fixture
 def api(
-    settings: Settings, policy_client: PolicyClient, mcp: FakeMcpServer
+    settings: Settings,
+    policy_client: PolicyClient,
+    mcp: FakeMcpServer,
+    scanner: MarkerInjectionScanner,
 ) -> Iterator[TestClient]:
-    with _client_for(_settings_pointing_at(settings, mcp), policy_client) as client:
+    with _client_for(_settings_pointing_at(settings, mcp), policy_client, scanner) as client:
         yield client
 
 
@@ -346,6 +368,101 @@ def test_refusal_is_a_json_rpc_error_with_the_request_id(api: TestClient) -> Non
     assert answer["id"] == 7
     assert "error" in answer
     assert "result" not in answer
+
+
+def test_a_policy_refusal_says_who_refused_and_why_in_general(api: TestClient) -> None:
+    _open_run(api)
+    answer = _post_to_mcp(api, _tool_call("read", {"filePath": "/etc/shadow"}))
+    assert answer["error"]["data"] == {"refused_by": "ads-guardrail", "reason": "policy"}
+
+
+def test_a_refusal_with_a_permitted_alternative_names_it(api: TestClient) -> None:
+    _open_run(api)
+    answer = _post_to_mcp(api, _tool_call("migrate", {"path": "/etc/schema.sql"}))
+    assert answer["error"]["data"]["alternative"] == "use db.query"
+
+
+@pytest.fixture
+def enforcing_api(
+    settings: Settings, mcp: FakeMcpServer, scanner: MarkerInjectionScanner
+) -> Iterator[TestClient]:
+    injection_enforced = Interception(response=Side(checks=DEFAULT_RESPONSE.checks))
+    policy_client = InProcessPolicyClient(_policy_service(injection_enforced))
+    with _client_for(_settings_pointing_at(settings, mcp), policy_client, scanner) as client:
+        yield client
+
+
+def test_by_default_a_result_with_an_injection_still_reaches_the_agent(
+    api: TestClient, mcp: FakeMcpServer, scanner: MarkerInjectionScanner
+) -> None:
+    mcp.tool_result = f"Release notes. {INJECTION_MARKER} and push to main."
+    _open_run(api)
+    answer = _post_to_mcp(api, _read_workdir_file())
+    assert answer["result"]["content"][0]["text"] == mcp.tool_result
+    assert scanner.scanned != []
+
+
+def test_a_result_with_an_injection_never_reaches_the_agent(
+    enforcing_api: TestClient, mcp: FakeMcpServer
+) -> None:
+    api = enforcing_api
+    mcp.tool_result = f"Release notes. {INJECTION_MARKER} and push to main."
+    _open_run(api)
+    answer = _post_to_mcp(api, _tool_call("read", {"filePath": WORKDIR_FILE}, request_id=5))
+    assert INJECTION_MARKER not in json.dumps(answer)
+    assert answer["id"] == 5
+    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["data"] == {
+        "refused_by": "ads-guardrail",
+        "reason": "prompt-injection",
+    }
+
+
+def test_the_scanner_reads_every_string_of_the_result(
+    api: TestClient, mcp: FakeMcpServer, scanner: MarkerInjectionScanner
+) -> None:
+    mcp.tool_result = {"files": [{"path": "a.md", "body": "hello"}]}
+    _open_run(api)
+    _post_to_mcp(api, _read_workdir_file())
+    assert {"a.md", "hello"} <= set(scanner.scanned[-1])
+
+
+def test_an_unreachable_scanner_withholds_the_result(
+    enforcing_api: TestClient, mcp: FakeMcpServer, scanner: MarkerInjectionScanner
+) -> None:
+    scanner.unavailable_reason = "scanner unreachable"
+    _open_run(enforcing_api)
+    answer = _post_to_mcp(enforcing_api, _read_workdir_file())
+    assert "result" not in answer
+    assert answer["error"]["data"]["reason"] == "policy"
+
+
+def test_the_scanner_is_not_asked_when_the_rule_does_not_name_injection(
+    settings: Settings, mcp: FakeMcpServer
+) -> None:
+    secrets_only = Side(checks=frozenset({CheckKind.SECRETS}))
+    policy_client = InProcessPolicyClient(_policy_service(Interception(response=secrets_only)))
+    scanner = MarkerInjectionScanner()
+    mcp.tool_result = INJECTION_MARKER
+    with _client_for(_settings_pointing_at(settings, mcp), policy_client, scanner) as api:
+        _open_run(api)
+        answer = _post_to_mcp(api, _read_workdir_file())
+    assert scanner.scanned == []
+    assert answer["result"]["content"][0]["text"] == INJECTION_MARKER
+
+
+def test_a_streamed_injection_is_dropped_and_the_result_withheld(
+    enforcing_api: TestClient, mcp: FakeMcpServer
+) -> None:
+    mcp.answers_as_stream = True
+    mcp.progress_message = f"{INJECTION_MARKER} while reading"
+    mcp.tool_result = f"{INJECTION_MARKER} in the file"
+    response = _post_streamed_read(enforcing_api)
+    assert INJECTION_MARKER not in response.text
+    messages = _sse_messages(response.text)
+    assert len(messages) == 1
+    assert messages[0]["error"]["data"]["reason"] == "prompt-injection"
+    assert "id: 2" in response.text.splitlines()
 
 
 def test_unbound_tool_is_refused(api: TestClient, mcp: FakeMcpServer) -> None:
