@@ -4,12 +4,11 @@ import os
 
 import nox
 
-os.environ.setdefault("UV_DEFAULT_INDEX", "https://pypi.org/simple")
-
 nox.options.default_venv_backend = "uv"
 nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 
 _SRC = (
+    "deploy/tests",
     "deploy/keycloak/tests",
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",

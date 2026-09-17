@@ -48,8 +48,8 @@ ads-sandbox-mcp = { workspace = true }
 ads-sandbox-ipc = { workspace = true }
 
 [[tool.uv.index]]
-name = "nexus"
-url = "https://nexus.interlab/repository/pypi-group/simple"
+name = "pypi"
+url = "https://pypi.org/simple"
 default = true
 
 [dependency-groups]
@@ -123,6 +123,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = [
+    "deploy/tests",
     "deploy/keycloak/tests",
     "deploy/lab/sandbox-identity/tests",
     "libraries/ads-commons/tests",
