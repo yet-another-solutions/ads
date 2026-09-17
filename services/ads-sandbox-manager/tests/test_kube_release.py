@@ -91,6 +91,26 @@ async def test_live_adapter_bound_and_released_including_attachless_driver(api, 
     assert api.storage.list_volume_attachment.called
 
 
+@pytest.mark.parametrize(
+    "phase,expected", [("Failed", True), ("Pending", False), ("Running", False)]
+)
+async def test_never_bound_claim_cleanup_after_prescheduling_failure(
+    api, manager_settings, phase, expected
+):
+    job, pvc = pair(manager_settings)
+    del pvc["spec"]["volumeName"]
+    pvc["status"]["phase"] = "Pending"
+    pod = api.core.list_namespaced_pod.return_value["items"][0]
+    del pod["spec"]["nodeName"]
+    pod["status"] = {"phase": phase}
+    assert await api.released(pvc, None) is expected
+    assert not await api.released(pvc, job)  # Never a ready clone source.
+    api.core.read_node.assert_not_called()
+    api.core.read_persistent_volume.assert_not_called()
+    pod["metadata"]["deletionTimestamp"] = "now"
+    assert not await api.released(pvc, None)
+
+
 @pytest.mark.parametrize("phase", ["Pending", "Running", "Unknown", None])
 async def test_any_consumer_blocks_even_without_manager_labels(api, manager_settings, phase):
     job, pvc = pair(manager_settings)

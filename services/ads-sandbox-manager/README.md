@@ -23,6 +23,9 @@ deletion, then foreground-deletes the Job and recreates the pair. A completed
 Job with no PVC is also recreated. An orphan PVC is never promoted to ready:
 it is deleted only when release can be established. A Bound orphan with no
 retained Pod/node evidence fails closed for operator investigation.
+Never-bound Pending claims can be cleaned up after pre-scheduling failure when
+all referencing Pods are terminal, without requiring nonexistent VM/node evidence.
+They can never satisfy readiness, and deletion preconditions fence a concurrent bind.
 
 Every delete has UID and resourceVersion preconditions. Conflicts, disappearing
 resources, API outages, and denied observations produce not-ready and retry on

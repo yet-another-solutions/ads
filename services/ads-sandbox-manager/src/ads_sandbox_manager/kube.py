@@ -117,6 +117,20 @@ class KubeClient:
                 for v in pod.get("spec", {}).get("volumes", [])
             )
         ]
+        pv_name = pvc.get("spec", {}).get("volumeName")
+        if not pv_name:
+            # A never-bound claim cannot have been published to a Pod. Permit failed
+            # pre-scheduling cleanup without inventing node/VM evidence. UID/RV
+            # delete preconditions fence a concurrent bind; live Pods still block.
+            return (
+                job is None
+                and pvc.get("status", {}).get("phase") == "Pending"
+                and all(
+                    not pod.get("metadata", {}).get("deletionTimestamp")
+                    and pod.get("status", {}).get("phase") in ("Succeeded", "Failed")
+                    for pod in consumers
+                )
+            )
         nodes: dict[str, datetime] = {}
         owned = False
         for pod in consumers:
@@ -155,9 +169,6 @@ class KubeClient:
         # removes it, do not infer release from an empty list after a restart.
         if job is not None and not owned:
             return False
-        pv_name = pvc.get("spec", {}).get("volumeName")
-        if not pv_name:
-            return job is None and not consumers and pvc.get("status", {}).get("phase") == "Pending"
         if not nodes:
             # A Bound orphan without any retained consumer/node evidence is ambiguous,
             # especially for CSI drivers that do not create VolumeAttachments.
