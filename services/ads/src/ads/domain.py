@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 
 from ads.models import (
     KIND_MESSAGE,
-    KIND_REASONING,
     ROLE_ASSISTANT,
     ROLE_USER,
     ChatSession,
     SessionEntry,
+    assistant_part_kind,
 )
 from ads.repository import SessionEntryRepository
 from ads.views import PartView, TurnView
@@ -114,7 +114,7 @@ def turns_from_entries(
             pending_id = entry.id
         pending.append(
             PartView(
-                kind=KIND_REASONING if entry.kind == KIND_REASONING else KIND_MESSAGE,
+                kind=assistant_part_kind(entry.kind),
                 role=entry.role,
                 text=entry.text,
             )

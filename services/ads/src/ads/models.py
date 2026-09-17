@@ -10,9 +10,20 @@ from ads.db import Base
 
 KIND_MESSAGE = "message"
 KIND_REASONING = "reasoning"
+KIND_NOTICE = "notice"
+ASSISTANT_PART_KINDS = frozenset({KIND_MESSAGE, KIND_REASONING, KIND_NOTICE})
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
+
+
+def assistant_part_kind(kind: str) -> str:
+    return kind if kind in ASSISTANT_PART_KINDS else KIND_MESSAGE
+
+
+def assistant_part_role(kind: str) -> str | None:
+    return ROLE_ASSISTANT if assistant_part_kind(kind) == KIND_MESSAGE else None
+
 
 STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"

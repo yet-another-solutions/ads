@@ -9,7 +9,7 @@ import msgspec
 import structlog
 
 from ads.engine_output_service import EngineOutputService
-from ads.models import KIND_MESSAGE, KIND_REASONING
+from ads.models import KIND_MESSAGE, KIND_NOTICE, KIND_REASONING
 from ads_commons.engine import (
     Acknowledge,
     EngineOutput,
@@ -97,4 +97,6 @@ def _delta(output: PartialResponse) -> tuple[str | None, str]:
         return KIND_REASONING, output.reasoning.text
     if output.message is not None:
         return KIND_MESSAGE, output.message.text
+    if output.notice is not None:
+        return KIND_NOTICE, output.notice.text
     return None, ""

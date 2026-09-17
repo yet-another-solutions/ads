@@ -7,11 +7,11 @@ from sqlalchemy.orm import Session
 from ads.domain import turns_from_entries, utc_now
 from ads.exceptions import InvalidInput, NotFound, SessionForbidden
 from ads.models import (
-    KIND_MESSAGE,
-    KIND_REASONING,
     STATUS_FINISHED,
     ChatSession,
     SessionEntry,
+    assistant_part_kind,
+    assistant_part_role,
 )
 from ads.repository import (
     ProjectRepository,
@@ -118,8 +118,8 @@ class SessionService:
                 for delta in self._buffer.list_after(run.id, run.watermark):
                     live.append(
                         PartView(
-                            kind=KIND_REASONING if delta.kind == KIND_REASONING else KIND_MESSAGE,
-                            role=None if delta.kind == KIND_REASONING else "assistant",
+                            kind=assistant_part_kind(delta.kind),
+                            role=assistant_part_role(delta.kind),
                             text=delta.text,
                             live=True,
                         )

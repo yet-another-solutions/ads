@@ -15,6 +15,7 @@ from ads_commons.engine import (
     AssistantMessage,
     ErrorOutput,
     Finish,
+    Notice,
     PartialResponse,
     Ping,
     Reasoning,
@@ -134,6 +135,40 @@ def test_consecutive_same_kind_appends_into_one_shell(
     assert parts_of(db_engine, session_id) == [
         ("message", "user", "hi"),
         ("message", "assistant", "one two three"),
+    ]
+
+
+def test_notices_are_their_own_parts_shown_but_never_sent_as_history(
+    client: TestClient,
+    app: Litestar,
+    db_engine: Engine,
+    kafka: RecordingKafka,
+    opened: tuple[uuid.UUID, uuid.UUID, uuid.UUID],
+) -> None:
+    project, session_id, model_id = opened
+    send(client, project, session_id, "read the notes", model_id)
+    refused = Notice(kind="tool-refused", tool="probe/run", text="Запрос отклонён.")
+    injected = Notice(kind="prompt-injection", tool="probe/inject", text="Найдена инъекция.")
+    emit(app, PartialResponse(session_id=session_id, order=0, notice=refused))
+    emit(app, PartialResponse(session_id=session_id, order=1, notice=injected))
+    emit(
+        app,
+        PartialResponse(session_id=session_id, order=2, message=AssistantMessage(text="Done")),
+    )
+    emit(app, Finish(session_id=session_id, last_order=2))
+    assert run_of(db_engine, session_id) is None
+    assert parts_of(db_engine, session_id) == [
+        ("message", "user", "read the notes"),
+        ("notice", None, "Запрос отклонён."),
+        ("notice", None, "Найдена инъекция."),
+        ("message", "assistant", "Done"),
+    ]
+    page = client.get(f"/projects/{project}/sessions/{session_id}")
+    assert '<p class="notice" role="status">Запрос отклонён.</p>' in page.text
+    send(client, project, session_id, "next", model_id)
+    assert kafka.requests[1].history == [
+        UserHistoryTurn(text="read the notes"),
+        AssistantHistoryTurn(text="Done"),
     ]
 
 
