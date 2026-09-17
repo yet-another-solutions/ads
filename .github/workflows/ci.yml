@@ -150,6 +150,10 @@ jobs:
           fi
           grep -q 'app.kubernetes.io/component: ads-audit' /tmp/ads-cm.yaml
           grep -q 'ADS_DATABASE_URL' /tmp/ads-cm.yaml
+          test "$(grep -c 'ADS_DATABASE_URL' /tmp/ads-cm.yaml)" -eq 2
+          grep -q 'ADS_PUBLIC_BASE_URL: "https://ads.interlab"' /tmp/ads-cm.yaml
+          helm template ads charts/ads --set httpRoute.publicBaseUrl=https://ads.local:8443/ \
+            | grep -q 'ADS_PUBLIC_BASE_URL: "https://ads.local:8443"'
           test "$(grep -c 'ADS_AMQP_URL' /tmp/ads-cm.yaml)" -eq 2
           if helm template ads charts/ads --set audit.rabbitmq.url= >/tmp/ads-no-mq.yaml; then
             echo 'decisions rendered with nowhere to be journalled' >&2

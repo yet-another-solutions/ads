@@ -107,6 +107,18 @@ spec:
       port: 15672
       targetPort: management
 ---
+# One database per service that keeps its own; the journal (ads_audit) is the
+# default one above.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-postgres-initdb
+data:
+  databases.sql: |
+    CREATE DATABASE ads OWNER ads;
+    CREATE DATABASE ads_engine OWNER ads;
+    CREATE DATABASE ads_preferences OWNER ads;
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -150,9 +162,15 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
       volumes:
         - name: data
           emptyDir: {}
+        - name: initdb
+          configMap:
+            name: ads-postgres-initdb
 ---
 apiVersion: v1
 kind: Service

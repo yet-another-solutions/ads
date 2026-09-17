@@ -1,17 +1,35 @@
-# Overrides for a throwaway local cluster (kind / minikube).
-# See deploy/local/README.md for the order things have to happen in.
+# Overrides for a throwaway local cluster (kind / minikube): the whole chain, from the
+# browser to the MCP probe. See deploy/local/README.md; deploy/local/up.sh does it all
+# in order, and applies deploy/local/rendered.yaml where there is no helm.
 #
-#   helm install ads charts/ads -n ads --create-namespace -f charts/ads/values-local.yaml
+#   helm upgrade --install ads charts/ads -n ads -f charts/ads/values-local.yaml \
+#     -f <policy.example.yaml wrapped under policy.document>
+#
+# After changing this file or the chart, render deploy/local/rendered.yaml again (see
+# its header).
 
-# Images are built locally and loaded into the node, never pulled.
+# Images are built locally and loaded into the node, never pulled. The localhost/
+# prefix is what podman gives a local image; up.sh tags docker builds the same way.
 image:
-  repository: ads
+  repository: localhost/ads
   tag: local
   pullPolicy: Never
 
+# deploy/local/dependencies.yaml runs PostgreSQL with one user for every database.
+database:
+  url: postgresql+psycopg://ads:ads@ads-postgres:5432/ads
+
+# Keycloak from deploy/local/keycloak.yaml. Browsers and pods use the same address.
+keycloak:
+  wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+  issuer: https://keycloak.ads.local:8444/realms/ads
+  clientId: ads
+  audience: ads
+  role: user
+
 policy:
   image:
-    repository: ads-policy
+    repository: localhost/ads-policy
     tag: local
     pullPolicy: Never
   # deploy/local/dependencies.yaml runs Redis without TLS.
@@ -22,45 +40,108 @@ policy:
 
 audit:
   image:
-    repository: ads-audit
+    repository: localhost/ads-audit
     tag: local
     pullPolicy: Never
   rabbitmq:
     url: amqp://guest:guest@ads-rabbitmq:5672/
   postgres:
     url: postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit
+  # Low, so a few refused calls are enough to see a chat lose its tools.
+  conversationBudgetLimit: 12
+  blockDeliverySeconds: 30
 
 engine:
-  # Off here. Unlike the web app, which discovers Keycloak lazily on the first login,
-  # the engine fetches the openid configuration while building its container and dies
-  # when it cannot — and there is no Keycloak on a throwaway cluster. Nothing in the
-  # governance layer depends on it.
-  replicaCount: 0
+  replicaCount: 1
   image:
-    repository: ads-engine
+    repository: localhost/ads-engine
     tag: local
     pullPolicy: Never
   # deploy/local/dependencies.yaml runs a single-node Kafka without TLS.
   kafka:
     bootstrapServers: ads-kafka:9092
+  database:
+    url: postgresql+psycopg://ads:ads@ads-postgres:5432/ads_engine
+  keycloak:
+    wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.ads.local:8444/realms/ads
+    audience: ads-engine
+    clientId: ads
+    allowedCallers:
+      - ads
+    ackAudience: ads
+    allowedAzp: ads-engine
+  tools:
+    enabled: true
+    mcpAudience: ads-mcp
+    workspace:
+      project: ads
+      repo: yet-another-solutions/ads
+      env: local
+
+kafka:
+  bootstrapServers: ads-kafka:9092
+
+preferences:
+  image:
+    repository: localhost/ads-preferences
+    tag: local
+    pullPolicy: Never
+  keycloak:
+    wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.ads.local:8444/realms/ads
+    audience: ads-preferences
+    clientId: ads
+    allowedCallers:
+      - ads
+  database:
+    url: postgresql+psycopg://ads:ads@ads-postgres:5432/ads_preferences
+
+guardrail:
+  enabled: true
+  image:
+    repository: localhost/ads-guardrail
+    tag: local
+    pullPolicy: Never
+  personTokenAudience: ads-mcp
+
+injectionScanner:
+  enabled: true
+  image:
+    repository: localhost/ads-injection-scanner
+    tag: local
+    pullPolicy: Never
+
+# kind has no Kata, so the probe runs only on an ordinary node: process.exec is refused
+# there, which is one of the things to see.
+mcpProbe:
+  enabled: true
+  image:
+    repository: localhost/ads-mcp-probe
+    tag: local
+    pullPolicy: Never
+  sites:
+    - name: probe-container
+      nodeLabels:
+        ads.io/application-node: "true"
 
 egressControlplane:
   image:
-    repository: ads-egress-controlplane
+    repository: localhost/ads-egress-controlplane
     tag: local
     pullPolicy: Never
 
 # A throwaway cluster has no Gateway API CRDs, and helm install fails outright on an
-# unknown kind rather than leaving the route inert. The serving certificates do not
-# depend on it, so the pods still come up with TLS; there is simply no way in from
-# outside, which is what port-forward is for.
+# unknown kind rather than leaving the route inert. Browsers come in through
+# `kubectl port-forward svc/ads 8443:8080` and /etc/hosts, at this address.
 httpRoute:
   enabled: false
   hostname: ads.local
+  publicBaseUrl: https://ads.local:8443
 
 # cert-manager signs everything with the local CA from
-# deploy/local/cert-manager-issuer.yaml. The same CA is mounted into the pods so ads
-# can verify the policy service; without it every decision fails closed.
+# deploy/local/cert-manager-issuer.yaml. The same CA is mounted into the pods so they
+# verify each other and Keycloak.
 tls:
   certManager:
     enabled: true
@@ -72,11 +153,15 @@ tls:
     secretName: ads-ca
     key: ca.crt
 
+# Must match the client secrets in deploy/local/keycloak.yaml.
 secrets:
-  keycloakClientSecret: unused-on-a-local-cluster
+  keycloakClientSecret: local-ads-client-secret
+  engineKeycloakClientSecret: local-engine-client-secret
   sessionSecret: local-session-secret-32-bytes
   policyApiToken: local-policy-token-32-bytes
   auditApiToken: local-audit-token-32-bytes
+  guardrailApiToken: local-guardrail-token-32-bytes
+  injectionScannerApiToken: local-scanner-token-32-bytes
 
 resources:
   requests:

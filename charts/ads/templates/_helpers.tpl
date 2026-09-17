@@ -140,7 +140,11 @@ app.kubernetes.io/component: ads-preferences
 {{- end }}
 
 {{- define "ads.publicBaseUrl" -}}
+{{- if .Values.httpRoute.publicBaseUrl -}}
+{{ .Values.httpRoute.publicBaseUrl | trimSuffix "/" }}
+{{- else -}}
 https://{{ .Values.httpRoute.hostname }}
+{{- end -}}
 {{- end }}
 
 {{- define "ads.guardrailSecretName" -}}

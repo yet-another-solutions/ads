@@ -1,33 +1,21 @@
-# Generated. Do not edit — edit the chart and render again.
+# Generated. Do not edit — edit the chart or values-local.yaml and render again.
 #
-# The chart already rendered, for a machine that has kubectl but no helm. Image
-# names carry the localhost/ prefix that podman gives a locally built image, so
-# this file suits podman and not docker.
+# The chart already rendered, for a machine without helm; deploy/local/up.sh applies
+# it when helm is missing. Includes policy.example.yaml as policy.document.
 #
 # Regenerate with:
 #
+#   { echo "policy:"; echo "  document:"; sed 's/^/    /' charts/ads/policy.example.yaml; } \
+#     > /tmp/policy-values.yaml
 #   helm template ads charts/ads -n ads -f charts/ads/values-local.yaml \
-#     --set image.repository=localhost/ads \
-#     --set policy.image.repository=localhost/ads-policy \
-#     --set audit.image.repository=localhost/ads-audit \
-#     --set engine.image.repository=localhost/ads-engine \
-#     --set egressControlplane.image.repository=localhost/ads-egress-controlplane \
-#     > deploy/local/rendered.yaml
+#     -f /tmp/policy-values.yaml > deploy/local/rendered.yaml
 #
-# Apply after steps 2 to 4 of the README — the node label, cert-manager with the
-# local CA, and the dependencies. The prerequisite checks the chart runs on install
-# are skipped here, because `helm template` cannot look anything up, so nothing
-# stops an apply against a cluster that is not ready; the pods just never start.
+# and put this header back. `helm template` cannot look at the cluster, so the
+# chart's prerequisite checks are skipped and ADS_SANDBOX_AVAILABLE is "true"; the
+# policy service still places runs at `container`, because kind has no Kata.
 #
-#   kubectl apply -n ads -f deploy/local/rendered.yaml
-#
-# The Certificates sit at the end of the file and the Deployments that mount their
-# secrets come earlier. That is fine: those pods stay in ContainerCreating until
-# cert-manager issues them, and start on their own afterwards.
-#
-# There is no helm release behind this, so `helm upgrade` and `helm uninstall` do
-# not apply. Change something and apply the file again; remove it all with
-# `kubectl delete -n ads -f deploy/local/rendered.yaml`.
+# There is no helm release behind this. Change something and apply the file again;
+# remove it all with `kubectl delete -n ads -f deploy/local/rendered.yaml`.
 ---
 # Source: ads/templates/serviceaccount.yaml
 apiVersion: v1
@@ -55,8 +43,61 @@ metadata:
 type: Opaque
 stringData:
   ADS_AUDIT_API_TOKEN: "local-audit-token-32-bytes"
+  ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
   ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
   ADS_DATABASE_URL: "postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit"
+---
+# Source: ads/templates/engine-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-engine
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-engine
+type: Opaque
+stringData:
+  ADS_ENGINE_KEYCLOAK_CLIENT_SECRET: "local-engine-client-secret"
+  ADS_ENGINE_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres:5432/ads_engine"
+  ADS_ENGINE_GUARDRAIL_API_TOKEN: "local-guardrail-token-32-bytes"
+---
+# Source: ads/templates/guardrail-configmap.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-guardrail
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+stringData:
+  ADS_GUARDRAIL_API_TOKEN: "local-guardrail-token-32-bytes"
+  ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
+  ADS_INJECTION_SCANNER_API_TOKEN: "local-scanner-token-32-bytes"
+  ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
+---
+# Source: ads/templates/injection-scanner-configmap.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-injection-scanner
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-injection-scanner
+type: Opaque
+stringData:
+  ADS_SCANNER_API_TOKEN: "local-scanner-token-32-bytes"
 ---
 # Source: ads/templates/policy-configmap.yaml
 apiVersion: v1
@@ -75,6 +116,22 @@ stringData:
   ADS_REDIS_URL: "redis://ads-redis:6379/0"
   ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
 ---
+# Source: ads/templates/preferences-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-preferences
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-preferences
+type: Opaque
+stringData:
+  ADS_PREFERENCES_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres:5432/ads_preferences"
+---
 # Source: ads/templates/secret.yaml
 apiVersion: v1
 kind: Secret
@@ -88,9 +145,10 @@ metadata:
     app.kubernetes.io/managed-by: Helm
 type: Opaque
 stringData:
-  ADS_KEYCLOAK_CLIENT_SECRET: "unused-on-a-local-cluster"
+  ADS_KEYCLOAK_CLIENT_SECRET: "local-ads-client-secret"
   ADS_SESSION_SECRET: "local-session-secret-32-bytes"
   ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
+  ADS_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres:5432/ads"
 ---
 # Source: ads/templates/audit-configmap.yaml
 apiVersion: v1
@@ -111,6 +169,9 @@ data:
   ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
   ADS_AUDIT_PREFETCH: "100"
   ADS_AUDIT_PARTITIONS_AHEAD: "2"
+  ADS_POLICY_URL: "https://ads-policy:8081"
+  ADS_AUDIT_CONVERSATION_BUDGET_LIMIT: "12"
+  ADS_AUDIT_BLOCK_DELIVERY_SECONDS: "30"
 ---
 # Source: ads/templates/configmap.yaml
 apiVersion: v1
@@ -124,15 +185,22 @@ metadata:
     app.kubernetes.io/version: "0.0.1"
     app.kubernetes.io/managed-by: Helm
 data:
-  ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"
-  ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"
+  ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
   ADS_KEYCLOAK_CLIENT_ID: "ads"
   ADS_KEYCLOAK_AUDIENCE: "ads"
   ADS_KEYCLOAK_ROLE: "user"
-  ADS_PUBLIC_BASE_URL: "https://ads.local"
-  ADS_DATA_DIR: "/data"
+  ADS_PUBLIC_BASE_URL: "https://ads.local:8443"
   ADS_BIND_HOST: "0.0.0.0"
   ADS_PORT: "8080"
+  ADS_KAFKA_BOOTSTRAP_SERVERS: "ads-kafka:9092"
+  ADS_ENGINE_REQUEST_TOPIC: "ads.engine.request"
+  ADS_ENGINE_OUTPUT_TOPIC: "ads.engine.output"
+  ADS_ENGINE_CONSUMER_GROUP: "ads"
+  ADS_PREFERENCES_BASE_URL: "https://ads-preferences:8080"
+  ADS_PREFERENCES_AUDIENCE: "ads-preferences"
+  ADS_ENGINE_AUDIENCE: "ads-engine"
+  ADS_ENGINE_ALLOWED_AZP: "ads-engine"
   ADS_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_TLS_KEY_PATH: "/certs/tls.key"
   ADS_POLICY_URL: "https://ads-policy:8081"
@@ -155,13 +223,87 @@ data:
   ADS_ENGINE_REQUEST_TOPIC: "ads.engine.request"
   ADS_ENGINE_OUTPUT_TOPIC: "ads.engine.output"
   ADS_ENGINE_CONSUMER_GROUP: "ads-engine"
-  ADS_ENGINE_DATABASE_URL: "sqlite:////tmp/ads-engine.db"
   ADS_ENGINE_PING_INTERVAL_SECONDS: "10"
-  ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.interlab/realms/ads/.well-known/openid-configuration"
-  ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"
+  ADS_ENGINE_ACK_TIMEOUT_SECONDS: "10"
+  ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
   ADS_ENGINE_KEYCLOAK_AUDIENCE: "ads-engine"
   ADS_ENGINE_KEYCLOAK_CLIENT_ID: "ads"
+  ADS_ENGINE_ALLOWED_CALLERS: "ads"
+  ADS_ENGINE_ACK_AUDIENCE: "ads"
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_ENGINE_MCP_SERVERS: "probe-container"
+  ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"
+  ADS_ENGINE_MCP_AUDIENCE: "ads-mcp"
+  ADS_ENGINE_WORKSPACE_PROJECT: "ads"
+  ADS_ENGINE_WORKSPACE_REPO: "yet-another-solutions/ads"
+  ADS_ENGINE_WORKSPACE_ENV: "local"
+  ADS_ENGINE_WORKSPACE_WORKDIR: "/workspace"
+  ADS_ENGINE_MAX_MODEL_ROUNDS: "8"
+  ADS_ENGINE_TOOL_CALL_ATTEMPTS: "3"
+---
+# Source: ads/templates/guardrail-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-guardrail
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: "8083"
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_POLICY_URL: "https://ads-policy:8081"
+  ADS_ATTRIBUTES: "repo.write=true,agent=true"
+  ADS_MCP_AUDIENCE: "ads-mcp"
+  ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_INJECTION_SCANNER_URL: "https://ads-injection-scanner:8085"
+  ADS_MCP_SERVERS: "[{\"name\":\"probe-container\",\"site\":{\"node_labels\":{\"ads.io/application-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":null},\"url\":\"https://ads-mcp-probe-container:8084/mcp\"}]"
+  ADS_APPLICATIONS: "[]"
+---
+# Source: ads/templates/injection-scanner-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-injection-scanner
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-injection-scanner
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: "8085"
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_SCANNER_THRESHOLD: "0.5"
+---
+# Source: ads/templates/mcp-probe.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-mcp-probe
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-mcp-probe
+data:
+  ADS_BIND_HOST: "0.0.0.0"
+  ADS_PORT: "8084"
+  ADS_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_TLS_KEY_PATH: "/certs/tls.key"
 ---
 # Source: ads/templates/policy-configmap.yaml
 apiVersion: v1
@@ -190,6 +332,280 @@ data:
   ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"
   ADS_PROTECTED_BRANCHES: "main,master,release"
 ---
+# Source: ads/templates/policy-document-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-policy-document
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-policy
+data:
+  policy.yaml: |
+    bindings:
+    - argument: command
+      capability: process.exec
+      source: opencode
+      tool: bash
+    - argument: filePath
+      capability: fs.read
+      source: opencode
+      tool: read
+    - argument: filePath
+      capability: fs.write
+      source: opencode
+      tool: write
+    - argument: filePath
+      capability: fs.write
+      source: opencode
+      tool: edit
+    - argument: path
+      capability: fs.read
+      source: opencode
+      tool: grep
+    - argument: path
+      capability: fs.read
+      source: opencode
+      tool: glob
+    - argument: path
+      capability: fs.read
+      source: opencode
+      tool: list
+    - argument: url
+      capability: net.egress
+      source: opencode
+      tool: webfetch
+    - capability: net.egress
+      source: opencode
+      tool: websearch
+      value: search-proxy.interlab
+    - capability: fs.read
+      source: mcp:probe-vm
+      tool: echo
+      value: /workspace/notes.md
+    - capability: fs.read
+      source: mcp:probe-vm
+      tool: leak
+      value: /workspace/.env.example
+    - capability: fs.read
+      source: mcp:probe-vm
+      tool: inject
+      value: /workspace/NOTES.md
+    - capability: fs.read
+      source: mcp:probe-vm
+      tool: stream
+      value: /workspace/notes.md
+    - argument: path
+      capability: fs.read
+      source: mcp:probe-vm
+      tool: read_file
+    - argument: command
+      capability: process.exec
+      source: mcp:probe-vm
+      tool: run
+    - capability: fs.read
+      source: mcp:probe-container
+      tool: echo
+      value: /workspace/notes.md
+    - capability: fs.read
+      source: mcp:probe-container
+      tool: leak
+      value: /workspace/.env.example
+    - capability: fs.read
+      source: mcp:probe-container
+      tool: inject
+      value: /workspace/NOTES.md
+    - capability: fs.read
+      source: mcp:probe-container
+      tool: stream
+      value: /workspace/notes.md
+    - argument: path
+      capability: fs.read
+      source: mcp:probe-container
+      tool: read_file
+    - argument: command
+      capability: process.exec
+      source: mcp:probe-container
+      tool: run
+    capabilities:
+    - capability: fs.read
+      classifier:
+        kind: path
+        match: workdir
+        otherwise: outside-workdir
+    - capability: fs.write
+      classifier:
+        kind: path
+        match: workdir
+        otherwise: outside-workdir
+    - capability: process.exec
+      classifier:
+        kind: literal
+        match: any
+    - capability: net.egress
+      classifier:
+        kind: host
+        match: allowlist
+        otherwise: internet
+    - capability: db.query
+      classifier:
+        kind: literal
+        match: broker
+    - capability: db.migrate
+      classifier:
+        kind: suffix
+        match: temporary
+        otherwise: outside-workdir
+        value: .sql
+    - capability: secret.read
+      classifier:
+        kind: literal
+        match: any
+    - capability: vcs.push
+      classifier:
+        kind: branch
+        match: protected-branch
+        otherwise: feature-branch
+    defaultWeight: 1
+    denyOnPolicyError: true
+    egressAllowlist:
+    - mirror.interlab
+    - llm-gateway.interlab
+    - tool-broker.interlab
+    - git-proxy.interlab
+    interception:
+      request:
+        checks:
+        - secrets
+        "true": enforce
+      response:
+        checks:
+        - secrets
+        - injection
+        review:
+        - injection
+        "true": enforce
+    mode: enforce
+    protectedBranches:
+    - main
+    - master
+    - release
+    rules:
+    - capability: fs.read
+      id: fs.read.workdir
+      levels:
+      - local
+      - container
+      - vm
+      resourceClass: workdir
+    - capability: fs.write
+      id: fs.write.workdir
+      levels:
+      - local
+      - container
+      - vm
+      resourceClass: workdir
+    - capability: fs.read
+      id: fs.read.outside
+      levels: []
+      resourceClass: outside-workdir
+      weight: 3
+    - capability: fs.write
+      id: fs.write.outside
+      levels: []
+      resourceClass: outside-workdir
+      weight: 3
+    - capability: process.exec
+      id: process.exec
+      levels:
+      - local
+      - vm
+      resourceClass: any
+      weight: 2
+    - capability: net.egress
+      id: net.egress.internet
+      levels:
+      - local
+      resourceClass: internet
+      weight: 2
+    - capability: net.egress
+      id: net.egress.allowlist
+      levels:
+      - local
+      - container
+      - vm
+      resourceClass: allowlist
+    - capability: db.query
+      id: db.query.broker
+      levels:
+      - local
+      - container
+      - vm
+      resourceClass: broker
+    - alternative: db.query
+      capability: db.migrate
+      id: db.migrate.temporary
+      levels:
+      - vm
+      resourceClass: temporary
+      weight: 2
+    - alternative: db.query
+      capability: db.migrate
+      id: db.migrate.outside
+      levels: []
+      resourceClass: outside-workdir
+      weight: 4
+    - capability: secret.read
+      id: secret.read
+      levels: []
+      resourceClass: any
+      weight: 5
+    - capability: vcs.push
+      id: vcs.push.feature
+      levels:
+      - local
+      - vm
+      requires:
+        repo.write: "true"
+      resourceClass: feature-branch
+      weight: 2
+    - alternative: vcs.push to a feature branch
+      capability: vcs.push
+      id: vcs.push.protected
+      levels: []
+      resourceClass: protected-branch
+      weight: 5
+    schemaVersion: ads.governance/v1
+    version: org-1
+---
+# Source: ads/templates/preferences-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-preferences
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-preferences
+data:
+  ADS_PREFERENCES_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_PREFERENCES_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_PREFERENCES_KEYCLOAK_AUDIENCE: "ads-preferences"
+  ADS_PREFERENCES_KEYCLOAK_CLIENT_ID: "ads"
+  ADS_PREFERENCES_ALLOWED_CALLERS: "ads"
+  ADS_PREFERENCES_BIND_HOST: "0.0.0.0"
+  ADS_PREFERENCES_PORT: "8080"
+  ADS_PREFERENCES_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_PREFERENCES_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"
+---
 # Source: ads/templates/audit-service.yaml
 apiVersion: v1
 kind: Service
@@ -213,6 +629,78 @@ spec:
     app.kubernetes.io/instance: ads
     app.kubernetes.io/component: ads-audit
 ---
+# Source: ads/templates/guardrail-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-guardrail
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8083
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-guardrail
+---
+# Source: ads/templates/injection-scanner-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-injection-scanner
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-injection-scanner
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8085
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-injection-scanner
+---
+# Source: ads/templates/mcp-probe.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-mcp-probe-container
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-mcp-probe
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8084
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-mcp-probe
+    ads.io/probe-site: "probe-container"
+---
 # Source: ads/templates/policy-service.yaml
 apiVersion: v1
 kind: Service
@@ -235,6 +723,30 @@ spec:
     app.kubernetes.io/name: ads
     app.kubernetes.io/instance: ads
     app.kubernetes.io/component: ads-policy
+---
+# Source: ads/templates/preferences-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-preferences
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-preferences
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-preferences
 ---
 # Source: ads/templates/service.yaml
 apiVersion: v1
@@ -487,9 +999,7 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: ads-engine
 spec:
-  # Zero on purpose: the engine loads the openid configuration while starting and
-  # there is no Keycloak on a local cluster. See charts/ads/values-local.yaml.
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: ads
@@ -517,6 +1027,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: ads-engine
+            - secretRef:
+                name: ads-engine
           volumeMounts:
             - name: ca
               mountPath: /ca
@@ -532,6 +1044,247 @@ spec:
             items:
               - key: ca.crt
                 path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/guardrail-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-guardrail
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-guardrail
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-guardrail
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-guardrail
+    spec:
+      serviceAccountName: ads
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-guardrail
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-guardrail:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8083
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-guardrail
+            - secretRef:
+                name: ads-guardrail
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-guardrail-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/injection-scanner-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-injection-scanner
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-injection-scanner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-injection-scanner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-injection-scanner
+    spec:
+      serviceAccountName: ads
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-injection-scanner
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-injection-scanner:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8085
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-injection-scanner
+            - secretRef:
+                name: ads-injection-scanner
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          resources:
+            limits:
+              memory: 1536Mi
+            requests:
+              cpu: 500m
+              memory: 768Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-injection-scanner-tls
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/mcp-probe.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-mcp-probe-container
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-mcp-probe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-mcp-probe
+      ads.io/probe-site: "probe-container"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-mcp-probe
+        ads.io/probe-site: "probe-container"
+    spec:
+      serviceAccountName: ads
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-mcp-probe
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-mcp-probe:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8084
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-mcp-probe
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+          resources:
+            {}
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-mcp-probe-container-tls
       nodeSelector:
         ads.io/application-node: "true"
 ---
@@ -627,6 +1380,91 @@ spec:
       nodeSelector:
         ads.io/application-node: "true"
 ---
+# Source: ads/templates/preferences-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-preferences
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-preferences
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-preferences
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-preferences
+    spec:
+      serviceAccountName: ads
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-preferences
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-preferences:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-preferences
+            - secretRef:
+                name: ads-preferences
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-preferences-service-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
 # Source: ads/templates/audit-service.yaml
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -649,6 +1487,29 @@ spec:
     - "ads-audit.ads"
     - "ads-audit.ads.svc"
     - "ads-audit.ads.svc.cluster.local"
+---
+# Source: ads/templates/guardrail-service.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-guardrail
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-guardrail-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-guardrail"
+    - "ads-guardrail.ads"
+    - "ads-guardrail.ads.svc"
+    - "ads-guardrail.ads.svc.cluster.local"
 ---
 # Source: ads/templates/httproute.yaml
 apiVersion: cert-manager.io/v1
@@ -674,6 +1535,52 @@ spec:
     - "ads.ads.svc"
     - "ads.ads.svc.cluster.local"
 ---
+# Source: ads/templates/injection-scanner-service.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-injection-scanner
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-injection-scanner-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-injection-scanner"
+    - "ads-injection-scanner.ads"
+    - "ads-injection-scanner.ads.svc"
+    - "ads-injection-scanner.ads.svc.cluster.local"
+---
+# Source: ads/templates/mcp-probe.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-mcp-probe-container
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-mcp-probe-container-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-mcp-probe-container"
+    - "ads-mcp-probe-container.ads"
+    - "ads-mcp-probe-container.ads.svc"
+    - "ads-mcp-probe-container.ads.svc.cluster.local"
+---
 # Source: ads/templates/policy-service.yaml
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -696,3 +1603,27 @@ spec:
     - "ads-policy.ads"
     - "ads-policy.ads.svc"
     - "ads-policy.ads.svc.cluster.local"
+---
+# Source: ads/templates/preferences-certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-preferences
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-preferences
+spec:
+  secretName: ads-preferences-service-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-preferences"
+    - "ads-preferences.ads"
+    - "ads-preferences.ads.svc"
+    - "ads-preferences.ads.svc.cluster.local"

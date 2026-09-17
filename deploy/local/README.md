@@ -1,139 +1,101 @@
 # Local cluster
 
-Installing the chart on a throwaway kind or minikube cluster. Everything here exists
-because the chart deliberately requires infrastructure it does not install.
+The whole chain on a throwaway kind cluster: browser → ads → Kafka → engine → your
+LLM → guardrail → MCP probe, with the policy service, the injection scanner and the
+audit journal, all over TLS from a local CA and signed in through Keycloak.
 
-## 1. Cluster and images
+## Run it
 
 ```sh
-kind create cluster --name ads
-
-docker build -f services/ads/Containerfile -t ads:local .
-docker build -f services/ads-policy/Containerfile -t ads-policy:local .
-docker build -f services/ads-audit/Containerfile -t ads-audit:local .
-docker build -f services/ads-engine/Containerfile -t ads-engine:local .
-docker build -f services/ads-egress-controlplane/Containerfile -t ads-egress-controlplane:local .
-
-for image in ads ads-policy ads-audit ads-engine ads-egress-controlplane; do
-  kind load docker-image "$image:local" --name ads
-done
+bash deploy/local/up.sh
 ```
 
-`values-local.yaml` sets `pullPolicy: Never`, so the node uses what was loaded and
-never reaches for GHCR — which matters, because `ads-policy` and `ads-audit` have
-never been published there.
+Needs kind, kubectl, podman or docker, and internet access for the images and the
+scanner's model (it is downloaded while the image is built). Podman is used when it
+is installed (`ADS_CONTAINER_ENGINE=docker` to override), with kind's podman
+provider. helm is optional: without it the script applies `rendered.yaml`, the same
+chart rendered in advance — render it again after changing the chart or
+`values-local.yaml` (the command is in its header). `ADS_SKIP_BUILD=1` skips
+building and loading the images on a rerun. At the end the script prints what is
+left to do by hand: `/etc/hosts`, two port-forwards, the LLM, and where to log in.
 
-## 2. Node label
+What it does, in order:
 
-```sh
-NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-kubectl label node "$NODE" ads.io/application-node=true
-```
+1. **kind cluster** `ads` (`ADS_KIND_CLUSTER` to change), and the nine images built
+   as `localhost/<name>:local` and loaded into it — `values-local.yaml` sets
+   `pullPolicy: Never`.
+2. **Node label** `ads.io/application-node=true`. There is no Kata and no sandbox
+   node, so the policy service is told there is no sandbox: nothing reaches level
+   `vm`, and `process.exec` is refused. The MCP probe runs at the one site this
+   cluster has, `probe-container`.
+3. **cert-manager** and a local CA (`cert-manager-issuer.yaml`). The CA is copied into
+   the namespace as `ads-ca`; every pod mounts it and trusts the others and Keycloak.
+4. **Redis, RabbitMQ, PostgreSQL, Kafka** (`dependencies.yaml`). PostgreSQL creates
+   `ads`, `ads_audit`, `ads_engine` and `ads_preferences`.
+5. **Keycloak** (`keycloak.yaml`): realm `ads`, user `alice` / `alice`, and the clients
+   the chain exchanges tokens between — `ads` → `ads-engine`, `ads-preferences`;
+   `ads-engine` → `ads`, `ads-mcp`.
+6. **CoreDNS** rewrites `keycloak.ads.local` to the Keycloak Service. Browsers and pods
+   then use the same address, `https://keycloak.ads.local:8444`, and the issuer in a
+   token is the same wherever it is checked.
+7. **The chart** with `values-local.yaml` and `policy.example.yaml` as
+   `policy.document` — the built-in rules plus the probe's bindings; through helm, or
+   as `rendered.yaml` when there is no helm. Guardrail,
+   scanner, probe and engine tools are on. The audit budget is 12, so a few refusals
+   are enough to see a chat lose its tools.
 
-That is all the topology the chart requires. It looks for Kata on its own and finds
-none here, so the policy service is told there is no sandbox: runs come out as
-`container`, and every capability the matrix grants only at `vm` — `process.exec`,
-`db.migrate`, pushing to a feature branch — is unavailable. Which is the truth about
-a cluster without Kata.
+## Use it
 
-## 3. cert-manager and the local CA
+After `/etc/hosts` and the port-forwards the script prints, open
+`https://ads.local:8443`, log in as `alice`, and add a model in the catalog. The model
+runs on your machine (Ollama with `OLLAMA_HOST=0.0.0.0`, LM Studio, vLLM) and must be
+able to call tools; pods reach it through the gateway of the `kind` docker network,
+which the script prints.
 
-```sh
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml
-kubectl -n cert-manager wait --for=condition=Available deploy --all --timeout=180s
+Things to try in one chat:
 
-kubectl apply -f deploy/local/cert-manager-issuer.yaml
-kubectl -n cert-manager wait --for=condition=Ready certificate/ads-local-ca --timeout=120s
-```
+| ask | expect |
+|---|---|
+| read `/workspace/src/app.py` with `read_file` | the probe's answer |
+| read `/etc/shadow` | a notice: refused by the security policy |
+| run `uv sync` | a notice: refused — no Kata, so the site is `container` |
+| call `leak` | the key comes back as `[redacted:aws-access-token]` |
+| call `inject` | passes; the journal has `payload.injection` with weight 0 |
+| call `echo` with an `AKIA…` key in the text | a notice: refused, `payload.leak` |
+| a few refusals more | the chat is blocked; its tools are refused from now on, other chats keep theirs |
 
-The pods have to trust the CA that signed each other's certificates, so copy it into
-the release namespace. Without this `ads` rejects the policy service certificate and
-every decision fails closed:
-
-```sh
-kubectl create namespace ads
-kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' \
-  | base64 -d > /tmp/ads-ca.crt
-kubectl -n ads create secret generic ads-ca --from-file=ca.crt=/tmp/ads-ca.crt
-```
-
-## 4. Redis, RabbitMQ, PostgreSQL, Kafka
-
-Redis, RabbitMQ and PostgreSQL must exist **before** `helm install`: the chart looks
-the Services up and refuses to install if they are missing. Kafka is not looked up,
-but the engine pod crashloops without it.
-
-```sh
-kubectl apply -n ads -f deploy/local/dependencies.yaml
-kubectl -n ads rollout status \
-  deploy/ads-redis deploy/ads-rabbitmq deploy/ads-postgres deploy/ads-kafka
-```
-
-## 5. Install
-
-```sh
-helm install ads charts/ads -n ads -f charts/ads/values-local.yaml
-kubectl -n ads rollout status \
-  deploy/ads deploy/ads-policy deploy/ads-audit deploy/ads-engine
-```
-
-`values-local.yaml` turns the HTTPRoute off: the Gateway API CRDs are not on a bare
-kind cluster, and helm refuses an unknown kind outright rather than rendering
-something inert. The pods still get their certificates, so everything below works
-over port-forward. Install the Gateway API CRDs and drop that override if you want
-to exercise the route itself.
-
-## 6. Poke it
+The journal:
 
 ```sh
-kubectl -n ads port-forward svc/ads-policy 8081:8081 &
 kubectl -n ads port-forward svc/ads-audit 8082:8082 &
-
-POLICY='curl -sk -H "authorization: Bearer local-policy-token-32-bytes"'
 AUDIT='curl -sk -H "authorization: Bearer local-audit-token-32-bytes"'
-
-$POLICY https://127.0.0.1:8081/policy/version
-
-RUN=$($POLICY -H 'content-type: application/json' -d '{
-  "subject":"alice","project":"ads","repo":"yet-another-solutions/ads","env":"dev",
-  "workdir":"/workspace","runtime_class_name":"kata-clh",
-  "node_labels":{"ads.io/sandbox-node":"true"}}' \
-  https://127.0.0.1:8081/policy/runs)
-ID=$(echo "$RUN" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-
-# The request claims a Kata placement, but this cluster has none, so the run comes
-# back as "container". A claim is not a placement.
-echo "$RUN"
-
-# denied three times: the repeat costs a multiple of the first
-for _ in 1 2 3; do
-  $POLICY -H 'content-type: application/json' -d "{\"run_id\":\"$ID\",\"subject\":\"alice\",
-    \"capability\":\"secret.read\",\"resource\":\"ads-client-secret\"}" \
-    https://127.0.0.1:8081/policy/decide
-done
-
-sleep 2   # the policy service drains its audit buffer once a second
-$AUDIT https://127.0.0.1:8082/audit/runs/$ID/budget
+$AUDIT https://127.0.0.1:8082/audit/events
+$AUDIT https://127.0.0.1:8082/audit/conversations/<chat id>/budget
 ```
 
-`-k` skips certificate verification from your machine; inside the cluster the pods do
-verify, through the CA mounted in step 3.
+The chat id is the session id in the ads URL.
 
-Worth trying, because none of it shows up when the services run as single processes:
+To enforce the injection check instead of recording it, add `review: []` to
+`interception.response` in `policy.example.yaml` and rerun the script with
+`ADS_SKIP_BUILD=1` (without helm, render `rendered.yaml` again first); the policy
+service picks the document up without a restart.
 
-- `kubectl -n ads delete pod -l app.kubernetes.io/component=ads-policy`, then use the
-  same run again — it survives, because runs live in Redis and not in the process.
-- `kubectl -n ads scale deploy/ads-audit --replicas=0`, make some decisions, watch
-  them pile up in the queue at `kubectl -n ads port-forward svc/ads-rabbitmq
-  15672:15672` (guest/guest), then scale back up and see the backlog drain.
-- `kubectl -n ads scale deploy/ads-redis --replicas=0` — decisions turn into
-  `run.store` denials and `/health/ready` on the policy pod goes 503 while
-  `/health/live` stays 200.
-- Wait five minutes (`policy.runTtlSeconds` is 300 here) and reuse the run —
-  `run.unknown`.
+## Also worth trying
+
+- `kubectl -n ads delete pod -l app.kubernetes.io/component=ads-policy`, then keep
+  chatting — the run survives, because runs live in Redis.
+- `kubectl -n ads scale deploy/ads-audit --replicas=0`, make some calls, watch them
+  queue at `kubectl -n ads port-forward svc/ads-rabbitmq 15672:15672` (guest/guest),
+  scale back and see the backlog drain.
+- `kubectl -n ads scale deploy/ads-injection-scanner --replicas=0` — results still pass
+  (the check is in review), and the journal shows `payload.injection.unchecked`.
+- `kubectl -n ads scale deploy/ads-mcp-probe-container --replicas=0` — a notice that
+  the tool service is unavailable, and the model answers without it.
+- Stay silent for five minutes (`policy.runTtlSeconds` is 300) and write again — the
+  chat gets a new run with the same conversation label.
 
 ## Tear down
 
 ```sh
-kind delete cluster --name ads
+kind delete cluster --name ads     # with podman: KIND_EXPERIMENTAL_PROVIDER=podman first
 ```

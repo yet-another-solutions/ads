@@ -5,6 +5,10 @@ image:
   tag: "0.0.1"
   pullPolicy: IfNotPresent
 
+# Sessions, projects and chat history of ads itself.
+database:
+  url: postgresql+psycopg://ads:change-me@ads-postgres:5432/ads
+
 policy:
   replicaCount: 1
   image:
@@ -244,6 +248,9 @@ service:
 httpRoute:
   enabled: true
   hostname: ads.interlab
+  # Where browsers reach ads, when that is not https://<hostname> — a port-forward,
+  # for example. Keycloak redirects back here.
+  publicBaseUrl: ""
   gateway:
     name: testlab
     namespace: gateway
