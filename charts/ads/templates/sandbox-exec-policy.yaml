@@ -1,0 +1,22 @@
+{{/*
+Parse policy data, do not tpl it: {{ request.* }} belongs to Kyverno, not Helm.
+This file is the same security contract used in the live lab admission proof.
+*/}}
+{{- $policy := .Files.Get "files/sandbox-exec-policy.yaml" | fromYaml -}}
+{{- $_ := set $policy.metadata "name" (required "sandbox.admission.policyName is required" .Values.sandbox.admission.policyName) -}}
+{{- $_ := set $policy.metadata "labels" (include "ads.labels" . | fromYaml) -}}
+{{- $namespace := .Values.sandbox.namespace -}}
+{{- range $rule := $policy.spec.rules -}}
+{{- range $match := $rule.match.any -}}
+{{- $_ := set $match.resources "namespaces" (list $namespace) -}}
+{{- range $subject := $match.subjects -}}
+{{- $_ := set $subject "namespace" $namespace -}}
+{{- end -}}
+{{- end -}}
+{{- range $context := ($rule.context | default list) -}}
+{{- if eq $context.name "caller" -}}
+{{- $_ := set $context.apiCall "urlPath" (replace "/namespaces/ads-sandbox/" (printf "/namespaces/%s/" $namespace) $context.apiCall.urlPath) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{ toYaml $policy }}

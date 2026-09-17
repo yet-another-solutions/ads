@@ -69,12 +69,19 @@ ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON
 
 ## Helm
 
+See the [chart install and lifecycle guide](charts/ads/README.md). Store the release
+record in the existing `default` namespace; chart templates create the dedicated
+application and sandbox namespaces. Uninstall deletes both and their contents,
+including sandbox PVCs. Existing releases in `ads` need a separately approved
+ownership migration, not an in-place upgrade or an unreviewed uninstall.
+
 `charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname for ads, and TLS via cert-manager or bring-your-own secrets (optional CA bundle). ads-preferences is an in-cluster ClusterIP TLS service (`preferences.*`, including `preferences.database.url`). Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The chart does not install Kafka or Postgres.
 
 Install requires:
 
 - at least one node labeled `ads.io/application-node=true`
 - at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-qemu`)
+- Kyverno already installed with an established ClusterPolicy CRD and available admission controller. ADS ships its exec policy and scoped RBAC, not the Kyverno engine.
 - Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<httpRoute.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
 
 Application pods (ADS, engine, preferences, and egress-controlplane) schedule on application nodes.

@@ -2,6 +2,7 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}-service
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -14,15 +15,16 @@ spec:
   dnsNames:
     - {{ .Values.httpRoute.hostname | quote }}
     - {{ include "ads.fullname" . | quote }}
-    - {{ printf "%s.%s" (include "ads.fullname" .) .Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc" (include "ads.fullname" .) .Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc.cluster.local" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s.%s" (include "ads.fullname" .) .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc" (include "ads.fullname" .) .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "ads.fullname" .) .Values.namespace | quote }}
 ---
 {{- end }}
 {{- if .Values.httpRoute.enabled }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -49,6 +51,7 @@ spec:
 apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}
   labels:
     {{- include "ads.labels" . | nindent 4 }}
