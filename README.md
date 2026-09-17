@@ -15,8 +15,10 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `services/ads-policy` — decision point: capability matrix, tool-call bindings, run lifecycle, isolation levels
 - `services/ads-audit` — append-only journal of decisions, deny budget
 - `services/ads-guardrail` — enforcement point outside every sandbox: MCP proxy and decision API
+- `services/ads-injection-scanner` — prompt-injection classifier on ONNX Runtime for tool results (in `review` until a model is chosen)
+- `services/ads-mcp-probe` — harmless MCP server whose tools trip every check, for end-to-end checks
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
-- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
+- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, injection scanner, MCP probe and engine tools, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
 
 Images:
@@ -27,6 +29,8 @@ Images:
 - `ghcr.io/yet-another-solutions/ads-policy`
 - `ghcr.io/yet-another-solutions/ads-audit`
 - `ghcr.io/yet-another-solutions/ads-guardrail`
+- `ghcr.io/yet-another-solutions/ads-injection-scanner`
+- `ghcr.io/yet-another-solutions/ads-mcp-probe`
 - `ghcr.io/yet-another-solutions/ads-egress-controlplane`
 
 ## Configuration
@@ -63,8 +67,8 @@ ads-preferences is a TLS-only JSON resource server (`python -m ads_preferences`)
 The governance services are HTTPS APIs behind a bearer token, reachable only from inside the cluster:
 
 - ads-policy: `ADS_POLICY_API_TOKEN`, `ADS_REDIS_URL` (run state), `ADS_AMQP_URL` (decisions out), `ADS_POLICY_DIR`, `ADS_POLICY_MODE` (`enforce`/`review`), `ADS_POLICY_DENY_ON_ERROR`, `ADS_SANDBOX_AVAILABLE`, `ADS_RUN_WORKDIR`, `ADS_RUN_TTL_SECONDS`, `ADS_EGRESS_ALLOWLIST`, `ADS_PROTECTED_BRANCHES`
-- ads-audit: `ADS_AUDIT_API_TOKEN`, `ADS_DATABASE_URL` (PostgreSQL journal), `ADS_AMQP_URL` (decisions in)
-- ads-guardrail (optional, `guardrail.enabled`): `ADS_GUARDRAIL_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_ATTRIBUTES`, `ADS_MCP_SERVERS` (JSON `[{name, url, site}]`; an agent reaches each at `/mcp/<name>`, and a call's isolation level follows from that server's `site`), `ADS_APPLICATIONS` (JSON `[{name, key_sha256, workspace}]`: applications such as hermes that call with their own key; their runs are opened by the guardrail), `ADS_MCP_AUDIENCE` (`guardrail.personTokenAudience`) with `ADS_KEYCLOAK_WELL_KNOWN_URL` and `ADS_KEYCLOAK_ISSUER` (whose tokens identify people; empty accepts none), `ADS_MCP_TIMEOUT_SECONDS`, `ADS_RUN_HEADER`. A person's run is opened by whoever creates the sandbox: `POST /guardrail/runs` with the person's token and the workspace.
+- ads-audit: `ADS_AUDIT_API_TOKEN`, `ADS_DATABASE_URL` (PostgreSQL journal), `ADS_AMQP_URL` (decisions in), `ADS_POLICY_URL` and `ADS_POLICY_API_TOKEN` (chat blocks out), `ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` (`audit.conversationBudgetLimit`, 30)
+- ads-guardrail (optional, `guardrail.enabled`): `ADS_GUARDRAIL_API_TOKEN`, `ADS_POLICY_URL`, `ADS_POLICY_API_TOKEN`, `ADS_AMQP_URL`, `ADS_ATTRIBUTES`, `ADS_MCP_SERVERS` (JSON `[{name, url, site}]`; an agent reaches each at `/mcp/<name>`, and a call's isolation level follows from that server's `site`), `ADS_APPLICATIONS` (JSON `[{name, key_sha256, workspace}]`: applications such as hermes that call with their own key; their runs are opened by the guardrail), `ADS_MCP_AUDIENCE` (`guardrail.personTokenAudience`) with `ADS_KEYCLOAK_WELL_KNOWN_URL` and `ADS_KEYCLOAK_ISSUER` (whose tokens identify people; empty accepts none), `ADS_INJECTION_SCANNER_URL` with `ADS_INJECTION_SCANNER_API_TOKEN` (without them results whose injection check is enforced are withheld), `ADS_MCP_TIMEOUT_SECONDS`, `ADS_RUN_HEADER`. A person's run is opened by whoever creates the sandbox: `POST /guardrail/runs` with the person's token and the workspace.
 
 All three take the same `ADS_TLS_*` and `ADS_BIND_HOST`/`ADS_PORT` as the ADS process.
 
