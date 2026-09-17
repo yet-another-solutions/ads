@@ -18,6 +18,9 @@ business HTTP API, MCP endpoint, database, manager implementation, or guest code
   cancels startup and wins over ready/error.
 - `request` acknowledges without executing. Matching `ack-reply` starts execution;
   reset, abort-before-ack, and ack timeout drop the waiting unit.
+  `acknowledge`, `ack-reply`, `ack-reset`, and `abort` require the full
+  `execution_id`, `session_id`, `message_id` tuple. Controls must match all three
+  IDs and the authenticated subject, including terminal-result replay.
 - Keep one current unit and one terminal slot. Duplicate requests never start the
   current/last execution again. A terminal result can be redelivered after a
   produce failure. A different authenticated subject cannot take over a unit.

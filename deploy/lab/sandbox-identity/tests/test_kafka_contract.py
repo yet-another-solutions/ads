@@ -77,6 +77,14 @@ class KafkaContractTest(unittest.TestCase):
                 self.assertNotIn("ads.sandbox.idle", resources.get("topics", ()))
             self.assertNotIn("*", resources.get("topics", ()))
             self.assertNotIn("*", resources.get("groups", ()))
+        self.assertIn("ads.sandbox.manager.barrier", KAFKA.STATIC)
+        barrier_acls = [
+            c for c in acls.call_args_list
+            if "ads.sandbox.manager.barrier" in c.kwargs.get("topics", ())
+        ]
+        self.assertEqual(len(barrier_acls), 1)
+        self.assertEqual(barrier_acls[0].args,
+                         ("ads-sandbox-manager", ("Read", "Write", "Describe")))
 
 
 if __name__ == "__main__":

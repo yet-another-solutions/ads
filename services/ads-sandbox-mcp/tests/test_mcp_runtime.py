@@ -96,7 +96,7 @@ async def test_real_sdk_http_disconnect_tombstones(long_harness: Harness, acked:
 async def test_kafka_rejects_invalid_identity(harness: Harness, claims: dict) -> None:
     h = harness
     h.service.accept_reply = AsyncMock()
-    message = encode_outbound(SandboxAcknowledge(uuid4()))
+    message = encode_outbound(SandboxAcknowledge(uuid4(), uuid4(), uuid4()))
     token = (
         h.keys.token(azp="ads-sandbox-manager", **{k: v for k, v in claims.items() if k != "azp"})
         if "azp" not in claims
@@ -112,7 +112,9 @@ async def test_kafka_rejects_invalid_identity(harness: Harness, claims: dict) ->
 async def test_kafka_missing_or_malformed_auth(harness: Harness, headers) -> None:
     h = harness
     h.service.accept_reply = AsyncMock()
-    await h.controller.on_message(encode_outbound(SandboxAcknowledge(uuid4())), headers)
+    await h.controller.on_message(
+        encode_outbound(SandboxAcknowledge(uuid4(), uuid4(), uuid4())), headers
+    )
     h.service.accept_reply.assert_not_awaited()
 
 
@@ -127,7 +129,7 @@ async def test_reply_verification_does_not_bind_or_replace_http_identity(harness
 
     h.service.accept_reply = capture
     with SecurityContextHolder.bound(original):
-        await h.publisher.reply(SandboxAcknowledge(uuid4()))
+        await h.publisher.reply(SandboxAcknowledge(uuid4(), uuid4(), uuid4()))
         assert SecurityContextHolder.require() is original
     assert observed == [original]
 
@@ -151,10 +153,10 @@ async def test_publisher_topics_keys_headers_and_consumer_seek(harness: Harness)
     publisher = KafkaPublisher(producer, h.settings)
     message = SandboxRequest(uuid4(), uuid4(), uuid4(), "python", "print(1)")
     headers = [("authorization", b"test-token")]
-    await publisher.publish(message, headers)
+    await publisher.publish(message, headers, session_id=message.session_id)
     args, kwargs = producer.send_and_wait.call_args
     assert args == ("ads.sandbox.exec.request",)
-    assert kwargs["key"] == str(message.execution_id).encode()
+    assert kwargs["key"] == str(message.session_id).encode()
     assert kwargs["headers"] == headers
     assert b"print(1)" in kwargs["value"]
     consumer = Mock(end_offsets=AsyncMock(return_value={"partition": 42}))

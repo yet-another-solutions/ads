@@ -105,11 +105,26 @@ class FakePublisher:
         self.controller: ReplyController
 
     async def publish(
-        self, message: SandboxExecInbound, headers: Sequence[tuple[str, bytes]]
+        self,
+        message: SandboxExecInbound,
+        headers: Sequence[tuple[str, bytes]],
+        *,
+        session_id,
     ) -> None:
         if self.fail:
             raise RuntimeError("fake Kafka outage")
         self.messages.append(message)
+        assert session_id == message.session_id
+        if not isinstance(message, SandboxRequest):
+            request = next(
+                item
+                for item in self.messages
+                if isinstance(item, SandboxRequest) and item.execution_id == message.execution_id
+            )
+            assert (message.session_id, message.message_id) == (
+                request.session_id,
+                request.message_id,
+            )
         self.headers.append(headers)
         if isinstance(message, SandboxRequest) and self.mode != "none":
             self.tasks.append(
@@ -133,7 +148,9 @@ class FakePublisher:
                 SandboxResult(request.execution_id, -1, "", "", False, 0, True, "not ready")
             )
         else:
-            await self.reply(SandboxAcknowledge(request.execution_id))
+            await self.reply(
+                SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+            )
 
     async def _result(self, ack: SandboxAckReply) -> None:
         await asyncio.sleep(0.005)

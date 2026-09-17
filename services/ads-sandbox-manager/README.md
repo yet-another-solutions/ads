@@ -1,12 +1,75 @@
 # ads-sandbox-manager
 
-Slices 7 and 8 implement golden ensure and session object provisioning. This is a top-level uv workspace member,
+Slices 7 through 9 implement golden ensure, session object provisioning, and authenticated Kafka transit.
+This is a top-level uv workspace member,
 included in all five Nox gates and CI image lint, build, and import smoke.
-There is no Kafka transit, STE, ready listener, idle/recover scheduler, or
-application/Helm service wiring yet. The session lifecycle worker has an explicit
-`TopicPreparation` port with a test implementation only. Production does not
-silently supply a no-op port or expose an unauthenticated provisioning endpoint.
-Slice 9 will connect the authenticated Kafka ingress and detached worker lifetime.
+Idle/recover schedulers and application/Helm service wiring remain later slices.
+The production `TopicPreparation` creates dynamic topics, waits for the local
+response subscription/seek, then runs a best-effort manager barrier before compute.
+There is no unauthenticated provisioning endpoint.
+
+## Authenticated transit
+
+The shared consumer group `ads-sandbox-manager` consumes `ads.sandbox.exec.request`
+and regex-discovers every `sandbox.res.{sandbox_id}`, including topics created by
+another replica. New local assignments seek to end; already-seen local assignments
+restore their recorded position on rebalance rather than discarding more live data.
+Partition movement to a replica that has never owned it still seeks to end.
+
+All initial requests and controls carry `execution_id`, `session_id`, `message_id`.
+MCP keys requests and controls by `session_id`; the manager checks key/body agreement.
+IPC's `acknowledge` carries the same tuple, while `result` remains execution-correlated.
+IPC keys responses by `sandbox_id`; manager verifies topic/key and resolves the
+durable session mapping. An acknowledgement must also match that session.
+
+Every inbound message is verified with the common JWT verifier and caller
+allowlist: MCP on execution input, IPC on responses and `ready`, manager on barrier
+coordination. No user holder is bound. Every forwarding hop mints a fresh STE token:
+manager-to-IPC from the inbound MCP JWT, manager-to-MCP from the inbound IPC JWT.
+No token, command, or output is stored in the manager database or error logs.
+
+Only `request` can provision. Requests wait for authenticated IPC `ready`, not
+Kubernetes readiness. Missing/stopped sessions create/resume; other non-ready
+statuses wait, bounded by `READY_SECONDS`. Failure/timeout produces an error result
+using fresh STE. Follow-ups and results pass regardless of status and never create.
+Forwarded results update `last_execution_at`. Ready sets status and initial
+activity timestamps only after all object UIDs have committed, even without a
+local waiter; duplicate ready warns without resetting activity.
+
+Reset/abort removes only the matching tuple and subject from the local forward
+buffer. A claimed provisioner continues detached, even after reset or request
+timeout. A reset before claim prevents a later worker start, and a reset during
+STE prevents publication of the dropped request. Process shutdown cancels local
+tasks but does not delete resources or steal durable claims.
+
+## Best-effort subscription barrier
+
+`ads.sandbox.manager.barrier` is a pre-created, manager-only topic. Each replica has
+a unique group `ads-sandbox-manager-barrier-{replica_id}`. Its listener and the
+unique `ads-sandbox-manager-ready-{replica_id}` listener start and seek before that
+replica joins the shared request/result group. All Kafka clients support the
+configured SASL/TLS transport.
+
+After local response subscription/seek, public
+`AIOKafkaAdminClient.describe_consumer_groups` snapshots the shared group's
+members. The shared consumer's `client_id` is a unique process UUID. The adapter
+uses aiokafka 0.14's documented raw response shape; no private member/generation
+attributes are used. It waits for a stable, self-inclusive snapshot within the
+same barrier deadline, not a configured replica count.
+
+A fresh `barrier_id` identifies each request and matching acknowledgements.
+Participants acknowledge only after their response subscription callback has
+completed its seeks, including replicas with an empty assignment. Requests and
+acks use fresh manager client-credentials JWTs, not user tokens. Round state and
+participant tasks exist only in memory and are cleaned on completion/timeout/stop.
+
+`BARRIER_SECONDS` defaults to 3. Missing acknowledgements, discovery failure, or
+coordination failure log a warning and **proceed**. Required local topic creation
+and subscription preparation instead fail the create attempt on timeout/error.
+The barrier is not strict consensus, generation fencing, or reliable delivery.
+A replica joining after the snapshot, a timeout, crash, or subsequent partition
+reassignment can still lose a response under seek-to-end semantics. MCP timeout
+is the accepted fallback. No durable barrier table or second membership registry.
 
 ## Session objects
 
@@ -17,11 +80,11 @@ repository uses caller-owned short transactions. Kubernetes/port calls never
 hold a database transaction open.
 
 The INSERT winner atomically claims `pending -> creating`; stopped rows use a
-compare-and-set claim to resume. Losers return the current row for the future
+compare-and-set claim to resume. Losers return the current row for the
 bounded ready waiter. They never clone, start a second worker, or steal an
 interrupted `creating` claim. A worker/process interruption leaves that claim
 for the later recover component. This worker must not be cancelled by execution
-abort/reset: detachment belongs to the future ingress/runtime, not this API.
+abort/reset: transit owns its detached lifetime.
 
 Creation order is:
 
@@ -30,7 +93,7 @@ Creation order is:
    If it already has the matching session label and valid block contract, adopt
    its UID and recorded golden version; do not replace or upgrade its contents.
 2. Commit that disk UID before any topics or compute.
-3. Prepare topics and subscribe/seek the result topic via `TopicPreparation`.
+3. Prepare topics, subscribe/seek the result topic, and run the best-effort barrier.
 4. Create Filesystem PVC `ads-sandbox-ipc-{sandbox_id}`.
 5. Recheck the named session/PVC bind, then create Kata Deployment
    `ads-sandbox-{sandbox_id}`, container `sandbox`.
@@ -44,7 +107,7 @@ The guest uses only its session Block volume, with no network annotations,
 projected token, service links, host namespace sharing, or credentials.
 Its readiness probe checks the boot script's `/run/ads-sandbox-ready` marker;
 object existence and Kubernetes readiness do **not** set the database to `ready`.
-That transition remains the later authenticated IPC Kafka-ready listener.
+That transition belongs only to the authenticated IPC Kafka-ready listener.
 
 IPC uses the shared, Helm-owned ServiceAccount and bound token, its own
 Filesystem PID store, referenced configuration/credential Secrets, and TLS-only
@@ -148,8 +211,12 @@ TLS materials are loaded on the main thread before any client creation.
 | `IMAGE_PULL_SECRETS` | Comma-separated Secret names |
 | `RESOURCES` | Job container resource requests/limits JSON object |
 | `DATABASE_URL` | Required `postgresql+psycopg://…`; dedicated manager database with startup migration |
-| `SESSION_OBJECTS` | Optional JSON object described below; required before invoking session provisioning |
-| `KAFKA_BOOTSTRAP_SERVERS` | Required; metadata check only, no topic/group operations |
+| `SESSION_OBJECTS` | Required JSON object described below |
+| `KAFKA_BOOTSTRAP_SERVERS` | Required; producer, consumers, admin, and health use the same transport settings |
+| `KEYCLOAK_ISSUER`, `KEYCLOAK_WELL_KNOWN_URL`, `KEYCLOAK_CLIENT_SECRET` | Required HTTPS identity/discovery and manager client secret |
+| `READY_SECONDS` | Request/ready wait timeout, default 120 |
+| `BARRIER_SECONDS` | Best-effort round timeout, including membership discovery, default 3 |
+| `TOPIC_REPLICATION_FACTOR` | Dynamic request/result topics, default 1; each has one partition |
 | `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL` |
 | `KAFKA_SASL_MECHANISM` | Default `SCRAM-SHA-512` |
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Required for SASL |
@@ -179,11 +246,12 @@ settings. All referenced objects must exist in the sandbox namespace.
 
 The referenced ConfigMap/Secret supply the existing IPC-prefixed configuration:
 Keycloak discovery URL, issuer, client secret, Kafka bootstrap, and optional
-execution/handshake caps. No credential value is part of manager configuration.
+execution/handshake caps. IPC credentials are referenced, never embedded in object JSON;
+the manager's own client and Kafka secrets are configured separately.
 Manager-owned IPC env explicitly fixes sandbox ID, namespace, PID directory,
 TLS paths, and the HTTPS probe port. The optional CA Secret provides `ca.crt`.
-Kafka SASL support in IPC and transit implementation remain later work; this
-slice does not misrepresent the existing plaintext-only IPC adapter as SASL-ready.
+Kafka SASL support in IPC/MCP remains later work; manager transport support does
+not misrepresent those existing plaintext-only adapters as SASL-ready.
 
 ## Verification boundary
 
@@ -199,3 +267,7 @@ CI wiring; live Kata/CSI bake behavior is a separate cluster smoke using
 already-built artifacts, never a lab image build.
 Live four-object/guest-boot acceptance is deferred until the whole sandbox plan
 is implemented. Deterministic tests do not claim Kata/CSI/guest boot passed.
+Transit tests cover real PostgreSQL state, signed JWT rejection/acceptance,
+fresh per-hop STE, detached provisioning, tuple correlation, subscription
+callbacks, unknown replica counts, missing/stale acknowledgements, and the
+documented late-joiner gap. Fake Kafka/Kubernetes boundaries are not live E2E proof.

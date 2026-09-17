@@ -65,6 +65,8 @@ class IpcService:
         self.stopping = False
         self.current: Unit | None = None
         self.last_id: UUID | None = None
+        self.last_session_id: UUID | None = None
+        self.last_message_id: UUID | None = None
         self.last_subject: str | None = None
         self.last_result: SandboxResult | None = None
         self._last_token: str | None = None
@@ -111,6 +113,8 @@ class IpcService:
 
     def _remember(self, unit: Unit, result: SandboxResult | None = None) -> None:
         self.last_id = unit.request.execution_id
+        self.last_session_id = unit.request.session_id
+        self.last_message_id = unit.request.message_id
         self.last_subject = unit.subject
         self.last_result = result
         self._last_token = unit.token if result is not None else None
@@ -133,6 +137,8 @@ class IpcService:
                     isinstance(message, (SandboxRequest, SandboxAckReply))
                     and self.last_result is not None
                     and delivery.subject == self.last_subject
+                    and message.session_id == self.last_session_id
+                    and message.message_id == self.last_message_id
                 ):
                     await self.publisher.publish(self.last_result, self._last_token)
                     self._result_delivered = True
@@ -146,7 +152,10 @@ class IpcService:
                         and delivery.subject == unit.subject
                     ):
                         await self.publisher.publish(
-                            SandboxAcknowledge(message.execution_id), delivery.token
+                            SandboxAcknowledge(
+                                message.execution_id, message.session_id, message.message_id
+                            ),
+                            delivery.token,
                         )
                     return
                 unit = Unit(
@@ -167,7 +176,10 @@ class IpcService:
                 self._ack_task = asyncio.create_task(self._ack_timeout(unit))
                 try:
                     await self.publisher.publish(
-                        SandboxAcknowledge(message.execution_id), delivery.token
+                        SandboxAcknowledge(
+                            message.execution_id, message.session_id, message.message_id
+                        ),
+                        delivery.token,
                     )
                 except Exception:
                     self.current = None
@@ -177,6 +189,8 @@ class IpcService:
             if (
                 unit is None
                 or message.execution_id != unit.request.execution_id
+                or message.session_id != unit.request.session_id
+                or message.message_id != unit.request.message_id
                 or delivery.subject != unit.subject
             ):
                 return

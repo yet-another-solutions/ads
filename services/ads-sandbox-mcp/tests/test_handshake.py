@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import pytest
+from msgspec.structs import replace
 from sqlalchemy import select
 
 from ads_commons.sandbox.handshake import (
@@ -43,6 +44,43 @@ def start(h: Harness) -> asyncio.Task[SandboxResult]:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("field", ["session_id", "message_id"])
+@pytest.mark.parametrize("expired", [False, True])
+async def test_acknowledge_requires_durable_correlation(
+    long_harness: Harness, field: str, expired: bool
+) -> None:
+    h = long_harness
+    h.publisher.mode = "none"
+    task = start(h)
+    request = await wait_for_message(h, SandboxRequest)
+    assert isinstance(request, SandboxRequest)
+    if expired:
+        await h.service._expire(request.execution_id, h.identity().access_token, force=True)
+    before = await row(h, request.execution_id)
+    assert before
+    ack = SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    count = len(h.publisher.messages)
+    await h.publisher.reply(replace(ack, **{field: uuid4()}))
+    after = await row(h, request.execution_id)
+    assert after
+    assert (after.deadline, after.ack_replied, after.timed_out) == (
+        before.deadline,
+        before.ack_replied,
+        before.timed_out,
+    )
+    assert len(h.publisher.messages) == count
+    await h.publisher.reply(ack)
+    assert isinstance(h.publisher.messages[-1], SandboxAckReset if expired else SandboxAckReply)
+    if not expired:
+        await h.publisher.reply(SandboxResult(request.execution_id, 0, "", "", False, 0, False))
+        assert not (await task).is_error
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.anyio
 async def test_preack_timeout_late_ack_reset_then_unknown_ack_ignored(harness: Harness) -> None:
     h = harness
     h.publisher.mode = "none"
@@ -51,12 +89,16 @@ async def test_preack_timeout_late_ack_reset_then_unknown_ack_ignored(harness: H
     saved = await row(h, result.execution_id)
     assert saved and saved.timed_out and not saved.ack_replied
     assert [type(x) for x in h.publisher.messages] == [SandboxRequest]
-    await h.publisher.reply(SandboxAcknowledge(result.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(result.execution_id, saved.session_id, saved.message_id)
+    )
     assert isinstance(h.publisher.messages[-1], SandboxAckReset)
     assert await row(h, result.execution_id) is None
     count = len(h.publisher.messages)
-    await h.publisher.reply(SandboxAcknowledge(result.execution_id))
-    await h.publisher.reply(SandboxAcknowledge(uuid4()))
+    await h.publisher.reply(
+        SandboxAcknowledge(result.execution_id, saved.session_id, saved.message_id)
+    )
+    await h.publisher.reply(SandboxAcknowledge(uuid4(), uuid4(), uuid4()))
     assert len(h.publisher.messages) == count
     assert not any(isinstance(x, SandboxAbort) for x in h.publisher.messages)
 
@@ -74,7 +116,9 @@ async def test_postack_timeout_aborts_and_late_ack_resets(harness: Harness) -> N
     ]
     saved = await row(h, result.execution_id)
     assert saved and saved.timed_out and saved.ack_replied
-    await h.publisher.reply(SandboxAcknowledge(result.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(result.execution_id, saved.session_id, saved.message_id)
+    )
     assert isinstance(h.publisher.messages[-1], SandboxAckReset)
     assert await row(h, result.execution_id) is None
     tokens = [dict(headers)["authorization"] for headers in h.publisher.headers]
@@ -99,11 +143,15 @@ async def test_ack_resets_deadline_once_and_duplicate_cannot_extend(
     before = await row(h, request.execution_id)
     assert before
     clock.now.return_value = before.created_at + timedelta(seconds=1)
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     after = await row(h, request.execution_id)
     assert after and after.deadline > before.deadline
     assert (after.deadline - after.created_at).total_seconds() > h.settings.timeout_seconds
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     duplicate = await row(h, request.execution_id)
     assert duplicate and duplicate.deadline == after.deadline
     clock.now.return_value = before.deadline
@@ -134,7 +182,9 @@ async def test_cancel_follows_ack_boundary(harness: Harness, acked: bool) -> Non
     saved = await row(h, request.execution_id)
     assert saved and saved.timed_out
     assert any(isinstance(x, SandboxAbort) for x in h.publisher.messages) is acked
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     assert isinstance(h.publisher.messages[-1], SandboxAckReset)
     assert await row(h, request.execution_id) is None
     assert not h.service._waiters
@@ -207,8 +257,15 @@ async def test_other_replica_can_ack_but_cannot_consume_result(long_harness: Har
     assert isinstance(request, SandboxRequest)
     headers = [("authorization", h.keys.token(azp="ads-sandbox-manager").encode())]
     await asyncio.gather(
-        controller.on_message(encode_outbound(SandboxAcknowledge(request.execution_id)), headers),
-        h.publisher.reply(SandboxAcknowledge(request.execution_id)),
+        controller.on_message(
+            encode_outbound(
+                SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+            ),
+            headers,
+        ),
+        h.publisher.reply(
+            SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+        ),
     )
     assert sum(isinstance(x, SandboxAckReply) for x in h.publisher.messages) == 1
     result = SandboxResult(request.execution_id, 0, "ok", "", False, 2, False)
@@ -253,7 +310,9 @@ async def test_expired_duplicate_ack_does_not_suppress_abort(harness: Harness) -
             saved = await h.repository.locked(session, request.execution_id)
             assert saved
             saved.deadline = datetime.now(UTC) - timedelta(seconds=1)
-        await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+        await h.publisher.reply(
+            SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+        )
     assert (await task).is_error
     assert sum(isinstance(x, SandboxAbort) for x in h.publisher.messages) == 1
     assert not any(isinstance(x, SandboxAckReset) for x in h.publisher.messages)
@@ -289,7 +348,9 @@ async def test_control_failure_leaves_durable_timeout(harness: Harness, failure_
         h.tokens.fail = True
     elif failure_point == "ack-publish":
         h.publisher.fail = True
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     if failure_point == "abort-publish":
         h.publisher.fail = True
     result = await task
@@ -298,7 +359,9 @@ async def test_control_failure_leaves_durable_timeout(harness: Harness, failure_
     assert saved and saved.timed_out
     assert saved.ack_replied is (failure_point == "abort-publish")
     h.tokens.fail = h.publisher.fail = False
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     assert isinstance(h.publisher.messages[-1], SandboxAckReset)
     assert await row(h, request.execution_id) is None
 
@@ -316,6 +379,8 @@ async def test_database_outage_cannot_leave_http_waiter_forever(harness: Harness
     assert result.is_error and "state unavailable" in result.text
     h.repository.locked = locked
     # Once storage recovers, the expired row still rejects late execution.
-    await h.publisher.reply(SandboxAcknowledge(request.execution_id))
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
     assert isinstance(h.publisher.messages[-1], SandboxAckReset)
     assert await row(h, request.execution_id) is None

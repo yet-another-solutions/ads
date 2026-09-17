@@ -174,7 +174,12 @@ Manager also reads/writes `ads.sandbox.ready`, `ads.sandbox.idle`, and
 `ads.sandbox.recover`. IPC reads/writes `ads.sandbox.ready`. Describe accompanies
 the topic/group rights. Only the manager may Create/Delete dynamic topics, and
 only under `sandbox.req.` and `sandbox.res.`; no cluster-wide Create permission.
-All seven static topics have one partition and replication factor one.
+All eight static topics have one partition and replication factor one.
+Slice 9 adds `ads.sandbox.manager.barrier` with Read/Write/Describe for the manager
+only. The existing manager group prefix includes its unique barrier and ready
+groups and supplies Describe for shared-group membership discovery. The updated
+provisioning script is a deployment prerequisite; this source change does not
+mean the additional topic/ACL has already been installed on the lab.
 
 The three scoped Kafka Secrets are `ads/ads-sandbox-mcp-kafka`,
 `ads/ads-sandbox-manager-kafka`, and `ads-sandbox/ads-sandbox-ipc-kafka`, each with

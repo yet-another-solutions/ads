@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -46,6 +47,9 @@ def test_invalid_or_overflow_size_fails(value):
         ("poll_seconds", 0),
         ("control_seconds", float("inf")),
         ("node_fresh_seconds", float("nan")),
+        ("ready_seconds", 0),
+        ("barrier_seconds", float("nan")),
+        ("topic_replication_factor", 0),
         ("bake_seconds", 0),
         ("node_selector", []),
         ("node_selector", {}),
@@ -100,6 +104,21 @@ def configure(monkeypatch, settings):
         "KAFKA_BOOTSTRAP_SERVERS": settings.kafka_bootstrap_servers,
         "TLS_CERT_PATH": str(settings.tls_cert_path),
         "TLS_KEY_PATH": str(settings.tls_key_path),
+        "KEYCLOAK_ISSUER": "https://identity.test",
+        "KEYCLOAK_WELL_KNOWN_URL": "https://identity.test/.well-known/openid-configuration",
+        "KEYCLOAK_CLIENT_SECRET": "fixture-only-secret",
+        "SESSION_OBJECTS": json.dumps(
+            {
+                "guest_image": "registry.test/guest:1",
+                "ipc_image": "registry.test/ipc:1",
+                "ipc_storage_class": "local-path",
+                "ipc_service_account": "ipc",
+                "ipc_config_map": "ipc",
+                "ipc_secret": "ipc",
+                "ipc_tls_secret": "ipc-tls",
+                "ipc_node_selector": {"ads.io/application-node": "true"},
+            }
+        ),
     }.items():
         monkeypatch.setenv("ADS_SANDBOX_MANAGER_" + name, value)
     monkeypatch.setenv("ADS_SESSION_SIZE", settings.session_size)
@@ -113,6 +132,19 @@ def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
     assert settings.golden_bytes == 22 * 1024**3
     assert settings.session_size == "20Gi"
     assert settings.database_url not in repr(settings)
+    assert settings.keycloak_client_secret not in repr(settings)
+    assert settings.barrier_seconds == 3
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["SESSION_OBJECTS", "KEYCLOAK_ISSUER", "KEYCLOAK_WELL_KNOWN_URL", "KEYCLOAK_CLIENT_SECRET"],
+)
+def test_transit_configuration_required(monkeypatch, manager_tls, name):
+    configure(monkeypatch, manager_tls)
+    monkeypatch.delenv("ADS_SANDBOX_MANAGER_" + name)
+    with pytest.raises(RuntimeError):
+        load_settings()
 
 
 @pytest.mark.parametrize("name", ["ADS_SESSION_SIZE", "ADS_SANDBOX_MANAGER_GOLDEN_VERSION"])

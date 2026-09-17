@@ -20,18 +20,26 @@ class SandboxRequest(msgspec.Struct, frozen=True, tag="request", tag_field="type
 
 class SandboxAcknowledge(msgspec.Struct, frozen=True, tag="acknowledge", tag_field="type"):
     execution_id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: uuid.UUID
 
 
 class SandboxAckReply(msgspec.Struct, frozen=True, tag="ack-reply", tag_field="type"):
     execution_id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: uuid.UUID
 
 
 class SandboxAckReset(msgspec.Struct, frozen=True, tag="ack-reset", tag_field="type"):
     execution_id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: uuid.UUID
 
 
 class SandboxAbort(msgspec.Struct, frozen=True, tag="abort", tag_field="type"):
     execution_id: uuid.UUID
+    session_id: uuid.UUID
+    message_id: uuid.UUID
 
 
 class SandboxResult(msgspec.Struct, frozen=True, tag="result", tag_field="type"):

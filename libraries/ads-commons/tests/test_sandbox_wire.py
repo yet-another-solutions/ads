@@ -74,25 +74,42 @@ def test_python_request_kind() -> None:
     assert decoded.kind == "python"
 
 
-def test_handshake_follow_ups_round_trip() -> None:
-    reply = SandboxAckReply(execution_id=EXECUTION)
-    reset = SandboxAckReset(execution_id=EXECUTION)
-    abort = SandboxAbort(execution_id=EXECUTION)
-    assert json.loads(encode_inbound(reply)) == {
-        "type": "ack-reply",
+@pytest.mark.parametrize(
+    ("control", "tag"),
+    [(SandboxAckReply, "ack-reply"), (SandboxAckReset, "ack-reset"), (SandboxAbort, "abort")],
+)
+def test_handshake_follow_ups_round_trip(control, tag) -> None:
+    message = control(execution_id=EXECUTION, session_id=SESSION, message_id=MESSAGE)
+    assert json.loads(encode_inbound(message)) == {
+        "type": tag,
         "execution_id": str(EXECUTION),
+        "session_id": str(SESSION),
+        "message_id": str(MESSAGE),
     }
-    assert json.loads(encode_inbound(reset))["type"] == "ack-reset"
-    abort_payload = json.loads(encode_inbound(abort))
-    assert abort_payload == {"type": "abort", "execution_id": str(EXECUTION)}
-    assert "session_id" not in abort_payload
-    assert decode_inbound(encode_inbound(reply)) == reply
-    assert decode_inbound(encode_inbound(reset)) == reset
-    assert decode_inbound(encode_inbound(abort)) == abort
+    assert decode_inbound(encode_inbound(message)) == message
+
+
+@pytest.mark.parametrize("tag", ["acknowledge", "ack-reply", "ack-reset", "abort"])
+@pytest.mark.parametrize("field", ["execution_id", "session_id", "message_id"])
+@pytest.mark.parametrize("invalid", ["missing", None, "not-a-uuid", 123])
+def test_controls_require_all_correlation_ids(tag, field, invalid) -> None:
+    payload = {
+        "type": tag,
+        "execution_id": str(EXECUTION),
+        "session_id": str(SESSION),
+        "message_id": str(MESSAGE),
+    }
+    if invalid == "missing":
+        del payload[field]
+    else:
+        payload[field] = invalid
+    with pytest.raises(msgspec.ValidationError):
+        decoder = decode_outbound if tag == "acknowledge" else decode_inbound
+        decoder(json.dumps(payload).encode())
 
 
 def test_acknowledge_and_result_round_trip() -> None:
-    acknowledge = SandboxAcknowledge(execution_id=EXECUTION)
+    acknowledge = SandboxAcknowledge(EXECUTION, SESSION, MESSAGE)
     result = SandboxResult(
         execution_id=EXECUTION,
         exit_code=1,
@@ -105,6 +122,8 @@ def test_acknowledge_and_result_round_trip() -> None:
     assert json.loads(encode_outbound(acknowledge)) == {
         "type": "acknowledge",
         "execution_id": str(EXECUTION),
+        "session_id": str(SESSION),
+        "message_id": str(MESSAGE),
     }
     payload = json.loads(encode_outbound(result))
     assert payload == {
@@ -142,7 +161,7 @@ def test_tool_layer_error_result() -> None:
 
 
 def test_inbound_rejects_outbound_types() -> None:
-    acknowledge = encode_outbound(SandboxAcknowledge(execution_id=EXECUTION))
+    acknowledge = encode_outbound(SandboxAcknowledge(EXECUTION, SESSION, MESSAGE))
     with pytest.raises(msgspec.ValidationError):
         decode_inbound(acknowledge)
 
