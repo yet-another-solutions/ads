@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import msgspec
 import structlog
 from redis.exceptions import RedisError
 
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
+from ads_policy.blocks import ConversationBlock, ConversationBlocks, InMemoryConversationBlocks
 from ads_policy.config import GovernanceSettings
 from ads_policy.contract import (
     AuditEvent,
@@ -35,6 +37,7 @@ class PolicyService:
     runs: RunStore
     audit: BufferedAuditSink
     settings: GovernanceSettings = field(default_factory=GovernanceSettings)
+    blocks: ConversationBlocks = field(default_factory=InMemoryConversationBlocks)
 
     async def start(self, request: RunRequest) -> Run:
         level = (
@@ -58,6 +61,7 @@ class PolicyService:
             isolation_level=level,
             policy_hash=self.pdp.policy_hash,
             holder=request.holder,
+            conversation=request.conversation,
         )
 
     async def run(self, run_id: str) -> Run | None:
@@ -81,30 +85,42 @@ class PolicyService:
             return run
         return await self.runs.finish(run_id)
 
+    async def block_conversation(self, conversation: str, budget: int, by: str) -> None:
+        await self.blocks.block(
+            ConversationBlock(
+                conversation=conversation,
+                revoked_at=datetime.now(UTC),
+                budget=budget,
+                by=by,
+            )
+        )
+        logger.info("conversation blocked", conversation=conversation, budget=budget, by=by)
+
     async def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         try:
             run = await self.runs.get(call.run_id)
         except RedisError as exc:
             return self._journal_unresolved_call(
-                call, self._refuse("run.store", f"run store unreachable: {exc}")
+                call, None, self._refuse("run.store", f"run store unreachable: {exc}")
             )
         if run is None:
             return self._journal_unresolved_call(
-                call, self._refuse("run.unknown", f"run {call.run_id} is unknown")
+                call, None, self._refuse("run.unknown", f"run {call.run_id} is unknown")
             )
         if run.subject != call.subject:
             return self._journal_unresolved_call(
-                call, self._refuse("run.subject", f"run {run.id} belongs to someone else")
+                call, run, self._refuse("run.subject", f"run {run.id} belongs to someone else")
             )
         pinned_policy = self.pdp.policy_of(run)
         if pinned_policy is None:
+            await self._finish_run_whose_policy_is_gone(run)
             return self._journal_unresolved_call(
-                call, self._refuse("policy.missing", "pinned policy is gone")
+                call, run, self._refuse("policy.missing", "pinned policy is gone")
             )
         try:
             capability, resource = resolve(call, pinned_policy)
         except Unbound as exc:
-            return self._journal_unresolved_call(call, self._refuse(exc.rule_id, str(exc)))
+            return self._journal_unresolved_call(call, run, self._refuse(exc.rule_id, str(exc)))
         decision = await self.decide(
             DecisionRequest(
                 run_id=call.run_id,
@@ -118,7 +134,7 @@ class PolicyService:
         return msgspec.structs.replace(decision, capability=capability, resource=resource)
 
     def _journal_unresolved_call(
-        self, call: ToolCallRequest, decision: PolicyDecision
+        self, call: ToolCallRequest, run: Run | None, decision: PolicyDecision
     ) -> PolicyDecision:
         try:
             self.audit.enqueue(
@@ -132,6 +148,7 @@ class PolicyService:
                     weight=decision.weight or self.settings.default_weight,
                     policy_hash=decision.policy_hash,
                     point=decision.point,
+                    conversation=_conversation_of(run),
                 )
             )
         except AuditBacklogFull as exc:
@@ -143,20 +160,35 @@ class PolicyService:
             run = await self.runs.get(request.run_id)
         except RedisError as exc:
             return self._journal(
-                request, self._refuse("run.store", f"run store unreachable: {exc}")
+                request, None, self._refuse("run.store", f"run store unreachable: {exc}")
             )
         if run is None:
             decision = self._refuse(
                 "run.unknown", f"run {request.run_id} is unknown or past its lifetime"
             )
-        elif run.subject != request.subject:
-            decision = self._refuse("run.subject", f"run {run.id} belongs to someone else")
-        elif run.state is not RunState.RUNNING:
-            decision = self._refuse("run.state", f"run {run.id} is {run.state.value}")
         else:
-            decision = self._decide_running(run, request)
-            await self._extend_lifetime_from_now(run)
-        return self._journal(request, decision)
+            decision = await self._decide_in(run, request)
+        return self._journal(request, run, decision)
+
+    async def _decide_in(self, run: Run, request: DecisionRequest) -> PolicyDecision:
+        if run.subject != request.subject:
+            return self._refuse("run.subject", f"run {run.id} belongs to someone else")
+        if run.state is not RunState.RUNNING:
+            return self._refuse("run.state", f"run {run.id} is {run.state.value}")
+        if self.pdp.policy_of(run) is None:
+            await self._finish_run_whose_policy_is_gone(run)
+            return self._refuse("policy.missing", "pinned policy is gone")
+        try:
+            blocked = await self.blocks.is_blocked(run.conversation)
+        except RedisError as exc:
+            return self._refuse("run.store", f"conversation blocks unreachable: {exc}")
+        if blocked:
+            return self._refuse(
+                "conversation.revoked", f"conversation {run.conversation} is blocked"
+            )
+        decision = self._decide_running(run, request)
+        await self._extend_lifetime_from_now(run)
+        return decision
 
     def _decide_running(self, run: Run, request: DecisionRequest) -> PolicyDecision:
         try:
@@ -190,15 +222,27 @@ class PolicyService:
             settings=self.settings,
         )
 
+    async def _finish_run_whose_policy_is_gone(self, run: Run) -> None:
+        if run.state is not RunState.RUNNING:
+            return
+        try:
+            await self.runs.finish(run.id)
+        except (KeyError, RedisError) as exc:
+            logger.warning("run with a lost policy not finished", run_id=run.id, error=str(exc))
+            return
+        logger.info("run finished: its policy is gone", run_id=run.id)
+
     async def _extend_lifetime_from_now(self, run: Run) -> None:
         try:
             await self.runs.touch(run)
         except RedisError as exc:
             logger.warning("run lifetime not extended", run_id=run.id, error=str(exc))
 
-    def _journal(self, request: DecisionRequest, decision: PolicyDecision) -> PolicyDecision:
+    def _journal(
+        self, request: DecisionRequest, run: Run | None, decision: PolicyDecision
+    ) -> PolicyDecision:
         try:
-            self.audit.enqueue(record(request, decision))
+            self.audit.enqueue(record(request, decision, conversation=_conversation_of(run)))
         except AuditBacklogFull as exc:
             return self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
         return decision
@@ -224,3 +268,7 @@ class PolicyService:
             policy_hash=self.pdp.policy_hash,
             mode=Mode.ENFORCE,
         )
+
+
+def _conversation_of(run: Run | None) -> str:
+    return "" if run is None else run.conversation

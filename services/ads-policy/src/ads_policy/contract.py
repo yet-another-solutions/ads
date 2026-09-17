@@ -6,9 +6,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 import msgspec
+
+MAX_CONVERSATION_LENGTH = 64
+
+ConversationId = Annotated[
+    str, msgspec.Meta(max_length=MAX_CONVERSATION_LENGTH, pattern=r"^[A-Za-z0-9._:-]*$")
+]
 
 
 class Capability(StrEnum):
@@ -122,13 +128,31 @@ class CheckKind(StrEnum):
 class Side(msgspec.Struct, frozen=True):
     checks: frozenset[CheckKind]
     on: Switch = Switch.ENFORCE
+    review: frozenset[CheckKind] = frozenset()
+
+    def switch_for(self, check: CheckKind) -> Switch:
+        if check not in self.checks:
+            return Switch.OFF
+        if check in self.review:
+            return Switch.REVIEW if self.on is Switch.ENFORCE else self.on
+        return self.on
 
     def stricter(self, other: Side) -> Side:
-        return Side(checks=self.checks | other.checks, on=self.on.stricter(other.on))
+        checks = self.checks | other.checks
+        reviewed_by_both = self.review & other.review
+        reviewed_where_only_one_asks = (self.review - other.checks) | (other.review - self.checks)
+        return Side(
+            checks=checks,
+            on=self.on.stricter(other.on),
+            review=reviewed_by_both | reviewed_where_only_one_asks,
+        )
 
 
 DEFAULT_REQUEST = Side(checks=frozenset({CheckKind.SECRETS}))
-DEFAULT_RESPONSE = Side(checks=frozenset({CheckKind.SECRETS, CheckKind.INJECTION}))
+DEFAULT_RESPONSE = Side(
+    checks=frozenset({CheckKind.SECRETS, CheckKind.INJECTION}),
+    review=frozenset({CheckKind.INJECTION}),
+)
 
 
 class Interception(msgspec.Struct, frozen=True):
@@ -167,7 +191,11 @@ def _stricter_of_stated(one: Side | None, other: Side | None) -> Side | None:
 def _canonical_side(side: Side | None) -> list[Any] | None:
     if side is None:
         return None
-    return [side.on.value, sorted(check.value for check in side.checks)]
+    return [
+        side.on.value,
+        sorted(check.value for check in side.checks),
+        sorted(check.value for check in side.review),
+    ]
 
 
 class RunState(StrEnum):
@@ -349,6 +377,7 @@ class Run(msgspec.Struct, frozen=True):
     policy_hash: str
     state: RunState = RunState.RUNNING
     holder: str = ""
+    conversation: str = ""
 
 
 class AuditEvent(msgspec.Struct, frozen=True):
@@ -363,6 +392,7 @@ class AuditEvent(msgspec.Struct, frozen=True):
     content: str | None = None
     point: InterceptionPoint = InterceptionPoint.CALL
     decided_by: str = ""
+    conversation: str = ""
     event_id: str = msgspec.field(default_factory=lambda: uuid.uuid4().hex)
     recorded_at: datetime = msgspec.field(default_factory=lambda: datetime.now(UTC))
 
@@ -377,6 +407,12 @@ class RunRequest(msgspec.Struct, frozen=True):
     runtime_class_name: str | None = None
     node_labels: dict[str, str] = msgspec.field(default_factory=dict)
     holder: str = ""
+    conversation: ConversationId = ""
+
+
+class ConversationBlockRequest(msgspec.Struct, frozen=True):
+    budget: int
+    by: str
 
 
 class DecisionRequest(msgspec.Struct, frozen=True):

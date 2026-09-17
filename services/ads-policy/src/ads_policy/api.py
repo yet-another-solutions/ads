@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 from typing import Any
 
+import msgspec
 from dishka.integrations.litestar import FromDishka, inject
 from litestar import Controller, get, post
 from litestar.connection import ASGIConnection
@@ -10,6 +11,8 @@ from litestar.exceptions import ClientException, NotAuthorizedException, NotFoun
 from litestar.handlers import BaseRouteHandler
 
 from ads_policy.contract import (
+    ConversationBlockRequest,
+    ConversationId,
     DecisionRequest,
     PolicyDecision,
     Run,
@@ -73,6 +76,22 @@ class PolicyController(Controller):
         if run is None:
             raise NotFoundException(detail="no such run")
         return run
+
+    @post("/conversations/{conversation:str}/revoke", status_code=204)
+    @inject
+    async def block_conversation(
+        self,
+        conversation: str,
+        data: ConversationBlockRequest,
+        service: FromDishka[PolicyService],
+    ) -> None:
+        try:
+            msgspec.convert(conversation, ConversationId)
+        except msgspec.ValidationError as exc:
+            raise ClientException(detail=f"unreadable conversation: {exc}") from exc
+        if not conversation:
+            raise ClientException(detail="a conversation is required")
+        await service.block_conversation(conversation, data.budget, data.by)
 
     @post("/decide")
     @inject

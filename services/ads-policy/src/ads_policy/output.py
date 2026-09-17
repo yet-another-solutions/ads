@@ -13,6 +13,8 @@ from ads_policy.contract import (
 from ads_policy.secrets import find_secrets, redact
 
 ALL_CHECKS = frozenset(CheckKind)
+PROMPT_INJECTION_RULE = "payload.injection"
+SCANNER_UNAVAILABLE_RULE = "payload.injection.unchecked"
 
 
 def inspect_payload(
@@ -40,13 +42,11 @@ def inspect_payload(
             reason="no credential matched",
             point=point,
         )
-    warnings = _injection_marker_warnings(text, config) if CheckKind.INJECTION in checks else ()
     if findings:
         return PolicyDecision(
             effect=Effect.TRANSFORM,
             rule_id="payload.redact",
             reason=f"redacted {list(rules)}",
-            warnings=warnings,
             transform=Transform(payload=redact(text, findings), redactions=rules),
             point=point,
         )
@@ -54,7 +54,6 @@ def inspect_payload(
         effect=Effect.ALLOW,
         rule_id="payload.inbound",
         reason="no credential matched",
-        warnings=warnings,
         point=point,
     )
 
@@ -81,15 +80,11 @@ def inspect_texts(
             }
         )
     )
-    warnings = tuple(
-        dict.fromkeys(warning for decision in per_text_decisions for warning in decision.warnings)
-    )
     if redactions:
         return PolicyDecision(
             effect=Effect.TRANSFORM,
             rule_id="payload.redact",
             reason=f"redacted {list(redactions)}",
-            warnings=warnings,
             transform=Transform(payload="\n".join(cleaned), redactions=redactions),
             point=InterceptionPoint.RESPONSE,
         ), cleaned
@@ -97,15 +92,32 @@ def inspect_texts(
         effect=Effect.ALLOW,
         rule_id="payload.inbound",
         reason="no credential matched",
-        warnings=warnings,
         point=InterceptionPoint.RESPONSE,
     ), cleaned
 
 
-def _injection_marker_warnings(text: str, config: GovernanceSettings) -> tuple[str, ...]:
-    lowered = text.lower()
-    return tuple(
-        f"possible injected instruction: {marker}"
-        for marker in config.injection_markers
-        if marker in lowered
+def prompt_injection_found(
+    score: float, settings: GovernanceSettings | None = None
+) -> PolicyDecision:
+    config = settings or GovernanceSettings()
+    return PolicyDecision(
+        effect=Effect.DENY,
+        rule_id=PROMPT_INJECTION_RULE,
+        reason=f"the injection scanner scored the result {score:.3f}",
+        message=config.denied_message,
+        weight=config.injection_weight,
+        point=InterceptionPoint.RESPONSE,
+    )
+
+
+def prompt_injection_unchecked(
+    reason: str, settings: GovernanceSettings | None = None
+) -> PolicyDecision:
+    config = settings or GovernanceSettings()
+    return PolicyDecision(
+        effect=Effect.DENY,
+        rule_id=SCANNER_UNAVAILABLE_RULE,
+        reason=f"the injection scanner could not read the result: {reason}",
+        message=config.denied_message,
+        point=InterceptionPoint.RESPONSE,
     )

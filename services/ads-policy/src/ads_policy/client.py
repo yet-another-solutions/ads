@@ -4,11 +4,13 @@ import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import httpx2
 import msgspec
 
 from ads_policy.contract import (
+    ConversationBlockRequest,
     DecisionRequest,
     Effect,
     Mode,
@@ -91,6 +93,17 @@ class HttpPolicyClient:
 
     def finish_run(self, run_id: str) -> Run | None:
         return self._run_or_none_if_unknown("POST", f"/policy/runs/{run_id}/finish")
+
+    def block_conversation(self, conversation: str, budget: int, by: str) -> None:
+        try:
+            response = self._client.post(
+                f"/policy/conversations/{quote(conversation, safe='')}/revoke",
+                content=msgspec.json.encode(ConversationBlockRequest(budget=budget, by=by)),
+                headers={"content-type": "application/json"},
+            )
+            response.raise_for_status()
+        except httpx2.HTTPError as exc:
+            raise PolicyUnavailable(f"policy service: {exc}") from exc
 
     def _run_or_none_if_unknown(self, method: str, path: str) -> Run | None:
         try:

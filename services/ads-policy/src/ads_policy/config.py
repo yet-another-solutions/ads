@@ -131,14 +131,6 @@ DEFAULT_EGRESS_ALLOWLIST = (
 
 DEFAULT_PROTECTED_BRANCHES = ("main", "master", "release")
 
-DEFAULT_INJECTION_MARKERS = (
-    "ignore previous instructions",
-    "ignore all previous",
-    "disregard the above",
-    "you are now",
-    "system prompt",
-)
-
 
 @dataclass(frozen=True, slots=True)
 class GovernanceSettings:
@@ -151,6 +143,7 @@ class GovernanceSettings:
     deny_on_policy_error: bool = True
     default_weight: int = 1
     leak_weight: int = 5
+    injection_weight: int = 5
     deny_repeat_multiplier: int = 3
     run_ttl_seconds: int = 3600
     audit_backlog: int = 10000
@@ -171,7 +164,6 @@ class GovernanceSettings:
     rules: tuple[Rule, ...] = DEFAULT_RULES
     capabilities: tuple[CapabilityDef, ...] = DEFAULT_CAPABILITIES
     bindings: tuple[Binding, ...] = DEFAULT_BINDINGS
-    injection_markers: tuple[str, ...] = DEFAULT_INJECTION_MARKERS
 
 
 def _list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:

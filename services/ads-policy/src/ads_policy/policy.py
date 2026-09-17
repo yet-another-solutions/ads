@@ -106,20 +106,33 @@ def _load_side(raw: object, where: str, default: Side) -> Side | None:
         on = Switch(str(raw.get("on", Switch.ENFORCE.value)))
     except ValueError as exc:
         raise ValueError(f"{where}.on must be one of {[s.value for s in Switch]}") from exc
-    if "checks" not in raw:
-        return Side(checks=default.checks, on=on)
-    try:
-        checks = frozenset(CheckKind(str(check)) for check in raw["checks"])
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{where}.checks must be a list of {[c.value for c in CheckKind]}"
-        ) from exc
+    checks = _load_checks(raw["checks"], f"{where}.checks") if "checks" in raw else default.checks
     checks_this_side_cannot_run = checks - default.checks
     if checks_this_side_cannot_run:
         raise ValueError(
             f"{where} cannot check {sorted(c.value for c in checks_this_side_cannot_run)}"
         )
-    return Side(checks=checks, on=on)
+    review = (
+        _load_checks(raw["review"], f"{where}.review")
+        if "review" in raw
+        else default.review & checks
+    )
+    reviewed_but_not_run = review - checks
+    if reviewed_but_not_run:
+        raise ValueError(
+            f"{where}.review names checks the side does not run: "
+            f"{sorted(c.value for c in reviewed_but_not_run)}"
+        )
+    return Side(checks=checks, on=on, review=review)
+
+
+def _load_checks(raw: object, where: str) -> frozenset[CheckKind]:
+    if not isinstance(raw, list):
+        raise ValueError(f"{where} must be a list of {[c.value for c in CheckKind]}")
+    try:
+        return frozenset(CheckKind(str(check)) for check in raw)
+    except ValueError as exc:
+        raise ValueError(f"{where} must be a list of {[c.value for c in CheckKind]}") from exc
 
 
 def _load_binding(raw: Mapping[str, Any]) -> Binding:

@@ -47,6 +47,7 @@ public. Everything is HTTPS; there is no plain-HTTP mode.
 |---|---|
 | `POST /policy/runs` | open a run. The body describes the placement, if any; the level is derived from it |
 | `POST /policy/runs/{id}/revoke` | revoke a run. The next decision sees it |
+| `POST /policy/conversations/{id}/revoke` | `{budget, by}` → block a chat for good: every decision in any run carrying that `conversation` is refused as `conversation.revoked`, in either mode. Sent by the audit service |
 | `POST /policy/decide` | a decision for one capability and resource within a run |
 | `POST /policy/calls` | a decision for one tool call, named as the agent names it |
 | `GET /policy/version` | schema version, policy version, the hash the service computed, mode |

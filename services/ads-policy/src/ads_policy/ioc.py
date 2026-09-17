@@ -8,6 +8,7 @@ from dishka import Provider, Scope, provide
 from redis.asyncio import Redis
 
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
+from ads_policy.blocks import ConversationBlocks, RedisConversationBlocks
 from ads_policy.build import identity
 from ads_policy.config import Settings
 from ads_policy.contract import Policy
@@ -79,11 +80,16 @@ class AppProvider(Provider):
         return BufferedAuditSink(sink, settings.governance, decided_by=identity("ads-policy"))
 
     @provide(scope=Scope.APP)
+    def blocks(self, redis: Redis) -> ConversationBlocks:
+        return RedisConversationBlocks(redis)
+
+    @provide(scope=Scope.APP)
     def policy_service(
         self,
         settings: Settings,
         pdp: PolicyDecisionPoint,
         runs: RunStore,
         audit: BufferedAuditSink,
+        blocks: ConversationBlocks,
     ) -> PolicyService:
-        return PolicyService(pdp, runs, audit, settings.governance)
+        return PolicyService(pdp, runs, audit, settings.governance, blocks)

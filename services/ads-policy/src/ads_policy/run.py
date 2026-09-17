@@ -43,6 +43,7 @@ class RunStore(Protocol):
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
+        conversation: str = "",
     ) -> Run: ...
 
     async def get(self, run_id: str) -> Run | None: ...
@@ -70,6 +71,7 @@ class RedisRunStore:
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
+        conversation: str = "",
     ) -> Run:
         run = Run(
             id=run_id or uuid.uuid4().hex,
@@ -78,6 +80,7 @@ class RedisRunStore:
             isolation_level=isolation_level,
             policy_hash=policy_hash,
             holder=holder,
+            conversation=conversation,
         )
         lifetime = self.settings.run_ttl_seconds
         await self.redis.set(_key(run.id), msgspec.json.encode(run), ex=lifetime)
@@ -141,6 +144,7 @@ class InMemoryRunStore:
         policy_hash: str,
         run_id: str | None = None,
         holder: str = "",
+        conversation: str = "",
     ) -> Run:
         run = Run(
             id=run_id or uuid.uuid4().hex,
@@ -149,6 +153,7 @@ class InMemoryRunStore:
             isolation_level=isolation_level,
             policy_hash=policy_hash,
             holder=holder,
+            conversation=conversation,
         )
         self._runs[run.id] = run
         return run

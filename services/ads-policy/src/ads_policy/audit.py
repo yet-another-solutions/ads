@@ -21,6 +21,7 @@ def record(
     *,
     content: str | None = None,
     include_content: bool = False,
+    conversation: str = "",
 ) -> AuditEvent:
     return AuditEvent(
         run_id=request.run_id,
@@ -33,6 +34,7 @@ def record(
         policy_hash=decision.policy_hash,
         content=content if include_content else None,
         point=decision.point,
+        conversation=conversation,
     )
 
 

@@ -38,6 +38,7 @@ def test_run_carries_the_agreed_fields_and_no_stored_counter() -> None:
         "policy_hash",
         "state",
         "holder",
+        "conversation",
     )
 
 
