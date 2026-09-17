@@ -14,20 +14,25 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 
-from ads_commons.engine import AssistantHistoryTurn, EngineRequest, UserHistoryTurn
+from ads_commons.engine import AssistantHistoryTurn, EngineRequest, Notice, UserHistoryTurn
 
 
 @dataclass(frozen=True, slots=True)
 class StreamDelta:
-    kind: Literal["reasoning", "message"]
+    kind: Literal["reasoning", "message", "notice"]
     text: str
+    notice: Notice | None = None
+
+
+class SideEffectsHappened(RuntimeError):
+    pass
 
 
 class ChatStreamer(Protocol):
     def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]: ...
 
 
-def _history_messages(request: EngineRequest) -> list[BaseMessage]:
+def history_messages(request: EngineRequest) -> list[BaseMessage]:
     messages: list[BaseMessage] = []
     if request.instructions:
         messages.append(SystemMessage(content=request.instructions))
@@ -143,20 +148,24 @@ class AdsChatOpenAI(ChatOpenAI):
         return generation_chunk
 
 
+def build_chat_model(request: EngineRequest) -> AdsChatOpenAI:
+    token = request.model.authentication.openai_bearer.token
+    return AdsChatOpenAI(
+        model=request.model.options.model_name,
+        base_url=request.model.url,
+        api_key=lambda: token,
+        streaming=True,
+        max_retries=0,
+    )
+
+
 class LangChainChatStreamer:
     def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
         return self._stream(request)
 
     async def _stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
-        token = request.model.authentication.openai_bearer.token
-        model = AdsChatOpenAI(
-            model=request.model.options.model_name,
-            base_url=request.model.url,
-            api_key=lambda: token,
-            streaming=True,
-            max_retries=0,
-        )
-        async for chunk in model.astream(_history_messages(request)):
+        model = build_chat_model(request)
+        async for chunk in model.astream(history_messages(request)):
             if not isinstance(chunk, AIMessageChunk):
                 continue
             for delta in deltas_from_chunk(chunk):

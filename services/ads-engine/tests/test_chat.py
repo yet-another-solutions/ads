@@ -8,7 +8,7 @@ from langchain_core.messages import (
 )
 
 from ads_commons.engine import AssistantHistoryTurn, EngineRequest, UserHistoryTurn
-from ads_engine.chat import AdsChatOpenAI, _history_messages, deltas_from_chunk
+from ads_engine.chat import AdsChatOpenAI, deltas_from_chunk, history_messages
 from engine_fakes import make_request
 
 
@@ -26,7 +26,7 @@ def test_history_then_user_input_are_sent_once() -> None:
         model=base.model,
         authorization=base.authorization,
     )
-    messages = _history_messages(request)
+    messages = history_messages(request)
     assert isinstance(messages[0], SystemMessage)
     assert messages[0].content == "be brief"
     assert isinstance(messages[1], HumanMessage)

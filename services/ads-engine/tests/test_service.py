@@ -17,6 +17,7 @@ from ads_commons.engine import (
     EngineRequest,
     ErrorOutput,
     Finish,
+    Notice,
     PartialResponse,
     Ping,
     Reasoning,
@@ -31,7 +32,7 @@ from ads_commons.security import (
     SecurityContextHolder,
     TokenExchangeError,
 )
-from ads_engine.chat import StreamDelta
+from ads_engine.chat import SideEffectsHappened, StreamDelta
 from ads_engine.config import Settings
 from ads_engine.listener import EngineListener
 from ads_engine.service import EngineService
@@ -446,6 +447,28 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
     assert chat.requests[0].authorization.token == access_token
 
 
+def test_a_notice_is_published_as_its_own_partial(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    notice = Notice(kind="tool-refused", tool="probe/run", text="отклонено")
+    chat = ScriptedChat(
+        [
+            StreamDelta(kind="notice", text="отклонено", notice=notice),
+            StreamDelta(kind="message", text="answer"),
+        ]
+    )
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    _handle_accepted(listener, publisher, request, access_token)
+    assert publisher.messages[1] == PartialResponse(
+        session_id=request.session_id, order=0, notice=notice
+    )
+    assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
+
+
 def test_openai_retries_before_partial_then_succeeds(
     store: ActiveSessionStore,
     jwt_verifier: Any,
@@ -476,6 +499,29 @@ def test_openai_gives_up_after_three_failures_before_partial(
     assert isinstance(error, ErrorOutput)
     assert error.text == "openai unavailable"
     assert not any(isinstance(item, Finish) for item in publisher.messages)
+
+
+class _ChatThatCalledToolsThenFailed(ScriptedChat):
+    async def _stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+        self.calls += 1
+        raise SideEffectsHappened("failed after tools were called")
+        yield StreamDelta(kind="message", text="unreachable")  # pragma: no cover
+
+
+def test_no_retry_once_tools_were_called(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    chat = _ChatThatCalledToolsThenFailed()
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    _handle_accepted(listener, publisher, request, access_token)
+    assert chat.calls == 1
+    error = publisher.messages[-1]
+    assert isinstance(error, ErrorOutput)
+    assert error.text == "failed after tools were called"
 
 
 def test_empty_stream_is_error_not_finish(

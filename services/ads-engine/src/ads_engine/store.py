@@ -23,6 +23,13 @@ class ActiveSessionRow(Base):
     message_id: Mapped[str] = mapped_column(String(36), nullable=False)
 
 
+class ConversationRunRow(Base):
+    __tablename__ = "conversation_runs"
+
+    session_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
 def _create_engine(database_url: str) -> Engine:
     if database_url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
@@ -42,6 +49,18 @@ class ActiveSessionStore:
         Base.metadata.create_all(self._engine)
         self._sessions = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._lock = asyncio.Lock()
+
+    async def run_of_conversation(self, session_id: uuid.UUID) -> str | None:
+        async with self._lock:
+            with self._sessions() as session:
+                row = session.get(ConversationRunRow, str(session_id))
+                return None if row is None else row.run_id
+
+    async def remember_run_of_conversation(self, session_id: uuid.UUID, run_id: str) -> None:
+        async with self._lock:
+            with self._sessions() as session:
+                session.merge(ConversationRunRow(session_id=str(session_id), run_id=run_id))
+                session.commit()
 
     async def reset(self) -> None:
         async with self._lock:

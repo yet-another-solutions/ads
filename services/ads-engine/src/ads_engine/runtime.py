@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import aiohttp
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import make_container
@@ -13,7 +14,7 @@ from ads_engine.ioc import AppProvider
 from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener
 from ads_engine.logconfig import configure_logging
-from ads_engine.store import ActiveSessionRow, ActiveSessionStore
+from ads_engine.store import ActiveSessionRow, ActiveSessionStore, ConversationRunRow
 
 log = structlog.get_logger("ads_engine")
 
@@ -24,7 +25,7 @@ async def run(settings: Settings | None = None) -> None:
     prepare_schema(
         alembic_ini=alembic_ini_for("ads-engine"),
         database_url=resolved.database_url,
-        tables=mapped_tables(ActiveSessionRow),
+        tables=mapped_tables(ActiveSessionRow, ConversationRunRow),
     )
     configure_logging()
     container = make_container(CommonsBeansProvider(), AppProvider(resolved))
@@ -64,4 +65,5 @@ async def run(settings: Settings | None = None) -> None:
             await asyncio.gather(*tasks, return_exceptions=True)
         await consumer.stop()
         await producer.stop()
+        await container.get(aiohttp.ClientSession).close()
         container.close()

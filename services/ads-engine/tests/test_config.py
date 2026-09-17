@@ -65,6 +65,62 @@ def test_ack_timeout_defaults_to_ten_seconds(monkeypatch: pytest.MonkeyPatch) ->
     assert settings.ack_audience == "ads"
 
 
+def _minimal_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    monkeypatch.setenv("ADS_ENGINE_DATABASE_URL", "postgresql+psycopg://ads_engine@db/ads_engine")
+    monkeypatch.setenv(
+        "ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL",
+        "https://keycloak.test/realms/ads/.well-known/openid-configuration",
+    )
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_ISSUER", "https://keycloak.test/realms/ads")
+    monkeypatch.setenv("ADS_ENGINE_KEYCLOAK_CLIENT_SECRET", "engine-client-secret")
+
+
+def test_without_mcp_servers_there_are_no_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    _minimal_environment(monkeypatch)
+    monkeypatch.delenv("ADS_ENGINE_MCP_SERVERS", raising=False)
+    assert load_settings().tools is None
+
+
+def test_mcp_servers_bring_the_tool_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _minimal_environment(monkeypatch)
+    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "probe, probe-vm")
+    monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_URL", "https://guardrail.test:8083/")
+    monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_API_TOKEN", "guardrail-api-token-32-bytes")
+    monkeypatch.setenv("ADS_ENGINE_WORKSPACE_PROJECT", "ads")
+    monkeypatch.setenv("ADS_ENGINE_WORKSPACE_REPO", "yet-another-solutions/ads")
+    monkeypatch.setenv("ADS_ENGINE_WORKSPACE_ENV", "test")
+    tools = load_settings().tools
+    assert tools is not None
+    assert tools.mcp_servers == ("probe", "probe-vm")
+    assert tools.guardrail_url == "https://guardrail.test:8083"
+    assert tools.mcp_audience == "ads-mcp"
+    assert tools.workspace.workdir == "/workspace"
+    assert tools.max_model_rounds == 8
+
+
+@pytest.mark.parametrize(
+    ("servers", "message"),
+    [("probe,probe", "twice"), ("../etc", "not a server name")],
+)
+def test_malformed_mcp_servers_stop_the_engine(
+    monkeypatch: pytest.MonkeyPatch, servers: str, message: str
+) -> None:
+    _minimal_environment(monkeypatch)
+    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", servers)
+    with pytest.raises(RuntimeError, match=message):
+        load_settings()
+
+
+def test_mcp_servers_need_an_https_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
+    _minimal_environment(monkeypatch)
+    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "probe")
+    monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_URL", "http://guardrail.test")
+    monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_API_TOKEN", "guardrail-api-token-32-bytes")
+    with pytest.raises(RuntimeError, match="https"):
+        load_settings()
+
+
 def test_database_url_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     monkeypatch.setenv(

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+
+MCP_SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -17,6 +20,37 @@ def _callers(raw: str) -> frozenset[str]:
     if not parties:
         raise RuntimeError("ADS_ENGINE_ALLOWED_CALLERS must list at least one caller")
     return parties
+
+
+def _names(raw: str) -> tuple[str, ...]:
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    for name in names:
+        if not MCP_SERVER_NAME.fullmatch(name):
+            raise RuntimeError(f"ADS_ENGINE_MCP_SERVERS: {name!r} is not a server name")
+    if len(set(names)) != len(names):
+        raise RuntimeError("ADS_ENGINE_MCP_SERVERS names a server twice")
+    return names
+
+
+@dataclass(frozen=True, slots=True)
+class Workspace:
+    project: str
+    repo: str
+    env: str
+    workdir: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSettings:
+    mcp_servers: tuple[str, ...]
+    guardrail_url: str
+    guardrail_api_token: str
+    mcp_audience: str
+    workspace: Workspace
+    max_model_rounds: int = 8
+    call_attempts: int = 3
+    retry_pause_seconds: float = 1.0
+    timeout_seconds: float = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +70,35 @@ class Settings:
     ack_audience: str
     allowed_callers: frozenset[str]
     tls_ca_bundle: Path | None
+    tools: ToolSettings | None = None
+
+
+def _tool_settings() -> ToolSettings | None:
+    servers = _names(os.environ.get("ADS_ENGINE_MCP_SERVERS", ""))
+    if not servers:
+        return None
+    guardrail_url = _env("ADS_ENGINE_GUARDRAIL_URL").strip().rstrip("/")
+    if not guardrail_url.startswith("https://"):
+        raise RuntimeError("ADS_ENGINE_GUARDRAIL_URL must be an https URL")
+    guardrail_api_token = _env("ADS_ENGINE_GUARDRAIL_API_TOKEN").strip()
+    if not guardrail_api_token:
+        raise RuntimeError("ADS_ENGINE_GUARDRAIL_API_TOKEN is required with MCP servers")
+    return ToolSettings(
+        mcp_servers=servers,
+        guardrail_url=guardrail_url,
+        guardrail_api_token=guardrail_api_token,
+        mcp_audience=_env("ADS_ENGINE_MCP_AUDIENCE", "ads-mcp").strip(),
+        workspace=Workspace(
+            project=_env("ADS_ENGINE_WORKSPACE_PROJECT").strip(),
+            repo=_env("ADS_ENGINE_WORKSPACE_REPO").strip(),
+            env=_env("ADS_ENGINE_WORKSPACE_ENV").strip(),
+            workdir=_env("ADS_ENGINE_WORKSPACE_WORKDIR", "/workspace").strip(),
+        ),
+        max_model_rounds=int(_env("ADS_ENGINE_MAX_MODEL_ROUNDS", "8")),
+        call_attempts=int(_env("ADS_ENGINE_TOOL_CALL_ATTEMPTS", "3")),
+        retry_pause_seconds=float(_env("ADS_ENGINE_TOOL_RETRY_PAUSE_SECONDS", "1")),
+        timeout_seconds=float(_env("ADS_ENGINE_TOOL_TIMEOUT_SECONDS", "60")),
+    )
 
 
 def load_settings() -> Settings:
@@ -59,4 +122,5 @@ def load_settings() -> Settings:
         ack_audience=_env("ADS_ENGINE_ACK_AUDIENCE", "ads"),
         allowed_callers=_callers(_env("ADS_ENGINE_ALLOWED_CALLERS", "ads")),
         tls_ca_bundle=tls_ca_bundle,
+        tools=_tool_settings(),
     )

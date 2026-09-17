@@ -26,7 +26,7 @@ from ads_commons.security import (
     TokenExchangeError,
     require_caller,
 )
-from ads_engine.chat import ChatStreamer, StreamDelta
+from ads_engine.chat import ChatStreamer, SideEffectsHappened, StreamDelta
 from ads_engine.config import Settings
 from ads_engine.store import ActiveSessionStore
 
@@ -208,7 +208,7 @@ class EngineService:
                 break
             except Exception as exc:
                 last_error = exc
-                if emitted_partial:
+                if emitted_partial or isinstance(exc, SideEffectsHappened):
                     raise
                 log.info(
                     "openai_retry",
@@ -240,6 +240,8 @@ async def _cancel(task: asyncio.Task[None]) -> None:
 
 
 def _partial(session_id: uuid.UUID, order: int, delta: StreamDelta) -> PartialResponse:
+    if delta.notice is not None:
+        return PartialResponse(session_id=session_id, order=order, notice=delta.notice)
     if delta.kind == "reasoning":
         return PartialResponse(
             session_id=session_id,

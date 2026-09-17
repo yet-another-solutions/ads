@@ -4,6 +4,7 @@ import ssl
 import uuid
 from collections.abc import Sequence
 
+import aiohttp
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import Provider, Scope, provide
 
@@ -24,6 +25,7 @@ from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener, TokenAuthenticator
 from ads_engine.service import EngineService, OutputPublisher, TokenMinter
 from ads_engine.store import ActiveSessionStore
+from ads_engine.tooling import ToolingChatStreamer
 
 
 class KafkaPublisher:
@@ -56,7 +58,25 @@ class AppProvider(Provider):
 
     store = provide(ActiveSessionStore, scope=Scope.APP)
 
-    chat = provide(LangChainChatStreamer, scope=Scope.APP, provides=ChatStreamer)
+    @provide(scope=Scope.APP)
+    def tool_http(self, settings: Settings) -> aiohttp.ClientSession:
+        timeout = settings.tools.timeout_seconds if settings.tools is not None else 60.0
+        return aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(ssl=_ssl_context(settings) or True),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        )
+
+    @provide(scope=Scope.APP)
+    def chat(
+        self,
+        settings: Settings,
+        tool_http: aiohttp.ClientSession,
+        exchange: TokenExchange,
+        store: ActiveSessionStore,
+    ) -> ChatStreamer:
+        if settings.tools is None:
+            return LangChainChatStreamer()
+        return ToolingChatStreamer(settings.tools, tool_http, exchange, store)
 
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
