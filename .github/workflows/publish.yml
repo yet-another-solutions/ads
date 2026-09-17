@@ -102,6 +102,11 @@ jobs:
             context: services/ads-sandbox-golden
             platforms: linux/amd64
             pack: "true"
+          - image: ads-sandbox-base
+            file: services/ads-sandbox-base/Containerfile
+            context: services/ads-sandbox-base
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner

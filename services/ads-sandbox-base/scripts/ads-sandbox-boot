@@ -1,0 +1,90 @@
+#!/bin/bash
+set -euo pipefail
+
+fail() {
+  echo "ads-sandbox-boot: $*" >&2
+  exit 1
+}
+
+hex_to_dec() {
+  printf '%d' "0x$1"
+}
+
+device_in_use() {
+  local mm=$1
+  awk -v mm="$mm" '$3 == mm { found = 1; exit } END { exit !found }' /proc/self/mountinfo
+}
+
+as_podman() {
+  runuser -u podman -- env HOME=/home/podman XDG_RUNTIME_DIR=/run/ads-podman "$@"
+}
+
+podman_cmd() {
+  as_podman podman --root /session/outer-podman --runroot /run/ads-podman "$@"
+}
+
+green2() {
+  local name
+  ip -br link show lo | grep -q UP || fail "lo is not up"
+  while read -r name _; do
+    name=${name%%@*}
+    [[ -n $name ]] || continue
+    [[ $name == lo ]] || fail "unexpected up interface $name"
+  done < <(ip -br link show up)
+  if ip -4 route show default | grep -q .; then
+    fail "default ipv4 route present"
+  fi
+  if ip -6 route show default | grep -q .; then
+    fail "default ipv6 route present"
+  fi
+  if timeout 3 getent ahosts sandbox.internal >/dev/null 2>&1; then
+    fail "sandbox.internal resolved"
+  fi
+}
+
+device_check() {
+  local syspath name mm session_mm session_dec session_seen=0
+  [[ -n ${ADS_SESSION_DEVICE:-} ]] || fail "ADS_SESSION_DEVICE unset"
+  [[ -b $ADS_SESSION_DEVICE ]] || fail "$ADS_SESSION_DEVICE is not a block device"
+  session_mm=$(stat -c '%t:%T' "$ADS_SESSION_DEVICE")
+  session_dec="$(hex_to_dec "${session_mm%%:*}"):$(hex_to_dec "${session_mm##*:}")"
+  for syspath in /sys/class/block/*; do
+    [[ -e $syspath ]] || continue
+    name=${syspath##*/}
+    [[ -f $syspath/partition ]] && continue
+    case $name in
+      ram*|zram*|fd*|sr*|nbd*) continue ;;
+    esac
+    mm=$(cat "$syspath/dev")
+    if [[ $mm == "$session_dec" ]]; then
+      session_seen=1
+      if device_in_use "$mm"; then
+        fail "session device already mounted"
+      fi
+      continue
+    fi
+    if ! device_in_use "$mm"; then
+      fail "unexpected unmounted disk $name"
+    fi
+  done
+  [[ $session_seen == 1 ]] || fail "session device not in /sys/class/block"
+}
+
+green2
+device_check
+
+mkdir -p /session
+mount "$ADS_SESSION_DEVICE" /session
+[[ -d /session/rootfs ]] || fail "/session/rootfs missing"
+mkdir -p /session/outer-podman /run/ads-podman
+chown -R podman:podman /session /run/ads-podman
+
+if podman_cmd container exists dev-sandbox; then
+  podman_cmd start dev-sandbox
+else
+  podman_cmd create --name dev-sandbox --device /dev/fuse --rootfs /session/rootfs /bin/sleep infinity
+  podman_cmd start dev-sandbox
+fi
+
+touch /run/ads-sandbox-ready
+exec capsh --drop=cap_sys_admin -- -c 'exec /usr/local/sbin/pause'

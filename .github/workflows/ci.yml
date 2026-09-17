@@ -42,6 +42,7 @@ jobs:
           - services/ads-preferences/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
+          - services/ads-sandbox-base/Containerfile
     steps:
       - uses: actions/checkout@v7
       - name: Hadolint
@@ -83,6 +84,11 @@ jobs:
             context: services/ads-sandbox-golden
             smoke: ""
             pack: "true"
+          - image: ads-sandbox-base
+            file: services/ads-sandbox-base/Containerfile
+            context: services/ads-sandbox-base
+            smoke: ""
+            pack: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -138,6 +144,14 @@ jobs:
         run: docker run --rm ${{ matrix.image }}:ci python -c "${{ matrix.smoke }}"
       - name: Smoke golden entrypoint
         if: matrix.pack == 'true'
+        run: |
+          set +e
+          docker run --rm ${{ matrix.image }}:ci
+          st=$?
+          set -e
+          test "$st" -eq 1
+      - name: Smoke guest entrypoint
+        if: matrix.image == 'ads-sandbox-base'
         run: |
           set +e
           docker run --rm ${{ matrix.image }}:ci
