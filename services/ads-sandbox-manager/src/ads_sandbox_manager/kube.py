@@ -22,6 +22,13 @@ class Kubernetes(Protocol):
     async def released(self, pvc: Object, job: Object | None) -> bool: ...
 
 
+class SessionKubernetes(Protocol):
+    async def named_pvc(self, name: str) -> Object | None: ...
+    async def deployment(self, name: str) -> Object | None: ...
+    async def create_pvc(self, body: Object) -> None: ...
+    async def create_deployment(self, body: Object) -> None: ...
+
+
 def timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -43,6 +50,7 @@ class KubeClient:
         self.core = client.CoreV1Api(self.api_client)
         self.batch = client.BatchV1Api(self.api_client)
         self.storage = client.StorageV1Api(self.api_client)
+        self.apps = client.AppsV1Api(self.api_client)
 
     async def close(self) -> None:
         await asyncio.to_thread(self.api_client.close)
@@ -53,10 +61,15 @@ class KubeClient:
         )
         return self.api_client.sanitize_for_serialization(result)
 
-    async def _get(self, method: Callable[..., Any]) -> Object | None:
+    async def _get(self, method: Callable[..., Any], name: str | None = None) -> Object | None:
         try:
             return cast(
-                Object, await self._call(method, self.settings.golden_name, self.settings.namespace)
+                Object,
+                await self._call(
+                    method,
+                    name or self.settings.golden_name,
+                    self.settings.namespace,
+                ),
             )
         except ApiException as exc:
             if exc.status == 404:
@@ -68,6 +81,15 @@ class KubeClient:
 
     async def pvc(self) -> Object | None:
         return await self._get(self.core.read_namespaced_persistent_volume_claim)
+
+    async def named_pvc(self, name: str) -> Object | None:
+        return await self._get(self.core.read_namespaced_persistent_volume_claim, name)
+
+    async def deployment(self, name: str) -> Object | None:
+        return await self._get(self.apps.read_namespaced_deployment, name)
+
+    async def create_deployment(self, body: Object) -> None:
+        await self._call(self.apps.create_namespaced_deployment, self.settings.namespace, body)
 
     async def create_job(self, body: Object) -> None:
         await self._call(self.batch.create_namespaced_job, self.settings.namespace, body)

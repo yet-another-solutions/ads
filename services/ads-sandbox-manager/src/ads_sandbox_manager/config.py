@@ -26,6 +26,61 @@ def size_bytes(value: str) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionSettings:
+    """Helm-owned object inputs. Only references, never inline credentials."""
+
+    guest_image: str
+    ipc_image: str
+    ipc_storage_class: str
+    ipc_service_account: str
+    ipc_config_map: str
+    ipc_secret: str
+    ipc_tls_secret: str
+    ipc_node_selector: dict[str, str]
+    ipc_ca_secret: str | None = None
+    ipc_size: str = "1Gi"
+    guest_resources: dict[str, Any] = field(default_factory=dict)
+    ipc_resources: dict[str, Any] = field(default_factory=dict)
+    ipc_tolerations: list[dict[str, Any]] = field(default_factory=list)
+    create_seconds: float = 120
+
+    def __post_init__(self) -> None:
+        for name in (
+            self.ipc_storage_class,
+            self.ipc_service_account,
+            self.ipc_config_map,
+            self.ipc_secret,
+            self.ipc_tls_secret,
+            self.ipc_ca_secret,
+        ):
+            if name is not None and (
+                len(name) > 253 or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", name)
+            ):
+                raise ValueError("session object references must be DNS-safe names")
+        if not self.guest_image.strip() or not self.ipc_image.strip():
+            raise ValueError("guest and IPC images are required")
+        if self.ipc_storage_class == "sandbox-block":
+            raise ValueError("IPC requires an application Filesystem storage class")
+        size_bytes(self.ipc_size)
+        if not math.isfinite(self.create_seconds) or self.create_seconds <= 0:
+            raise ValueError("session create timeout must be finite and positive")
+        if (
+            not isinstance(self.ipc_node_selector, dict)
+            or not self.ipc_node_selector
+            or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in self.ipc_node_selector.items()
+            )
+        ):
+            raise ValueError("IPC application node selector must be a non-empty string map")
+        if not all(isinstance(r, dict) for r in (self.guest_resources, self.ipc_resources)):
+            raise ValueError("session resources must be JSON objects")
+        if not isinstance(self.ipc_tolerations, list) or not all(
+            isinstance(t, dict) for t in self.ipc_tolerations
+        ):
+            raise ValueError("IPC tolerations must be a JSON array of objects")
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     golden_version: str
     golden_image: str
@@ -52,6 +107,7 @@ class Settings:
     kafka_sasl_username: str | None = None
     kafka_sasl_password: str | None = field(default=None, repr=False)
     kafka_ca_bundle: Path | None = None
+    session_objects: SessionSettings | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -162,6 +218,11 @@ def load_settings() -> Settings:
         kafka_sasl_username=os.environ.get(prefix + "KAFKA_SASL_USERNAME"),
         kafka_sasl_password=os.environ.get(prefix + "KAFKA_SASL_PASSWORD"),
         kafka_ca_bundle=optional_path("KAFKA_CA_BUNDLE"),
+        session_objects=(
+            SessionSettings(**json.loads(os.environ[prefix + "SESSION_OBJECTS"]))
+            if os.environ.get(prefix + "SESSION_OBJECTS", "").strip()
+            else None
+        ),
     )
     load_tls_context(settings)
     return settings
