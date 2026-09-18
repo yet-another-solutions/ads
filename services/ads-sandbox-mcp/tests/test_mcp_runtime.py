@@ -20,8 +20,7 @@ from ads_commons.security import SecurityContextHolder
 from ads_sandbox_mcp.kafka import KafkaPublisher, KafkaRuntime, SeekToEnd, consumer_group
 from ads_sandbox_mcp.scheduler import GC_LOCK, ClusterScheduler
 from ads_sandbox_mcp.store import InFlight
-from sandbox_support import Harness, rpc
-from test_handshake import row, wait_for_message
+from sandbox_support import Harness, row, rpc, wait_for_message
 
 pytestmark = pytest.mark.anyio
 

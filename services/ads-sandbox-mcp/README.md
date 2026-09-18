@@ -6,6 +6,26 @@ the official `mcp==2.2.0` low-level `Server` owns MCP parsing, metadata validati
 discovery, dispatch and serialization. Dishka wires the registered tool callbacks,
 execution service, watchdog, Kafka components, repository and cluster scheduler.
 
+## Application composition
+
+`create_app` assembles the provider graph, HTTP routes, authentication, and one
+lifespan. `AppProvider` constructs the official SDK `Server` and owns the async
+database engine through a yielding provider. Loop-bound beans are resolved only
+inside the ASGI lifespan, and closing Dishka disposes each resolved engine even
+when later construction or startup fails.
+
+`McpRuntime` coordinates Kafka, cluster scheduler, and SDK session-manager startup,
+then unwinds them in reverse order. The application stores one runtime reference;
+it does not manually construct or dispose SDK/database dependencies. `http.py`
+owns authentication, health routes, and the transparent disconnect adapter.
+The SDK still owns all MCP parsing, dispatch, and serialization.
+
+Tests retain the explicit `overrides` hook. `HarnessOverrides` supplies the
+controlled execution service and external doubles, leaving SDK/runtime composition
+real. The separate composition tests override external boundaries and verify the
+production service/controller/provider graph, APP scope, startup/shutdown failures,
+and disposal. Fixture-owned test engines are disposed by fixtures, not by the app.
+
 ## Boundaries
 
 ```text
@@ -148,3 +168,14 @@ but use real PostgreSQL for migrations, row locks and advisory leadership.
 CI uses Testcontainers `postgres:16-alpine`. For an existing disposable local
 database, set `ADS_MCP_TEST_DATABASE_URL=postgresql+psycopg:///ads_sandbox_mcp_test`.
 The fixture clears `sandbox_execution`; never point it at a live database.
+
+`tests/sandbox_fixtures.py` is shared by the MCP tests and the manager's deterministic
+cross-service handshake tests. It provides settings, a disposable PostgreSQL
+database/schema, an engine, and the harness; `sandbox_support.py` contains the
+controlled doubles, named overrides, and shared row/message helpers. The manager
+keeps its own database and Alembic head through `ADS_MANAGER_TEST_DATABASE_URL`.
+The existing ack/reset/abort, timeout, identity, and HTTP-disconnect assertions
+remain in place. Cross-service tests supplement them with real services, SQL
+repositories, signed JWT verification, and STE adapters, while Kafka, the identity
+endpoint, Kubernetes, and guest processes remain simulated. This is not a live
+Kafka/Keycloak/Kata acceptance proof.

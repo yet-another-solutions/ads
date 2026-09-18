@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import ssl
+from collections.abc import AsyncIterator
+from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import Provider, Scope, provide
+from mcp.server import Server
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -16,6 +20,7 @@ from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeS
 from ads_sandbox_mcp.config import Settings
 from ads_sandbox_mcp.controller import ToolController
 from ads_sandbox_mcp.kafka import KafkaPublisher, KafkaRuntime, ReplyController, consumer_group
+from ads_sandbox_mcp.runtime import McpRuntime
 from ads_sandbox_mcp.scheduler import ClusterScheduler
 from ads_sandbox_mcp.service import ExecService, Publisher, TokenMinter, Watchdog
 from ads_sandbox_mcp.store import InFlightRepository
@@ -31,8 +36,12 @@ class AppProvider(Provider):
         return self._settings
 
     @provide(scope=Scope.APP)
-    def engine(self, settings: Settings) -> AsyncEngine:
-        return create_async_engine(settings.database_url, pool_pre_ping=True)
+    async def engine(self, settings: Settings) -> AsyncIterator[AsyncEngine]:
+        engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+        try:
+            yield engine
+        finally:
+            await engine.dispose()
 
     @provide(scope=Scope.APP)
     def sessions(self, engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -63,6 +72,26 @@ class AppProvider(Provider):
     replies = provide(ReplyController, scope=Scope.APP)
     kafka = provide(KafkaRuntime, scope=Scope.APP)
     scheduler = provide(ClusterScheduler, scope=Scope.APP)
+    runtime = provide(McpRuntime, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def sdk(self, tools: ToolController, settings: Settings) -> Server[Any]:
+        sdk: Server[Any] = Server(
+            "ads-sandbox-mcp",
+            version="0.0.1",
+            on_list_tools=tools.list_tools,
+            on_call_tool=tools.call_tool,
+        )
+        sdk.streamable_http_app(
+            json_response=True,
+            stateless_http=True,
+            max_request_body_size=max(4194304, settings.input_bytes * 6 + 65536),
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=list(settings.allowed_hosts),
+                allowed_origins=list(settings.allowed_origins),
+            ),
+        )
+        return sdk
 
     @provide(scope=Scope.APP)
     def jwt_settings(self, settings: Settings) -> JwtVerifierSettings:

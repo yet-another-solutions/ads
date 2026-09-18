@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text, update
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy import update
 
 from ads_commons.sandbox import (
     SandboxAbort,
@@ -26,7 +22,6 @@ from ads_commons.sandbox import (
     encode_inbound,
 )
 from ads_commons_beans import TokenExchange
-from ads_commons_schema import mapped_tables, prepare_schema
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP, ClientCredentials
 from ads_sandbox_manager.lifecycle import (
     PING_REPLY,
@@ -39,12 +34,16 @@ from ads_sandbox_manager.lifecycle_store import LifecycleRepository
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.service import READY_TOPIC, REPLY_TOPIC, REQUEST_TOPIC
 from ads_sandbox_manager.store import SandboxSession
-from ads_sandbox_mcp.config import Settings as McpSettings
 from ads_sandbox_mcp.store import InFlight
 from handshake_support import Handshake
 from ipc_support import eventually
+from sandbox_fixtures import harness as mcp_harness  # noqa: F401
+from sandbox_fixtures import (  # noqa: F401
+    sandbox_database_url,
+    sandbox_engine,
+    sandbox_settings,
+)
 from sandbox_support import SUBJECT
-from sandbox_support import Harness as McpHarness
 from test_lifecycle import FakeCleanup
 from test_session_objects import object_settings  # noqa: F401
 from test_sessions import row_for, sessions_harness  # noqa: F401
@@ -52,48 +51,14 @@ from test_sessions import row_for, sessions_harness  # noqa: F401
 pytestmark = pytest.mark.anyio
 
 
-@pytest.fixture(scope="session")
-def handshake_database_url():
-    # Separate MCP/manager databases: their independent Alembic heads cannot share one.
-    configured = os.environ.get("ADS_MCP_TEST_DATABASE_URL")
-    if configured:
-        yield configured
-    else:
-        from testcontainers.postgres import PostgresContainer
-
-        with PostgresContainer("postgres:16-alpine", driver="psycopg") as postgres:
-            yield postgres.get_connection_url()
-
-
 @pytest.fixture
-async def handshake(sessions_harness, handshake_database_url, tmp_path, monkeypatch):  # noqa: F811
-    settings = McpSettings(
-        database_url=handshake_database_url,
-        keycloak_well_known_url="https://identity.test/.well-known/openid-configuration",
-        keycloak_issuer="https://identity.test",
-        keycloak_client_secret="fixture",
-        tls_cert_path=Path("/unused/cert"),
-        tls_key_path=Path("/unused/key"),
-        kafka_bootstrap_servers="unused.test:9092",
-        timeout_seconds=10,
-        allowed_hosts=("testserver.local",),
-    )
-    prepare_schema(
-        alembic_ini=Path(__file__).parents[2] / "ads-sandbox-mcp" / "alembic.ini",
-        database_url=handshake_database_url,
-        tables=mapped_tables(InFlight),
-    )
-    sync = create_engine(handshake_database_url)
-    with sync.begin() as db:
-        db.execute(text("DELETE FROM sandbox_execution"))
-    sync.dispose()
-    engine = create_async_engine(handshake_database_url, poolclass=NullPool)
-    h = Handshake(sessions_harness, McpHarness(settings, engine), tmp_path, monkeypatch)
+async def handshake(sessions_harness, mcp_harness, tmp_path, monkeypatch):  # noqa: F811
+    mcp_harness.settings = replace(mcp_harness.settings, timeout_seconds=10)
+    h = Handshake(sessions_harness, mcp_harness, tmp_path, monkeypatch)
     try:
         yield h
     finally:
         await h.close()
-        await engine.dispose()
 
 
 async def waiting_at_ack(h):

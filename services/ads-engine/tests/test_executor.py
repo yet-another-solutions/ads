@@ -20,7 +20,7 @@ from ads_engine.chat import LangChainChatStreamer
 from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.mcp_client import SandboxClient, SandboxTools
 from ads_engine.mcp_credentials import ExecutionFailed, RunCredentials, TokenPair
-from ads_sandbox_mcp.app import AdsAuthentication
+from ads_sandbox_mcp.http import AdsAuthentication
 from engine_fakes import make_request
 from sandbox_support import Keys
 
