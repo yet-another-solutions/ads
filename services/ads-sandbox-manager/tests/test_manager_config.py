@@ -53,6 +53,10 @@ def test_invalid_or_overflow_size_fails(value):
         ("detached_seconds", -1),
         ("cleanup_seconds", float("inf")),
         ("pvc_timeout_seconds", float("nan")),
+        ("ping_interval_seconds", 0),
+        ("ping_timeout_seconds", float("inf")),
+        ("ping_timeout_seconds", 10),
+        ("recovery_seconds", 120),
         ("lifecycle_batch", 0),
         ("topic_replication_factor", 0),
         ("bake_seconds", 0),
@@ -153,6 +157,9 @@ def test_lifecycle_configuration_is_environment_overridable(monkeypatch, manager
         "CLEANUP_SECONDS": "20",
         "PVC_TIMEOUT_SECONDS": "30",
         "LIFECYCLE_BATCH": "7",
+        "PING_INTERVAL_SECONDS": "5",
+        "PING_TIMEOUT_SECONDS": "15",
+        "RECOVERY_SECONDS": "300",
     }.items():
         monkeypatch.setenv("ADS_SANDBOX_MANAGER_" + name, value)
     settings = load_settings()
@@ -163,6 +170,11 @@ def test_lifecycle_configuration_is_environment_overridable(monkeypatch, manager
         settings.pvc_timeout_seconds,
         settings.lifecycle_batch,
     ) == (60, 90, 20, 30, 7)
+    assert (
+        settings.ping_interval_seconds,
+        settings.ping_timeout_seconds,
+        settings.recovery_seconds,
+    ) == (5, 15, 300)
 
 
 @pytest.mark.parametrize(

@@ -41,6 +41,17 @@ class SandboxSession(Base):
     status_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_execution_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_ping_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PingProbe(Base):
+    """Bounded, durable correlation across manager replicas; no credentials."""
+
+    __tablename__ = "ping_probe"
+
+    ping_id: Mapped[UUID] = mapped_column(primary_key=True)
+    sandbox_id: Mapped[UUID] = mapped_column(index=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class SessionPVC(Base):
@@ -109,6 +120,7 @@ class SessionRepository:
                 status_changed_at=advance(row.status_changed_at, now),
                 last_execution_at=now,
                 last_ping_at=now,
+                last_ping_sent_at=None,
             )
             .returning(SandboxSession.session_id)
         )

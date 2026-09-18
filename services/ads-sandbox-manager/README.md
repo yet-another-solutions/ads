@@ -1,10 +1,11 @@
 # ads-sandbox-manager
 
-Slices 7 through 11 implement golden ensure, session object provisioning,
-authenticated Kafka transit, deterministic handshake proof, and lifecycle cleanup.
+Slices 7 through 12 implement golden ensure, session object provisioning,
+authenticated Kafka transit, deterministic handshake proof, lifecycle cleanup,
+IPC-alive ping, and durable recovery.
 This is a top-level uv workspace member,
 included in all five Nox gates and CI image lint, build, and import smoke.
-The full ping/recovery executor and application/Helm service wiring remain later slices.
+Application/Helm service wiring remains in later slices.
 The production `TopicPreparation` creates dynamic topics, waits for the local
 response subscription/seek, then runs a best-effort manager barrier before compute.
 There is no unauthenticated provisioning endpoint.
@@ -133,9 +134,10 @@ recovery, with no exception bodies, tokens, or command output stored.
 
 ## Idle, retention, and orphan cleanup
 
-Fresh installations initialize `sandbox_session`, `session_pvc`, and `cleanup_work`.
+Fresh installations initialize `sandbox_session`, `session_pvc`, `cleanup_work`,
+and `ping_probe`.
 This changes the initial schema, deliberately without a legacy migration, name
-adoption, or backfill. Existing slice-10 databases are not an in-place upgrade target.
+adoption, or backfill. Existing earlier-slice databases are not an in-place upgrade target.
 The stable session UUID is separate from both sandbox identity and disk lifetime.
 `session_pvc` tracks `attaching`, `attached`, `detaching`, `detached`, `destroying`,
 and `failed`, with execution and exact transition timestamps.
@@ -192,10 +194,53 @@ The verdict begins at acknowledged Kafka publication, not scheduler observation;
 pre-publication loss is accepted without an outbox. Admission condemns the
 observed sandbox even after late success, advances its sandbox ID, and durably
 retains every old cleanup target for recovery. Replaced IDs and active-recovery
-duplicates are ignored. This slice implements only that boundary and tests the
-fresh-sandbox/fresh-PVC rebuild contract with a fake executor. The full executor,
-ping integration, and recovery-topic disposal belong to slice 12.
+duplicates are ignored. Timed-out recovery rotates again and carries unfinished
+targets forward rather than forgetting a partially destroyed generation.
 Ordinary idle/reap never deletes Kafka topics.
+
+## IPC ping and recovery
+
+A separately locked cluster scheduler pings only ready sandboxes every 10 seconds
+by default. Each request uses fresh manager client credentials and fresh STE to IPC;
+the IPC reply uses fresh STE back to the manager. No user holder or token cache is
+used. Shutdown likewise uses fresh service identity. The ready broadcast listener
+also receives ping replies. Database `ping_probe` rows correlate UUIDs across
+replicas and are expired after the ping timeout; consumed or unknown UUIDs cannot
+refresh liveness. Out-of-order outstanding replies remain valid within the deadline.
+Ready initializes the liveness baseline; only an authenticated matching reply
+updates it. Ping tests IPC's Kafka loop, never guest health or execution activity.
+
+After 30 seconds without a valid reply, the scheduler publishes recovery with a
+fresh manager service JWT. Publication is the failure verdict even if a late reply
+arrives before admission. Durable admission changes identity before any external
+cleanup; recovery work survives manager restarts. The worker has a per-session
+advisory lock and fences progress by sandbox ID, recovering state, and exact
+transition timestamp. No execution is replayed.
+
+Recovery first deletes the old request/result topics and observes their absence.
+It captures exact old object/storage evidence durably, removes old Deployments,
+then releases and reclaims IPC/session PVCs. Missing known disks without retained
+release evidence remain blocked. Late-created objects with no committed UID must
+match the condemned identity; foreign resources are never adopted or deleted.
+Orphan cleanup cannot steal targets owned by recovery. All carried generations
+must be reclaimed before their records are removed.
+
+Only then does one transaction claim a fresh PVC lifetime under the already-new
+sandbox ID. The ordinary golden-clone builder prepares new topics/subscriptions
+before new compute. Authenticated IPC ready, not the recovery worker, marks ready.
+Failures preserve targets and publish another recovery verdict. The watchdog
+covers failed and timed-out creating/shutting-down/recovering states, including
+rows with no current PVC. The recovery deadline defaults to 600 seconds.
+
+`ADS_SANDBOX_MANAGER_PING_INTERVAL_SECONDS`,
+`ADS_SANDBOX_MANAGER_PING_TIMEOUT_SECONDS`, and
+`ADS_SANDBOX_MANAGER_RECOVERY_SECONDS` configure these defaults.
+Timeout must exceed interval; recovery must exceed the cleanup deadline.
+The deterministic cross-service proof stops IPC, admits the resulting recovery,
+rebuilds from golden, and completes the next execution with fresh IDs. PostgreSQL
+and signed JWT/STE adapters are real; broker, identity endpoint, Kubernetes and
+guest process frames are simulated. Live kill-IPC/Kata/CSI proof remains deferred
+until the full plan is implemented. Helm settings remain slice 14.
 
 ### Release and reclamation evidence
 
@@ -365,6 +410,6 @@ documented late-joiner gap. Fake Kafka/Kubernetes boundaries are not live E2E pr
 Lifecycle tests add joint admission/idle and stopped-claim exclusion, exact timestamp
 fences, retained-disk resume, retention clocks, fresh post-reap clones, shared
 maintenance deadlines, late orphan cleanup, UID replacement safety, durable
-partition admission/rebalance, and the slice-12 recovery handoff.
+partition admission/rebalance, ping correlation, and restart-safe recovery rebuilds.
 The lifecycle Kafka ACL/topic additions are source-only, not installed in the lab.
 All new thresholds are environment-configurable now; Helm exposure remains slice 14.

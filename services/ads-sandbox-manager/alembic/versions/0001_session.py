@@ -28,6 +28,7 @@ def upgrade() -> None:
         sa.Column("status_changed_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_execution_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_ping_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_ping_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "status IN ('pending','creating','ready','shutting_down',"
             "'stopped','service','failed','recovering')",
@@ -74,9 +75,17 @@ def upgrade() -> None:
         sa.Column("targets", JSONB(), nullable=False),
     )
     op.create_index("ix_cleanup_work_session_id", "cleanup_work", ["session_id"])
+    op.create_table(
+        "ping_probe",
+        sa.Column("ping_id", sa.Uuid(), primary_key=True),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index("ix_ping_probe_sandbox_id", "ping_probe", ["sandbox_id"])
 
 
 def downgrade() -> None:
+    op.drop_table("ping_probe")
     op.drop_table("cleanup_work")
     op.drop_table("session_pvc")
     op.drop_table("sandbox_session")

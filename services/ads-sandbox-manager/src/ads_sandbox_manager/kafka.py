@@ -11,14 +11,15 @@ import msgspec
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
-from aiokafka.errors import TopicAlreadyExistsError, for_code
+from aiokafka.errors import TopicAlreadyExistsError, UnknownTopicOrPartitionError, for_code
 
 from ads_sandbox_manager.auth import ClientCredentials
 from ads_sandbox_manager.barrier import GROUP, TOPIC, BarrierMessage, ManagerBarrier
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.controller import KafkaController
-from ads_sandbox_manager.lifecycle import TOPICS, LifecycleService
+from ads_sandbox_manager.lifecycle import PING_REPLY, TOPICS, LifecycleService
 from ads_sandbox_manager.lifecycle_kafka import DurableAdmission
+from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.service import READY_TOPIC, TransitService
 
 log = logging.getLogger(__name__)
@@ -181,6 +182,14 @@ class KafkaTopics:
         # Local preparation is required. Remote agreement alone is best effort.
         await self.barrier.wait(sandbox_id)
 
+    async def remove(self, sandbox_id: UUID) -> bool:
+        names = [f"sandbox.{direction}.{sandbox_id}" for direction in ("req", "res")]
+        response = await self.transport.admin.delete_topics(names)
+        for _, code in response.topic_error_codes:
+            if code and code != UnknownTopicOrPartitionError.errno:
+                raise for_code(code)()
+        return not set(names).intersection(await self.transport.admin.list_topics())
+
 
 class KafkaRuntime:
     def __init__(
@@ -191,6 +200,7 @@ class KafkaRuntime:
         service: TransitService,
         barrier: ManagerBarrier,
         lifecycle: LifecycleService,
+        recovery: RecoveryService,
     ) -> None:
         self.settings = settings
         self.transport = transport
@@ -198,6 +208,7 @@ class KafkaRuntime:
         self.service = service
         self.barrier = barrier
         self.lifecycle = lifecycle
+        self.recovery = recovery
         self._tasks: list[asyncio.Task[None]] = []
         self._startup: asyncio.Task[None] | None = None
         self._started = False
@@ -219,11 +230,11 @@ class KafkaRuntime:
                 # A replica advertises itself in the shared group only AFTER its broadcast
                 # listeners are installed and have sought. Late join after snapshot is still
                 # deliberately not fenced by the best-effort barrier.
-                for consumer, seek, topic in (
-                    (t.coordination, t.coordination_seek, TOPIC),
-                    (t.lifecycle, t.lifecycle_seek, READY_TOPIC),
+                for consumer, seek, topics in (
+                    (t.coordination, t.coordination_seek, [TOPIC]),
+                    (t.lifecycle, t.lifecycle_seek, [READY_TOPIC, PING_REPLY]),
                 ):
-                    consumer.subscribe([topic], listener=seek)
+                    consumer.subscribe(topics, listener=seek)
                     await consumer.start()
                     self._tasks.append(asyncio.create_task(self._consume(consumer)))
                     await seek.complete.wait()
@@ -236,6 +247,7 @@ class KafkaRuntime:
                 await t.maintenance.start()
                 self._tasks.append(asyncio.create_task(admission.run()))
                 await self.lifecycle.start()
+                await self.recovery.start()
                 self._started = True
         except Exception:
             log.warning("manager Kafka startup failed")
@@ -259,6 +271,7 @@ class KafkaRuntime:
         self._tasks.clear()
         await self.service.stop()
         await self.lifecycle.stop()
+        await self.recovery.stop()
         await self.barrier.stop()
         t = self.transport
         # Attempt every close even if one client fails.

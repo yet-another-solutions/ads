@@ -119,6 +119,9 @@ class Settings:
     cleanup_seconds: float = 120
     pvc_timeout_seconds: float = 120
     lifecycle_batch: int = 50
+    ping_interval_seconds: float = 10
+    ping_timeout_seconds: float = 30
+    recovery_seconds: float = 600
 
     def __post_init__(self) -> None:
         if (
@@ -148,9 +151,16 @@ class Settings:
             self.detached_seconds,
             self.cleanup_seconds,
             self.pvc_timeout_seconds,
+            self.ping_interval_seconds,
+            self.ping_timeout_seconds,
+            self.recovery_seconds,
         ):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("poll and timeout settings must be finite and positive")
+        if self.ping_timeout_seconds <= self.ping_interval_seconds:
+            raise ValueError("ping timeout must exceed its interval")
+        if self.recovery_seconds <= self.cleanup_seconds:
+            raise ValueError("recovery timeout must exceed cleanup timeout")
         if self.bake_seconds <= 0:
             raise ValueError("bake timeout must be positive")
         if self.topic_replication_factor < 1:
@@ -259,6 +269,9 @@ def load_settings() -> Settings:
         cleanup_seconds=float(os.environ.get(prefix + "CLEANUP_SECONDS", "120")),
         pvc_timeout_seconds=float(os.environ.get(prefix + "PVC_TIMEOUT_SECONDS", "120")),
         lifecycle_batch=int(os.environ.get(prefix + "LIFECYCLE_BATCH", "50")),
+        ping_interval_seconds=float(os.environ.get(prefix + "PING_INTERVAL_SECONDS", "10")),
+        ping_timeout_seconds=float(os.environ.get(prefix + "PING_TIMEOUT_SECONDS", "30")),
+        recovery_seconds=float(os.environ.get(prefix + "RECOVERY_SECONDS", "600")),
     )
     load_tls_context(settings)
     if settings.session_objects is None:

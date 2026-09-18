@@ -18,6 +18,7 @@ from ads_sandbox_manager.kafka import (
     SubscriptionReady,
     kafka_options,
 )
+from ads_sandbox_manager.lifecycle import PING_REPLY
 from ads_sandbox_manager.service import READY_TOPIC, REQUEST_TOPIC
 
 pytestmark = pytest.mark.anyio
@@ -142,6 +143,23 @@ async def test_topic_creation_allows_only_already_exists(transport):
         await transport.create_topics(sandbox)
 
 
+async def test_recovery_topic_removal_requires_observed_absence(transport, manager_settings):
+    sandbox = uuid4()
+    names = [f"sandbox.req.{sandbox}", f"sandbox.res.{sandbox}"]
+    topics = KafkaTopics(manager_settings, transport, AsyncMock())
+    transport.admin.delete_topics.return_value = SimpleNamespace(
+        topic_error_codes=[(names[0], 0), (names[1], 3)]
+    )
+    transport.admin.list_topics.return_value = names
+    assert not await topics.remove(sandbox)
+    transport.admin.delete_topics.assert_awaited_once_with(names)
+    transport.admin.list_topics.return_value = ["unrelated"]
+    assert await topics.remove(sandbox)
+    transport.admin.delete_topics.return_value = SimpleNamespace(topic_error_codes=[(names[0], 29)])
+    with pytest.raises(TopicAuthorizationFailedError):
+        await topics.remove(sandbox)
+
+
 async def test_barrier_broadcast_uses_fresh_client_identity(transport):
     message = BarrierRequest(uuid4(), uuid4(), transport.replica_id, (transport.replica_id,))
     transport.credentials.mint.side_effect = ["fresh-one", "fresh-two"]
@@ -231,7 +249,9 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
 
         c.start.side_effect = start
     service, barrier = AsyncMock(), AsyncMock()
-    runtime = KafkaRuntime(manager_settings, t, AsyncMock(), service, barrier, AsyncMock())
+    runtime = KafkaRuntime(
+        manager_settings, t, AsyncMock(), service, barrier, AsyncMock(), AsyncMock()
+    )
 
     async def consume(*args, **kwargs):
         await gate.wait()
@@ -243,7 +263,7 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
     assert calls == ["coordination", "lifecycle", "shared"]
     assert runtime.ready
     assert t.coordination.subscribe.call_args.args[0] == [TOPIC]
-    assert t.lifecycle.subscribe.call_args.args[0] == [READY_TOPIC]
+    assert t.lifecycle.subscribe.call_args.args[0] == [READY_TOPIC, PING_REPLY]
     assert t.shared.subscribe.call_args.kwargs["pattern"] == RESPONSE_PATTERN
     await runtime.stop()
     assert not runtime.ready
@@ -253,12 +273,14 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
     t.producer.stop.assert_awaited_once()
     service.stop.assert_awaited_once()
     barrier.stop.assert_awaited_once()
+    runtime.recovery.start.assert_awaited_once()
+    runtime.recovery.stop.assert_awaited_once()
 
 
 async def test_runtime_start_failure_closes_all_resources(transport, manager_settings, caplog):
     transport.admin.start.side_effect = RuntimeError("private-token")
     runtime = KafkaRuntime(
-        manager_settings, transport, AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+        manager_settings, transport, AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
     )
     await runtime.start()
     await runtime._startup

@@ -13,6 +13,7 @@ from ads_commons.sandbox import (
     SandboxShutdownAck,
     decode_inbound,
     decode_outbound,
+    decode_ping,
     decode_ready,
 )
 from ads_commons.security import ensure_caller
@@ -20,7 +21,7 @@ from ads_commons_beans import JwtVerifier
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP
 from ads_sandbox_manager.barrier import TOPIC, BarrierMessage, ManagerBarrier
 from ads_sandbox_manager.config import Settings
-from ads_sandbox_manager.lifecycle import TOPICS, LifecycleService, Signal
+from ads_sandbox_manager.lifecycle import PING_REPLY, TOPICS, LifecycleService, Signal
 from ads_sandbox_manager.service import READY_TOPIC, REQUEST_TOPIC, TransitService, VerifiedExec
 
 log = logging.getLogger(__name__)
@@ -77,9 +78,12 @@ class KafkaController:
         headers: Sequence[tuple[str | bytes, bytes | None]] | None = None,
     ) -> None:
         try:
-            if topic not in (REQUEST_TOPIC, READY_TOPIC, TOPIC) and not topic.startswith(
-                "sandbox.res."
-            ):
+            if topic not in (
+                REQUEST_TOPIC,
+                READY_TOPIC,
+                TOPIC,
+                PING_REPLY,
+            ) and not topic.startswith("sandbox.res."):
                 return
             token = authorization_token(headers)
             if token is None:
@@ -98,6 +102,10 @@ class KafkaController:
                 await self.service.accept(
                     VerifiedExec(message.session_id, message, context.subject, token)
                 )
+            elif topic == PING_REPLY:
+                ping = decode_ping(raw)
+                if key == str(ping.sandbox_id).encode():
+                    await self.lifecycle.ping_reply(ping)
             elif topic == READY_TOPIC:
                 lifecycle = decode_ready(raw)
                 if (

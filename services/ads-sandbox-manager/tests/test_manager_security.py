@@ -14,12 +14,14 @@ from ads_commons.sandbox import (
     SandboxAcknowledge,
     SandboxAckReply,
     SandboxAckReset,
+    SandboxPing,
     SandboxReady,
     SandboxRequest,
     SandboxResult,
     SandboxShutdownAck,
     encode_inbound,
     encode_outbound,
+    encode_ping,
     encode_ready,
 )
 from ads_commons.security import InvalidAccessToken, SecurityContextHolder
@@ -27,7 +29,7 @@ from ads_commons_beans import JwtVerifier, JwtVerifierSettings, TokenExchangeSet
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP, ClientCredentials
 from ads_sandbox_manager.barrier import TOPIC, BarrierAck, BarrierRequest
 from ads_sandbox_manager.controller import KafkaController
-from ads_sandbox_manager.lifecycle import TOPICS, Signal
+from ads_sandbox_manager.lifecycle import PING_REPLY, TOPICS, Signal
 from ads_sandbox_manager.service import READY_TOPIC, REQUEST_TOPIC
 
 
@@ -74,6 +76,8 @@ def wire(kind):
     }
     if kind in controls:
         return REQUEST_TOPIC, encode_inbound(controls[kind]), str(session).encode(), MCP
+    if kind == "ping":
+        return PING_REPLY, encode_ping(SandboxPing(uuid4(), sandbox)), str(sandbox).encode(), IPC
     if kind in ("ready", "shutdown-ack"):
         value = (
             SandboxReady(sandbox)
@@ -97,6 +101,7 @@ def wire(kind):
 
 
 KINDS = [
+    "ping",
     "request",
     "ack-reply",
     "ack-reset",
