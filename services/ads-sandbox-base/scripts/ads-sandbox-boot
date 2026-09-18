@@ -45,7 +45,8 @@ chown -R podman:podman /session /run/ads-podman
 if podman_cmd container exists dev-sandbox; then
   podman_cmd start dev-sandbox
 else
-  podman_cmd create --name dev-sandbox --device /dev/fuse --rootfs /session/rootfs /bin/sleep infinity
+  # v1 has no uplink. Native overlay storage does not require a FUSE device.
+  podman_cmd create --name dev-sandbox --network=none --rootfs /session/rootfs /bin/sleep infinity
   podman_cmd start dev-sandbox
 fi
 

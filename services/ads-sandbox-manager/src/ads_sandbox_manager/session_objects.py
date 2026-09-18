@@ -111,7 +111,8 @@ def guest_deployment(
                     "securityContext": {
                         "runAsUser": 0,
                         "privileged": False,
-                        "allowPrivilegeEscalation": False,
+                        # Rootless Podman needs setuid newuidmap/newgidmap at bootstrap.
+                        "allowPrivilegeEscalation": True,
                         "capabilities": {"add": ["SYS_ADMIN"]},
                     },
                     "volumeDevices": [{"name": "session", "devicePath": "/dev/ads-session"}],
