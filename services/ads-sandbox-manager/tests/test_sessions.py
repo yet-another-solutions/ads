@@ -436,7 +436,9 @@ async def test_existing_nonstopped_rows_never_start_work(sessions_harness, statu
     assert not h.kube.calls
 
 
-async def test_creation_timeout_and_api_denial_fail_without_deleting_disk(sessions_harness):
+async def test_creation_timeout_and_api_denial_fail_without_deleting_disk(
+    sessions_harness, monkeypatch
+):
     h, sid = sessions_harness, uuid4()
     h.service.settings = replace(
         h.settings,
@@ -446,7 +448,20 @@ async def test_creation_timeout_and_api_denial_fail_without_deleting_disk(sessio
         ),
     )
 
+    deadlines = []
+
+    def timeout(seconds):
+        # Expire the real asyncio deadline at the intended network wait, not
+        # during a slow CI database claim/commit before build() has started.
+        deadline = asyncio.timeout(None if seconds == 0.15 else seconds)
+        if seconds == 0.15:
+            deadlines.append(deadline)
+        return deadline
+
+    monkeypatch.setattr("ads_sandbox_manager.sessions.asyncio", SimpleNamespace(timeout=timeout))
+
     async def wait(_):
+        deadlines[-1].reschedule(asyncio.get_running_loop().time())
         await asyncio.Event().wait()
 
     h.topics.hook = wait

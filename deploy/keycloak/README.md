@@ -105,6 +105,10 @@ scope mapping. It has no default `roles`, audience-resolve, service-account role
 offline, or broad client-role mapper. The separate `ads-engine-ack` optional
 scope adds only `ads`; engine ACK STE explicitly requests it, while MCP STE never
 does. Do not attach that scope as default or request it for the MCP refresh pair.
+Because declaring custom scopes suppresses automatic built-in scope creation on
+realm import, the sample also includes explicit Keycloak 26.7.2 definitions for
+`basic`, `roles`, `profile`, `email`, and `service_account`, exported without IDs
+from a disposable realm. The engine still attaches only `basic` by default.
 
 For an existing lab realm, **do not apply the create-only import to reconcile it**.
 At the deferred deployment stage, use an authenticated Keycloak Admin REST client

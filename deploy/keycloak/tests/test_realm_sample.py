@@ -97,6 +97,21 @@ def test_flows_scopes_audiences_and_role_assignment():
 
 def test_engine_ack_scope_is_optional_and_only_adds_ads():
     realm = yaml.safe_load(SAMPLE.read_text())["spec"]["realm"]
+    scopes = {s["name"]: s for s in realm["clientScopes"]}
+    assert set(scopes) == {
+        "basic",
+        "roles",
+        "profile",
+        "email",
+        "service_account",
+        "ads-engine-ack",
+    }
+    for client in realm["clients"]:
+        assert set(client["defaultClientScopes"] + client["optionalClientScopes"]) <= scopes.keys()
+    assert {m["protocolMapper"] for m in scopes["basic"]["protocolMappers"]} == {
+        "oidc-sub-mapper",
+        "oidc-usersessionmodel-note-mapper",
+    }
     scope = next(s for s in realm["clientScopes"] if s["name"] == "ads-engine-ack")
     assert len(scope["protocolMappers"]) == 1
     mapper = scope["protocolMappers"][0]

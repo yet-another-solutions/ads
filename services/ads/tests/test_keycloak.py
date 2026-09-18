@@ -447,6 +447,11 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 assert client["directAccessGrantsEnabled"] is False
                 assert client["standardFlowEnabled"] == (name == "ads")
                 assert client["fullScopeAllowed"] is False
+                imported_scopes = admin(
+                    "GET", admin_path + f"/clients/{client['id']}/default-client-scopes"
+                )
+                expected = next(c for c in realm["clients"] if c["clientId"] == name)
+                assert {s["name"] for s in imported_scopes} == set(expected["defaultClientScopes"])
 
             # Humans are deliberately absent from the sample; provision a CI-only user.
             admin(
