@@ -20,6 +20,8 @@ from ads_commons.engine import (
     PartialResponse,
     Ping,
     Reasoning,
+    ToolCall,
+    ToolResult,
     authorization_headers,
     encode_abort,
     encode_ack_response,
@@ -444,6 +446,46 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
     assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
     assert chat.calls == 1
     assert chat.requests[0].authorization.token == access_token
+
+
+def test_successful_chat_emits_tool_call_and_result_partials(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    call = ToolCall(id="call-1", name="exec_shell", arguments={"command": "printf hi"})
+    result = ToolResult(
+        tool_call_id="call-1",
+        name="exec_shell",
+        status="success",
+        content={"structuredContent": {"stdout": "hi"}},
+    )
+    publisher = RecordingPublisher()
+    chat = ScriptedChat(
+        [
+            StreamDelta(kind="tool_call", tool_call=call),
+            StreamDelta(kind="tool_result", tool_result=result),
+            StreamDelta(kind="message", text="done"),
+        ]
+    )
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    _handle_accepted(listener, publisher, request, access_token)
+    assert publisher.messages[1] == PartialResponse(
+        session_id=request.session_id,
+        order=0,
+        tool_call=call,
+    )
+    assert publisher.messages[2] == PartialResponse(
+        session_id=request.session_id,
+        order=1,
+        tool_result=result,
+    )
+    assert publisher.messages[3] == PartialResponse(
+        session_id=request.session_id,
+        order=2,
+        message=AssistantMessage(text="done"),
+    )
 
 
 def test_openai_retries_before_partial_then_succeeds(

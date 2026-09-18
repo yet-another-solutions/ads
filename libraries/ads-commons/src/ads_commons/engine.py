@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import msgspec
 
@@ -41,7 +41,24 @@ class AssistantHistoryTurn(msgspec.Struct, frozen=True, tag="assistant", tag_fie
     text: str
 
 
-HistoryTurn = UserHistoryTurn | AssistantHistoryTurn
+class ToolCall(msgspec.Struct, frozen=True, omit_defaults=True, tag="tool_call", tag_field="type"):
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    metadata: dict[str, Any] = {}
+
+
+class ToolResult(
+    msgspec.Struct, frozen=True, omit_defaults=True, tag="tool_result", tag_field="type"
+):
+    tool_call_id: str
+    name: str
+    status: Literal["success", "error"]
+    content: Any
+    metadata: dict[str, Any] = {}
+
+
+HistoryTurn = UserHistoryTurn | AssistantHistoryTurn | ToolCall | ToolResult
 
 
 class EngineRequest(msgspec.Struct, frozen=True, tag="request", tag_field="type"):
@@ -92,6 +109,8 @@ class PartialResponse(
     order: int
     reasoning: Reasoning | None = None
     message: AssistantMessage | None = None
+    tool_call: ToolCall | None = None
+    tool_result: ToolResult | None = None
 
 
 class Ping(msgspec.Struct, frozen=True, tag="ping", tag_field="type"):

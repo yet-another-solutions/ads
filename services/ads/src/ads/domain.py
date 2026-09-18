@@ -5,9 +5,12 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import msgspec
+
 from ads.models import (
     KIND_MESSAGE,
-    KIND_REASONING,
+    KIND_TOOL_CALL,
+    KIND_TOOL_RESULT,
     ROLE_ASSISTANT,
     ROLE_USER,
     ChatSession,
@@ -15,7 +18,13 @@ from ads.models import (
 )
 from ads.repository import SessionEntryRepository
 from ads.views import PartView, TurnView
-from ads_commons.engine import AssistantHistoryTurn, HistoryTurn, UserHistoryTurn
+from ads_commons.engine import (
+    AssistantHistoryTurn,
+    HistoryTurn,
+    ToolCall,
+    ToolResult,
+    UserHistoryTurn,
+)
 from ads_commons.security import SecurityContext
 
 
@@ -66,16 +75,107 @@ def append_entry(
     return entry
 
 
+def parse_tool_call(text: str) -> ToolCall | None:
+    try:
+        return msgspec.json.decode(text.encode(), type=ToolCall)
+    except (msgspec.DecodeError, msgspec.ValidationError):
+        return None
+
+
+def parse_tool_result(text: str) -> ToolResult | None:
+    try:
+        return msgspec.json.decode(text.encode(), type=ToolResult)
+    except (msgspec.DecodeError, msgspec.ValidationError):
+        return None
+
+
+def tool_call_display(call: ToolCall) -> str:
+    if call.name == "exec_shell":
+        command = call.arguments.get("command")
+        if isinstance(command, str):
+            return command
+    if call.name == "exec_python":
+        code = call.arguments.get("code")
+        if isinstance(code, str):
+            return code
+    return msgspec.json.encode(call.arguments).decode()
+
+
+def tool_result_display(result: ToolResult) -> str:
+    content = result.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        structured = content.get("structuredContent")
+        if isinstance(structured, dict):
+            stdout = structured.get("stdout")
+            if isinstance(stdout, str) and stdout:
+                return stdout
+        blocks = content.get("content")
+        if isinstance(blocks, list):
+            texts = [
+                block["text"]
+                for block in blocks
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ]
+            if texts:
+                return "".join(texts)
+    try:
+        return msgspec.json.encode(content).decode()
+    except (TypeError, msgspec.EncodeError):
+        return str(content)
+
+
+def part_from_stored(kind: str, text: str, role: str | None, *, live: bool = False) -> PartView:
+    if kind == KIND_TOOL_CALL:
+        call = parse_tool_call(text)
+        if call is None:
+            return PartView(kind=kind, role=role, text=text, live=live)
+        return PartView(
+            kind=kind,
+            role=role,
+            text=tool_call_display(call),
+            live=live,
+            name=call.name,
+            call_id=call.id,
+            arguments=dict(call.arguments),
+            metadata=dict(call.metadata),
+        )
+    if kind == KIND_TOOL_RESULT:
+        result = parse_tool_result(text)
+        if result is None:
+            return PartView(kind=kind, role=role, text=text, live=live)
+        return PartView(
+            kind=kind,
+            role=role,
+            text=tool_result_display(result),
+            live=live,
+            name=result.name,
+            call_id=result.tool_call_id,
+            status=result.status,
+            content=result.content,
+            metadata=dict(result.metadata),
+        )
+    return PartView(kind=kind, role=role, text=text, live=live)
+
+
 def history_from_entries(entries: list[SessionEntry]) -> list[HistoryTurn]:
-    """Committed ``message`` rows only. Reasoning is never history."""
+    """Committed message and tool rows. Reasoning is never history."""
     turns: list[HistoryTurn] = []
     for entry in entries:
-        if entry.kind != KIND_MESSAGE:
-            continue
-        if entry.role == ROLE_USER:
-            turns.append(UserHistoryTurn(text=entry.text))
-        elif entry.role == ROLE_ASSISTANT:
-            turns.append(AssistantHistoryTurn(text=entry.text))
+        if entry.kind == KIND_MESSAGE:
+            if entry.role == ROLE_USER:
+                turns.append(UserHistoryTurn(text=entry.text))
+            elif entry.role == ROLE_ASSISTANT:
+                turns.append(AssistantHistoryTurn(text=entry.text))
+        elif entry.kind == KIND_TOOL_CALL:
+            call = parse_tool_call(entry.text)
+            if call is not None:
+                turns.append(call)
+        elif entry.kind == KIND_TOOL_RESULT:
+            result = parse_tool_result(entry.text)
+            if result is not None:
+                turns.append(result)
     return turns
 
 
@@ -112,13 +212,7 @@ def turns_from_entries(
         if pending_at is None:
             pending_at = entry.created_at
             pending_id = entry.id
-        pending.append(
-            PartView(
-                kind=KIND_REASONING if entry.kind == KIND_REASONING else KIND_MESSAGE,
-                role=entry.role,
-                text=entry.text,
-            )
-        )
+        pending.append(part_from_stored(entry.kind, entry.text, entry.role))
     if live:
         if pending_at is None:
             pending_at = utc_now()

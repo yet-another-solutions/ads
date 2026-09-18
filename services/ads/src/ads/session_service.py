@@ -4,15 +4,9 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from ads.domain import turns_from_entries, utc_now
+from ads.domain import part_from_stored, turns_from_entries, utc_now
 from ads.exceptions import InvalidInput, NotFound, SessionForbidden
-from ads.models import (
-    KIND_MESSAGE,
-    KIND_REASONING,
-    STATUS_FINISHED,
-    ChatSession,
-    SessionEntry,
-)
+from ads.models import KIND_MESSAGE, ROLE_ASSISTANT, STATUS_FINISHED, ChatSession, SessionEntry
 from ads.repository import (
     ProjectRepository,
     SessionEntryRepository,
@@ -117,10 +111,10 @@ class SessionService:
                 run_view = RunView(status=run.status, message_id=run.message_id)
                 for delta in self._buffer.list_after(run.id, run.watermark):
                     live.append(
-                        PartView(
-                            kind=KIND_REASONING if delta.kind == KIND_REASONING else KIND_MESSAGE,
-                            role=None if delta.kind == KIND_REASONING else "assistant",
-                            text=delta.text,
+                        part_from_stored(
+                            delta.kind,
+                            delta.text,
+                            ROLE_ASSISTANT if delta.kind == KIND_MESSAGE else None,
                             live=True,
                         )
                     )
