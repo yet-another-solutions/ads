@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
-from aiokafka.errors import GroupAuthorizationFailedError, TopicAuthorizationFailedError
+from aiokafka.errors import (
+    GroupAuthorizationFailedError,
+    IllegalStateError,
+    TopicAuthorizationFailedError,
+)
 from aiokafka.protocol.admin import DescribeGroupsResponse_v3
 from aiokafka.structs import TopicPartition
 
@@ -82,6 +86,76 @@ async def test_subscription_wait_cannot_complete_from_stale_callback():
     c.subscription.return_value = {REQUEST_TOPIC, topic}
     await listener.on_partitions_assigned([])
     await asyncio.wait_for(task, 1)
+
+
+async def test_revocation_after_subscription_invalidates_assignment_preserves_offsets():
+    c = consumer()
+    a, b = TopicPartition(REQUEST_TOPIC, 0), TopicPartition(f"sandbox.res.{uuid4()}", 0)
+    listener = SubscriptionReady(c)
+    c.end_offsets.return_value = {a: 10}
+    await listener.on_partitions_assigned([a])
+    # Even an assignment that delivered nothing must retain its original tail.
+    c.position.side_effect = IllegalStateError("partition no longer assigned")
+    await listener.on_partitions_revoked([a])
+    assert listener.positions[a] == 10
+    assert not listener.complete.is_set()
+    c.end_offsets.return_value = {b: 20}
+    await listener.on_partitions_assigned([a, b])
+    c.end_offsets.assert_awaited_with([b])
+    assert c.seek.call_args.args == (a, 10)
+    assert listener.positions[b] == 20
+    # An unavailable partition does not prevent saving another owned partition.
+    c.position.side_effect = [IllegalStateError(), 24]
+    await listener.on_partitions_revoked([a, b])
+    assert listener.positions == {a: 10, b: 24}
+    c.end_offsets.reset_mock()
+    await listener.on_partitions_assigned([a, b])
+    c.end_offsets.assert_not_awaited()
+    assert [call.args for call in c.seek.call_args_list[-2:]] == [(a, 10), (b, 24)]
+
+
+async def test_delivered_offset_is_saved_before_dispatch_can_trigger_rebalance(manager_settings):
+    a = TopicPartition(REQUEST_TOPIC, 0)
+    c = consumer()
+    listener = SubscriptionReady(c)
+    c.end_offsets.return_value = {a: 10}
+    await listener.on_partitions_assigned([a])
+
+    async def records():
+        yield SimpleNamespace(
+            topic=a.topic,
+            partition=a.partition,
+            offset=12,
+            value=b"request",
+            key=b"session",
+            headers=[],
+        )
+
+    class Stream:
+        def __aiter__(self):
+            return records()
+
+    async def dispatch(*args):
+        assert listener.positions[a] == 13
+        c.position.side_effect = IllegalStateError()
+        await listener.on_partitions_revoked([a])
+        await listener.on_partitions_assigned([a])
+        c.seek.assert_called_with(a, 13)
+
+    controller = SimpleNamespace(on_message=AsyncMock(side_effect=dispatch))
+    runtime = KafkaRuntime(
+        manager_settings, Mock(), controller, AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+    )
+    await runtime._consume(Stream(), listener)
+    controller.on_message.assert_awaited_once_with(a.topic, b"request", b"session", [])
+
+
+async def test_revocation_does_not_hide_other_position_failures():
+    c = consumer()
+    listener = SubscriptionReady(c)
+    c.position.side_effect = RuntimeError("unexpected failure")
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        await listener.on_partitions_revoked([TopicPartition(REQUEST_TOPIC, 0)])
 
 
 async def test_public_admin_membership_snapshot(transport):

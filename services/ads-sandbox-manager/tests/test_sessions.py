@@ -393,6 +393,27 @@ async def test_existing_compute_or_ipc_disk_cannot_cross_bind(sessions_harness, 
     assert (await row_for(h, sid)).status == "failed"
 
 
+async def test_public_image_provisioning_accepts_api_omitted_empty_lists(sessions_harness):
+    h, sid = sessions_harness, uuid4()
+    h.service.settings = replace(h.settings, tolerations=[], image_pull_secrets=())
+
+    async def normalize(body):
+        if body["kind"] == "Deployment":
+            obj = h.kube.objects[("Deployment", body["metadata"]["name"])]
+            pod = obj["spec"]["template"]["spec"]
+            for field in ("tolerations", "imagePullSecrets"):
+                assert pod[field] == []
+                del pod[field]
+
+    h.kube.after_create = normalize
+    row = await h.service.provision(sid)
+    assert row.guest_deployment_uid and row.ipc_deployment_uid and row.ipc_pvc_uid
+    assert len(h.kube.objects) == 4
+    stored = await row_for(h, sid)
+    assert stored.guest_deployment_uid == row.guest_deployment_uid
+    assert stored.ipc_deployment_uid == row.ipc_deployment_uid
+
+
 async def test_golden_must_be_released_and_clone_uses_actual_capacity(sessions_harness):
     h, sid = sessions_harness, uuid4()
     h.golden.kube.is_released = False
