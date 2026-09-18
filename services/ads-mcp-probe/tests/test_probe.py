@@ -81,17 +81,17 @@ def test_echo_returns_its_text(probe: TestClient) -> None:
     assert _text_of(_post(probe, _call("echo", text="hello")).json()) == "hello"
 
 
-def test_leak_returns_a_fake_cloud_key(probe: TestClient) -> None:
-    assert FAKE_AWS_ACCESS_KEY in _text_of(_post(probe, _call("leak")).json())
+def test_env_config_returns_a_fake_cloud_key(probe: TestClient) -> None:
+    assert FAKE_AWS_ACCESS_KEY in _text_of(_post(probe, _call("env_config")).json())
 
 
-def test_inject_returns_an_injected_instruction(probe: TestClient) -> None:
-    assert INJECTED_INSTRUCTION in _text_of(_post(probe, _call("inject")).json())
+def test_release_notes_return_an_injected_instruction(probe: TestClient) -> None:
+    assert INJECTED_INSTRUCTION in _text_of(_post(probe, _call("release_notes")).json())
 
 
-def test_read_file_and_run_touch_nothing(probe: TestClient) -> None:
+def test_read_file_and_run_command_touch_nothing(probe: TestClient) -> None:
     read = _text_of(_post(probe, _call("read_file", path="/etc/shadow")).json())
-    ran = _text_of(_post(probe, _call("run", command="rm -rf /")).json())
+    ran = _text_of(_post(probe, _call("run_command", command="rm -rf /")).json())
     assert read == "probe: contents of /etc/shadow"
     assert ran == "probe: would run rm -rf /"
 
@@ -127,8 +127,8 @@ def test_a_batch_is_answered_request_by_request(probe: TestClient) -> None:
     assert [answer["id"] for answer in answers] == [1, 2]
 
 
-def test_stream_answers_with_events_when_the_client_accepts_them(probe: TestClient) -> None:
-    response = _post(probe, _call("stream", text="streamed"))
+def test_tail_log_answers_with_events_when_the_client_accepts_them(probe: TestClient) -> None:
+    response = _post(probe, _call("tail_log", text="streamed"))
     assert response.headers["content-type"].startswith("text/event-stream")
     data_lines = [line for line in response.text.splitlines() if line.startswith("data: ")]
     messages = [msgspec.json.decode(line.removeprefix("data: ")) for line in data_lines]
@@ -137,8 +137,8 @@ def test_stream_answers_with_events_when_the_client_accepts_them(probe: TestClie
     assert "id: 1" in response.text.splitlines()
 
 
-def test_stream_answers_with_json_when_the_client_accepts_only_json(probe: TestClient) -> None:
-    response = _post(probe, _call("stream", text="plain"), headers={"accept": "application/json"})
+def test_tail_log_answers_with_json_when_the_client_accepts_only_json(probe: TestClient) -> None:
+    response = _post(probe, _call("tail_log", text="plain"), headers={"accept": "application/json"})
     assert response.headers["content-type"].startswith("application/json")
     assert _text_of(response.json()) == "plain"
 

@@ -3,11 +3,6 @@
 # so the issuer in a token is the same wherever it is checked: browsers through
 # /etc/hosts and a port-forward, pods through a CoreDNS rewrite to this Service.
 #
-# Token exchange (standard, V2):
-#   ads        → ads-engine, ads-preferences   (a message, the model catalog)
-#   ads-engine → ads, ads-mcp                   (acknowledging, calling tools)
-# A requester may only ask for an audience its client scopes carry, and must itself
-# be in the audience of the token it exchanges; the scopes below give exactly that.
 #
 # Dev mode, no persistence: the realm is imported again on every start.
 #
@@ -39,53 +34,8 @@ data:
       "enabled": true,
       "sslRequired": "external",
       "accessTokenLifespan": 300,
+      "passwordPolicy": "hashAlgorithm(pbkdf2-sha512)",
       "roles": {"realm": [{"name": "user"}]},
-      "clientScopes": [
-        {
-          "name": "audience-ads",
-          "protocol": "openid-connect",
-          "attributes": {"include.in.token.scope": "false"},
-          "protocolMappers": [{
-            "name": "audience-ads", "protocol": "openid-connect",
-            "protocolMapper": "oidc-audience-mapper",
-            "config": {"included.client.audience": "ads", "access.token.claim": "true",
-                       "id.token.claim": "false", "introspection.token.claim": "true"}
-          }]
-        },
-        {
-          "name": "audience-ads-engine",
-          "protocol": "openid-connect",
-          "attributes": {"include.in.token.scope": "false"},
-          "protocolMappers": [{
-            "name": "audience-ads-engine", "protocol": "openid-connect",
-            "protocolMapper": "oidc-audience-mapper",
-            "config": {"included.client.audience": "ads-engine", "access.token.claim": "true",
-                       "id.token.claim": "false", "introspection.token.claim": "true"}
-          }]
-        },
-        {
-          "name": "audience-ads-preferences",
-          "protocol": "openid-connect",
-          "attributes": {"include.in.token.scope": "false"},
-          "protocolMappers": [{
-            "name": "audience-ads-preferences", "protocol": "openid-connect",
-            "protocolMapper": "oidc-audience-mapper",
-            "config": {"included.client.audience": "ads-preferences", "access.token.claim": "true",
-                       "id.token.claim": "false", "introspection.token.claim": "true"}
-          }]
-        },
-        {
-          "name": "audience-ads-mcp",
-          "protocol": "openid-connect",
-          "attributes": {"include.in.token.scope": "false"},
-          "protocolMappers": [{
-            "name": "audience-ads-mcp", "protocol": "openid-connect",
-            "protocolMapper": "oidc-audience-mapper",
-            "config": {"included.client.audience": "ads-mcp", "access.token.claim": "true",
-                       "id.token.claim": "false", "introspection.token.claim": "true"}
-          }]
-        }
-      ],
       "clients": [
         {
           "clientId": "ads",
@@ -101,9 +51,25 @@ data:
             "standard.token.exchange.enabled": "true",
             "post.logout.redirect.uris": "https://ads.local:8443/*"
           },
-          "defaultClientScopes": [
-            "basic", "profile", "email", "roles", "web-origins", "acr",
-            "audience-ads", "audience-ads-engine", "audience-ads-preferences"
+          "protocolMappers": [
+            {
+              "name": "audience-ads", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            },
+            {
+              "name": "audience-ads-engine", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-engine", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            },
+            {
+              "name": "audience-ads-preferences", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-preferences", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            }
           ]
         },
         {
@@ -116,8 +82,19 @@ data:
           "directAccessGrantsEnabled": false,
           "serviceAccountsEnabled": false,
           "attributes": {"standard.token.exchange.enabled": "true"},
-          "defaultClientScopes": [
-            "basic", "profile", "roles", "audience-ads-engine", "audience-ads", "audience-ads-mcp"
+          "protocolMappers": [
+            {
+              "name": "audience-ads", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            },
+            {
+              "name": "audience-ads-mcp", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-mcp", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            }
           ]
         },
         {
@@ -173,6 +150,8 @@ spec:
           args:
             - start-dev
             - --import-realm
+            - --bootstrap-admin-username=admin
+            - --bootstrap-admin-password=admin
             - --https-port=8443
             - --https-certificate-file=/tls/tls.crt
             - --https-certificate-key-file=/tls/tls.key

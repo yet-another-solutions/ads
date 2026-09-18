@@ -7,8 +7,7 @@
 #
 # Needs kind, kubectl, podman or docker, and internet access for the images and the
 # scanner's model. With helm the chart is installed from source; without it
-# deploy/local/rendered.yaml is applied. Linux sed; on macOS install gnu-sed and put
-# it first in PATH.
+# deploy/local/rendered.yaml is applied. Works on Linux and macOS.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -44,6 +43,9 @@ if [ "${ADS_SKIP_BUILD:-}" != "1" ]; then
     "$ENGINE" save -o "$WORK/image.tar" "localhost/${image}:local"
     kind load image-archive "$WORK/image.tar" --name "$CLUSTER"
     rm -f "$WORK/image.tar"
+    if [ "${ADS_FREE_IMAGES:-}" = "1" ]; then
+      "$ENGINE" rmi "localhost/${image}:local"
+    fi
   done
 fi
 
@@ -63,7 +65,7 @@ kubectl -n cert-manager wait --for=condition=Ready certificate/ads-local-ca --ti
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 CA_FILE="${TMPDIR:-/tmp}/ads-local-ca.crt"
-kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > "$CA_FILE"
+kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' | base64 --decode > "$CA_FILE"
 kubectl -n "$NAMESPACE" create secret generic ads-ca --from-file=ca.crt="$CA_FILE" \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -77,9 +79,11 @@ kubectl -n "$NAMESPACE" rollout status deploy/keycloak --timeout=600s
 step "CoreDNS: keycloak.ads.local resolves to the Keycloak Service inside the cluster"
 kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' > "$WORK/Corefile"
 if ! grep -q 'keycloak.ads.local' "$WORK/Corefile"; then
-  sed -i "s|^\(\s*\)ready$|&\n\1rewrite name keycloak.ads.local keycloak.${NAMESPACE}.svc.cluster.local|" \
-    "$WORK/Corefile"
-  kubectl -n kube-system create configmap coredns --from-file=Corefile="$WORK/Corefile" \
+  awk -v rule="rewrite name keycloak.ads.local keycloak.${NAMESPACE}.svc.cluster.local" '
+    { print }
+    /^[[:space:]]*ready$/ { match($0, /^[[:space:]]*/); print substr($0, 1, RLENGTH) rule }
+  ' "$WORK/Corefile" > "$WORK/Corefile.new"
+  kubectl -n kube-system create configmap coredns --from-file=Corefile="$WORK/Corefile.new" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl -n kube-system rollout restart deploy/coredns
   kubectl -n kube-system rollout status deploy/coredns --timeout=120s
@@ -101,14 +105,19 @@ else
   kubectl -n "$NAMESPACE" wait --for=condition=Available deploy --all --timeout=900s
 fi
 
-if [ "$ENGINE" = podman ]; then
-  GATEWAY_FORMAT='{{range .Subnets}}{{.Gateway}} {{end}}'
+if [ "$(uname -s)" = Darwin ]; then
+  # The engine runs in a VM; its own name for the Mac forwards to the Mac's localhost.
+  if [ "$ENGINE" = podman ]; then LLM_HOST=host.containers.internal; else LLM_HOST=host.docker.internal; fi
 else
-  GATEWAY_FORMAT='{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+  if [ "$ENGINE" = podman ]; then
+    GATEWAY_FORMAT='{{range .Subnets}}{{.Gateway}} {{end}}'
+  else
+    GATEWAY_FORMAT='{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+  fi
+  LLM_HOST="$("$ENGINE" network inspect kind --format "$GATEWAY_FORMAT" 2>/dev/null \
+    | tr ' ' '\n' | grep -m1 '\.' || true)"
 fi
-GATEWAY="$("$ENGINE" network inspect kind --format "$GATEWAY_FORMAT" 2>/dev/null \
-  | tr ' ' '\n' | grep -m1 '\.' || true)"
-LLM_URL="http://${GATEWAY:-<kind network gateway>}:11434/v1"
+LLM_URL="http://${LLM_HOST:-<kind network gateway>}:11434/v1"
 
 cat <<EOF
 
@@ -139,11 +148,11 @@ cat <<EOF
      Token:       anything, e.g. ollama
 
 5. Ask it to use the probe, for example:
-     "Прочитай файл /workspace/src/app.py через read_file"   — allowed
-     "Прочитай /etc/shadow"                                   — refused, notice
-     "Выполни команду uv sync"                                — refused: no Kata here
-     "Вызови leak"                                            — the key comes back cut out
-     "Вызови inject"                                          — journalled, passed on (review)
+     "Вызови probe-container__read_file с path /workspace/src/app.py"  — allowed
+     "Вызови probe-container__read_file с path /etc/shadow"            — refused, notice
+     "Вызови probe-container__run_command с command uv sync"           — refused: no Kata
+     "Вызови probe-container__env_config"                              — the key comes back cut out
+     "Вызови probe-container__release_notes"                           — journalled, passed on
    A few refusals in one chat and the chat loses its tools (budget 12).
 
 6. The journal:

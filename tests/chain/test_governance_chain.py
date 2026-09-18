@@ -297,15 +297,15 @@ def test_the_same_tool_is_decided_by_where_its_server_runs(tmp_path: Path) -> No
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel(
             [
-                [tool_call("probe-vm__run", {"command": "uv sync"}, "vm")],
-                [tool_call("probe-container__run", {"command": "uv sync"}, "container")],
+                [tool_call("probe-vm__run_command", {"command": "uv sync"}, "vm")],
+                [tool_call("probe-container__run_command", {"command": "uv sync"}, "container")],
                 [said("done")],
             ]
         )
         deltas = await chain.ask(http, model)
         assert model.tool_result(1) == "probe: would run uv sync"
         assert "refused" in model.tool_result(2)
-        assert _notices(deltas) == [("tool-refused", "probe-container/run")]
+        assert _notices(deltas) == [("tool-refused", "probe-container/run_command")]
 
     _through_the_chain(Chain(tmp_path), scenario)
 
@@ -326,9 +326,9 @@ def test_reading_outside_the_workdir_is_refused_and_journalled(tmp_path: Path) -
 
 def test_a_tool_nothing_binds_never_reaches_the_server(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
-        model = ScriptedModel([[tool_call("probe-vm__unbound", {})], [said("no")]])
+        model = ScriptedModel([[tool_call("probe-vm__diagnostics", {})], [said("no")]])
         deltas = await chain.ask(http, model)
-        assert _notices(deltas) == [("tool-refused", "probe-vm/unbound")]
+        assert _notices(deltas) == [("tool-refused", "probe-vm/diagnostics")]
         assert "unbound tool was reached" not in model.tool_result()
         assert _rows(await chain.journal(), "binding.missing") != []
 
@@ -353,7 +353,7 @@ def test_a_secret_in_the_arguments_never_leaves(tmp_path: Path) -> None:
 
 def test_a_secret_in_the_result_is_cut_out(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
-        model = ScriptedModel([[tool_call("probe-vm__leak", {})], [said("ok")]])
+        model = ScriptedModel([[tool_call("probe-vm__env_config", {})], [said("ok")]])
         deltas = await chain.ask(http, model)
         assert _notices(deltas) == []
         assert FAKE_AWS_ACCESS_KEY not in model.tool_result()
@@ -364,7 +364,7 @@ def test_a_secret_in_the_result_is_cut_out(tmp_path: Path) -> None:
 
 def test_by_default_an_injection_is_recorded_and_passed_on(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
-        model = ScriptedModel([[tool_call("probe-vm__inject", {})], [said("ok")]])
+        model = ScriptedModel([[tool_call("probe-vm__release_notes", {})], [said("ok")]])
         deltas = await chain.ask(http, model)
         assert _notices(deltas) == []
         assert INJECTED_INSTRUCTION in model.tool_result()
@@ -376,9 +376,9 @@ def test_by_default_an_injection_is_recorded_and_passed_on(tmp_path: Path) -> No
 
 def test_an_enforced_injection_is_withheld_and_the_person_told_why(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
-        model = ScriptedModel([[tool_call("probe-vm__inject", {})], [said("ok")]])
+        model = ScriptedModel([[tool_call("probe-vm__release_notes", {})], [said("ok")]])
         deltas = await chain.ask(http, model)
-        assert _notices(deltas) == [("prompt-injection", "probe-vm/inject")]
+        assert _notices(deltas) == [("prompt-injection", "probe-vm/release_notes")]
         assert INJECTION_MARKER not in model.tool_result().lower()
         (withheld,) = _rows(await chain.journal(expected_guardrail_rows=1), "payload.injection")
         assert withheld.weight == GOVERNANCE.injection_weight
@@ -390,15 +390,15 @@ def test_an_injection_in_a_streamed_answer_is_withheld(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel(
             [
-                [tool_call("probe-vm__stream", {"text": "streamed and clean"}, "clean")],
-                [tool_call("probe-vm__stream", {"text": INJECTION_MARKER}, "poisoned")],
+                [tool_call("probe-vm__tail_log", {"text": "streamed and clean"}, "clean")],
+                [tool_call("probe-vm__tail_log", {"text": INJECTION_MARKER}, "poisoned")],
                 [said("ok")],
             ]
         )
         deltas = await chain.ask(http, model)
         assert model.tool_result(1) == "streamed and clean"
         assert INJECTION_MARKER not in model.tool_result(2).lower()
-        assert _notices(deltas) == [("prompt-injection", "probe-vm/stream")]
+        assert _notices(deltas) == [("prompt-injection", "probe-vm/tail_log")]
 
     _through_the_chain(Chain(tmp_path, interception=INJECTION_ENFORCED), scenario)
 
@@ -438,7 +438,10 @@ def test_both_servers_offer_the_probe_tools(tmp_path: Path, server: str) -> None
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel([[said("hi")]])
         await chain.ask(http, model)
-        assert {f"{server}__{tool}" for tool in ("echo", "leak", "inject", "run")} <= set(
+        assert {
+            f"{server}__{tool}"
+            for tool in ("echo", "env_config", "release_notes", "run_command")
+        } <= set(
             model.offered
         )
 
@@ -457,13 +460,13 @@ def test_the_real_classifier_withholds_the_probe_injection(tmp_path: Path) -> No
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel(
             [
-                [tool_call("probe-vm__inject", {}, "poisoned")],
+                [tool_call("probe-vm__release_notes", {}, "poisoned")],
                 [tool_call("probe-vm__read_file", {"path": f"{WORKDIR}/src/app.py"}, "clean")],
                 [said("ok")],
             ]
         )
         deltas = await chain.ask(http, model)
-        assert _notices(deltas) == [("prompt-injection", "probe-vm/inject")]
+        assert _notices(deltas) == [("prompt-injection", "probe-vm/release_notes")]
         assert model.tool_result(2) == f"probe: contents of {WORKDIR}/src/app.py"
 
     _through_the_chain(

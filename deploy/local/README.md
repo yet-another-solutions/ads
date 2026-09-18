@@ -49,8 +49,9 @@ What it does, in order:
 After `/etc/hosts` and the port-forwards the script prints, open
 `https://ads.local:8443`, log in as `alice`, and add a model in the catalog. The model
 runs on your machine (Ollama with `OLLAMA_HOST=0.0.0.0`, LM Studio, vLLM) and must be
-able to call tools; pods reach it through the gateway of the `kind` docker network,
-which the script prints.
+able to call tools. On Linux pods reach it through the gateway of the `kind` network;
+on macOS through `host.containers.internal` (podman) or `host.docker.internal`
+(docker), which the VM forwards to the Mac. The script prints the address.
 
 Things to try in one chat:
 
@@ -59,8 +60,8 @@ Things to try in one chat:
 | read `/workspace/src/app.py` with `read_file` | the probe's answer |
 | read `/etc/shadow` | a notice: refused by the security policy |
 | run `uv sync` | a notice: refused — no Kata, so the site is `container` |
-| call `leak` | the key comes back as `[redacted:aws-access-token]` |
-| call `inject` | passes; the journal has `payload.injection` with weight 0 |
+| call `env_config` | the key comes back as `[redacted:aws-access-token]` |
+| call `release_notes` | passes; the journal has `payload.injection` with weight 0 |
 | call `echo` with an `AKIA…` key in the text | a notice: refused, `payload.leak` |
 | a few refusals more | the chat is blocked; its tools are refused from now on, other chats keep theirs |
 

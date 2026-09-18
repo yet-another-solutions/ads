@@ -389,15 +389,15 @@ data:
       value: /workspace/notes.md
     - capability: fs.read
       source: mcp:probe-vm
-      tool: leak
+      tool: env_config
       value: /workspace/.env.example
     - capability: fs.read
       source: mcp:probe-vm
-      tool: inject
+      tool: release_notes
       value: /workspace/NOTES.md
     - capability: fs.read
       source: mcp:probe-vm
-      tool: stream
+      tool: tail_log
       value: /workspace/notes.md
     - argument: path
       capability: fs.read
@@ -406,22 +406,22 @@ data:
     - argument: command
       capability: process.exec
       source: mcp:probe-vm
-      tool: run
+      tool: run_command
     - capability: fs.read
       source: mcp:probe-container
       tool: echo
       value: /workspace/notes.md
     - capability: fs.read
       source: mcp:probe-container
-      tool: leak
+      tool: env_config
       value: /workspace/.env.example
     - capability: fs.read
       source: mcp:probe-container
-      tool: inject
+      tool: release_notes
       value: /workspace/NOTES.md
     - capability: fs.read
       source: mcp:probe-container
-      tool: stream
+      tool: tail_log
       value: /workspace/notes.md
     - argument: path
       capability: fs.read
@@ -430,7 +430,7 @@ data:
     - argument: command
       capability: process.exec
       source: mcp:probe-container
-      tool: run
+      tool: run_command
     capabilities:
     - capability: fs.read
       classifier:

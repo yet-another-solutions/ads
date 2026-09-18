@@ -38,9 +38,9 @@ def test_every_probe_site_binds_the_same_tools() -> None:
         for site in PROBE_SITES
     }
     assert tools_by_site["probe-vm"] == tools_by_site["probe-container"]
-    assert ("run", Capability.PROCESS_EXEC) in tools_by_site["probe-vm"]
+    assert ("run_command", Capability.PROCESS_EXEC) in tools_by_site["probe-vm"]
 
 
 def test_the_probe_tool_meant_to_be_refused_is_not_bound() -> None:
     probe = _probe_bindings(load_policy(_example()).bindings)
-    assert all(binding.tool != "unbound" for binding in probe)
+    assert all(binding.tool != "diagnostics" for binding in probe)
