@@ -106,6 +106,21 @@ jobs:
             context: services/ads-sandbox-base
             platforms: linux/amd64,linux/arm64
             pack: "false"
+          - image: ads-sandbox-mcp
+            file: services/ads-sandbox-mcp/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-ipc
+            file: services/ads-sandbox-ipc/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-manager
+            file: services/ads-sandbox-manager/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner
