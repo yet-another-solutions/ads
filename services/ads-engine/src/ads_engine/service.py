@@ -253,6 +253,18 @@ def _partial(session_id: uuid.UUID, order: int, delta: StreamDelta) -> PartialRe
             order=order,
             reasoning=Reasoning(text=delta.text),
         )
+    if delta.kind == "tool_call" and delta.tool_call is not None:
+        return PartialResponse(
+            session_id=session_id,
+            order=order,
+            tool_call=delta.tool_call,
+        )
+    if delta.kind == "tool_result" and delta.tool_result is not None:
+        return PartialResponse(
+            session_id=session_id,
+            order=order,
+            tool_result=delta.tool_result,
+        )
     return PartialResponse(
         session_id=session_id,
         order=order,

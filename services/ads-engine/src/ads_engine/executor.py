@@ -10,7 +10,14 @@ from langchain_core.messages import AIMessageChunk
 from langsmith import tracing_context
 
 from ads_commons.engine import EngineRequest
-from ads_engine.chat import AdsChatOpenAI, StreamDelta, _history_messages, deltas_from_chunk
+from ads_engine.chat import (
+    AdsChatOpenAI,
+    StreamDelta,
+    _history_messages,
+    deltas_from_chunk,
+    tool_call_from_native,
+    tool_result_from_message,
+)
 from ads_engine.mcp_client import SandboxClient
 from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
 
@@ -77,10 +84,25 @@ class ExecutorChatStreamer:
                                 return
                             messages.append(response)
                             for call in response.tool_calls:
+                                try:
+                                    yield StreamDelta(
+                                        kind="tool_call",
+                                        tool_call=tool_call_from_native(call),
+                                    )
+                                except GeneratorExit:
+                                    return
                                 # Mark before send: an ambiguous failure must never
                                 # replay a possibly executed shell/Python side effect.
                                 dispatched = True
-                                messages.append(await tools.call(tools.executor_run_id, call))
+                                result = await tools.call(tools.executor_run_id, call)
+                                messages.append(result)
+                                try:
+                                    yield StreamDelta(
+                                        kind="tool_result",
+                                        tool_result=tool_result_from_message(result),
+                                    )
+                                except GeneratorExit:
+                                    return
             except Exception:
                 # SDK/provider exceptions and exception groups can carry request
                 # bodies. Never log/emit them and never retry the entire run.

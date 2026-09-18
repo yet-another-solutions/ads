@@ -10,6 +10,8 @@ from ads.db import Base
 
 KIND_MESSAGE = "message"
 KIND_REASONING = "reasoning"
+KIND_TOOL_CALL = "tool_call"
+KIND_TOOL_RESULT = "tool_result"
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"

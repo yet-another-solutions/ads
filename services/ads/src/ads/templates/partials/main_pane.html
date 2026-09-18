@@ -21,6 +21,8 @@
         <summary>Reasoning</summary>
         <p>{{ part.text }}</p>
       </details>
+      {% elif part.kind == 'tool_call' or part.kind == 'tool_result' %}
+      {% include 'partials/tool_part.html' %}
       {% elif part.role == 'user' %}
       <p class="user">{{ part.text }}</p>
       {% else %}

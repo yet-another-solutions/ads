@@ -161,7 +161,7 @@ def sdk_harness(settings, monkeypatch):
     )
 
 
-def test_real_sdk_sequential_shell_python_and_only_delta_output(sdk_harness):
+def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
     h = sdk_harness
     FakeModel.scripts = [
         [native()],
@@ -172,7 +172,25 @@ def test_real_sdk_sequential_shell_python_and_only_delta_output(sdk_harness):
     async def scenario():
         async with h.sdk.session_manager.run():
             output = [delta async for delta in h.streamer.stream(make_request())]
-        assert [(d.kind, d.text) for d in output] == [("reasoning", "checked"), ("message", "done")]
+        assert [d.kind for d in output] == [
+            "tool_call",
+            "tool_result",
+            "tool_call",
+            "tool_result",
+            "reasoning",
+            "message",
+        ]
+        assert output[0].tool_call is not None
+        assert output[0].tool_call.name == "exec_shell"
+        assert output[0].tool_call.arguments == {"command": "printf hi"}
+        assert output[1].tool_result is not None
+        assert output[1].tool_result.status == "success"
+        assert output[1].tool_result.content["structuredContent"]["exit_code"] == 7
+        assert output[2].tool_call is not None
+        assert output[2].tool_call.name == "exec_python"
+        assert output[2].tool_call.arguments == {"code": "print(1)"}
+        assert output[4].text == "checked"
+        assert output[5].text == "done"
 
     asyncio.run(scenario())
     assert [e[0] for e in h.executions] == ["exec_shell", "exec_python"]
@@ -328,7 +346,7 @@ def test_output_failure_does_not_replay_tool(sdk_harness, store):
         assert h.run._pair is None
 
     asyncio.run(scenario())
-    assert len(h.executions) == 1 and len(h.credentials.opens) == 1
+    assert len(h.executions) == 0 and len(h.credentials.opens) == 1
 
 
 @pytest.mark.parametrize("ending", ["abort", "finish", "error"])

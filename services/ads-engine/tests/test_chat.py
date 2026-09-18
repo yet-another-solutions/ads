@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import json
+
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 
-from ads_commons.engine import AssistantHistoryTurn, EngineRequest, UserHistoryTurn
+from ads_commons.engine import (
+    AssistantHistoryTurn,
+    EngineRequest,
+    ToolCall,
+    ToolResult,
+    UserHistoryTurn,
+)
 from ads_engine.chat import AdsChatOpenAI, _history_messages, deltas_from_chunk
 from engine_fakes import make_request
 
@@ -36,6 +45,52 @@ def test_history_then_user_input_are_sent_once() -> None:
     assert isinstance(messages[3], HumanMessage)
     assert messages[3].content == "next"
     assert len(messages) == 4
+
+
+def test_history_coalesces_tool_calls_then_results() -> None:
+    base = make_request()
+    request = EngineRequest(
+        session_id=base.session_id,
+        message_id=base.message_id,
+        history=[
+            UserHistoryTurn(text="run"),
+            AssistantHistoryTurn(text=""),
+            ToolCall(
+                id="call-1",
+                name="exec_shell",
+                arguments={"command": "printf hi"},
+                metadata={"index": 0},
+            ),
+            ToolResult(
+                tool_call_id="call-1",
+                name="exec_shell",
+                status="success",
+                content={"structuredContent": {"stdout": "hi"}},
+            ),
+            AssistantHistoryTurn(text="done"),
+        ],
+        user_input="next",
+        instructions="",
+        model=base.model,
+        authorization=base.authorization,
+    )
+    messages = _history_messages(request)
+    assert isinstance(messages[0], HumanMessage)
+    assert messages[0].content == "run"
+    assert isinstance(messages[1], AIMessage)
+    assert messages[1].content == ""
+    assert messages[1].tool_calls[0]["name"] == "exec_shell"
+    assert messages[1].tool_calls[0]["args"] == {"command": "printf hi"}
+    assert messages[1].tool_calls[0]["id"] == "call-1"
+    assert isinstance(messages[2], ToolMessage)
+    assert messages[2].tool_call_id == "call-1"
+    assert messages[2].status == "success"
+    assert json.loads(messages[2].content)["structuredContent"]["stdout"] == "hi"
+    assert isinstance(messages[3], AIMessage)
+    assert messages[3].content == "done"
+    assert not messages[3].tool_calls
+    assert isinstance(messages[4], HumanMessage)
+    assert messages[4].content == "next"
 
 
 def test_deltas_map_reasoning_then_assistant_text() -> None:
