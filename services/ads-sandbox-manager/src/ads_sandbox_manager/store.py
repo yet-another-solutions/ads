@@ -287,7 +287,10 @@ class SessionRepository:
                     pvc.uid = str(values["pvc_uid"])
                 if values.get("status") == "failed":
                     pvc.state = "failed"
-                    pvc.last_state_change = advance(pvc.last_state_change, row.status_changed_at)
+                    pvc.last_state_change = advance(
+                        pvc.last_state_change,
+                        changed if isinstance(changed, datetime) else row.status_changed_at,
+                    )
         result: SandboxSession | None = await db.scalar(
             update(SandboxSession)
             .where(

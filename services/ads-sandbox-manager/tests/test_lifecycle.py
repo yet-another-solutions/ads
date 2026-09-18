@@ -127,6 +127,20 @@ async def test_stale_resume_snapshot_cannot_follow_changed_pvc_mapping(life):
     assert (await disk(h)).state == "detached"
 
 
+async def test_failed_provisioning_records_failure_time_not_claim_time(life):
+    h = life
+    await detach(h)
+    row = await h.service.provision(h.row.session_id)
+    failure_time = row.status_changed_at + timedelta(seconds=60)
+    async with h.sessions.begin() as db:
+        updated = await h.repository.record(
+            db, row, row.claimed_by, status="failed", status_changed_at=failure_time
+        )
+        assert updated.status_changed_at == failure_time
+    pvc = await disk(h)
+    assert pvc.state == "failed" and pvc.last_state_change == failure_time
+
+
 async def test_recovery_handoff_contract_rebuilds_only_with_fresh_identities(life):
     h = life
     work = await idle(h)
