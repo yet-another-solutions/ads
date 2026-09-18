@@ -87,6 +87,41 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_scoped_sasl_for_every_sandbox_component(self):
+        for component in ("mcp", "ipc", "manager"):
+            with self.subTest(component=component):
+                args = ["--set", f"sandbox.{component}.kafka.securityProtocol=SASL_PLAINTEXT"]
+                self.assertNotEqual(self.render(*args).returncode, 0)
+                args += ["--set", f"sandbox.{component}.kafka.saslUsername=scoped-{component}"]
+                self.assertNotEqual(self.render(*args).returncode, 0)
+                existing = self.render(
+                    *args, "--set", f"sandbox.{component}.existingSecret=external-credentials"
+                )
+                self.assertEqual(existing.returncode, 0, existing.stderr)
+                args += ["--set", f"sandbox.{component}.kafka.saslPassword=fixture-password"]
+                rendered = self.render(*args)
+                self.assertEqual(rendered.returncode, 0, rendered.stderr)
+                objects = list(yaml.safe_load_all(rendered.stdout))
+                name = f"ads-sandbox-{component}"
+                secret = next(
+                    x
+                    for x in objects
+                    if x and x["kind"] == "Secret" and x["metadata"]["name"] == name
+                )["stringData"]
+                prefix = f"ADS_SANDBOX_{component.upper()}_"
+                self.assertEqual(secret[prefix + "KAFKA_SASL_PASSWORD"], "fixture-password")
+                self.assertEqual(secret[prefix + "KAFKA_SASL_USERNAME"], f"scoped-{component}")
+                for obj in objects:
+                    if obj and obj["kind"] == "ConfigMap":
+                        self.assertNotIn("fixture-password", json.dumps(obj))
+                        self.assertNotIn("KAFKA_SASL_PASSWORD", json.dumps(obj))
+                config = next(
+                    x
+                    for x in objects
+                    if x and x["kind"] == "ConfigMap" and x["metadata"]["name"] == name
+                )["data"]
+                self.assertEqual(config[prefix + "KAFKA_SECURITY_PROTOCOL"], "SASL_PLAINTEXT")
+
     def render(self, *args):
         return subprocess.run(
             [HELM, "template", "ads", str(CHART), "--namespace", "default", *args],

@@ -49,12 +49,12 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
-        return AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
+        return AIOKafkaProducer(**settings.kafka_options())
 
     @provide(scope=Scope.APP)
     def consumer(self, settings: Settings) -> AIOKafkaConsumer:
         return AIOKafkaConsumer(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
+            **settings.kafka_options(),
             group_id=consumer_group(),
             enable_auto_commit=False,
             auto_offset_reset="latest",

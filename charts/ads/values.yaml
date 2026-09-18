@@ -159,6 +159,11 @@ sandbox:
     bootstrapServers: kafka.kafka.svc.cluster.local:9092
   mcp:
     replicaCount: 1
+    kafka:
+      securityProtocol: PLAINTEXT
+      saslMechanism: PLAIN
+      saslUsername: ""
+      saslPassword: ""
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-mcp
       tag: ""
@@ -201,7 +206,7 @@ sandbox:
     pingIntervalSeconds: 10
     pingTimeoutSeconds: 30
     recoverySeconds: 600
-    # Only manager currently supports SASL/TLS Kafka transport.
+    # Manager additionally supports Kafka TLS.
     kafka:
       securityProtocol: PLAINTEXT
       saslMechanism: SCRAM-SHA-512
@@ -211,6 +216,11 @@ sandbox:
         secretName: ""
         key: ca.crt
   ipc:
+    kafka:
+      securityProtocol: PLAINTEXT
+      saslMechanism: PLAIN
+      saslUsername: ""
+      saslPassword: ""
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-ipc
       tag: ""

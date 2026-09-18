@@ -17,6 +17,8 @@ data:
   {{ $prefix }}KEYCLOAK_WELL_KNOWN_URL: {{ $sb.keycloak.wellKnownUrl | quote }}
   {{ $prefix }}KEYCLOAK_ISSUER: {{ $sb.keycloak.issuer | quote }}
   {{ $prefix }}KAFKA_BOOTSTRAP_SERVERS: {{ $sb.kafka.bootstrapServers | quote }}
+  {{ $prefix }}KAFKA_SECURITY_PROTOCOL: {{ $settings.kafka.securityProtocol | quote }}
+  {{ $prefix }}KAFKA_SASL_MECHANISM: {{ $settings.kafka.saslMechanism | quote }}
   {{- if ne $component "ipc" }}
   {{ $prefix }}PORT: {{ $settings.port | quote }}
   {{ $prefix }}TLS_CERT_PATH: "/tls/tls.crt"
@@ -39,8 +41,6 @@ data:
   {{ $prefix }}RESOURCES: {{ $sb.golden.resources | toJson | quote }}
   {{ $prefix }}IMAGE_PULL_SECRETS: {{ $sb.imagePullSecrets | join "," | quote }}
   {{ $prefix }}SESSION_OBJECTS: {{ include "ads.sandboxSessionObjects" $root | quote }}
-  {{ $prefix }}KAFKA_SECURITY_PROTOCOL: {{ $settings.kafka.securityProtocol | quote }}
-  {{ $prefix }}KAFKA_SASL_MECHANISM: {{ $settings.kafka.saslMechanism | quote }}
   {{- if $settings.kafka.caBundle.secretName }}
   {{ $prefix }}KAFKA_CA_BUNDLE: "/kafka-ca/ca.crt"
   {{- end }}
