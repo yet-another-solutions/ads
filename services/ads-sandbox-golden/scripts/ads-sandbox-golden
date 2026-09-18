@@ -27,45 +27,12 @@ parse_size() {
   esac
 }
 
-hex_to_dec() {
-  printf '%d' "0x$1"
-}
-
-device_in_use() {
-  local mm=$1
-  awk -v mm="$mm" '$3 == mm { found = 1; exit } END { exit !found }' /proc/self/mountinfo
-}
-
 [[ -n ${ADS_SESSION_DEVICE:-} ]] || fail "ADS_SESSION_DEVICE unset"
 [[ -n ${ADS_SESSION_SIZE:-} ]] || fail "ADS_SESSION_SIZE unset"
 [[ -b $ADS_SESSION_DEVICE ]] || fail "$ADS_SESSION_DEVICE is not a block device"
 [[ -f /ci/rootfs.tar.zst && -s /ci/rootfs.tar.zst ]] || fail "/ci/rootfs.tar.zst missing"
 
-session_mm=$(stat -c '%t:%T' "$ADS_SESSION_DEVICE")
-session_dec="$(hex_to_dec "${session_mm%%:*}"):$(hex_to_dec "${session_mm##*:}")"
-session_seen=0
-
-for syspath in /sys/class/block/*; do
-  [[ -e $syspath ]] || continue
-  name=${syspath##*/}
-  [[ -f $syspath/partition ]] && continue
-  case $name in
-    ram*|zram*|fd*|sr*|nbd*) continue ;;
-  esac
-  mm=$(cat "$syspath/dev")
-  if [[ $mm == "$session_dec" ]]; then
-    session_seen=1
-    if device_in_use "$mm"; then
-      fail "session device already mounted"
-    fi
-    continue
-  fi
-  if ! device_in_use "$mm"; then
-    fail "unexpected unmounted disk $name"
-  fi
-done
-
-[[ $session_seen == 1 ]] || fail "session device not in /sys/class/block"
+/usr/local/sbin/ads-session-device-check
 
 want=$(parse_size "$ADS_SESSION_SIZE") || fail "invalid ADS_SESSION_SIZE $ADS_SESSION_SIZE"
 dev_bytes=$(blockdev --getsize64 "$ADS_SESSION_DEVICE")

@@ -39,6 +39,7 @@ async def test_failed_bake_keeps_name_lock_until_partial_pvc_is_gone(baked):
     k.is_released = True
     assert not await g.poll()
     assert k.calls == [("delete", "pvc")]
+    assert k.bake_pods_deleted
     assert not await g.poll()
     assert k.calls == [("delete", "pvc")]  # Wait for asynchronous PVC deletion.
     k.objects["pvc"] = None
@@ -51,6 +52,16 @@ async def test_failed_bake_keeps_name_lock_until_partial_pvc_is_gone(baked):
     assert k.calls[-2:] == [("create", "job"), ("create", "pvc")]
     k.finish()
     assert await g.poll()
+
+
+async def test_deleting_failed_claim_recovers_retained_pod_cleanup(baked):
+    k = baked.kube
+    k.finish("Failed")
+    k.objects["pvc"]["metadata"]["deletionTimestamp"] = "now"
+    k.is_released = True
+    assert not await baked.golden.poll()
+    assert k.bake_pods_deleted
+    assert not k.calls  # Job remains the lock; PVC deletion is already in progress.
 
 
 @pytest.mark.parametrize("terminal", ["Failed", "Complete"])

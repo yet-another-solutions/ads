@@ -87,6 +87,19 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_main_database_url_is_rendered_only_into_secret(self):
+        url = "postgresql+psycopg://fixture:fixture@database/ads"
+        rendered = self.render("--set", f"database.url={url}")
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        objects = [x for x in yaml.safe_load_all(rendered.stdout) if x]
+        secret = next(
+            x for x in objects if x["kind"] == "Secret" and x["metadata"]["name"] == "ads"
+        )
+        self.assertEqual(secret["stringData"]["ADS_DATABASE_URL"], url)
+        for obj in objects:
+            if obj["kind"] == "ConfigMap":
+                self.assertNotIn(url, json.dumps(obj))
+
     def test_scoped_sasl_for_every_sandbox_component(self):
         for component in ("mcp", "ipc", "manager"):
             with self.subTest(component=component):
