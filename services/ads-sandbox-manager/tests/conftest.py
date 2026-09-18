@@ -79,6 +79,10 @@ class FakeKube:
     async def delete_pvc(self, observed):
         self.delete("pvc", observed)
 
+    async def delete_released_bake_pods(self, pvc, job):
+        if self.is_released:
+            self.bake_pods_deleted = True
+
     async def released(self, pvc, job):
         if self.release_hook:
             self.release_hook()

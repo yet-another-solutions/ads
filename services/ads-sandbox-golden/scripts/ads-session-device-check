@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""Reject extra accessible disks without relying on the container mount namespace."""
+
+import errno
+import os
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+
+def exclusive_state(path: Path) -> str:
+    """O_EXCL checks kernel block-device claims across mount namespaces."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        if error.errno == errno.EBUSY:
+            return "busy"
+        if error.errno in (errno.EPERM, errno.EACCES):
+            return "inaccessible"
+        raise
+    os.close(fd)
+    return "free"
+
+
+def check(session: Path, blocks: Path = Path("/sys/class/block"), dev: Path = Path("/dev")) -> None:
+    info = session.lstat()
+    if not stat.S_ISBLK(info.st_mode):
+        raise RuntimeError("session path must be a block device, not a symlink or file")
+    session_id = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+    if exclusive_state(session) != "free":
+        raise RuntimeError("session device is mounted, claimed, or inaccessible")
+    seen = False
+    with tempfile.TemporaryDirectory(prefix=".ads-device-check-", dir=dev) as directory:
+        for block in blocks.iterdir():
+            if (block / "partition").exists():
+                continue
+            identity = (block / "dev").read_text().strip()
+            if identity == session_id:
+                seen = True
+                continue
+            # Kernel placeholder loops have no backing store and are not disks.
+            if (
+                block.name.startswith("loop")
+                and (block / "size").read_text().strip() == "0"
+                and not (block / "loop/backing_file").exists()
+            ):
+                continue
+            if block.name.startswith(("ram", "zram", "fd", "sr", "nbd")):
+                continue
+            major, minor = map(int, identity.split(":"))
+            probe = Path(directory) / block.name
+            os.mknod(probe, stat.S_IFBLK | 0o600, os.makedev(major, minor))
+            # Busy covers rootfs disks/partitions mounted by the Kata agent outside
+            # this PID/mount namespace. Device-cgroup-denied disks are not exposed.
+            # Any other error fails closed; an extra accessible free disk is fatal.
+            if exclusive_state(probe) == "free":
+                raise RuntimeError(f"unexpected accessible unclaimed disk {block.name}")
+    if not seen:
+        raise RuntimeError("session device is not a whole disk in sysfs")
+
+
+if __name__ == "__main__":
+    try:
+        value = os.environ.get("ADS_SESSION_DEVICE")
+        if not value:
+            raise RuntimeError("ADS_SESSION_DEVICE unset")
+        check(Path(value))
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"ads-session-device-check: {error}", file=sys.stderr)
+        sys.exit(1)

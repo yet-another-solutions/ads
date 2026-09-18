@@ -63,7 +63,7 @@ class GoldenEnsure:
             raise RuntimeError("foreign golden Job; refusing adoption or deletion")
         if pvc is not None and not self._valid_pvc(pvc):
             raise RuntimeError("foreign or incompatible golden PVC; refusing adoption or deletion")
-        if any(o is not None and o["metadata"].get("deletionTimestamp") for o in (job, pvc)):
+        if job is not None and job["metadata"].get("deletionTimestamp"):
             return None
         if (
             job is not None
@@ -71,6 +71,12 @@ class GoldenEnsure:
             and (pvc["metadata"]["labels"].get(JOB_UID) != job["metadata"]["uid"])
         ):
             raise RuntimeError("golden PVC belongs to a different bake attempt")
+        if pvc is not None and pvc["metadata"].get("deletionTimestamp"):
+            if job is not None and condition(job, "Failed"):
+                # Recover a crash after PVC deletion was requested. Retained terminal
+                # Pods otherwise keep pvc-protection alive indefinitely.
+                await self.kube.delete_released_bake_pods(pvc, job)
+            return None
         if job is None:
             if pvc is not None:
                 # A partial orphan is never promoted to ready. Delete before acquiring
@@ -87,6 +93,7 @@ class GoldenEnsure:
             if pvc is not None:
                 if await self.kube.released(pvc, None):
                     await self.kube.delete_pvc(pvc)
+                    await self.kube.delete_released_bake_pods(pvc, job)
             else:
                 await self.kube.delete_job(job)
             return None

@@ -9,7 +9,7 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 
 from ads_sandbox_manager.config import Settings
-from ads_sandbox_manager.objects import Object
+from ads_sandbox_manager.objects import JOB_UID, Object
 
 
 class Kubernetes(Protocol):
@@ -19,6 +19,7 @@ class Kubernetes(Protocol):
     async def create_pvc(self, body: Object) -> None: ...
     async def delete_job(self, observed: Object) -> None: ...
     async def delete_pvc(self, observed: Object) -> None: ...
+    async def delete_released_bake_pods(self, pvc: Object, job: Object) -> None: ...
     async def released(self, pvc: Object, job: Object | None) -> bool: ...
 
 
@@ -109,13 +110,54 @@ class KubeClient:
             "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]},
             "propagationPolicy": "Foreground",
         }
-        await self._call(method, self.settings.golden_name, self.settings.namespace, body=body)
+        await self._call(method, meta["name"], self.settings.namespace, body=body)
 
     async def delete_job(self, observed: Object) -> None:
         await self._delete(self.batch.delete_namespaced_job, observed)
 
     async def delete_pvc(self, observed: Object) -> None:
         await self._delete(self.core.delete_namespaced_persistent_volume_claim, observed)
+
+    async def delete_released_bake_pods(self, pvc: Object, job: Object) -> None:
+        """Remove only failed-attempt evidence after disk release, retaining the Job lock."""
+        current_job, current_pvc = await self.job(), await self.pvc()
+        if (
+            current_job is None
+            or current_pvc is None
+            or current_job["metadata"].get("deletionTimestamp")
+            or not current_pvc["metadata"].get("deletionTimestamp")
+            or current_job["metadata"].get("uid") != job["metadata"]["uid"]
+            or current_job["metadata"].get("resourceVersion") != job["metadata"]["resourceVersion"]
+            or current_pvc["metadata"].get("uid") != pvc["metadata"]["uid"]
+            or current_pvc["metadata"].get("labels", {}).get(JOB_UID) != job["metadata"]["uid"]
+            or not any(
+                c.get("type") == "Failed" and c.get("status") == "True"
+                for c in current_job.get("status", {}).get("conditions", [])
+            )
+        ):
+            return
+        pods = await self._list(self.core.list_namespaced_pod, self.settings.namespace)
+        if not await self.released(current_pvc, None):
+            return
+        for pod in pods:
+            meta = pod.get("metadata", {})
+            if (
+                meta.get("uid")
+                and meta.get("resourceVersion")
+                and not meta.get("deletionTimestamp")
+                and pod.get("status", {}).get("phase") in ("Succeeded", "Failed")
+                and any(
+                    ref.get("kind") == "Job"
+                    and ref.get("controller") is True
+                    and ref.get("uid") == job["metadata"]["uid"]
+                    for ref in meta.get("ownerReferences", [])
+                )
+                and any(
+                    v.get("persistentVolumeClaim", {}).get("claimName") == self.settings.golden_name
+                    for v in pod.get("spec", {}).get("volumes", [])
+                )
+            ):
+                await self._delete(self.core.delete_namespaced_pod, pod)
 
     async def _list(self, method: Callable[..., Any], *args: Any) -> list[Object]:
         items: list[Object] = []

@@ -1,6 +1,8 @@
 # Workloads live here; store the Helm release in the existing default namespace.
 namespace: ads
 replicaCount: 1
+database:
+  url: postgresql+psycopg://ads:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads
 
 image:
   repository: ghcr.io/yet-another-solutions/ads

@@ -27,6 +27,8 @@ def api(manager_settings, monkeypatch):
     pod = {
         "metadata": {
             "name": "golden-random",
+            "uid": "pod-uid",
+            "resourceVersion": "7",
             "ownerReferences": [{"kind": "Job", "uid": "job-uid", "controller": True}],
         },
         "spec": {
@@ -46,6 +48,7 @@ def api(manager_settings, monkeypatch):
     k.batch.delete_namespaced_job.return_value = {}
     k.core.create_namespaced_persistent_volume_claim.return_value = {}
     k.core.delete_namespaced_persistent_volume_claim.return_value = {}
+    k.core.delete_namespaced_pod.return_value = {}
     k.core.list_namespaced_pod.return_value = {"items": [pod], "metadata": {}}
     k.core.read_persistent_volume.return_value = {
         "spec": {
@@ -79,6 +82,49 @@ def pair(settings):
     pvc["spec"]["volumeName"] = "pv-1"
     pvc["status"] = {"phase": "Bound"}
     return job, pvc
+
+
+@pytest.mark.parametrize(
+    "blocked",
+    [None, "running", "foreign", "replacement", "complete", "used", "unfenced", "not-deleting"],
+)
+async def test_failed_bake_pod_cleanup_is_release_and_identity_fenced(
+    api, manager_settings, blocked
+):
+    job, pvc = pair(manager_settings)
+    job["status"] = {"conditions": [{"type": "Failed", "status": "True"}]}
+    pvc["metadata"]["deletionTimestamp"] = "now"
+    api.batch.read_namespaced_job.return_value = deepcopy(job)
+    api.core.read_namespaced_persistent_volume_claim.return_value = deepcopy(pvc)
+    pod = api.core.list_namespaced_pod.return_value["items"][0]
+    if blocked == "running":
+        pod["status"]["phase"] = "Running"
+    elif blocked == "foreign":
+        pod["metadata"]["ownerReferences"][0]["uid"] = "other-job"
+    elif blocked == "replacement":
+        api.core.read_namespaced_persistent_volume_claim.return_value["metadata"]["uid"] = "new"
+    elif blocked == "complete":
+        api.batch.read_namespaced_job.return_value["status"]["conditions"][0]["type"] = "Complete"
+    elif blocked == "used":
+        api.core.read_node.return_value["status"]["volumesInUse"] = [
+            "kubernetes.io/csi/example.csi.test^disk-1"
+        ]
+    elif blocked == "unfenced":
+        del pod["metadata"]["resourceVersion"]
+    elif blocked == "not-deleting":
+        del api.core.read_namespaced_persistent_volume_claim.return_value["metadata"][
+            "deletionTimestamp"
+        ]
+    await api.delete_released_bake_pods(pvc, job)
+    if blocked:
+        api.core.delete_namespaced_pod.assert_not_called()
+    else:
+        call = api.core.delete_namespaced_pod.call_args
+        assert call.args == ("golden-random", manager_settings.namespace)
+        assert call.kwargs["body"]["preconditions"] == {"uid": "pod-uid", "resourceVersion": "7"}
+        assert "gracePeriodSeconds" not in call.kwargs["body"]
+    api.batch.delete_namespaced_job.assert_not_called()
+    api.core.delete_namespaced_persistent_volume_claim.assert_not_called()
 
 
 async def test_live_adapter_bound_and_released_including_attachless_driver(api, manager_settings):

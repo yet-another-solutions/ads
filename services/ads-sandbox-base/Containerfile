@@ -26,6 +26,7 @@ RUN apt-get update \
         libcap2-bin \
         passt \
         podman \
+        python3 \
         slirp4netns \
         uidmap \
         util-linux \
@@ -46,8 +47,9 @@ RUN apt-get update \
 COPY --from=pause-builder /pause /usr/local/sbin/pause
 COPY scripts/ads-sandbox-boot /usr/local/sbin/ads-sandbox-boot
 COPY scripts/ads-session-exec /usr/local/sbin/ads-session-exec
+COPY scripts/ads-session-device-check /usr/local/sbin/ads-session-device-check
 
-RUN chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/pause \
+RUN chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/ads-session-device-check /usr/local/sbin/pause \
     && test -x /usr/local/sbin/pause
 
 ENTRYPOINT ["/usr/local/sbin/ads-sandbox-boot"]
