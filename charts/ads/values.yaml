@@ -38,6 +38,8 @@ engine:
     allowedAzp: ads-engine
   pingIntervalSeconds: 10
   ackTimeoutSeconds: 10
+  mcpTimeoutSeconds: 120
+  maxToolCalls: 32
 
 # ads consumes ads.engine.output and produces ads.engine.request.
 kafka:
@@ -135,6 +137,98 @@ nodes:
 # ADS owns its sandbox policy/RBAC, not the Kyverno installation.
 sandbox:
   namespace: ads-sandbox
+  # Session size is release metadata in files/sandbox-release.yaml, not a value.
+  golden:
+    slack: 2Gi
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-golden
+      tag: "" # Chart.appVersion unless explicitly overridden
+    resources: {}
+  guest:
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-base
+      tag: ""
+    resources: {}
+  # Applied to both the golden Job and session guest.
+  tolerations: []
+  imagePullSecrets: [] # Names must already exist in sandbox.namespace.
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+  kafka:
+    bootstrapServers: kafka.kafka.svc.cluster.local:9092
+  mcp:
+    replicaCount: 1
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-mcp
+      tag: ""
+      pullPolicy: IfNotPresent
+    port: 8080
+    databaseUrl: postgresql+psycopg://ads_sandbox_mcp:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_sandbox_mcp
+    keycloakClientSecret: change-me
+    existingSecret: "" # Env-keyed Secret; replaces the generated credentials Secret.
+    tlsSecretName: "" # Required for BYO TLS.
+    resources: {}
+    timeoutSeconds: 120
+    stdoutBytes: 65536
+    stderrBytes: 65536
+    inputBytes: 262144
+  manager:
+    replicaCount: 1
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-manager
+      tag: ""
+      pullPolicy: IfNotPresent
+    port: 8080
+    databaseUrl: postgresql+psycopg://ads_sandbox_manager:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_sandbox_manager
+    keycloakClientSecret: change-me
+    existingSecret: ""
+    tlsSecretName: ""
+    resources: {}
+    pollSeconds: 10
+    controlSeconds: 10
+    bakeSeconds: 1800
+    nodeFreshSeconds: 600
+    createSeconds: 120
+    readySeconds: 120
+    barrierSeconds: 3
+    topicReplicationFactor: 1
+    idleSeconds: 1800
+    detachedSeconds: 7200
+    cleanupSeconds: 120
+    pvcTimeoutSeconds: 120
+    lifecycleBatch: 50
+    pingIntervalSeconds: 10
+    pingTimeoutSeconds: 30
+    recoverySeconds: 600
+    # Only manager currently supports SASL/TLS Kafka transport.
+    kafka:
+      securityProtocol: PLAINTEXT
+      saslMechanism: SCRAM-SHA-512
+      saslUsername: ""
+      saslPassword: ""
+      caBundle:
+        secretName: ""
+        key: ca.crt
+  ipc:
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-ipc
+      tag: ""
+    storageClass: local-path # Existing application-node Filesystem class.
+    size: 1Gi
+    keycloakClientSecret: change-me
+    existingSecret: ""
+    tlsSecretName: ""
+    caSecretName: "" # Existing sandbox.namespace Secret with key ca.crt.
+    resources: {}
+    startupSeconds: 120
+    timeoutSeconds: 120
+    ackSeconds: 10
+    pollSeconds: 0.1
+    controlSeconds: 10
+    stdoutBytes: 65536
+    stderrBytes: 65536
+    inputBytes: 262144
   admission:
     policyName: ads-sandbox-ipc-exec
     kyvernoNamespace: kyverno

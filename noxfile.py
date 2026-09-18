@@ -8,6 +8,8 @@ nox.options.default_venv_backend = "uv"
 nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 
 _SRC = (
+    "charts/ads/package_release.py",
+    "charts/ads/tests",
     "deploy/tests",
     "deploy/keycloak/tests",
     "libraries/ads-commons/src",

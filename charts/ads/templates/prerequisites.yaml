@@ -1,2 +1,10 @@
 {{- include "ads.checkPrerequisites" . }}
 {{- include "ads.checkSandboxAdmission" . }}
+{{- include "ads.checkSandboxValues" . }}
+{{- if lookup "v1" "Namespace" "" "kube-system" -}}
+{{- range $name := list "sandbox-block" .Values.sandbox.ipc.storageClass -}}
+{{- if not (lookup "storage.k8s.io/v1" "StorageClass" "" $name) -}}
+{{- fail (printf "ADS requires existing StorageClass %s; install storage infrastructure separately" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

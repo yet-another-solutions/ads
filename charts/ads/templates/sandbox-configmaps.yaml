@@ -1,0 +1,55 @@
+{{- $root := . -}}
+{{- $sb := .Values.sandbox -}}
+{{- range $component, $settings := dict "mcp" $sb.mcp "manager" $sb.manager "ipc" $sb.ipc }}
+{{- $ctx := dict "root" $root "component" $component "settings" $settings }}
+{{- $name := include "ads.sandboxName" $ctx }}
+{{- $prefix := printf "ADS_SANDBOX_%s_" (upper $component) }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ ternary $sb.namespace $root.Values.namespace (eq $component "ipc") }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-{{ $component }}
+data:
+  {{ $prefix }}KEYCLOAK_WELL_KNOWN_URL: {{ $sb.keycloak.wellKnownUrl | quote }}
+  {{ $prefix }}KEYCLOAK_ISSUER: {{ $sb.keycloak.issuer | quote }}
+  {{ $prefix }}KAFKA_BOOTSTRAP_SERVERS: {{ $sb.kafka.bootstrapServers | quote }}
+  {{- if ne $component "ipc" }}
+  {{ $prefix }}PORT: {{ $settings.port | quote }}
+  {{ $prefix }}TLS_CERT_PATH: "/tls/tls.crt"
+  {{ $prefix }}TLS_KEY_PATH: "/tls/tls.key"
+  {{- if $root.Values.tls.caBundle.secretName }}
+  {{ $prefix }}TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}
+  {{- end }}
+  {{- if eq $component "mcp" }}
+  {{ $prefix }}ALLOWED_HOSTS: {{ printf "%s,%s:*,%s.%s,%s.%s:*,%s.%s.svc,%s.%s.svc:*,%s.%s.svc.cluster.local,%s.%s.svc.cluster.local:*" $name $name $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace | quote }}
+  {{- end }}
+  {{- if eq $component "manager" }}
+  ADS_SESSION_SIZE: {{ ($root.Files.Get "files/sandbox-release.yaml" | fromYaml).sessionSize | quote }}
+  {{ $prefix }}GOLDEN_VERSION: {{ printf "v%s" $root.Chart.AppVersion | quote }}
+  {{ $prefix }}GOLDEN_IMAGE: {{ include "ads.sandboxImage" (dict "root" $root "image" $sb.golden.image) | quote }}
+  {{ $prefix }}GOLDEN_SLACK: {{ $sb.golden.slack | quote }}
+  {{ $prefix }}NAMESPACE: {{ $sb.namespace | quote }}
+  {{ $prefix }}NODE_SELECTOR: {{ dict $root.Values.nodes.sandbox.labelKey (toString $root.Values.nodes.sandbox.labelValue) | toJson | quote }}
+  {{ $prefix }}TOLERATIONS: {{ $sb.tolerations | toJson | quote }}
+  {{ $prefix }}RESOURCES: {{ $sb.golden.resources | toJson | quote }}
+  {{ $prefix }}IMAGE_PULL_SECRETS: {{ $sb.imagePullSecrets | join "," | quote }}
+  {{ $prefix }}SESSION_OBJECTS: {{ include "ads.sandboxSessionObjects" $root | quote }}
+  {{ $prefix }}KAFKA_SECURITY_PROTOCOL: {{ $settings.kafka.securityProtocol | quote }}
+  {{ $prefix }}KAFKA_SASL_MECHANISM: {{ $settings.kafka.saslMechanism | quote }}
+  {{- if $settings.kafka.caBundle.secretName }}
+  {{ $prefix }}KAFKA_CA_BUNDLE: "/kafka-ca/ca.crt"
+  {{- end }}
+  {{- end }}
+  {{- range $key, $value := $settings }}
+  {{- if or (hasSuffix "Seconds" $key) (hasSuffix "Bytes" $key) (has $key (list "topicReplicationFactor" "lifecycleBatch")) }}
+  {{- if ne $key "createSeconds" }}
+  {{ $prefix }}{{ $key | snakecase | upper }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+{{- end }}

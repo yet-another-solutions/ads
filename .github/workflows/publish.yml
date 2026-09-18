@@ -190,12 +190,9 @@ jobs:
           path: dist/ads-keycloak-realm-*
           if-no-files-found: error
 
-  release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [channel, python, publish-image, realm-sample]
+  chart:
+    needs: [channel, python]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
@@ -205,13 +202,30 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.channel.outputs.image_tag }}
         run: |
-          sed -i "s/^version: .*/version: ${IMAGE_TAG}/" charts/ads/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" charts/ads/Chart.yaml
+          python3 charts/ads/package_release.py --version "${IMAGE_TAG}" --session-size "${ADS_SESSION_SIZE}"
+          helm lint charts/ads
           mkdir -p dist
           helm package charts/ads --destination dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ads-chart-${{ needs.channel.outputs.image_tag }}
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [channel, python, publish-image, realm-sample, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - uses: actions/download-artifact@v4
         with:
           name: ads-keycloak-realm-${{ needs.channel.outputs.image_tag }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: ads-chart-${{ needs.channel.outputs.image_tag }}
           path: dist
       - name: Attach chart and standalone Keycloak sample to GitHub Release
         uses: softprops/action-gh-release@v2

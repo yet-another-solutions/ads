@@ -13,6 +13,9 @@ data:
   ADS_ENGINE_CONSUMER_GROUP: {{ .Values.engine.kafka.consumerGroup | quote }}
   ADS_ENGINE_PING_INTERVAL_SECONDS: {{ .Values.engine.pingIntervalSeconds | quote }}
   ADS_ENGINE_ACK_TIMEOUT_SECONDS: {{ .Values.engine.ackTimeoutSeconds | quote }}
+  ADS_ENGINE_MCP_URL: {{ printf "https://%s:%v/mcp" (include "ads.sandboxName" (dict "root" . "component" "mcp")) .Values.sandbox.mcp.port | quote }}
+  ADS_ENGINE_MCP_TIMEOUT_SECONDS: {{ .Values.engine.mcpTimeoutSeconds | quote }}
+  ADS_ENGINE_MAX_TOOL_CALLS: {{ .Values.engine.maxToolCalls | quote }}
   ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.engine.keycloak.wellKnownUrl | quote }}
   ADS_ENGINE_KEYCLOAK_ISSUER: {{ .Values.engine.keycloak.issuer | quote }}
   ADS_ENGINE_KEYCLOAK_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}
