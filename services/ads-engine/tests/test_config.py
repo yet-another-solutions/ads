@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,9 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setenv("ADS_ENGINE_ACK_AUDIENCE", "ads")
     monkeypatch.setenv("ADS_ENGINE_ALLOWED_CALLERS", "ads, ads-ui")
     monkeypatch.setenv("ADS_ENGINE_TLS_CA_BUNDLE", str(ca))
+    monkeypatch.setenv("ADS_ENGINE_MCP_URL", "https://sandbox.test/mcp")
+    monkeypatch.setenv("ADS_ENGINE_MCP_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("ADS_ENGINE_MAX_TOOL_CALLS", "12")
 
     settings = load_settings()
 
@@ -42,6 +46,27 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert settings.ack_audience == "ads"
     assert settings.allowed_callers == frozenset({"ads", "ads-ui"})
     assert settings.tls_ca_bundle == ca
+    assert settings.mcp_url == "https://sandbox.test/mcp"
+    assert settings.mcp_timeout_seconds == 90
+    assert settings.max_tool_calls == 12
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"mcp_url": "http://sandbox.test/mcp"},
+        {"mcp_url": "https://user:secret@sandbox.test/mcp"},
+        {"mcp_url": "https://sandbox.test/mcp#fragment"},
+        {"mcp_url": "https:///mcp"},
+        {"mcp_timeout_seconds": 0},
+        {"mcp_timeout_seconds": float("nan")},
+        {"mcp_timeout_seconds": float("inf")},
+        {"max_tool_calls": 0},
+    ],
+)
+def test_mcp_settings_fail_closed(settings, changes):
+    with pytest.raises(ValueError):
+        replace(settings, **changes)
 
 
 def test_ack_timeout_defaults_to_ten_seconds(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Sequence
+from contextlib import aclosing
 from typing import Any, Protocol
 
 import structlog
@@ -28,6 +29,7 @@ from ads_commons.security import (
 )
 from ads_engine.chat import ChatStreamer, StreamDelta
 from ads_engine.config import Settings
+from ads_engine.mcp_credentials import ExecutionFailed
 from ads_engine.store import ActiveSessionStore
 
 log = structlog.get_logger("ads_engine")
@@ -116,7 +118,6 @@ class EngineService:
             )
             waiter = asyncio.Event()
             self._ack_waiters[request.session_id] = (request.message_id, waiter)
-            ping_task = asyncio.create_task(self._ping(request.session_id))
             with SecurityContextHolder.bound(minted):
                 await self._publisher.publish(
                     request.session_id,
@@ -130,6 +131,7 @@ class EngineService:
                 )
                 await self._wait_for_ack_response(request.session_id, waiter)
                 self._ack_waiters.pop(request.session_id, None)
+                ping_task = asyncio.create_task(self._ping(request.session_id))
                 last_order = await self._run_model(request)
                 await _cancel(ping_task)
                 await self._publisher.publish(
@@ -198,14 +200,19 @@ class EngineService:
         last_error: Exception | None = None
         for attempt in range(OPENAI_ATTEMPTS):
             try:
-                async for delta in self._chat.stream(request):
-                    await self._publisher.publish(
-                        request.session_id,
-                        _partial(request.session_id, order, delta),
-                    )
-                    order += 1
-                    emitted_partial = True
+                async with aclosing(self._chat.stream(request)) as stream:
+                    async for delta in stream:
+                        # Publication can fail after a tool side effect. Never
+                        # restart a run once a delta reaches the output boundary.
+                        emitted_partial = True
+                        await self._publisher.publish(
+                            request.session_id,
+                            _partial(request.session_id, order, delta),
+                        )
+                        order += 1
                 break
+            except ExecutionFailed:
+                raise
             except Exception as exc:
                 last_error = exc
                 if emitted_partial:

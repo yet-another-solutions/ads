@@ -45,6 +45,21 @@ spec:
       - {client: ads-sandbox-mcp, roles: [user]}
       - {client: ads-sandbox-manager, roles: [user]}
       - {client: ads-sandbox-ipc, roles: [user]}
+    clientScopes:
+      # Only explicitly requested by the access-only engine acknowledgement STE.
+      # Never request this scope for the MCP pair or its refresh grant.
+      - name: ads-engine-ack
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: audience-ads
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads
+              access.token.claim: "true"
+              id.token.claim: "false"
     # Built-in basic/roles/profile/email/service_account scopes are created by
     # Keycloak on new-realm import. No custom replacement or offline_access.
     clients:
@@ -103,24 +118,22 @@ spec:
         implicitFlowEnabled: false
         directAccessGrantsEnabled: false
         fullScopeAllowed: false
-        defaultClientScopes: [basic, roles, service_account]
-        optionalClientScopes: []
+        # No built-in roles scope: its audience resolver/client-role mapper can
+        # widen a refreshed token. Only the scoped realm role mapper below.
+        defaultClientScopes: [basic]
+        optionalClientScopes: [ads-engine-ack]
         attributes:
           standard.token.exchange.enabled: "true"
+          standard.token.exchange.enableRefreshRequestedTokenType: SAME_SESSION
           access.token.lifespan: "300"
         protocolMappers:
-          - name: audience-ads-engine
+          - name: scoped-user-role
             protocol: openid-connect
-            protocolMapper: oidc-audience-mapper
+            protocolMapper: oidc-usermodel-realm-role-mapper
             config:
-              included.client.audience: ads-engine
-              access.token.claim: "true"
-              id.token.claim: "false"
-          - name: audience-ads
-            protocol: openid-connect
-            protocolMapper: oidc-audience-mapper
-            config:
-              included.client.audience: ads
+              claim.name: realm_access.roles
+              jsonType.label: String
+              multivalued: "true"
               access.token.claim: "true"
               id.token.claim: "false"
           - name: audience-ads-sandbox-mcp

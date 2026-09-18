@@ -53,7 +53,7 @@ replacement can expose the import Job's environment variables.
 | Client | Browser code flow | STE V2 | Access-token audiences |
 | --- | --- | --- | --- |
 | `ads` | Yes | Yes | `ads`, `ads-engine`, `ads-preferences` |
-| `ads-engine` | No | Yes | `ads-engine`, `ads`, `ads-sandbox-mcp` |
+| `ads-engine` | No | Yes | Default: `ads-sandbox-mcp`; optional `ads-engine-ack` scope: `ads` |
 | `ads-preferences` | No | No | `ads-preferences` |
 | `ads-sandbox-mcp` | No | Yes | `ads-sandbox-manager` |
 | `ads-sandbox-manager` | No | Yes | `ads-sandbox-manager`, `ads-sandbox-ipc`, `ads-sandbox-mcp` |
@@ -79,14 +79,73 @@ Do not replace this with an unconditional hardcoded-subject mapper.
 Audiences enable the intended exchange paths but are **not** a substitute for
 ADS caller allowlists. Each callee still verifies signature, issuer, expiry,
 UUID subject, audience, and permitted `azp`; user operations require `user`.
-Lifecycle tokens are service identity, not a user security context. Every hop
-uses a fresh [Standard Token Exchange V2](https://www.keycloak.org/securing-apps/token-exchange).
+Lifecycle tokens are service identity, not a user security context. Hops use a
+fresh [Standard Token Exchange V2](https://www.keycloak.org/securing-apps/token-exchange),
+except the run-local engine-to-MCP pair described below.
 
 Configure ADS issuer/discovery/JWKS URLs for the imported realm and distribute
 the matching client secrets to the relevant application namespaces. The import
 Secret is not the runtime Secret and is not automatically copied across namespaces.
 The current Helm chart does not yet wire all later sandbox runtime credentials.
 Record the imported manager/IPC client UUIDs for later lifecycle verification.
+
+## Engine MCP refresh and existing realms
+
+The engine initially exchanges the inbound user token for an MCP access/refresh
+pair, then uses only refresh grants for that run. Enable the engine client
+attribute `standard.token.exchange.enableRefreshRequestedTokenType=SAME_SESSION`;
+the sample keeps access-token lifespan at 300 seconds, exceeding twice the
+default 120-second MCP timeout. Refresh recomputes claims from client scopes and
+mappers, so `audience` on the initial STE alone is not a durable restriction.
+See [Keycloak token exchange](https://www.keycloak.org/securing-apps/token-exchange).
+
+The engine has only `basic` as a default scope, a direct MCP audience mapper, a
+direct realm-role mapper, `fullScopeAllowed=false`, and explicit `user` role
+scope mapping. It has no default `roles`, audience-resolve, service-account role,
+offline, or broad client-role mapper. The separate `ads-engine-ack` optional
+scope adds only `ads`; engine ACK STE explicitly requests it, while MCP STE never
+does. Do not attach that scope as default or request it for the MCP refresh pair.
+
+For an existing lab realm, **do not apply the create-only import to reconcile it**.
+At the deferred deployment stage, use an authenticated Keycloak Admin REST client
+over trusted TLS. Obtain the realm and client UUID by discovery, not from the
+sample UUIDs. Preserve a protected pre-change export and reconcile these exact
+resources from `spec.realm` in the sample:
+
+1. `GET /admin/realms/{realm}/clients?clientId=ads-engine`: require exactly one
+   match. On that client, `PUT /clients/{id}` the existing representation with
+   `fullScopeAllowed=false` and the sample engine attributes merged into
+   `attributes`. Preserve its live secret, UUID and other unrelated fields.
+2. `GET /client-scopes`: upsert the `ads-engine-ack` scope with exactly the sample
+   scope's mapper/config via `POST /client-scopes` or `PUT /client-scopes/{id}`;
+   reconcile its `/protocol-mappers/models` explicitly as well. This shared
+   scope must have no additional mappers or role mappings.
+3. For `/clients/{id}/default-client-scopes`, remove every attached scope except
+   `basic` with `DELETE .../{scope-id}`. Attach `basic` if missing using
+   `PUT .../{scope-id}`. Inspect `basic` itself for unexpected custom role or
+   audience mappers before proceeding; do not silently modify a shared scope.
+4. Reconcile `/clients/{id}/optional-client-scopes` to only `ads-engine-ack`
+   using the same GET/DELETE/PUT membership endpoints.
+5. Reconcile `/clients/{id}/protocol-mappers/models` to the two engine mappers
+   in the sample: `audience-ads-sandbox-mcp` and `scoped-user-role`. Delete superseded
+   ADS/engine audience mappers, audience-resolve, or other widening mappers.
+   Create/update by mapper name using POST or PUT with the observed mapper ID.
+6. Reconcile `/clients/{id}/scope-mappings/realm` to the real `user` role
+   representation (`GET /roles/user`). Remove other realm and client-role scope
+   mappings, inspect composites, and verify service accounts have no user role.
+   Keep human role assignments unchanged.
+7. Read all resources back and compare against these desired fields. Verify a
+   browser-user token → engine STE → MCP pair, then at least two refreshes:
+   unchanged UUID subject, `azp=ads-engine`, singleton `ads-sandbox-mcp` audience,
+   only `user` realm role, no `resource_access`, and usable expiry. Separately
+   verify ACK STE with `scope=ads-engine-ack` targets `ads` and still supports the
+   return ADS→engine exchange. Fail deployment on any extra authority.
+
+All paths after the first step are relative to `/admin/realms/{realm}`.
+Review deletions against the protected export before approval; never print
+client secrets or access/refresh tokens. These are reproducible desired-state
+changes, not a claim that the existing lab was modified. Live reconciliation
+and sustained refresh/expiry/revocation smoke are deferred until the full plan.
 
 ## CD artifacts and verification
 

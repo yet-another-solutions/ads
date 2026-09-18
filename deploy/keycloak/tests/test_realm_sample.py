@@ -19,7 +19,7 @@ CLIENTS = {
 }
 AUDIENCES = {
     "ads": {"ads", "ads-engine", "ads-preferences"},
-    "ads-engine": {"ads-engine", "ads", "ads-sandbox-mcp"},
+    "ads-engine": {"ads-sandbox-mcp"},
     "ads-preferences": {"ads-preferences"},
     "ads-sandbox-mcp": {"ads-sandbox-manager"},
     "ads-sandbox-manager": {"ads-sandbox-manager", "ads-sandbox-ipc", "ads-sandbox-mcp"},
@@ -64,10 +64,23 @@ def test_flows_scopes_audiences_and_role_assignment():
         assert client["standardFlowEnabled"] == (name == "ads")
         assert client["directAccessGrantsEnabled"] is False
         assert client["implicitFlowEnabled"] is False
-        assert client["optionalClientScopes"] == []
+        assert client["optionalClientScopes"] == (
+            ["ads-engine-ack"] if name == "ads-engine" else []
+        )
         assert "offline_access" not in client["defaultClientScopes"]
         assert "basic" in client["defaultClientScopes"]
-        assert "roles" in client["defaultClientScopes"]
+        if name == "ads-engine":
+            assert client["defaultClientScopes"] == ["basic"]
+            assert (
+                client["attributes"]["standard.token.exchange.enableRefreshRequestedTokenType"]
+                == "SAME_SESSION"
+            )
+            assert {m["protocolMapper"] for m in client["protocolMappers"]} == {
+                "oidc-audience-mapper",
+                "oidc-usermodel-realm-role-mapper",
+            }
+        else:
+            assert "roles" in client["defaultClientScopes"]
         assert client["attributes"]["standard.token.exchange.enabled"] == (
             "false" if name == "ads-preferences" else "true"
         )
@@ -80,6 +93,18 @@ def test_flows_scopes_audiences_and_role_assignment():
     browser = next(c for c in realm["clients"] if c["clientId"] == "ads")
     assert browser["redirectUris"] == ["https://ads.example.com/auth/callback"]
     assert browser["webOrigins"] == ["https://ads.example.com"]
+
+
+def test_engine_ack_scope_is_optional_and_only_adds_ads():
+    realm = yaml.safe_load(SAMPLE.read_text())["spec"]["realm"]
+    scope = next(s for s in realm["clientScopes"] if s["name"] == "ads-engine-ack")
+    assert len(scope["protocolMappers"]) == 1
+    mapper = scope["protocolMappers"][0]
+    assert mapper["protocolMapper"] == "oidc-audience-mapper"
+    assert mapper["config"]["included.client.audience"] == "ads"
+    assert mapper["config"]["access.token.claim"] == "true"
+    for client in realm["clients"]:
+        assert "ads-engine-ack" not in client["defaultClientScopes"]
 
 
 def test_lifecycle_subjects_are_service_only_and_admin_protected():

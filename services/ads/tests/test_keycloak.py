@@ -405,6 +405,11 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                     "client_secret": secrets[caller],
                     "subject_token": subject,
                     "audience": audience,
+                    **(
+                        {"scope": "ads-engine-ack"}
+                        if caller == "ads-engine" and audience == "ads"
+                        else {}
+                    ),
                 },
                 allowed=allowed,
             )
@@ -524,6 +529,47 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 current = exchange(caller, audience, current)
             exchange("ads-sandbox-ipc", "ads-sandbox-mcp", initial, allowed=False)
             exchange("ads-preferences", "ads", initial, allowed=False)
+            pair = token(
+                {
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "requested_token_type": "urn:ietf:params:oauth:token-type:refresh_token",
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                    "client_id": "ads-engine",
+                    "client_secret": secrets["ads-engine"],
+                    "subject_token": engine,
+                    "audience": "ads-sandbox-mcp",
+                }
+            )
+            for _ in range(3):
+                assert pair["refresh_token"] and pair["refresh_expires_in"] > 0
+                checked = verifier("ads-sandbox-mcp")
+                claims = checked.verified_claims(pair["access_token"])
+                assert claims["sub"] == user_id and claims["azp"] == "ads-engine"
+                assert claims["aud"] in ("ads-sandbox-mcp", ["ads-sandbox-mcp"])
+                assert set(claims["realm_access"]["roles"]) == {"user"}
+                assert not claims.get("resource_access")
+                assert "ads-engine-ack" not in claims.get("scope", "").split()
+                assert claims["exp"] - claims["iat"] > 240
+                pair = token(
+                    {
+                        "grant_type": "refresh_token",
+                        "client_id": "ads-engine",
+                        "client_secret": secrets["ads-engine"],
+                        "refresh_token": pair["refresh_token"],
+                    }
+                )
+            # Revocation is recomputed on refresh, never copied from the first pair.
+            admin("DELETE", admin_path + f"/users/{user_id}/role-mappings/realm", [role])
+            revoked = token(
+                {
+                    "grant_type": "refresh_token",
+                    "client_id": "ads-engine",
+                    "client_secret": secrets["ads-engine"],
+                    "refresh_token": pair["refresh_token"],
+                }
+            )
+            claims = verifier("ads-sandbox-mcp").verified_claims(revoked["access_token"])
+            assert "user" not in claims.get("realm_access", {}).get("roles", [])
             token(
                 {
                     "grant_type": "password",
