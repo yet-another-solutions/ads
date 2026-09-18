@@ -35,6 +35,10 @@ class Publisher(Protocol):
     async def send(self, topic: str, key: UUID, raw: bytes, token: str) -> None: ...
 
 
+class Maintenance(Protocol):
+    async def service_expired(self, row: SandboxSession) -> None: ...
+
+
 @dataclass(frozen=True)
 class VerifiedExec:
     """Constructed by the JWT/caller-checked boundary, never persisted or logged."""
@@ -56,6 +60,7 @@ class TransitService:
         provisioner: SessionProvisioner,
         publisher: Publisher,
         tokens: TokenMinter,
+        maintenance: Maintenance,
     ) -> None:
         self.settings = settings
         self.sessions = sessions
@@ -63,6 +68,7 @@ class TransitService:
         self.provisioner = provisioner
         self.publisher = publisher
         self.tokens = tokens
+        self.maintenance = maintenance
         self._pending: dict[UUID, VerifiedExec] = {}
         self._requests: dict[UUID, asyncio.Task[None]] = {}
         self._workers: dict[UUID, asyncio.Task[SandboxSession]] = {}
@@ -140,11 +146,42 @@ class TransitService:
 
     async def _request(self, incoming: VerifiedExec) -> None:
         execution = incoming.message.execution_id
+        service_transition = None
         try:
-            async with asyncio.timeout(self.settings.ready_seconds):
+            async with asyncio.timeout(self.settings.ready_seconds) as wait:
                 while self._pending.get(execution) is incoming:
                     row = await self._row(incoming.session_id)
+                    if row is not None and row.status == "service":
+                        if row.service_deadline is None:
+                            raise RuntimeError("service has no durable deadline")
+                        remaining = (row.service_deadline - datetime.now(UTC)).total_seconds()
+                        if remaining <= 0:
+                            await self.maintenance.service_expired(row)
+                            raise TimeoutError("sandbox maintenance expired")
+                        transition = (row.sandbox_id, row.status_changed_at)
+                        if service_transition != transition:
+                            # All callers share the persisted deadline, not a fresh timeout.
+                            # Leave one bounded control interval to publish its failure verdict.
+                            wait.reschedule(
+                                asyncio.get_running_loop().time()
+                                + remaining
+                                + self.settings.control_seconds
+                            )
+                            service_transition = transition
+                        await asyncio.sleep(min(self.settings.poll_seconds, 0.1))
+                        continue
+                    if service_transition is not None:
+                        wait.reschedule(
+                            asyncio.get_running_loop().time() + self.settings.ready_seconds
+                        )
+                        service_transition = None
                     if row is not None and row.status == "ready":
+                        async with self.sessions.begin() as db:
+                            row = await self.repository.admit(
+                                db, incoming.session_id, datetime.now(UTC)
+                            )
+                        if row is None:
+                            continue
                         # _send rechecks after STE so reset during minting drops this buffer.
                         if self._pending.get(execution) is incoming:
                             await self._send(
@@ -203,6 +240,7 @@ class TransitService:
 
     async def ready(self, sandbox_id: UUID) -> None:
         # IPC may emit ready before the Kubernetes create response's UID is committed.
+        expected = None
         async with asyncio.timeout(self.settings.ready_seconds):
             while True:
                 async with self.sessions.begin() as db:
@@ -211,7 +249,13 @@ class TransitService:
                         if row is not None and row.status == "ready":
                             log.warning("manager duplicate IPC ready")
                         return
-                    if await self.repository.mark_ready(db, sandbox_id, datetime.now(UTC)):
+                    if expected is None:
+                        expected = row.status_changed_at
+                    if row.status_changed_at != expected:
+                        return
+                    if await self.repository.mark_ready(
+                        db, sandbox_id, datetime.now(UTC), expected
+                    ):
                         return
                 await asyncio.sleep(min(self.settings.poll_seconds, 0.1))
 

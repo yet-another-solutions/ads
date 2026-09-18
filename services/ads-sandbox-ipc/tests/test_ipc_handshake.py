@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
@@ -135,7 +136,7 @@ async def test_shutdown_finishes_then_acks_and_repeated_shutdown_acks_again(ipc)
             SandboxAckReply(request.execution_id, request.session_id, request.message_id)
         )
         await eventually(lambda: len(ipc.kube.calls) == 2)
-        shutdown = SandboxShutdown(ipc.settings.sandbox_id)
+        shutdown = SandboxShutdown(ipc.settings.sandbox_id, datetime.now(UTC))
         token = await ipc.send(shutdown, topic=READY_TOPIC)
         count = len(ipc.publisher.messages)
         await ipc.send(ipc.request())
@@ -148,11 +149,13 @@ async def test_shutdown_finishes_then_acks_and_repeated_shutdown_acks_again(ipc)
         await eventually(lambda: isinstance(ipc.publisher.messages[-1], SandboxShutdownAck))
         assert isinstance(ipc.publisher.messages[-2], SandboxResult)
         assert ipc.publisher.subject_tokens[-1] == token
+        assert ipc.publisher.messages[-1].transition == shutdown.transition
         assert ipc.service.http_ready  # readiness latches, never an exec/guest-alive probe
         second_token = await ipc.send(shutdown, topic=READY_TOPIC)
         assert isinstance(ipc.publisher.messages[-1], SandboxShutdownAck)
         assert isinstance(ipc.publisher.messages[-2], SandboxShutdownAck)
         assert ipc.publisher.subject_tokens[-1] == second_token
+        assert ipc.publisher.messages[-1].transition == shutdown.transition
 
 
 async def test_shutdown_drops_waiter(ipc) -> None:

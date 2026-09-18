@@ -2,6 +2,7 @@
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
 revision = "0001_session"
 down_revision = None
@@ -17,6 +18,8 @@ def upgrade() -> None:
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("golden_version", sa.String(), nullable=False),
         sa.Column("pvc_uid", sa.String(), nullable=True),
+        sa.Column("pvc_id", sa.Uuid(), nullable=True),
+        sa.Column("service_deadline", sa.DateTime(timezone=True), nullable=True),
         sa.Column("guest_deployment_uid", sa.String(), nullable=True),
         sa.Column("ipc_deployment_uid", sa.String(), nullable=True),
         sa.Column("ipc_pvc_uid", sa.String(), nullable=True),
@@ -27,11 +30,53 @@ def upgrade() -> None:
         sa.Column("last_ping_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "status IN ('pending','creating','ready','shutting_down',"
-            "'stopped','failed','recovering')",
+            "'stopped','service','failed','recovering')",
             name="sandbox_session_status",
         ),
     )
+    op.create_table(
+        "session_pvc",
+        sa.Column("pvc_id", sa.Uuid(), primary_key=True),
+        sa.Column(
+            "session_id",
+            sa.Uuid(),
+            sa.ForeignKey("sandbox_session.session_id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("uid", sa.String(), nullable=True),
+        sa.Column("release_evidence", JSONB(), nullable=True),
+        sa.Column("state", sa.String(), nullable=False),
+        sa.Column("last_execution", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_state_change", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "state IN ('detached','attaching','attached','detaching','destroying','failed')",
+            name="session_pvc_state",
+        ),
+    )
+    op.create_index("ix_session_pvc_session_id", "session_pvc", ["session_id"])
+    op.create_table(
+        "cleanup_work",
+        sa.Column("work_id", sa.Uuid(), primary_key=True),
+        sa.Column(
+            "session_id",
+            sa.Uuid(),
+            sa.ForeignKey("sandbox_session.session_id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("pvc_id", sa.Uuid(), nullable=True),
+        sa.Column("kind", sa.String(), nullable=False),
+        sa.Column("state_changed", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("pvc_changed", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("deadline", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("acknowledged", sa.Boolean(), nullable=False),
+        sa.Column("targets", JSONB(), nullable=False),
+    )
+    op.create_index("ix_cleanup_work_session_id", "cleanup_work", ["session_id"])
 
 
 def downgrade() -> None:
+    op.drop_table("cleanup_work")
+    op.drop_table("session_pvc")
     op.drop_table("sandbox_session")

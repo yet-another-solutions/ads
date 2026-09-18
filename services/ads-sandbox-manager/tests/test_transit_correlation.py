@@ -21,7 +21,7 @@ from ads_sandbox_manager.service import REPLY_TOPIC, TransitService, VerifiedExe
 
 @pytest.fixture
 def transit(manager_settings):
-    service = TransitService(manager_settings, Mock(), Mock(), Mock(), Mock(), Mock())
+    service = TransitService(manager_settings, Mock(), Mock(), Mock(), Mock(), Mock(), AsyncMock())
     service._row = AsyncMock()
     service._send = AsyncMock()
     return service

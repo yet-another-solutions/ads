@@ -49,7 +49,7 @@ async def test_named_gets_and_create_use_only_configured_namespace(session_api, 
         object_settings.namespace,
         _request_timeout=0.1,
     )
-    body = guest_deployment(object_settings, sid, sandbox, object_settings.golden_version)
+    body = guest_deployment(object_settings, sid, sandbox, object_settings.golden_version, uuid4())
     await kube.create_deployment(body)
     kube.apps.create_namespaced_deployment.assert_called_once_with(
         object_settings.namespace,

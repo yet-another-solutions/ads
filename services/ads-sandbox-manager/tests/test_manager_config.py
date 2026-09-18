@@ -49,6 +49,11 @@ def test_invalid_or_overflow_size_fails(value):
         ("node_fresh_seconds", float("nan")),
         ("ready_seconds", 0),
         ("barrier_seconds", float("nan")),
+        ("idle_seconds", 0),
+        ("detached_seconds", -1),
+        ("cleanup_seconds", float("inf")),
+        ("pvc_timeout_seconds", float("nan")),
+        ("lifecycle_batch", 0),
         ("topic_replication_factor", 0),
         ("bake_seconds", 0),
         ("node_selector", []),
@@ -134,6 +139,30 @@ def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
     assert settings.database_url not in repr(settings)
     assert settings.keycloak_client_secret not in repr(settings)
     assert settings.barrier_seconds == 3
+    assert settings.idle_seconds == 1800
+    assert settings.detached_seconds == 7200
+    assert settings.cleanup_seconds == settings.pvc_timeout_seconds == 120
+    assert settings.lifecycle_batch == 50
+
+
+def test_lifecycle_configuration_is_environment_overridable(monkeypatch, manager_tls):
+    configure(monkeypatch, manager_tls)
+    for name, value in {
+        "IDLE_SECONDS": "60",
+        "DETACHED_SECONDS": "90",
+        "CLEANUP_SECONDS": "20",
+        "PVC_TIMEOUT_SECONDS": "30",
+        "LIFECYCLE_BATCH": "7",
+    }.items():
+        monkeypatch.setenv("ADS_SANDBOX_MANAGER_" + name, value)
+    settings = load_settings()
+    assert (
+        settings.idle_seconds,
+        settings.detached_seconds,
+        settings.cleanup_seconds,
+        settings.pvc_timeout_seconds,
+        settings.lifecycle_batch,
+    ) == (60, 90, 20, 30, 7)
 
 
 @pytest.mark.parametrize(

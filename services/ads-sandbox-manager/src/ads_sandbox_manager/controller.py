@@ -8,12 +8,19 @@ from uuid import UUID
 import msgspec
 
 from ads_commons.engine import authorization_token
-from ads_commons.sandbox import SandboxReady, decode_inbound, decode_outbound, decode_ready
+from ads_commons.sandbox import (
+    SandboxReady,
+    SandboxShutdownAck,
+    decode_inbound,
+    decode_outbound,
+    decode_ready,
+)
 from ads_commons.security import ensure_caller
 from ads_commons_beans import JwtVerifier
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP
 from ads_sandbox_manager.barrier import TOPIC, BarrierMessage, ManagerBarrier
 from ads_sandbox_manager.config import Settings
+from ads_sandbox_manager.lifecycle import TOPICS, LifecycleService, Signal
 from ads_sandbox_manager.service import READY_TOPIC, REQUEST_TOPIC, TransitService, VerifiedExec
 
 log = logging.getLogger(__name__)
@@ -28,11 +35,39 @@ class KafkaController:
         verifier: JwtVerifier,
         service: TransitService,
         barrier: ManagerBarrier,
+        lifecycle: LifecycleService,
     ) -> None:
         self.settings = settings
         self.verifier = verifier
         self.service = service
         self.barrier = barrier
+        self.lifecycle = lifecycle
+
+    async def admit_lifecycle(
+        self,
+        topic: str,
+        raw: bytes,
+        key: bytes | None,
+        headers: Sequence[tuple[str | bytes, bytes | None]] | None = None,
+    ) -> None:
+        # Only malformed/unauthorized messages are classified here. DB admission failures
+        # must escape so the durable consumer cannot commit past unfinished work.
+        try:
+            if topic not in TOPICS:
+                return
+            token = authorization_token(headers)
+            if token is None:
+                return
+            async with asyncio.timeout(self.settings.control_seconds):
+                context = await asyncio.to_thread(self.verifier.authenticate, token)
+                ensure_caller(context, MANAGER)
+            message = msgspec.json.decode(raw, type=Signal)
+            if key != str(message.session_id).encode():
+                return
+        except Exception:
+            log.warning("manager lifecycle signal rejected")
+            return
+        await self.lifecycle.admit(topic, message)
 
     async def on_message(
         self,
@@ -70,7 +105,12 @@ class KafkaController:
                     and key == str(lifecycle.sandbox_id).encode()
                 ):
                     await self.service.ready(lifecycle.sandbox_id)
-                # Startup error/shutdown-ack handling belongs to later lifecycle slices.
+                elif (
+                    isinstance(lifecycle, SandboxShutdownAck)
+                    and key == str(lifecycle.sandbox_id).encode()
+                ):
+                    await self.lifecycle.shutdown_ack(lifecycle.sandbox_id, lifecycle.transition)
+                # Startup error handling remains outside v1.
             elif topic == TOPIC:
                 coordination = msgspec.json.decode(raw, type=BarrierMessage)
                 if key == str(coordination.sandbox_id).encode():

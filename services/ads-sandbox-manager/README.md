@@ -1,9 +1,10 @@
 # ads-sandbox-manager
 
-Slices 7 through 9 implement golden ensure, session object provisioning, and authenticated Kafka transit.
+Slices 7 through 11 implement golden ensure, session object provisioning,
+authenticated Kafka transit, deterministic handshake proof, and lifecycle cleanup.
 This is a top-level uv workspace member,
 included in all five Nox gates and CI image lint, build, and import smoke.
-Idle/recover schedulers and application/Helm service wiring remain later slices.
+The full ping/recovery executor and application/Helm service wiring remain later slices.
 The production `TopicPreparation` creates dynamic topics, waits for the local
 response subscription/seek, then runs a best-effort manager barrier before compute.
 There is no unauthenticated provisioning endpoint.
@@ -88,10 +89,11 @@ abort/reset: transit owns its detached lifetime.
 
 Creation order is:
 
-1. GET only `ads-sandbox-{session_id}`. If absent and no persisted UID, clone the
+1. Persist a new PVC-lifetime UUID and the sandbox/attaching claim jointly.
+   GET only `ads-sandbox-{pvc_id}`. If absent and no persisted UID, clone the
    exact released golden observation, sized at least to its actual capacity.
-   If it already has the matching session label and valid block contract, adopt
-   its UID and recorded golden version; do not replace or upgrade its contents.
+   A conflicting create must match the already-persisted lifetime, session,
+   sandbox labels, and block contract before its UID can be recorded.
 2. Commit that disk UID before any topics or compute.
 3. Prepare topics, subscribe/seek the result topic, and run the best-effort barrier.
 4. Create Filesystem PVC `ads-sandbox-ipc-{sandbox_id}`.
@@ -120,7 +122,7 @@ Resume requires the persisted session PVC UID, matching immutable session label,
 golden version, Block mode, and `sandbox-block` class. A missing/replaced/foreign/
 deleting/incompatible disk fails closed, without clone, attach, or delete.
 Resume recreates only the compute/IPC resources and does not need a current
-golden source. Normal idle/disposal/recovery deletion is not implemented here.
+golden source. A reaped session gets a fresh PVC UUID and golden clone.
 No claim has a disposable-compute owner reference.
 
 PVCs can remain Pending while the Deployments are created; this avoids
@@ -129,7 +131,91 @@ GET and compatibility check, never blind adoption. The session create pass is
 bounded. Failures leave a durable `failed` row and retained objects for later
 recovery, with no exception bodies, tokens, or command output stored.
 
-## Lifecycle
+## Idle, retention, and orphan cleanup
+
+Fresh installations initialize `sandbox_session`, `session_pvc`, and `cleanup_work`.
+This changes the initial schema, deliberately without a legacy migration, name
+adoption, or backfill. Existing slice-10 databases are not an in-place upgrade target.
+The stable session UUID is separate from both sandbox identity and disk lifetime.
+`session_pvc` tracks `attaching`, `attached`, `detaching`, `detached`, `destroying`,
+and `failed`, with execution and exact transition timestamps.
+
+All joint mutations lock the sandbox before its PVC. Execution admission checks
+ready/attached and refreshes both activity clocks in one transaction. Idle
+admission rechecks activity under the same locks. An already-accepted dispatch
+can lose the race with shutdown and time out; it is never automatically replayed.
+Ordinary completions require the captured identity, state, and exact transition
+timestamp. Timestamp advancement is strict even within one database clock tick.
+
+Idle admits ready/attached into shutting_down/detaching after 30 minutes of
+inactivity by default. The manager sends authenticated shutdown with the captured
+transition timestamp. IPC stops admission, drains the execution and its result,
+then echoes that timestamp in its acknowledgement. Missing or stale acknowledgements
+cannot authorize teardown. Results still forward while shutting down.
+Cleanup removes IPC Deployment and its Filesystem PVC, then guest Deployment.
+It retains the session Block PVC. Only observed compute disappearance and storage
+release permit stopped/detached completion.
+
+Retention requires both 30-minute execution inactivity and two hours continuously
+detached by default. Reap exclusively claims the exact lifetime into destroying;
+resume and stopped-sandbox maintenance cannot claim it concurrently. Persisted
+cleanup targets contain names, UUIDs/UIDs, and storage evidence, never a mutable
+alias to the current session mapping. Deletes use UID/resourceVersion preconditions.
+A missing target warns; it is not by itself proof of storage reclamation.
+Only positive reclamation permits removal of that exact PVC record and mapping.
+
+Idle, retention, orphan, and PVC-watchdog scans have cluster-wide PostgreSQL
+advisory locks and bounded signal batches. They only publish suggestions.
+`ads.sandbox.idle`, `ads.sandbox.pvc.reap`, `ads.sandbox.orphan`, and
+`ads.sandbox.recover` use manager-only verified client-credentials JWTs.
+Their separate shared group `ads-sandbox-manager-maintenance` resumes committed
+offsets, starts at earliest if none exist, and never seeks to end or auto-commits.
+Each partition is serial and paused while its bounded batch is admitted. Other
+partitions continue polling independently. Only classified rejection or durable
+DB admission allows an explicit offset n+1 commit. Database failures block later
+records; commit retries do not repeat successful admission while assignment lasts.
+Revocation fences retries; replay is idempotent after a crash between DB and Kafka.
+This durability policy does not change best-effort execution/result transport.
+
+Orphan scans consider only manager-labeled/named guest/IPC Deployments and
+IPC/session PVCs. Golden/unrelated resources and every valid retained or
+attaching PVC are excluded. Grouped orphan cleanup removes compute before storage.
+Unexpected resources for a stopped sandbox require an exclusive
+stopped -> service -> stopped claim. Its persisted deadline is shared by all
+waiting requests and is never extended per request or stolen by another worker.
+No previous-state field or service claim UUID exists. Late-created resources are
+found by subsequent scans. Bound true-orphan disks without retained node evidence
+remain unresolved rather than being guessed safe to delete.
+
+Cleanup/service timeout and the PVC-state watchdog publish whole-sandbox recovery.
+The verdict begins at acknowledged Kafka publication, not scheduler observation;
+pre-publication loss is accepted without an outbox. Admission condemns the
+observed sandbox even after late success, advances its sandbox ID, and durably
+retains every old cleanup target for recovery. Replaced IDs and active-recovery
+duplicates are ignored. This slice implements only that boundary and tests the
+fresh-sandbox/fresh-PVC rebuild contract with a fake executor. The full executor,
+ping integration, and recovery-topic disposal belong to slice 12.
+Ordinary idle/reap never deletes Kafka topics.
+
+### Release and reclamation evidence
+
+Before teardown, persist each bound PV UID, claim identity, consuming nodes, and
+CSI volume key. Require no remaining Pods referencing the claim, no VolumeAttachment,
+and fresh Ready node observations after capture with no matching attached/in-use
+volume. Pending never-bound claims need no nonexistent node evidence, but a concurrent
+bind fails the captured-binding gate and delete resourceVersion precondition.
+Idle release evidence survives in the retained PVC record for later reaping.
+Reclamation additionally requires observed PVC and PV disappearance under the
+captured Delete policy and CSI external-provisioner deletion-protection finalizer.
+Unknown/missing evidence, stale nodes, remaining consumers, permission failures,
+and API errors fail closed. Cleanup deadlines retain targets for recovery.
+
+This is a Kubernetes/CSI-controller observation contract, not a physical-storage
+probe or fencing against administrator force deletion or a faulty node/driver.
+The adapter never force-deletes Pods or mutates Nodes/PVs. Live validation of the
+lab driver's finalizer/reclamation behavior is deferred, not asserted by tests.
+
+## Golden lifecycle
 
 The process serves TLS-only `/health/live` and `/health/ready`. Golden ensure runs
 in a bounded background polling loop even while readiness is false. Liveness
@@ -216,6 +302,11 @@ TLS materials are loaded on the main thread before any client creation.
 | `KEYCLOAK_ISSUER`, `KEYCLOAK_WELL_KNOWN_URL`, `KEYCLOAK_CLIENT_SECRET` | Required HTTPS identity/discovery and manager client secret |
 | `READY_SECONDS` | Request/ready wait timeout, default 120 |
 | `BARRIER_SECONDS` | Best-effort round timeout, including membership discovery, default 3 |
+| `IDLE_SECONDS` | Execution inactivity gate for idle and retention, default 1800 |
+| `DETACHED_SECONDS` | Minimum continuous detached age before reap, default 7200 |
+| `CLEANUP_SECONDS` | Persisted cleanup/service deadline interval, default 120 |
+| `PVC_TIMEOUT_SECONDS` | Watchdog timeout for attaching/detaching/destroying, default 120 |
+| `LIFECYCLE_BATCH` | Positive scheduler/work batch limit, default 50 |
 | `TOPIC_REPLICATION_FACTOR` | Dynamic request/result topics, default 1; each has one partition |
 | `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL` |
 | `KAFKA_SASL_MECHANISM` | Default `SCRAM-SHA-512` |
@@ -223,7 +314,7 @@ TLS materials are loaded on the main thread before any client creation.
 | `KAFKA_CA_BUNDLE` | Optional Kafka TLS trust bundle |
 | `TLS_CERT_PATH`, `TLS_KEY_PATH` | Required TLS serving materials |
 | `TLS_CA_BUNDLE` | Optional validated additional trust material |
-| `POLL_SECONDS`, `CONTROL_SECONDS` | Default 10 each; full pass bounded to 3 control intervals |
+| `POLL_SECONDS`, `CONTROL_SECONDS` | Default 10 each; polling interval and individual control/DB bounds |
 | `BAKE_SECONDS` | Job active deadline, default 1800 |
 | `NODE_FRESH_SECONDS` | Maximum Node heartbeat age, default 600 |
 | `BIND_HOST`, `PORT` | Default `0.0.0.0`, `8080`; always TLS |
@@ -271,3 +362,9 @@ Transit tests cover real PostgreSQL state, signed JWT rejection/acceptance,
 fresh per-hop STE, detached provisioning, tuple correlation, subscription
 callbacks, unknown replica counts, missing/stale acknowledgements, and the
 documented late-joiner gap. Fake Kafka/Kubernetes boundaries are not live E2E proof.
+Lifecycle tests add joint admission/idle and stopped-claim exclusion, exact timestamp
+fences, retained-disk resume, retention clocks, fresh post-reap clones, shared
+maintenance deadlines, late orphan cleanup, UID replacement safety, durable
+partition admission/rebalance, and the slice-12 recovery handoff.
+The lifecycle Kafka ACL/topic additions are source-only, not installed in the lab.
+All new thresholds are environment-configurable now; Helm exposure remains slice 14.
