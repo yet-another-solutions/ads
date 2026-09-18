@@ -16,14 +16,17 @@ from ads_commons.security import jwks_uri_from_well_known, token_endpoint_from_w
 from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeSettings
 from ads_sandbox_manager.auth import MANAGER, ClientCredentials, TokenMinter
 from ads_sandbox_manager.barrier import CoordinationPort, ManagerBarrier
+from ads_sandbox_manager.cleanup import CleanupAdapter, CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.controller import KafkaController
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.health import Dependencies, DependencyHealth
 from ads_sandbox_manager.kafka import KafkaRuntime, KafkaTopics, KafkaTransport
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
+from ads_sandbox_manager.lifecycle import LifecycleService
+from ads_sandbox_manager.lifecycle_store import LifecycleRepository
 from ads_sandbox_manager.runtime import ManagerRuntime
-from ads_sandbox_manager.service import Publisher, TransitService
+from ads_sandbox_manager.service import Maintenance, Publisher, TransitService
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
 from ads_sandbox_manager.store import SessionRepository
 
@@ -77,6 +80,13 @@ class AppProvider(Provider):
     service = provide(TransitService, scope=Scope.APP)
     controller = provide(KafkaController, scope=Scope.APP)
     kafka = provide(KafkaRuntime, scope=Scope.APP)
+    cleanup = provide(CleanupAdapter, scope=Scope.APP, provides=CleanupKubernetes)
+    lifecycle_repository = provide(LifecycleRepository, scope=Scope.APP)
+    lifecycle = provide(LifecycleService, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def maintenance(self, lifecycle: LifecycleService) -> Maintenance:
+        return lifecycle
 
     @provide(scope=Scope.APP)
     def coordination(self, transport: KafkaTransport) -> CoordinationPort:

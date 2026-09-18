@@ -17,6 +17,7 @@ STATIC = (
     "ads.sandbox.exec.request", "ads.sandbox.exec.reply", "ads.sandbox.ready",
     "ads.sandbox.ping.req", "ads.sandbox.ping.res", "ads.sandbox.idle", "ads.sandbox.recover",
     "ads.sandbox.manager.barrier",
+    "ads.sandbox.pvc.reap", "ads.sandbox.orphan",
 )
 
 
@@ -146,6 +147,8 @@ def main():
     acl(manager, ("Read", "Write", "Describe"),
         topics=("ads.sandbox.ready", "ads.sandbox.idle", "ads.sandbox.recover"))
     acl(manager, ("Read", "Write", "Describe"), topics=("ads.sandbox.manager.barrier",))
+    acl(manager, ("Read", "Write", "Describe"),
+        topics=("ads.sandbox.pvc.reap", "ads.sandbox.orphan"))
     acl(manager, ("Create", "Delete", "Describe"), topics=("sandbox.req.", "sandbox.res."), prefix=True)
     acl(manager, ("Write",), topics=("sandbox.req.",), prefix=True)
     acl(manager, ("Read",), topics=("sandbox.res.",), prefix=True)

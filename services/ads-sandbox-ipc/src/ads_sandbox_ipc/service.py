@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -75,8 +76,7 @@ class IpcService:
         self._startup_task: asyncio.Task[None] | None = None
         self._execution_task: asyncio.Task[None] | None = None
         self._ack_task: asyncio.Task[None] | None = None
-        self._shutdown_token: str | None = None
-        self._shutdown_count = 0
+        self._shutdowns: list[tuple[str, datetime | None]] = []
         self._pings: set[asyncio.Task[object]] = set()
 
     def start(self) -> None:
@@ -254,12 +254,11 @@ class IpcService:
             finally:
                 self._pings.discard(task)
 
-    async def shutdown(self, token: str) -> None:
+    async def shutdown(self, token: str, transition: datetime | None = None) -> None:
         # Latch before awaits, including startup cancellation and the execution lock.
         self.stopping = True
         self.kafka_ready = False
-        self._shutdown_token = token
-        self._shutdown_count += 1
+        self._shutdowns.append((token, transition))
         for task in self._pings:
             task.cancel()
         if self._startup_task and not self._startup_task.done():
@@ -276,13 +275,12 @@ class IpcService:
                 await self._finish_shutdown()
 
     async def _finish_shutdown(self) -> None:
-        while self._shutdown_count:
+        while self._shutdowns:
+            token, transition = self._shutdowns[0]
             await self.publisher.publish(
-                SandboxShutdownAck(self.settings.sandbox_id), self._shutdown_token
+                SandboxShutdownAck(self.settings.sandbox_id, transition), token
             )
-            self._shutdown_count -= 1
-        if self.stopping:
-            self._shutdown_token = None
+            self._shutdowns.pop(0)
 
     async def stop(self) -> None:
         self.stopping = True
@@ -298,4 +296,4 @@ class IpcService:
         await asyncio.gather(*tasks, return_exceptions=True)
         self.current = None
         self._last_token = None
-        self._shutdown_token = None
+        self._shutdowns.clear()

@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from kubernetes.client.exceptions import ApiException
@@ -15,10 +15,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from ads_commons_schema import mapped_tables, prepare_schema
+from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import VERSION
 from ads_sandbox_manager.session_objects import SESSION, ipc_name, session_name, session_pvc
 from ads_sandbox_manager.sessions import ClaimLost, SessionBindError, SessionProvisioner
-from ads_sandbox_manager.store import SandboxSession, SessionRepository
+from ads_sandbox_manager.store import SandboxSession, SessionPVC, SessionRepository
 from session_support import FakeSessionKube, FakeTopics
 from test_session_objects import object_settings  # noqa: F401
 
@@ -30,7 +31,7 @@ async def sessions_harness(baked, object_settings, manager_database_url):  # noq
     prepare_schema(
         alembic_ini=Path(__file__).parents[1] / "alembic.ini",
         database_url=manager_database_url,
-        tables=mapped_tables(SandboxSession),
+        tables=mapped_tables(SandboxSession, SessionPVC, CleanupWork),
     )
     sync = create_engine(manager_database_url)
     with sync.begin() as db:
@@ -69,20 +70,47 @@ async def row_for(h, session_id):
 
 
 async def seed(h, session_id, status="stopped", pvc_uid=None):
+    disk = next(
+        (
+            o
+            for o in h.kube.objects.values()
+            if o["kind"] == "PersistentVolumeClaim"
+            and o["metadata"]["labels"].get(SESSION) == str(session_id)
+        ),
+        None,
+    )
+    pvc_id = UUID(disk["metadata"]["name"].removeprefix("ads-sandbox-")) if disk else uuid4()
+    sandbox_id = UUID(disk["metadata"]["labels"]["ads.io/sandbox-id"]) if disk else uuid4()
+    now = datetime.now(UTC)
     async with h.sessions.begin() as db:
         await h.repository.insert_pending(
             db,
             session_id,
-            uuid4(),
-            h.settings.golden_version,
-            datetime.now(UTC),
+            sandbox_id,
+            disk["metadata"]["labels"][VERSION] if disk else h.settings.golden_version,
+            now,
         )
         await db.execute(
             update(SandboxSession)
             .where(
                 SandboxSession.session_id == session_id,
             )
-            .values(status=status, pvc_uid=pvc_uid)
+            .values(status=status, pvc_uid=pvc_uid, pvc_id=pvc_id)
+        )
+        db.add(
+            SessionPVC(
+                pvc_id=pvc_id,
+                session_id=session_id,
+                sandbox_id=sandbox_id,
+                uid=pvc_uid,
+                state="attached"
+                if status == "ready"
+                else "attaching"
+                if status == "creating"
+                else "detached",
+                last_execution=now,
+                last_state_change=now,
+            )
         )
     return await row_for(h, session_id)
 
@@ -102,13 +130,13 @@ async def test_first_create_four_objects_bind_persisted_before_topics(sessions_h
     assert row.pvc_uid and row.guest_deployment_uid and row.ipc_deployment_uid and row.ipc_pvc_uid
     writes = [call for call in h.kube.calls if call[0] != "get"]
     assert writes == [
-        ("create", "PersistentVolumeClaim", session_name(sid)),
+        ("create", "PersistentVolumeClaim", session_name(row.pvc_id)),
         ("topics-and-seek", str(row.sandbox_id)),
         ("create", "PersistentVolumeClaim", ipc_name(row.sandbox_id)),
         ("create", "Deployment", session_name(row.sandbox_id)),
         ("create", "Deployment", ipc_name(row.sandbox_id)),
     ]
-    disk = h.kube.objects[("PersistentVolumeClaim", session_name(sid))]
+    disk = h.kube.objects[("PersistentVolumeClaim", session_name(row.pvc_id))]
     assert disk["metadata"]["uid"] == row.pvc_uid
     assert disk["spec"]["resources"]["requests"]["storage"] == str(22 * 1024**3)
     # Neither claim needs Bound before Deployment creation (WaitForFirstConsumer).
@@ -138,7 +166,7 @@ async def test_parallel_replicas_create_only_one_sandbox(sessions_harness):
 
 async def test_parallel_resume_has_one_winner_and_preserves_disk(sessions_harness):
     h, sid = sessions_harness, uuid4()
-    disk = h.kube.put(session_pvc(h.settings, sid, uuid4(), "v0.0.10", "22Gi"))
+    disk = h.kube.put(session_pvc(h.settings, sid, uuid4(), "v0.0.10", "22Gi", uuid4()))
     original = await seed(h, sid, pvc_uid=disk["metadata"]["uid"])
     rows = await asyncio.gather(*(h.service.provision(sid) for _ in range(8)))
     assert {row.sandbox_id for row in rows} == {original.sandbox_id}
@@ -178,15 +206,16 @@ async def test_uuid_and_object_configuration_are_required_before_database_io(ses
     assert not h.kube.calls
 
 
-async def test_crash_adoption_preserves_older_golden_version_without_clone(sessions_harness):
+async def test_durable_lifetime_preserves_older_golden_version_without_clone(sessions_harness):
     h, sid = sessions_harness, uuid4()
-    old = h.kube.put(session_pvc(h.settings, sid, uuid4(), "v0.0.9", "22Gi"))
+    old = h.kube.put(session_pvc(h.settings, sid, uuid4(), "v0.0.9", "22Gi", uuid4()))
+    await seed(h, sid, pvc_uid=old["metadata"]["uid"])
     h.golden = AsyncMock()
     h.golden.clone_source.side_effect = AssertionError("must not rebake or upgrade")
     h.service.golden = h.golden
     row = await h.service.provision(sid)
     assert row.pvc_uid == old["metadata"]["uid"] and row.golden_version == "v0.0.9"
-    assert ("create", "PersistentVolumeClaim", session_name(sid)) not in h.kube.calls
+    assert ("create", "PersistentVolumeClaim", session_name(row.pvc_id)) not in h.kube.calls
     guest = h.kube.objects[("Deployment", session_name(row.sandbox_id))]
     assert guest["metadata"]["labels"][VERSION] == "v0.0.9"
     h.golden.clone_source.assert_not_called()
@@ -196,7 +225,7 @@ async def test_resume_keeps_disk_identity_and_recreates_compute(sessions_harness
     h, sid = sessions_harness, uuid4()
     original = await h.service.provision(sid)
     for key in list(h.kube.objects):
-        if key != ("PersistentVolumeClaim", session_name(sid)):
+        if key != ("PersistentVolumeClaim", session_name(original.pvc_id)):
             del h.kube.objects[key]  # Fake the not-yet-built idle component.
     async with h.sessions.begin() as db:
         await db.execute(
@@ -205,6 +234,9 @@ async def test_resume_keeps_disk_identity_and_recreates_compute(sessions_harness
                 SandboxSession.session_id == sid,
             )
             .values(status="stopped")
+        )
+        await db.execute(
+            update(SessionPVC).where(SessionPVC.pvc_id == original.pvc_id).values(state="detached")
         )
     h.kube.calls.clear()
     h.service.golden = AsyncMock()
@@ -236,7 +268,9 @@ async def test_resume_keeps_disk_identity_and_recreates_compute(sessions_harness
 async def test_resume_rejects_bad_bind_without_clone_attach_or_delete(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
     row = await seed(h, sid)
-    disk = h.kube.put(session_pvc(h.settings, sid, row.sandbox_id, row.golden_version, "22Gi"))
+    disk = h.kube.put(
+        session_pvc(h.settings, sid, row.sandbox_id, row.golden_version, "22Gi", row.pvc_id)
+    )
     async with h.sessions.begin() as db:
         await db.execute(
             update(SandboxSession)
@@ -274,15 +308,19 @@ async def test_resume_rejects_bad_bind_without_clone_attach_or_delete(sessions_h
 @pytest.mark.parametrize("fault", ["foreign", "filesystem", "class", "version"])
 async def test_initial_adoption_also_fails_closed(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
-    disk = h.kube.put(session_pvc(h.settings, sid, uuid4(), "v0.0.10", "22Gi"))
-    if fault == "foreign":
-        disk["metadata"]["labels"][SESSION] = str(uuid4())
-    elif fault == "filesystem":
-        disk["spec"]["volumeMode"] = "Filesystem"
-    elif fault == "class":
-        disk["spec"]["storageClassName"] = "foreign"
-    else:
-        disk["metadata"]["labels"][VERSION] = "latest"
+
+    async def race(body):
+        disk = h.kube.put(body)
+        if fault == "foreign":
+            disk["metadata"]["labels"][SESSION] = str(uuid4())
+        elif fault == "filesystem":
+            disk["spec"]["volumeMode"] = "Filesystem"
+        elif fault == "class":
+            disk["spec"]["storageClassName"] = "foreign"
+        else:
+            disk["metadata"]["labels"][VERSION] = "latest"
+
+    h.kube.before_create = race
     with pytest.raises(SessionBindError):
         await h.service.provision(sid)
     assert not any(call[0] != "get" for call in h.kube.calls)
@@ -292,7 +330,10 @@ async def test_replacement_after_bind_is_rechecked_before_compute(sessions_harne
     h, sid = sessions_harness, uuid4()
 
     async def replace_disk(_):
-        h.kube.objects[("PersistentVolumeClaim", session_name(sid))]["metadata"]["uid"] = "new"
+        row = await row_for(h, sid)
+        h.kube.objects[("PersistentVolumeClaim", session_name(row.pvc_id))]["metadata"]["uid"] = (
+            "new"
+        )
 
     h.topics.hook = replace_disk
     with pytest.raises(SessionBindError, match="identity changed"):
@@ -305,7 +346,7 @@ async def test_create_conflict_is_reread_not_blindly_adopted(sessions_harness, f
     h, sid = sessions_harness, uuid4()
 
     async def race(body):
-        if body["metadata"]["name"] == session_name(sid):
+        if body["kind"] == "PersistentVolumeClaim" and body["spec"].get("volumeMode") == "Block":
             disk = h.kube.put(body)
             if foreign:
                 disk["metadata"]["labels"][SESSION] = str(uuid4())
@@ -358,7 +399,7 @@ async def test_golden_must_be_released_and_clone_uses_actual_capacity(sessions_h
     h.golden.kube.is_released = True
     h.golden.kube.objects["pvc"]["status"]["capacity"] = {"storage": "24Gi"}
     row = await h.service.provision(uuid4())
-    disk = h.kube.objects[("PersistentVolumeClaim", session_name(row.session_id))]
+    disk = h.kube.objects[("PersistentVolumeClaim", session_name(row.pvc_id))]
     assert disk["spec"]["resources"]["requests"]["storage"] == str(24 * 1024**3)
 
 
@@ -448,7 +489,7 @@ async def test_schema_contains_only_lifecycle_and_migration_is_repeatable(sessio
     prepare_schema(
         alembic_ini=ini,
         database_url=h.engine.url.render_as_string(hide_password=False),
-        tables=mapped_tables(SandboxSession),
+        tables=mapped_tables(SandboxSession, SessionPVC, CleanupWork),
     )
     async with h.engine.connect() as db:
         columns = await db.run_sync(lambda c: inspect(c).get_columns("sandbox_session"))

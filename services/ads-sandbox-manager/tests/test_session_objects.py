@@ -43,12 +43,13 @@ def object_settings(manager_settings):
 
 
 def test_four_object_names_storage_and_no_ownership_gc(object_settings):
-    s, session, sandbox = object_settings, uuid4(), uuid4()
-    disk = session_pvc(s, session, sandbox, s.golden_version, "23622320128")
+    s, session, sandbox, pvc_id = object_settings, uuid4(), uuid4(), uuid4()
+    disk = session_pvc(s, session, sandbox, s.golden_version, "23622320128", pvc_id)
     ipc_disk = ipc_pvc(s, session, sandbox, s.golden_version)
-    guest = guest_deployment(s, session, sandbox, s.golden_version)
+    guest = guest_deployment(s, session, sandbox, s.golden_version, pvc_id)
     ipc = ipc_deployment(s, session, sandbox, s.golden_version)
-    assert disk["metadata"]["name"] == session_name(session)
+    assert disk["metadata"]["name"] == session_name(pvc_id)
+    assert pvc_id != session
     assert guest["metadata"]["name"] == session_name(sandbox)
     assert ipc_disk["metadata"]["name"] == ipc["metadata"]["name"] == ipc_name(sandbox)
     for obj in (disk, ipc_disk, guest, ipc):
@@ -69,8 +70,8 @@ def test_four_object_names_storage_and_no_ownership_gc(object_settings):
 
 
 def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
-    s, session, sandbox = object_settings, uuid4(), uuid4()
-    guest = guest_deployment(s, session, sandbox, s.golden_version)
+    s, session, sandbox, pvc_id = object_settings, uuid4(), uuid4(), uuid4()
+    guest = guest_deployment(s, session, sandbox, s.golden_version, pvc_id)
     ipc = ipc_deployment(s, session, sandbox, s.golden_version)
     for obj in (guest, ipc):
         assert obj["spec"]["replicas"] == 1
@@ -89,7 +90,7 @@ def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
     assert g["volumes"] == [
         {
             "name": "session",
-            "persistentVolumeClaim": {"claimName": session_name(session)},
+            "persistentVolumeClaim": {"claimName": session_name(pvc_id)},
         }
     ]
     container = g["containers"][0]
@@ -136,7 +137,7 @@ def test_builders_do_not_mutate_helm_inputs_and_ca_is_optional(object_settings):
         ),
     )
     before = asdict(s)
-    guest = guest_deployment(s, uuid4(), uuid4(), s.golden_version)
+    guest = guest_deployment(s, uuid4(), uuid4(), s.golden_version, uuid4())
     guest["spec"]["template"]["spec"]["nodeSelector"]["mutated"] = "true"
     ipc = ipc_deployment(s, uuid4(), uuid4(), s.golden_version)
     assert not any(v["name"] == "ca" for v in ipc["spec"]["template"]["spec"]["volumes"])

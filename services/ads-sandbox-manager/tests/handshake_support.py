@@ -155,9 +155,14 @@ class Handshake:
             manager.service,
             transport,
             self.identity.exchange(MANAGER),
+            AsyncMock(),
         )
         self.manager_controller = ManagerController(
-            self.transit.settings, self.identity.verifier(MANAGER), self.transit, AsyncMock()
+            self.transit.settings,
+            self.identity.verifier(MANAGER),
+            self.transit,
+            AsyncMock(),
+            AsyncMock(),
         )
 
         async def created(body):

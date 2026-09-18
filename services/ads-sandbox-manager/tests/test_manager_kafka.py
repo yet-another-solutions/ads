@@ -29,6 +29,7 @@ def consumer(**kwargs):
         stop=AsyncMock(),
         end_offsets=AsyncMock(return_value={}),
         position=AsyncMock(return_value=7),
+        getmany=AsyncMock(return_value={}),
     )
     c.subscription.return_value = {REQUEST_TOPIC}
     return c
@@ -203,7 +204,9 @@ async def test_sasl_tls_options_cover_every_kafka_client(manager_settings, monke
             assert call.kwargs["sasl_plain_password"] == "fixture-secret"
             assert call.kwargs["security_protocol"] == "SASL_SSL"
             assert call.kwargs["ssl_context"].check_hostname
-    shared, ready, barrier = factories[0].call_args_list
+    shared, ready, barrier, maintenance = factories[0].call_args_list
+    assert maintenance.kwargs["auto_offset_reset"] == "earliest"
+    assert not maintenance.kwargs["enable_auto_commit"]
     assert shared.kwargs["group_id"] == GROUP
     assert shared.kwargs["client_id"] == str(t.replica_id)
     assert ready.kwargs["group_id"] != barrier.kwargs["group_id"]
@@ -228,12 +231,13 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
 
         c.start.side_effect = start
     service, barrier = AsyncMock(), AsyncMock()
-    runtime = KafkaRuntime(manager_settings, t, AsyncMock(), service, barrier)
+    runtime = KafkaRuntime(manager_settings, t, AsyncMock(), service, barrier, AsyncMock())
 
-    async def consume(_):
+    async def consume(*args, **kwargs):
         await gate.wait()
 
     runtime._consume = consume
+    t.maintenance.getmany.side_effect = consume
     await runtime.start()
     await runtime._startup
     assert calls == ["coordination", "lifecycle", "shared"]
@@ -243,7 +247,7 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
     assert t.shared.subscribe.call_args.kwargs["pattern"] == RESPONSE_PATTERN
     await runtime.stop()
     assert not runtime.ready
-    for c in (t.shared, t.lifecycle, t.coordination):
+    for c in (t.shared, t.lifecycle, t.coordination, t.maintenance):
         c.stop.assert_awaited_once()
     t.admin.close.assert_awaited_once()
     t.producer.stop.assert_awaited_once()
@@ -253,7 +257,9 @@ async def test_runtime_installs_broadcast_listeners_before_shared_group(
 
 async def test_runtime_start_failure_closes_all_resources(transport, manager_settings, caplog):
     transport.admin.start.side_effect = RuntimeError("private-token")
-    runtime = KafkaRuntime(manager_settings, transport, AsyncMock(), AsyncMock(), AsyncMock())
+    runtime = KafkaRuntime(
+        manager_settings, transport, AsyncMock(), AsyncMock(), AsyncMock(), AsyncMock()
+    )
     await runtime.start()
     await runtime._startup
     assert not runtime.ready

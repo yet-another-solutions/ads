@@ -33,12 +33,13 @@ def session_pvc(
     sandbox_id: UUID,
     version: str,
     storage: str,
+    pvc_id: UUID,
 ) -> Object:
     return {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
         "metadata": {
-            "name": session_name(session_id),
+            "name": session_name(pvc_id),
             "namespace": settings.namespace,
             "labels": labels(session_id, sandbox_id, version, "ads-sandbox"),
         },
@@ -82,6 +83,7 @@ def guest_deployment(
     session_id: UUID,
     sandbox_id: UUID,
     version: str,
+    pvc_id: UUID,
 ) -> Object:
     config = settings.session_objects
     assert config is not None
@@ -122,7 +124,7 @@ def guest_deployment(
             "volumes": [
                 {
                     "name": "session",
-                    "persistentVolumeClaim": {"claimName": session_name(session_id)},
+                    "persistentVolumeClaim": {"claimName": session_name(pvc_id)},
                 }
             ],
         },

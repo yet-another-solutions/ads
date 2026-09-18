@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.kube import SessionKubernetes
-from ads_sandbox_manager.objects import VERSION, Object
+from ads_sandbox_manager.objects import COMPONENT, VERSION, Object
 from ads_sandbox_manager.session_objects import (
+    SANDBOX,
     SESSION,
     guest_deployment,
     ipc_deployment,
@@ -95,7 +96,7 @@ class SessionProvisioner:
             assert row is not None
             if not inserted and row.status != "stopped":
                 return row
-            resuming = row.status == "stopped"
+            resuming = row.status == "stopped" and row.pvc_id is not None
             claimed = await self.repository.claim(db, row, owner, datetime.now(UTC))
             if claimed is None:
                 current = await self.repository.get(db, session_id)
@@ -117,6 +118,7 @@ class SessionProvisioner:
                 )
                 # Re-GET the exact bind immediately before each compute create.
                 await self._verify_disk(row)
+                assert row.pvc_id is not None
                 row = await self._object(
                     row,
                     owner,
@@ -125,6 +127,7 @@ class SessionProvisioner:
                         row.session_id,
                         row.sandbox_id,
                         row.golden_version,
+                        row.pvc_id,
                     ),
                     "guest_deployment_uid",
                 )
@@ -166,13 +169,16 @@ class SessionProvisioner:
             return current
 
     def _bind(self, row: SandboxSession, pvc: Object) -> str:
+        assert row.pvc_id is not None
         meta, spec = pvc.get("metadata", {}), pvc.get("spec", {})
         labels = meta.get("labels", {})
         version = labels.get(VERSION, "")
         if (
-            meta.get("name") != session_name(row.session_id)
+            meta.get("name") != session_name(row.pvc_id)
             or meta.get("namespace") != self.settings.namespace
             or labels.get(SESSION) != str(row.session_id)
+            or labels.get(SANDBOX) != str(row.sandbox_id)
+            or labels.get(COMPONENT) != "ads-sandbox"
             or not meta.get("uid")
             or not meta.get("resourceVersion")
             or meta.get("deletionTimestamp")
@@ -194,7 +200,8 @@ class SessionProvisioner:
         return str(version)
 
     async def _verify_disk(self, row: SandboxSession) -> Object:
-        pvc = await self.kube.named_pvc(session_name(row.session_id))
+        assert row.pvc_id is not None
+        pvc = await self.kube.named_pvc(session_name(row.pvc_id))
         if pvc is None:
             raise SessionBindError("session PVC missing; recovery required")
         self._bind(row, pvc)
@@ -210,7 +217,8 @@ class SessionProvisioner:
         row = await self._current(row, owner)
         if resume and row.pvc_uid is None:
             raise SessionBindError("resume has no durable PVC identity; recovery required")
-        pvc = await self.kube.named_pvc(session_name(row.session_id))
+        assert row.pvc_id is not None
+        pvc = await self.kube.named_pvc(session_name(row.pvc_id))
         if row.pvc_uid is not None:
             if pvc is None:
                 raise SessionBindError("session PVC missing; recovery required")
@@ -235,12 +243,13 @@ class SessionProvisioner:
                         row.sandbox_id,
                         row.golden_version,
                         storage,
+                        row.pvc_id,
                     )
                 )
             except ApiException as exc:
                 if exc.status != 409:
                     raise
-            pvc = await self.kube.named_pvc(session_name(row.session_id))
+            pvc = await self.kube.named_pvc(session_name(row.pvc_id))
             if pvc is None:
                 raise SessionBindError("session PVC not observable after create")
         version = self._bind(row, pvc)

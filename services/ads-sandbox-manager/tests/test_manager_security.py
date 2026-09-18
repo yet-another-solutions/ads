@@ -1,4 +1,5 @@
 import time
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -16,6 +17,7 @@ from ads_commons.sandbox import (
     SandboxReady,
     SandboxRequest,
     SandboxResult,
+    SandboxShutdownAck,
     encode_inbound,
     encode_outbound,
     encode_ready,
@@ -25,6 +27,7 @@ from ads_commons_beans import JwtVerifier, JwtVerifierSettings, TokenExchangeSet
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP, ClientCredentials
 from ads_sandbox_manager.barrier import TOPIC, BarrierAck, BarrierRequest
 from ads_sandbox_manager.controller import KafkaController
+from ads_sandbox_manager.lifecycle import TOPICS, Signal
 from ads_sandbox_manager.service import READY_TOPIC, REQUEST_TOPIC
 
 
@@ -71,8 +74,13 @@ def wire(kind):
     }
     if kind in controls:
         return REQUEST_TOPIC, encode_inbound(controls[kind]), str(session).encode(), MCP
-    if kind == "ready":
-        return READY_TOPIC, encode_ready(SandboxReady(sandbox)), str(sandbox).encode(), IPC
+    if kind in ("ready", "shutdown-ack"):
+        value = (
+            SandboxReady(sandbox)
+            if kind == "ready"
+            else SandboxShutdownAck(sandbox, datetime.now(UTC))
+        )
+        return READY_TOPIC, encode_ready(value), str(sandbox).encode(), IPC
     if kind.startswith("barrier"):
         value = (
             BarrierRequest(uuid4(), sandbox, replica, (replica,))
@@ -96,6 +104,7 @@ KINDS = [
     "acknowledge",
     "result",
     "ready",
+    "shutdown-ack",
     "barrier-request",
     "barrier-ack",
 ]
@@ -116,13 +125,13 @@ KINDS = [
     ],
 )
 async def test_all_transit_auth_paths_fail_closed(manager_settings, keys, kind, changes, caplog):
-    service, barrier = AsyncMock(), AsyncMock()
-    controller = KafkaController(manager_settings, keys.verifier, service, barrier)
+    service, barrier, lifecycle = AsyncMock(), AsyncMock(), AsyncMock()
+    controller = KafkaController(manager_settings, keys.verifier, service, barrier, lifecycle)
     topic, raw, key, caller = wire(kind)
     claims = {"azp": caller, **changes}
     token = keys.token(**claims)
     await controller.on_message(topic, raw, key, [("authorization", token.encode())])
-    assert not service.mock_calls and not barrier.mock_calls
+    assert not service.mock_calls and not barrier.mock_calls and not lifecycle.mock_calls
     assert SecurityContextHolder.get() is None
     assert "rejected" in caplog.text
     assert all(secret not in caplog.text for secret in (token, "secret-command", "secret-output"))
@@ -131,13 +140,13 @@ async def test_all_transit_auth_paths_fail_closed(manager_settings, keys, kind, 
 @pytest.mark.anyio
 @pytest.mark.parametrize("kind", KINDS)
 async def test_valid_authenticated_delivery_without_holder(manager_settings, keys, kind):
-    service, barrier = AsyncMock(), AsyncMock()
-    controller = KafkaController(manager_settings, keys.verifier, service, barrier)
+    service, barrier, lifecycle = AsyncMock(), AsyncMock(), AsyncMock()
+    controller = KafkaController(manager_settings, keys.verifier, service, barrier, lifecycle)
     topic, raw, key, caller = wire(kind)
     await controller.on_message(
         topic, raw, key, [("authorization", keys.token(azp=caller).encode())]
     )
-    assert service.mock_calls or barrier.mock_calls
+    assert service.mock_calls or barrier.mock_calls or lifecycle.mock_calls
     assert SecurityContextHolder.get() is None
 
 
@@ -145,8 +154,8 @@ async def test_valid_authenticated_delivery_without_holder(manager_settings, key
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("bad", ["missing-auth", "invalid-auth", "key", "payload"])
 async def test_missing_auth_and_malformed_wire_have_no_effect(manager_settings, keys, kind, bad):
-    service, barrier = AsyncMock(), AsyncMock()
-    controller = KafkaController(manager_settings, keys.verifier, service, barrier)
+    service, barrier, lifecycle = AsyncMock(), AsyncMock(), AsyncMock()
+    controller = KafkaController(manager_settings, keys.verifier, service, barrier, lifecycle)
     topic, raw, key, caller = wire(kind)
     headers = [("authorization", keys.token(azp=caller).encode())]
     if bad == "missing-auth":
@@ -158,7 +167,7 @@ async def test_missing_auth_and_malformed_wire_have_no_effect(manager_settings, 
     else:
         raw = b"{broken"
     await controller.on_message(topic, raw, key, headers)
-    assert not service.mock_calls and not barrier.mock_calls
+    assert not service.mock_calls and not barrier.mock_calls and not lifecycle.mock_calls
 
 
 def test_manager_client_credentials_verifies_uuid_subject_and_caller(keys, monkeypatch):
@@ -183,3 +192,77 @@ def test_manager_client_credentials_verifies_uuid_subject_and_caller(keys, monke
         response.read.return_value = msgspec.json.encode(invalid)
         with pytest.raises(InvalidAccessToken):
             client.mint()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("topic", TOPICS)
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"aud": "wrong"},
+        {"azp": MCP},
+        {"azp": IPC},
+        {"azp": None},
+        {"sub": "client-name"},
+        {"exp": 1},
+        {"iss": "https://wrong.test"},
+        {"iat": 9999999999},
+    ],
+)
+async def test_lifecycle_manager_only_verified_auth(manager_settings, keys, topic, changes):
+    lifecycle = AsyncMock()
+    controller = KafkaController(
+        manager_settings, keys.verifier, AsyncMock(), AsyncMock(), lifecycle
+    )
+    message = Signal(uuid4(), uuid4())
+    await controller.admit_lifecycle(
+        topic,
+        msgspec.json.encode(message),
+        str(message.session_id).encode(),
+        [("authorization", keys.token(**{"azp": MANAGER, **changes}).encode())],
+    )
+    assert not lifecycle.mock_calls
+    assert SecurityContextHolder.get() is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("topic", TOPICS)
+async def test_lifecycle_database_error_escapes_for_durable_retry(manager_settings, keys, topic):
+    lifecycle = AsyncMock()
+    controller = KafkaController(
+        manager_settings, keys.verifier, AsyncMock(), AsyncMock(), lifecycle
+    )
+    message = Signal(uuid4(), uuid4())
+    args = (
+        topic,
+        msgspec.json.encode(message),
+        str(message.session_id).encode(),
+        [("authorization", keys.token(azp=MANAGER).encode())],
+    )
+    await controller.admit_lifecycle(*args)
+    lifecycle.admit.assert_awaited_once_with(topic, message)
+    lifecycle.admit.side_effect = RuntimeError("database unavailable")
+    with pytest.raises(RuntimeError, match="database"):
+        await controller.admit_lifecycle(*args)
+    assert SecurityContextHolder.get() is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("bad", ["no-auth", "signature", "key", "payload"])
+async def test_lifecycle_malformed_signals_are_classified_without_database(
+    manager_settings, keys, bad
+):
+    lifecycle = AsyncMock()
+    controller = KafkaController(
+        manager_settings, keys.verifier, AsyncMock(), AsyncMock(), lifecycle
+    )
+    message = Signal(uuid4(), uuid4())
+    raw, key = msgspec.json.encode(message), str(message.session_id).encode()
+    token = Keys().token(azp=MANAGER) if bad == "signature" else keys.token(azp=MANAGER)
+    headers = [] if bad == "no-auth" else [("authorization", token.encode())]
+    if bad == "key":
+        key = b"wrong"
+    if bad == "payload":
+        raw = b"{broken"
+    await controller.admit_lifecycle(TOPICS[0], raw, key, headers)
+    assert not lifecycle.mock_calls

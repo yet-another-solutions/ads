@@ -59,6 +59,7 @@ def transit(h, **settings):
         h.service,
         AsyncMock(),
         Tokens(),
+        AsyncMock(),
     )
 
 
@@ -289,7 +290,7 @@ async def test_signed_transit_handshake_with_real_ste_adapter(sessions_harness, 
         TokenExchangeSettings("https://identity.test/token", MANAGER, "fixture", None),
         keys.verifier,
     )
-    controller = KafkaController(service.settings, keys.verifier, service, AsyncMock())
+    controller = KafkaController(service.settings, keys.verifier, service, AsyncMock(), AsyncMock())
     mcp_token, ipc_token = keys.token(azp=MCP), keys.token(azp=IPC)
 
     async def deliver(topic, value, key, token):

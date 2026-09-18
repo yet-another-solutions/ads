@@ -73,7 +73,7 @@ class KafkaController:
             return
         try:
             if isinstance(message, SandboxShutdown):
-                await self.service.shutdown(token)
+                await self.service.shutdown(token, message.transition)
             elif topic == PING_REQUEST_TOPIC:
                 await self.service.ping(decode_ping(raw), token)
             else:

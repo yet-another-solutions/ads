@@ -17,6 +17,8 @@ from ads_sandbox_manager.auth import ClientCredentials
 from ads_sandbox_manager.barrier import GROUP, TOPIC, BarrierMessage, ManagerBarrier
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.controller import KafkaController
+from ads_sandbox_manager.lifecycle import TOPICS, LifecycleService
+from ads_sandbox_manager.lifecycle_kafka import DurableAdmission
 from ads_sandbox_manager.service import READY_TOPIC, TransitService
 
 log = logging.getLogger(__name__)
@@ -107,6 +109,12 @@ class KafkaTransport:
             enable_auto_commit=False,
             auto_offset_reset="latest",
         )
+        self.maintenance = AIOKafkaConsumer(
+            **options,
+            group_id=f"{GROUP}-maintenance",
+            enable_auto_commit=False,
+            auto_offset_reset="earliest",
+        )
         self.shared_seek = SubscriptionReady(self.shared)
         self.lifecycle_seek = SubscriptionReady(self.lifecycle)
         self.coordination_seek = SubscriptionReady(self.coordination)
@@ -182,12 +190,14 @@ class KafkaRuntime:
         controller: KafkaController,
         service: TransitService,
         barrier: ManagerBarrier,
+        lifecycle: LifecycleService,
     ) -> None:
         self.settings = settings
         self.transport = transport
         self.controller = controller
         self.service = service
         self.barrier = barrier
+        self.lifecycle = lifecycle
         self._tasks: list[asyncio.Task[None]] = []
         self._startup: asyncio.Task[None] | None = None
         self._started = False
@@ -221,6 +231,11 @@ class KafkaRuntime:
                 await t.shared.start()
                 self._tasks.append(asyncio.create_task(self._consume(t.shared)))
                 await t.shared_seek.complete.wait()
+                admission = DurableAdmission(t.maintenance, self.controller)
+                t.maintenance.subscribe(list(TOPICS), listener=admission)
+                await t.maintenance.start()
+                self._tasks.append(asyncio.create_task(admission.run()))
+                await self.lifecycle.start()
                 self._started = True
         except Exception:
             log.warning("manager Kafka startup failed")
@@ -243,6 +258,7 @@ class KafkaRuntime:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.service.stop()
+        await self.lifecycle.stop()
         await self.barrier.stop()
         t = self.transport
         # Attempt every close even if one client fails.
@@ -250,6 +266,7 @@ class KafkaRuntime:
             t.shared.stop(),
             t.lifecycle.stop(),
             t.coordination.stop(),
+            t.maintenance.stop(),
             t.admin.close(),
             t.producer.stop(),
             return_exceptions=True,

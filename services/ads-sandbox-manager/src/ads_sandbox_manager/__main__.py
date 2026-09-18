@@ -8,7 +8,8 @@ import uvicorn
 from ads_commons_schema import alembic_ini_for, mapped_tables, prepare_schema
 from ads_sandbox_manager.app import create_app
 from ads_sandbox_manager.config import load_settings
-from ads_sandbox_manager.store import SandboxSession
+from ads_sandbox_manager.lifecycle_store import CleanupWork
+from ads_sandbox_manager.store import SandboxSession, SessionPVC
 
 
 class FailFastServer(uvicorn.Server):
@@ -23,7 +24,7 @@ def main() -> None:
     prepare_schema(
         alembic_ini=alembic_ini_for("ads-sandbox-manager"),
         database_url=settings.database_url,
-        tables=mapped_tables(SandboxSession),
+        tables=mapped_tables(SandboxSession, SessionPVC, CleanupWork),
     )
     FailFastServer(
         uvicorn.Config(

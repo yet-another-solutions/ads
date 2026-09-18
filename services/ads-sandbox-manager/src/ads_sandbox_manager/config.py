@@ -114,6 +114,11 @@ class Settings:
     ready_seconds: float = 120
     barrier_seconds: float = 3
     topic_replication_factor: int = 1
+    idle_seconds: float = 1800
+    detached_seconds: float = 7200
+    cleanup_seconds: float = 120
+    pvc_timeout_seconds: float = 120
+    lifecycle_batch: int = 50
 
     def __post_init__(self) -> None:
         if (
@@ -139,6 +144,10 @@ class Settings:
             self.node_fresh_seconds,
             self.ready_seconds,
             self.barrier_seconds,
+            self.idle_seconds,
+            self.detached_seconds,
+            self.cleanup_seconds,
+            self.pvc_timeout_seconds,
         ):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("poll and timeout settings must be finite and positive")
@@ -146,6 +155,8 @@ class Settings:
             raise ValueError("bake timeout must be positive")
         if self.topic_replication_factor < 1:
             raise ValueError("topic replication factor must be positive")
+        if self.lifecycle_batch < 1:
+            raise ValueError("lifecycle batch must be positive")
         if (
             not isinstance(self.node_selector, dict)
             or not self.node_selector
@@ -243,6 +254,11 @@ def load_settings() -> Settings:
         ready_seconds=float(os.environ.get(prefix + "READY_SECONDS", "120")),
         barrier_seconds=float(os.environ.get(prefix + "BARRIER_SECONDS", "3")),
         topic_replication_factor=int(os.environ.get(prefix + "TOPIC_REPLICATION_FACTOR", "1")),
+        idle_seconds=float(os.environ.get(prefix + "IDLE_SECONDS", "1800")),
+        detached_seconds=float(os.environ.get(prefix + "DETACHED_SECONDS", "7200")),
+        cleanup_seconds=float(os.environ.get(prefix + "CLEANUP_SECONDS", "120")),
+        pvc_timeout_seconds=float(os.environ.get(prefix + "PVC_TIMEOUT_SECONDS", "120")),
+        lifecycle_batch=int(os.environ.get(prefix + "LIFECYCLE_BATCH", "50")),
     )
     load_tls_context(settings)
     if settings.session_objects is None:
