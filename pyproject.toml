@@ -127,6 +127,10 @@ module = ["advanced_alchemy", "advanced_alchemy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+pythonpath = [
+    "services/ads-sandbox-mcp/tests",
+    "services/ads-sandbox-ipc/tests",
+]
 testpaths = [
     "deploy/tests",
     "deploy/keycloak/tests",

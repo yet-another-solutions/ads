@@ -47,10 +47,17 @@ def start(h: Harness) -> asyncio.Task[SandboxResult]:
 @pytest.mark.parametrize("field", ["session_id", "message_id"])
 @pytest.mark.parametrize("expired", [False, True])
 async def test_acknowledge_requires_durable_correlation(
-    long_harness: Harness, field: str, expired: bool
+    long_harness: Harness, field: str, expired: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     h = long_harness
     h.publisher.mode = "none"
+    if expired:
+        # This test expires the row explicitly. Keep the background watchdog from
+        # finishing the waiter before the cancellation assertion in cleanup.
+        async def hold_watchdog(*args) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(h.service._watchdog, "wait", hold_watchdog)
     task = start(h)
     request = await wait_for_message(h, SandboxRequest)
     assert isinstance(request, SandboxRequest)
