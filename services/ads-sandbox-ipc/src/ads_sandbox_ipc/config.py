@@ -6,6 +6,7 @@ import re
 import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 
@@ -31,6 +32,10 @@ class Settings:
     stdout_bytes: int = 65536
     stderr_bytes: int = 65536
     input_bytes: int = 262144
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = "PLAIN"
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         for value in (
@@ -46,6 +51,21 @@ class Settings:
             raise ValueError("input and output caps must be positive")
         if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", self.namespace):
             raise ValueError("namespace must be a Kubernetes DNS label")
+        if self.kafka_security_protocol not in ("PLAINTEXT", "SASL_PLAINTEXT"):
+            raise ValueError("unsupported Kafka security protocol")
+        if self.kafka_security_protocol == "SASL_PLAINTEXT" and not (
+            self.kafka_sasl_username and self.kafka_sasl_password
+        ):
+            raise ValueError("Kafka SASL username and password are required")
+
+    def kafka_options(self) -> dict[str, Any]:
+        return {
+            "bootstrap_servers": self.kafka_bootstrap_servers,
+            "security_protocol": self.kafka_security_protocol,
+            "sasl_mechanism": self.kafka_sasl_mechanism,
+            "sasl_plain_username": self.kafka_sasl_username,
+            "sasl_plain_password": self.kafka_sasl_password,
+        }
 
     @property
     def request_topic(self) -> str:
@@ -91,6 +111,10 @@ def load_settings() -> Settings:
         tls_cert_path=Path(required("TLS_CERT_PATH")),
         tls_key_path=Path(required("TLS_KEY_PATH")),
         kafka_bootstrap_servers=required("KAFKA_BOOTSTRAP_SERVERS"),
+        kafka_security_protocol=os.environ.get(prefix + "KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+        kafka_sasl_mechanism=os.environ.get(prefix + "KAFKA_SASL_MECHANISM", "PLAIN"),
+        kafka_sasl_username=os.environ.get(prefix + "KAFKA_SASL_USERNAME"),
+        kafka_sasl_password=os.environ.get(prefix + "KAFKA_SASL_PASSWORD"),
         namespace=os.environ.get(prefix + "NAMESPACE", "ads-sandbox"),
         tls_ca_bundle=Path(ca) if ca else None,
         bind_host=os.environ.get(prefix + "BIND_HOST", "0.0.0.0"),

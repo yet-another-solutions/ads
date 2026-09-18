@@ -104,13 +104,17 @@ to the existing application/preferences TLS references. MCP and manager mount
 sandbox namespace, with key `ca.crt`. The IPC certificate serves HTTPS probes;
 there is no shared IPC Service or guest HTTPS interface.
 
-`sandbox.kafka.bootstrapServers` configures all three services. Only the manager
-currently accepts Kafka SASL/TLS settings; its SASL credentials remain in its
-Secret and its optional Kafka CA is mounted separately. MCP/IPC (and existing
-ADS/engine Kafka clients) still use their current PLAINTEXT transport. This
-chart does not pretend a full SASL path exists: coordinated transport wiring and
-removal of the lab compatibility listener require separate work before production
-acceptance. JWT/STE message authorization is unchanged.
+`sandbox.kafka.bootstrapServers` configures all three services. Each component's
+`kafka.securityProtocol`, `saslMechanism`, `saslUsername`, and `saslPassword`
+configure its own scoped Kafka identity. MCP/IPC support PLAINTEXT and
+SASL_PLAINTEXT; manager additionally supports SSL/SASL_SSL and a separate Kafka CA.
+SASL credentials are emitted only into Secrets, never ConfigMaps. An
+`existingSecret` must supply the component-prefixed `KAFKA_SASL_USERNAME` and
+`KAFKA_SASL_PASSWORD` environment keys when SASL is selected. Missing credentials
+fail startup instead of falling back to anonymous access. SASL_PLAINTEXT does not
+encrypt transport. Existing ADS/engine clients still use PLAINTEXT, so removal
+of their compatibility listener and complete Kafka TLS remain separate work.
+JWT/STE message authorization is unchanged.
 
 Local deterministic proof uses real Helm rendering/server-side lookup requests
 against a simulated API, plus the real service settings/object builders:

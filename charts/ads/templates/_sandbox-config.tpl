@@ -67,6 +67,17 @@
 {{- fail "engine.maxToolCalls must be a positive integer" -}}
 {{- end -}}
 {{- range $component, $settings := dict "manager" $sb.manager "mcp" $sb.mcp "ipc" $sb.ipc -}}
+{{- $protocols := list "PLAINTEXT" "SASL_PLAINTEXT" -}}
+{{- if eq $component "manager" -}}
+{{- $protocols = list "PLAINTEXT" "SSL" "SASL_PLAINTEXT" "SASL_SSL" -}}
+{{- end -}}
+{{- if not (has $settings.kafka.securityProtocol $protocols) -}}
+{{- fail (printf "unsupported sandbox.%s.kafka.securityProtocol" $component) -}}
+{{- end -}}
+{{- if and (hasPrefix "SASL" $settings.kafka.securityProtocol) (not $settings.existingSecret) -}}
+{{- $_ := required (printf "%s Kafka SASL username is required" $component) $settings.kafka.saslUsername -}}
+{{- $_ := required (printf "%s Kafka SASL password is required" $component) $settings.kafka.saslPassword -}}
+{{- end -}}
 {{- range $key, $value := $settings -}}
 {{- if or (hasSuffix "Seconds" $key) (hasSuffix "Bytes" $key) (has $key (list "replicaCount" "port" "topicReplicationFactor" "lifecycleBatch")) -}}
 {{- if not (regexMatch "^[0-9]+(\\.[0-9]+)?$" (toString $value)) -}}
@@ -89,13 +100,6 @@
 {{- end -}}
 {{- if le (float64 $sb.manager.recoverySeconds) (float64 $sb.manager.cleanupSeconds) -}}
 {{- fail "sandbox.manager.recoverySeconds must exceed cleanupSeconds" -}}
-{{- end -}}
-{{- if not (has $sb.manager.kafka.securityProtocol (list "PLAINTEXT" "SSL" "SASL_PLAINTEXT" "SASL_SSL")) -}}
-{{- fail "unsupported sandbox.manager.kafka.securityProtocol" -}}
-{{- end -}}
-{{- if and (hasPrefix "SASL" $sb.manager.kafka.securityProtocol) (not $sb.manager.existingSecret) -}}
-{{- $_ := required "manager Kafka SASL username is required" $sb.manager.kafka.saslUsername -}}
-{{- $_ := required "manager Kafka SASL password is required" $sb.manager.kafka.saslPassword -}}
 {{- end -}}
 {{- end -}}
 

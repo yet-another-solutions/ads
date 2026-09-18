@@ -29,7 +29,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
-        return AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers)
+        return AIOKafkaProducer(**settings.kafka_options())
 
     @provide(scope=Scope.APP)
     async def kube(self, settings: Settings) -> AsyncIterator[Kubernetes]:

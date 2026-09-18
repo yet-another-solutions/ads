@@ -5,6 +5,7 @@ import os
 import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,10 @@ class Settings:
     allowed_origins: tuple[str, ...] = ()
     request_topic: str = "ads.sandbox.exec.request"
     reply_topic: str = "ads.sandbox.exec.reply"
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = "PLAIN"
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
@@ -37,6 +42,21 @@ class Settings:
             raise ValueError("ADS sandbox MCP requires dedicated PostgreSQL via psycopg")
         if not self.allowed_hosts:
             raise ValueError("allowed_hosts must not be empty")
+        if self.kafka_security_protocol not in ("PLAINTEXT", "SASL_PLAINTEXT"):
+            raise ValueError("unsupported Kafka security protocol")
+        if self.kafka_security_protocol == "SASL_PLAINTEXT" and not (
+            self.kafka_sasl_username and self.kafka_sasl_password
+        ):
+            raise ValueError("Kafka SASL username and password are required")
+
+    def kafka_options(self) -> dict[str, Any]:
+        return {
+            "bootstrap_servers": self.kafka_bootstrap_servers,
+            "security_protocol": self.kafka_security_protocol,
+            "sasl_mechanism": self.kafka_sasl_mechanism,
+            "sasl_plain_username": self.kafka_sasl_username,
+            "sasl_plain_password": self.kafka_sasl_password,
+        }
 
 
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
@@ -70,6 +90,10 @@ def load_settings() -> Settings:
         tls_cert_path=Path(required("TLS_CERT_PATH")),
         tls_key_path=Path(required("TLS_KEY_PATH")),
         kafka_bootstrap_servers=required("KAFKA_BOOTSTRAP_SERVERS"),
+        kafka_security_protocol=os.environ.get(prefix + "KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+        kafka_sasl_mechanism=os.environ.get(prefix + "KAFKA_SASL_MECHANISM", "PLAIN"),
+        kafka_sasl_username=os.environ.get(prefix + "KAFKA_SASL_USERNAME"),
+        kafka_sasl_password=os.environ.get(prefix + "KAFKA_SASL_PASSWORD"),
         tls_ca_bundle=Path(ca) if ca else None,
         bind_host=os.environ.get(prefix + "BIND_HOST", "0.0.0.0"),
         port=int(os.environ.get(prefix + "PORT", "8080")),

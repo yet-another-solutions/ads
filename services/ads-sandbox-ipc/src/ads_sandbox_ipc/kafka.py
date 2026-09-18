@@ -117,7 +117,7 @@ class KafkaRuntime:
 
     def _consumer(self) -> AIOKafkaConsumer:
         return AIOKafkaConsumer(
-            bootstrap_servers=self.settings.kafka_bootstrap_servers,
+            **self.settings.kafka_options(),
             group_id=self.settings.group_id,
             enable_auto_commit=False,
             auto_offset_reset="latest",
