@@ -43,6 +43,16 @@ class SessionSettings:
     ipc_resources: dict[str, Any] = field(default_factory=dict)
     ipc_tolerations: list[dict[str, Any]] = field(default_factory=list)
     create_seconds: float = 120
+    guest_runtime_class: str = "kata-qemu-ads"
+    guest_budget: dict[str, int] = field(
+        default_factory=lambda: {
+            "CPU_MILLIS": 750,
+            "MEMORY_BYTES": 805306368,
+            "PIDS": 256,
+            "MAX_DEPTH": 8,
+            "MAX_DESCENDANTS": 32,
+        }
+    )
 
     def __post_init__(self) -> None:
         for name in (
@@ -52,6 +62,7 @@ class SessionSettings:
             self.ipc_secret,
             self.ipc_tls_secret,
             self.ipc_ca_secret,
+            self.guest_runtime_class,
         ):
             if name is not None and (
                 len(name) > 253 or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?", name)
@@ -59,6 +70,19 @@ class SessionSettings:
                 raise ValueError("session object references must be DNS-safe names")
         if not self.guest_image.strip() or not self.ipc_image.strip():
             raise ValueError("guest and IPC images are required")
+        if not self.guest_runtime_class or len(self.guest_runtime_class) > 63:
+            raise ValueError("guest runtime class must be a DNS-safe name of at most 63 characters")
+        if (
+            not isinstance(self.guest_budget, dict)
+            or set(self.guest_budget)
+            != {"CPU_MILLIS", "MEMORY_BYTES", "PIDS", "MAX_DEPTH", "MAX_DESCENDANTS"}
+            or any(
+                type(value) is not int or not 0 < value < 2**63
+                for value in self.guest_budget.values()
+            )
+            or self.guest_budget["MEMORY_BYTES"] % 4096 != 0
+        ):
+            raise ValueError("guest budget requires five positive integers and page-aligned memory")
         if self.ipc_storage_class == "sandbox-block":
             raise ValueError("IPC requires an application Filesystem storage class")
         size_bytes(self.ipc_size)

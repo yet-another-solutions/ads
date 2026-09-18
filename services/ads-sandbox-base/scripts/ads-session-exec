@@ -9,12 +9,8 @@ fail() {
 PID_FILE=/run/ads-session-exec.pid
 READY_FILE=/run/ads-sandbox-ready
 
-as_podman() {
-  runuser -u podman -- env HOME=/home/podman XDG_RUNTIME_DIR=/run/ads-podman "$@"
-}
-
 podman_exec() {
-  as_podman podman --root /session/outer-podman --runroot /run/ads-podman exec -i -w /workspace dev-sandbox "$@"
+  /usr/local/sbin/ads-sandbox-runtime podman exec -i -w /workspace dev-sandbox "$@"
 }
 
 [[ -f $READY_FILE ]] || fail "guest not ready"

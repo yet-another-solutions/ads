@@ -24,11 +24,19 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /bin/bash /bin/sh \
     && mkdir -p /workspace /etc/containers \
-    && if ! grep -q '^root:' /etc/subuid; then echo 'root:100000:65536' >> /etc/subuid; fi \
-    && if ! grep -q '^root:' /etc/subgid; then echo 'root:100000:65536' >> /etc/subgid; fi \
+    && printf 'root:1:65536\n' > /etc/subuid \
+    && printf 'root:1:65536\n' > /etc/subgid \
     && printf '%s\n' \
         '[containers]' \
         'netns = "host"' \
         'utsns = "host"' \
-        'ipcns = "host"' \
+        'ipcns = "private"' \
+        'cgroupns = "private"' \
+        'pidns = "private"' \
+        'cgroups = "enabled"' \
+        '[engine]' \
+        'cgroup_manager = "cgroupfs"' \
         > /etc/containers/containers.conf
+
+COPY scripts/ads-agent-init /usr/local/sbin/ads-agent-init
+RUN chmod 0755 /usr/local/sbin/ads-agent-init

@@ -59,6 +59,15 @@ def fixtures():
         "/apis/node.k8s.io/v1/runtimeclasses/kata-qemu": resource(
             "RuntimeClass", "kata-qemu", handler="kata-qemu"
         ),
+        "/apis/node.k8s.io/v1/runtimeclasses/kata-qemu-ads": {
+            **resource("RuntimeClass", "kata-qemu-ads", handler="kata-qemu-ads"),
+            "metadata": {
+                "name": "kata-qemu-ads",
+                "annotations": {
+                    "ads.io/runtime-contract": "nested-v1",
+                },
+            },
+        },
         CRD: resource(
             "CustomResourceDefinition",
             "clusterpolicies.kyverno.io",
@@ -325,6 +334,33 @@ class ChartTests(unittest.TestCase):
         result = self.online(fixtures())
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_guest_runtime_contract_required(self):
+        path = "/apis/node.k8s.io/v1/runtimeclasses/kata-qemu-ads"
+        for missing in (True, False):
+            objects = fixtures()
+            if missing:
+                del objects[path]
+            else:
+                del objects[path]["metadata"]["annotations"]
+            result = self.online(objects)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("guest RuntimeClass", result.stderr)
+
+    def test_string_budget_is_normalized_to_integer_json(self):
+        result = self.render("--set-string", "sandbox.guest.budget.CPU_MILLIS=600")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = list(yaml.safe_load_all(result.stdout))
+        manager = next(
+            doc
+            for doc in docs
+            if doc
+            and doc.get("kind") == "ConfigMap"
+            and "ADS_SANDBOX_MANAGER_SESSION_OBJECTS" in doc.get("data", {})
+        )
+        settings = json.loads(manager["data"]["ADS_SANDBOX_MANAGER_SESSION_OBJECTS"])
+        self.assertEqual(settings["guest_budget"]["CPU_MILLIS"], 600)
+        self.assertIsInstance(settings["guest_budget"]["CPU_MILLIS"], int)
+
     def test_online_custom_admission_installation(self):
         objects = fixtures()
         objects["/apis/apps/v1/namespaces/policy-system/deployments/admission"] = objects.pop(
@@ -446,6 +482,14 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.kafka.securityProtocol=SASL_SSL",
             "sandbox.manager.kafka.securityProtocol=unknown",
             "nodes.sandbox.runtimeClassName=other-kata",
+            "sandbox.guest.runtimeClassName=../bad",
+            "sandbox.guest.budget.PIDS=0",
+            "sandbox.guest.budget.MAX_DEPTH=-1",
+            "sandbox.guest.budget.CPU_MILLIS=1000",
+            "sandbox.guest.budget.MEMORY_BYTES=1610612736",
+            "sandbox.guest.budget.MEMORY_BYTES=4097",
+            "sandbox.guest.resources.limits.cpu=0",
+            "sandbox.guest.resources.limits.memory=0",
         ]:
             with self.subTest(value=value):
                 self.assertNotEqual(self.render("--set", value).returncode, 0)
@@ -558,8 +602,13 @@ class ChartTests(unittest.TestCase):
         guest = guest_deployment(settings, sid, bid, settings.golden_version, pid)
         self.assertEqual(guest["metadata"]["namespace"], "guests")
         self.assertEqual(
-            guest["spec"]["template"]["spec"]["containers"][0]["resources"], {"limits": {"cpu": 2}}
+            guest["spec"]["template"]["spec"]["containers"][0]["resources"],
+            {
+                "limits": {"cpu": 2, "memory": "1536Mi"},
+                "requests": {"cpu": "1", "memory": "1536Mi"},
+            },
         )
+        self.assertEqual(guest["spec"]["template"]["spec"]["runtimeClassName"], "kata-qemu-ads")
         ipc = ipc_deployment(settings, sid, bid, settings.golden_version)
         pod = ipc["spec"]["template"]["spec"]
         self.assertEqual(pod["serviceAccountName"], "ads-sandbox-ipc")

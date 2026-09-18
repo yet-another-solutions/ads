@@ -35,10 +35,23 @@ Lookup permission errors fail the operation rather than bypassing the check.
 Online operations also require existing `sandbox-block` and the configured
 `sandbox.ipc.storageClass`. These lookups are independent of the Node-list check.
 Existence is not proof of CSI Block clone capability or backing-store reclamation.
-RuntimeClass `kata-qemu` is fixed in v1, matching the manager's object builders.
+RuntimeClass `kata-qemu` remains fixed for golden baking. Session guests use
+`sandbox.guest.runtimeClassName` (default `kata-qemu-ads`), a separately provisioned
+Kata handler for bounded nested Podman. See [the runtime contract](../../services/ads-sandbox-base/README.md)
+before configuring it. Online Helm requires that RuntimeClass to carry
+`ads.io/runtime-contract: nested-v1`; this is an operator attestation, not an
+inspection of containerd's configuration. Guest boot independently checks the
+actual cgroup mount, enclosing bounds, controllers, namespace, and proc layout.
 Configure the existing installation using `sandbox.admission.kyvernoNamespace`,
 `deploymentName`, and `serviceAccountName`; the policy name is `policyName`.
 These are presence/availability checks, not an end-to-end webhook health probe.
+
+`sandbox.guest.resources.limits.cpu` and `.memory` are mandatory and must exceed
+the corresponding `sandbox.guest.budget` bounds. The default enclosing limits are
+1 CPU / 1536Mi; the delegated root-owned budget is 750m / 768Mi / 256 PIDs with
+zero swap, depth 8 and at most 32 descendant cgroups. Nested containers may choose
+smaller limits, not raise that ancestor budget. Runtime checks use the actual CRI
+limits, not solely the Helm values.
 
 The installing identity must be allowed to read Namespaces, CRDs, the configured
 Kyverno Deployment and ServiceAccount, plus the existing topology prerequisites.

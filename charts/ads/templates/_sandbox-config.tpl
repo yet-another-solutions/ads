@@ -60,6 +60,51 @@
 {{- if ne .Values.nodes.sandbox.runtimeClassName "kata-qemu" -}}
 {{- fail "sandbox v1 requires RuntimeClass kata-qemu" -}}
 {{- end -}}
+{{- $guest := $sb.guest -}}
+{{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $guest.runtimeClassName)) (gt (len $guest.runtimeClassName) 63) -}}
+{{- fail "sandbox.guest.runtimeClassName must be a DNS label" -}}
+{{- end -}}
+{{- $keys := list "CPU_MILLIS" "MEMORY_BYTES" "PIDS" "MAX_DEPTH" "MAX_DESCENDANTS" -}}
+{{- if ne (len $guest.budget) (len $keys) -}}
+{{- fail "sandbox.guest.budget must contain exactly the five documented bounds" -}}
+{{- end -}}
+{{- range $key := $keys -}}
+{{- $raw := index $guest.budget $key -}}
+{{- $value := toString $raw -}}
+{{- if kindIs "float64" $raw -}}
+{{- $value = printf "%.0f" $raw -}}
+{{- if ne (float64 $value) $raw -}}
+{{- fail (printf "sandbox.guest.budget.%s must be an integer" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if or (not (regexMatch "^[0-9]+$" $value)) (gt (len $value) 18) (le (int64 $value) 0) -}}
+{{- fail (printf "sandbox.guest.budget.%s must be a positive integer" $key) -}}
+{{- end -}}
+{{- end -}}
+{{- if ne (mod (int64 $guest.budget.MEMORY_BYTES) 4096) 0 -}}
+{{- fail "sandbox.guest.budget.MEMORY_BYTES must be page-aligned" -}}
+{{- end -}}
+{{- $memory := include "ads.storageBytes" (required "guest memory limit is required" $guest.resources.limits.memory) | int64 -}}
+{{- $cpu := toString (required "guest CPU limit is required" $guest.resources.limits.cpu) -}}
+{{- if not (regexMatch "^[0-9]+(m|([.][0-9]{1,3}))?$" $cpu) -}}
+{{- fail "guest CPU limit must be cores or millicores" -}}
+{{- end -}}
+{{- $millis := mulf (float64 $cpu) 1000 -}}
+{{- if hasSuffix "m" $cpu -}}
+{{- $millis = float64 (trimSuffix "m" $cpu) -}}
+{{- end -}}
+{{- if or (ge (float64 $guest.budget.CPU_MILLIS) $millis) (ge (int64 $guest.budget.MEMORY_BYTES) $memory) -}}
+{{- fail "guest CPU and memory limits must exceed the delegated budget" -}}
+{{- end -}}
+{{- if lookup "v1" "Namespace" "" "kube-system" -}}
+{{- $runtime := lookup "node.k8s.io/v1" "RuntimeClass" "" $guest.runtimeClassName -}}
+{{- if not $runtime -}}
+{{- fail (printf "missing guest RuntimeClass %s" $guest.runtimeClassName) -}}
+{{- end -}}
+{{- if ne (dig "metadata" "annotations" "ads.io/runtime-contract" "" $runtime) "nested-v1" -}}
+{{- fail "guest RuntimeClass must attest ads.io/runtime-contract=nested-v1; see runtime prerequisites" -}}
+{{- end -}}
+{{- end -}}
 {{- if or (le (float64 .Values.engine.mcpTimeoutSeconds) 0.0) (not (regexMatch "^[0-9]+(\\.[0-9]+)?$" (toString .Values.engine.mcpTimeoutSeconds))) -}}
 {{- fail "engine.mcpTimeoutSeconds must be positive" -}}
 {{- end -}}
@@ -107,6 +152,10 @@
 {{- $sb := .Values.sandbox -}}
 {{- $ipc := dict "root" . "component" "ipc" "settings" $sb.ipc -}}
 {{- $selector := mergeOverwrite (dict) .Values.nodeSelector (dict .Values.nodes.application.labelKey (toString .Values.nodes.application.labelValue)) -}}
+{{- $budget := dict -}}
+{{- range $key, $value := $sb.guest.budget -}}
+{{- $_ := set $budget $key (int64 $value) -}}
+{{- end -}}
 {{- $objects := dict
   "guest_image" (include "ads.sandboxImage" (dict "root" . "image" $sb.guest.image))
   "ipc_image" (include "ads.sandboxImage" (dict "root" . "image" $sb.ipc.image))
@@ -118,6 +167,8 @@
   "ipc_node_selector" $selector
   "ipc_size" $sb.ipc.size
   "guest_resources" $sb.guest.resources
+  "guest_runtime_class" $sb.guest.runtimeClassName
+  "guest_budget" $budget
   "ipc_resources" $sb.ipc.resources
   "ipc_tolerations" .Values.tolerations
   "create_seconds" $sb.manager.createSeconds -}}

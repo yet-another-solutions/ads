@@ -147,10 +147,25 @@ sandbox:
       tag: "" # Chart.appVersion unless explicitly overridden
     resources: {}
   guest:
+    # Dedicated, operator-provisioned Kata handler; see README runtime contract.
+    runtimeClassName: kata-qemu-ads
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-base
       tag: ""
-    resources: {}
+    resources:
+      requests:
+        cpu: "1"
+        memory: 1536Mi
+      limits:
+        cpu: "1"
+        memory: 1536Mi
+    # Root-owned enclosing budget; nested processes cannot raise these bounds.
+    budget:
+      CPU_MILLIS: 750
+      MEMORY_BYTES: 805306368
+      PIDS: 256
+      MAX_DEPTH: 8
+      MAX_DESCENDANTS: 32
   # Applied to both the golden Job and session guest.
   tolerations: []
   imagePullSecrets: [] # Names must already exist in sandbox.namespace.
