@@ -187,9 +187,9 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 4
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 6
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 2
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 5
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
@@ -240,6 +240,9 @@ jobs:
             --set tls.certManager.enabled=false \
             --set tls.serviceSecretName=byo-service \
             --set preferences.tls.serviceSecretName=byo-preferences \
+            --set sandbox.mcp.tlsSecretName=byo-mcp \
+            --set sandbox.manager.tlsSecretName=byo-manager \
+            --set sandbox.ipc.tlsSecretName=byo-ipc \
             >/tmp/ads-byo.yaml
           if grep -q 'kind: Certificate' /tmp/ads-byo.yaml; then
             echo 'BYO template still issues Certificates' >&2
@@ -258,5 +261,8 @@ jobs:
           grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
           grep -q 'ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
           grep -q 'ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml
-      - name: Namespace and Kyverno prerequisite regressions
-        run: python3 -m unittest discover -s charts/ads/tests -v
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Sandbox wiring and prerequisite regressions
+        run: uv run --group test python -m unittest discover -s charts/ads/tests -v

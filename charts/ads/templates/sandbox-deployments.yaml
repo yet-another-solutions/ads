@@ -1,0 +1,109 @@
+{{- $root := . -}}
+{{- $sb := .Values.sandbox -}}
+{{- range $component, $settings := dict "mcp" $sb.mcp "manager" $sb.manager }}
+{{- $ctx := dict "root" $root "component" $component "settings" $settings }}
+{{- $name := include "ads.sandboxName" $ctx }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-{{ $component }}
+spec:
+  replicas: {{ $settings.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ads.selectorLabels" $root | nindent 6 }}
+      app.kubernetes.io/component: ads-sandbox-{{ $component }}
+  template:
+    metadata:
+      annotations:
+        checksum/sandbox-config: {{ include (print $root.Template.BasePath "/sandbox-configmaps.yaml") $root | sha256sum }}
+        checksum/sandbox-secrets: {{ include (print $root.Template.BasePath "/sandbox-secrets.yaml") $root | sha256sum }}
+      labels:
+        {{- include "ads.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: ads-sandbox-{{ $component }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ ternary "ads-sandbox-manager" (include "ads.serviceAccountName" $root) (eq $component "manager") }}
+      automountServiceAccountToken: {{ eq $component "manager" }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ads-sandbox-{{ $component }}
+          image: {{ include "ads.sandboxImage" (dict "root" $root "image" $settings.image) | quote }}
+          imagePullPolicy: {{ $settings.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          ports:
+            - name: https
+              containerPort: {{ $settings.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}
+            - secretRef:
+                name: {{ include "ads.sandboxSecret" $ctx }}
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- if $root.Values.tls.caBundle.secretName }}
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+            {{- end }}
+            {{- if and (eq $component "manager") $sb.manager.kafka.caBundle.secretName }}
+            - name: kafka-ca
+              mountPath: /kafka-ca
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+          resources:
+            {{- toYaml $settings.resources | nindent 12 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ads.sandboxTLS" $ctx }}
+        {{- if $root.Values.tls.caBundle.secretName }}
+        - name: ca
+          secret:
+            secretName: {{ $root.Values.tls.caBundle.secretName }}
+            items:
+              - key: {{ $root.Values.tls.caBundle.key }}
+                path: ca.crt
+        {{- end }}
+        {{- if and (eq $component "manager") $sb.manager.kafka.caBundle.secretName }}
+        - name: kafka-ca
+          secret:
+            secretName: {{ $sb.manager.kafka.caBundle.secretName }}
+            items:
+              - key: {{ $sb.manager.kafka.caBundle.key }}
+                path: ca.crt
+        {{- end }}
+      nodeSelector:
+        {{- mergeOverwrite (dict) $root.Values.nodeSelector (dict $root.Values.nodes.application.labelKey (toString $root.Values.nodes.application.labelValue)) | toYaml | nindent 8 }}
+      {{- with $root.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

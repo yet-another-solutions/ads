@@ -3,19 +3,25 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlsplit
+
+import yaml
 
 CHART = Path(__file__).resolve().parents[1]
 HELM = os.environ.get("HELM_BIN", "helm")
 CRD = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterpolicies.kyverno.io"
 DEPLOYMENT = "/apis/apps/v1/namespaces/kyverno/deployments/kyverno-admission-controller"
 SA = "/api/v1/namespaces/kyverno/serviceaccounts/kyverno-admission-controller"
+BLOCK = "/apis/storage.k8s.io/v1/storageclasses/sandbox-block"
+FILESYSTEM = "/apis/storage.k8s.io/v1/storageclasses/local-path"
 
 
 def resource(kind, name, **fields):
@@ -62,17 +68,21 @@ def fixtures():
             "Deployment", "kyverno-admission-controller", status={"availableReplicas": 1}
         ),
         SA: resource("ServiceAccount", "kyverno-admission-controller"),
+        BLOCK: resource("StorageClass", "sandbox-block", provisioner="fixture.csi"),
+        FILESYSTEM: resource("StorageClass", "local-path", provisioner="fixture.csi"),
     }
 
 
 DISCOVERY = {
-    "v1": [("namespaces", "Namespace", False), ("nodes", "Node", False),
-           ("serviceaccounts", "ServiceAccount", True)],
-    "apps/v1": [("deployments", "Deployment", True)],
-    "apiextensions.k8s.io/v1": [
-        ("customresourcedefinitions", "CustomResourceDefinition", False)
+    "v1": [
+        ("namespaces", "Namespace", False),
+        ("nodes", "Node", False),
+        ("serviceaccounts", "ServiceAccount", True),
     ],
+    "apps/v1": [("deployments", "Deployment", True)],
+    "apiextensions.k8s.io/v1": [("customresourcedefinitions", "CustomResourceDefinition", False)],
     "node.k8s.io/v1": [("runtimeclasses", "RuntimeClass", False)],
+    "storage.k8s.io/v1": [("storageclasses", "StorageClass", False)],
 }
 
 
@@ -80,7 +90,10 @@ class ChartTests(unittest.TestCase):
     def render(self, *args):
         return subprocess.run(
             [HELM, "template", "ads", str(CHART), "--namespace", "default", *args],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
         )
 
     def online(self, objects, *args, forbidden=None):
@@ -107,30 +120,46 @@ class ChartTests(unittest.TestCase):
                                 "versions": [{"groupVersion": gv, "version": "v1"}],
                                 "preferredVersion": {"groupVersion": gv, "version": "v1"},
                             }
-                            for gv in DISCOVERY if gv != "v1"
+                            for gv in DISCOVERY
+                            if gv != "v1"
                         ],
                     }
                 elif path.removeprefix("/apis/").removeprefix("/api/") in DISCOVERY:
                     gv = path.removeprefix("/apis/").removeprefix("/api/")
                     body = {
-                        "kind": "APIResourceList", "groupVersion": gv,
+                        "kind": "APIResourceList",
+                        "groupVersion": gv,
                         "resources": [
-                            {"name": name, "kind": kind, "namespaced": namespaced,
-                             "verbs": ["get", "list"]}
+                            {
+                                "name": name,
+                                "kind": kind,
+                                "namespaced": namespaced,
+                                "verbs": ["get", "list"],
+                            }
                             for name, kind, namespaced in DISCOVERY[gv]
                         ],
                     }
                 elif path == forbidden:
                     code = 403
-                    body = {"kind": "Status", "apiVersion": "v1", "status": "Failure",
-                            "reason": "Forbidden", "message": "fixture access forbidden",
-                            "code": 403}
+                    body = {
+                        "kind": "Status",
+                        "apiVersion": "v1",
+                        "status": "Failure",
+                        "reason": "Forbidden",
+                        "message": "fixture access forbidden",
+                        "code": 403,
+                    }
                 elif path in objects:
                     body = objects[path]
                 else:
                     code = 404
-                    body = {"kind": "Status", "apiVersion": "v1", "status": "Failure",
-                            "reason": "NotFound", "code": 404}
+                    body = {
+                        "kind": "Status",
+                        "apiVersion": "v1",
+                        "status": "Failure",
+                        "reason": "NotFound",
+                        "code": 404,
+                    }
                 data = json.dumps(body).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -144,13 +173,26 @@ class ChartTests(unittest.TestCase):
             try:
                 with tempfile.TemporaryDirectory() as directory:
                     config = Path(directory) / "kubeconfig"
-                    config.write_text(json.dumps({
-                        "apiVersion": "v1", "kind": "Config",
-                        "clusters": [{"name": "fixture", "cluster": {
-                            "server": f"http://127.0.0.1:{server.server_port}"}}],
-                        "contexts": [{"name": "fixture", "context": {"cluster": "fixture"}}],
-                        "current-context": "fixture",
-                    }))
+                    config.write_text(
+                        json.dumps(
+                            {
+                                "apiVersion": "v1",
+                                "kind": "Config",
+                                "clusters": [
+                                    {
+                                        "name": "fixture",
+                                        "cluster": {
+                                            "server": f"http://127.0.0.1:{server.server_port}"
+                                        },
+                                    }
+                                ],
+                                "contexts": [
+                                    {"name": "fixture", "context": {"cluster": "fixture"}}
+                                ],
+                                "current-context": "fixture",
+                            }
+                        )
+                    )
                     config.chmod(0o600)
                     result = self.render("--dry-run=server", "--kubeconfig", str(config), *args)
             finally:
@@ -178,9 +220,17 @@ class ChartTests(unittest.TestCase):
                     else:
                         namespace = re.search(r'  namespace: "?([^"\n]+)', metadata)[1]
                         self.assertIn(namespace, [app, sandbox])
-                        if kind[1] in ["Deployment", "Service", "Secret", "ConfigMap",
-                                       "Certificate", "HTTPRoute", "BackendTLSPolicy"]:
-                            self.assertEqual(namespace, app)
+                        if kind[1] in [
+                            "Deployment",
+                            "Service",
+                            "Secret",
+                            "ConfigMap",
+                            "Certificate",
+                            "HTTPRoute",
+                            "BackendTLSPolicy",
+                        ]:
+                            expected = sandbox if "sandbox-ipc" in metadata else app
+                            self.assertEqual(namespace, expected)
                 self.assertCountEqual(namespace_names, [app, sandbox])
                 self.assertIn(f"ads.{app}.svc.cluster.local", result.stdout)
                 self.assertIn(f"ads-preferences.{app}.svc.cluster.local", result.stdout)
@@ -189,14 +239,18 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("failurePolicy: Fail", result.stdout)
                 self.assertIn("validationFailureAction: Enforce", result.stdout)
                 self.assertIn("{{ request.", result.stdout)
-                self.assertIn('authentication.kubernetes.io/pod-uid', result.stdout)
+                self.assertIn("authentication.kubernetes.io/pod-uid", result.stdout)
 
     def test_custom_admission_settings_and_manager_subject(self):
         result = self.render(
-            "--set", "namespace=custom-app,sandbox.namespace=custom-sandbox",
-            "--set", "sandbox.admission.kyvernoNamespace=policy-system",
-            "--set", "sandbox.admission.serviceAccountName=admission-sa",
-            "--set", "sandbox.admission.policyName=custom-exec",
+            "--set",
+            "namespace=custom-app,sandbox.namespace=custom-sandbox",
+            "--set",
+            "sandbox.admission.kyvernoNamespace=policy-system",
+            "--set",
+            "sandbox.admission.serviceAccountName=admission-sa",
+            "--set",
+            "sandbox.admission.policyName=custom-exec",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("name: custom-exec", result.stdout)
@@ -206,9 +260,12 @@ class ChartTests(unittest.TestCase):
 
     def test_reject_unsafe_namespace_layouts(self):
         for value in [
-            "namespace=default", "sandbox.namespace=default",
-            "namespace=kyverno", "sandbox.namespace=kube-system",
-            "sandbox.namespace=ads", "namespace=",
+            "namespace=default",
+            "sandbox.namespace=default",
+            "namespace=kyverno",
+            "sandbox.namespace=kube-system",
+            "sandbox.namespace=ads",
+            "namespace=",
         ]:
             with self.subTest(value=value):
                 self.assertNotEqual(self.render("--set", value).returncode, 0)
@@ -227,9 +284,13 @@ class ChartTests(unittest.TestCase):
         )
         objects["/api/v1/namespaces/policy-system/serviceaccounts/admission"] = objects.pop(SA)
         result = self.online(
-            objects, "--set", "sandbox.admission.kyvernoNamespace=policy-system",
-            "--set", "sandbox.admission.deploymentName=admission",
-            "--set", "sandbox.admission.serviceAccountName=admission",
+            objects,
+            "--set",
+            "sandbox.admission.kyvernoNamespace=policy-system",
+            "--set",
+            "sandbox.admission.deploymentName=admission",
+            "--set",
+            "sandbox.admission.serviceAccountName=admission",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -247,6 +308,8 @@ class ChartTests(unittest.TestCase):
             (DEPLOYMENT, "requires Kyverno admission Deployment"),
             (SA, "requires the configured Kyverno admission ServiceAccount"),
             ("/api/v1/namespaces/default", "release namespace must already exist"),
+            (BLOCK, "requires existing StorageClass sandbox-block"),
+            (FILESYSTEM, "requires existing StorageClass local-path"),
         ]:
             with self.subTest(path=path):
                 objects = fixtures()
@@ -258,8 +321,11 @@ class ChartTests(unittest.TestCase):
     def test_unready_and_status_absent(self):
         for path, status, message in [
             (CRD, {}, "established Kyverno"),
-            (CRD, {"conditions": [{"type": "Established", "status": "False"}]},
-             "established Kyverno"),
+            (
+                CRD,
+                {"conditions": [{"type": "Established", "status": "False"}]},
+                "established Kyverno",
+            ),
             (DEPLOYMENT, {}, "available Kyverno admission"),
             (DEPLOYMENT, {"availableReplicas": 0}, "available Kyverno admission"),
         ]:
@@ -271,11 +337,315 @@ class ChartTests(unittest.TestCase):
                 self.assertIn(message, result.stderr)
 
     def test_forbidden_lookup_fails_closed(self):
-        for path in ["/api/v1/namespaces/kube-system", CRD, DEPLOYMENT, SA]:
+        for path in ["/api/v1/namespaces/kube-system", CRD, DEPLOYMENT, SA, BLOCK, FILESYSTEM]:
             with self.subTest(path=path):
                 result = self.online(fixtures(), forbidden=path)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("fixture access forbidden", result.stderr)
+
+    def documents(self, *args):
+        result = self.render(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return {
+            (doc["kind"], doc["metadata"]["name"]): doc
+            for doc in yaml.safe_load_all(result.stdout)
+            if doc
+        }
+
+    def test_storage_lookup_independent_of_node_list(self):
+        objects = fixtures()
+        del objects["/api/v1/nodes"]
+        del objects[BLOCK]
+        result = self.online(objects)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires existing StorageClass sandbox-block", result.stderr)
+
+    def test_custom_filesystem_class(self):
+        objects = fixtures()
+        objects["/apis/storage.k8s.io/v1/storageclasses/app-disk"] = objects.pop(FILESYSTEM)
+        result = self.online(objects, "--set", "sandbox.ipc.storageClass=app-disk")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_invalid_values_fail_offline(self):
+        for value in [
+            "sandbox.golden.slack=0",
+            "sandbox.golden.slack=1Gi",
+            "sandbox.golden.slack=2047Mi",
+            "sandbox.golden.slack=2G",
+            "sandbox.golden.slack=-2Gi",
+            "sandbox.golden.slack=2.5Gi",
+            "sandbox.golden.slack=999999999999999999999Gi",
+            "sandbox.golden.slack=9223372036854775807",
+            "sandbox.sessionSize=30Gi",
+            "sandbox.ipc.storageClass=sandbox-block",
+            "sandbox.ipc.storageClass=",
+            "sandbox.ipc.size=0",
+            "sandbox.manager.idleSeconds=0",
+            "sandbox.manager.detachedSeconds=-1",
+            "sandbox.manager.lifecycleBatch=0",
+            "sandbox.manager.pvcTimeoutSeconds=0",
+            "sandbox.manager.pingTimeoutSeconds=10",
+            "sandbox.manager.recoverySeconds=120",
+            "sandbox.manager.replicaCount=1.5",
+            "sandbox.manager.bakeSeconds=1.5",
+            "sandbox.mcp.port=65536",
+            "engine.mcpTimeoutSeconds=0",
+            "engine.maxToolCalls=0",
+            "engine.maxToolCalls=1.5",
+            "sandbox.mcp.stdoutBytes=0",
+            "sandbox.ipc.ackSeconds=0",
+            "sandbox.ipc.timeoutSeconds=NaN",
+            "sandbox.manager.kafka.securityProtocol=SASL_SSL",
+            "sandbox.manager.kafka.securityProtocol=unknown",
+            "nodes.sandbox.runtimeClassName=other-kata",
+        ]:
+            with self.subTest(value=value):
+                self.assertNotEqual(self.render("--set", value).returncode, 0)
+
+    def test_valid_slack_quantities(self):
+        for value in ["2Gi", "2048Mi", "2147483648", "3G"]:
+            with self.subTest(value=value):
+                result = self.render("--set", f"sandbox.golden.slack={value}")
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_service_wiring_and_no_infrastructure(self):
+        docs = self.documents()
+        forbidden = {
+            "StorageClass",
+            "RuntimeClass",
+            "PersistentVolumeClaim",
+            "Job",
+            "StatefulSet",
+            "Keycloak",
+            "KeycloakRealmImport",
+        }
+        self.assertFalse({kind for kind, _ in docs} & forbidden)
+        self.assertEqual(sum(kind == "Deployment" for kind, _ in docs), 6)
+        self.assertNotIn(("Deployment", "ads-sandbox-ipc"), docs)
+        for component in ["mcp", "manager"]:
+            deployment = docs["Deployment", f"ads-sandbox-{component}"]
+            pod = deployment["spec"]["template"]["spec"]
+            self.assertEqual(pod["nodeSelector"]["ads.io/application-node"], "true")
+            self.assertEqual(pod["automountServiceAccountToken"], component == "manager")
+            container = pod["containers"][0]
+            for probe in ["livenessProbe", "readinessProbe"]:
+                self.assertEqual(container[probe]["httpGet"]["scheme"], "HTTPS")
+        manager = docs["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
+        self.assertEqual(manager["serviceAccountName"], "ads-sandbox-manager")
+        engine = docs["ConfigMap", "ads-engine"]["data"]
+        self.assertEqual(engine["ADS_ENGINE_MCP_URL"], "https://ads-sandbox-mcp:8080/mcp")
+        self.assertEqual(engine["ADS_ENGINE_MAX_TOOL_CALLS"], "32")
+        service = docs["Service", "ads-sandbox-mcp"]
+        self.assertEqual(service["spec"]["type"], "ClusterIP")
+        self.assertEqual(service["spec"]["ports"][0]["port"], 8080)
+        routes = [doc for (kind, _), doc in docs.items() if kind == "HTTPRoute"]
+        self.assertNotIn("sandbox", json.dumps(routes))
+        config = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+        self.assertEqual(config["ADS_SANDBOX_MANAGER_IDLE_SECONDS"], "1800")
+        self.assertEqual(config["ADS_SANDBOX_MANAGER_DETACHED_SECONDS"], "7200")
+        self.assertEqual(config["ADS_SESSION_SIZE"], "20Gi")
+        self.assertEqual(config["ADS_SANDBOX_MANAGER_GOLDEN_VERSION"], "v0.0.1")
+        self.assertNotIn("KEYCLOAK_CLIENT_SECRET", json.dumps(config))
+
+    def test_overrides_reach_real_settings_and_object_builders(self):
+        from uuid import uuid4
+
+        from ads_sandbox_ipc.config import load_settings as ipc_settings
+        from ads_sandbox_manager.config import load_settings as manager_settings
+        from ads_sandbox_manager.objects import golden_job, golden_pvc
+        from ads_sandbox_manager.session_objects import guest_deployment, ipc_deployment
+        from ads_sandbox_mcp.config import load_settings as mcp_settings
+
+        docs = self.documents(
+            "--set",
+            "fullnameOverride=custom,namespace=app,sandbox.namespace=guests",
+            "--set",
+            "sandbox.manager.idleSeconds=99,sandbox.manager.detachedSeconds=999",
+            "--set",
+            "sandbox.manager.lifecycleBatch=7,sandbox.manager.pvcTimeoutSeconds=87",
+            "--set",
+            "sandbox.manager.pingIntervalSeconds=12,sandbox.manager.pingTimeoutSeconds=40",
+            "--set",
+            "sandbox.golden.slack=3Gi,sandbox.ipc.size=2Gi",
+            "--set",
+            "sandbox.mcp.port=8443,sandbox.ipc.caSecretName=guest-ca",
+            "--set",
+            "sandbox.imagePullSecrets[0]=guest-registry",
+            "--set",
+            "sandbox.tolerations[0].key=isolated,sandbox.tolerations[0].operator=Exists",
+            "--set",
+            "sandbox.guest.resources.limits.cpu=2,sandbox.ipc.resources.limits.memory=256Mi",
+            "--set",
+            "sandbox.manager.createSeconds=144",
+            "--set",
+            "sandbox.ipc.timeoutSeconds=55,sandbox.mcp.timeoutSeconds=66",
+        )
+
+        def environment(component):
+            name = f"custom-sandbox-{component}"
+            return docs["ConfigMap", name]["data"] | docs["Secret", name]["stringData"]
+
+        with (
+            patch.dict(os.environ, environment("manager"), clear=True),
+            patch("ads_sandbox_manager.config.load_tls_context"),
+        ):
+            settings = manager_settings()
+        self.assertEqual(settings.idle_seconds, 99)
+        self.assertEqual(settings.detached_seconds, 999)
+        self.assertEqual(settings.lifecycle_batch, 7)
+        self.assertEqual(settings.pvc_timeout_seconds, 87)
+        self.assertEqual(settings.ping_interval_seconds, 12)
+        self.assertEqual(settings.ping_timeout_seconds, 40)
+        self.assertEqual(settings.golden_bytes, 23 * 1024**3)
+        self.assertEqual(settings.session_objects.create_seconds, 144)
+        job = golden_job(settings)["spec"]["template"]["spec"]
+        self.assertEqual(job["runtimeClassName"], "kata-qemu")
+        self.assertEqual(job["imagePullSecrets"], [{"name": "guest-registry"}])
+        self.assertEqual(job["tolerations"][0]["key"], "isolated")
+        self.assertEqual(
+            golden_pvc(settings, "uid")["spec"]["resources"]["requests"]["storage"],
+            str(23 * 1024**3),
+        )
+        sid, bid, pid = uuid4(), uuid4(), uuid4()
+        guest = guest_deployment(settings, sid, bid, settings.golden_version, pid)
+        self.assertEqual(guest["metadata"]["namespace"], "guests")
+        self.assertEqual(
+            guest["spec"]["template"]["spec"]["containers"][0]["resources"], {"limits": {"cpu": 2}}
+        )
+        ipc = ipc_deployment(settings, sid, bid, settings.golden_version)
+        pod = ipc["spec"]["template"]["spec"]
+        self.assertEqual(pod["serviceAccountName"], "ads-sandbox-ipc")
+        self.assertEqual(pod["nodeSelector"]["ads.io/application-node"], "true")
+        env = environment("ipc") | {
+            entry["name"]: entry["value"] for entry in pod["containers"][0]["env"]
+        }
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("ads_sandbox_ipc.config.load_tls_context"),
+        ):
+            ipc_config = ipc_settings()
+        self.assertEqual(ipc_config.namespace, "guests")
+        self.assertEqual(ipc_config.timeout_seconds, 55)
+        self.assertEqual(str(ipc_config.tls_ca_bundle), "/ca/ca.crt")
+        with (
+            patch.dict(os.environ, environment("mcp"), clear=True),
+            patch("ads_sandbox_mcp.config.load_tls_context"),
+        ):
+            mcp = mcp_settings()
+        self.assertEqual(mcp.port, 8443)
+        self.assertEqual(mcp.timeout_seconds, 66)
+        self.assertIn("custom-sandbox-mcp.app.svc.cluster.local:*", mcp.allowed_hosts)
+        self.assertEqual(
+            docs["ConfigMap", "custom-engine"]["data"]["ADS_ENGINE_MCP_URL"],
+            "https://custom-sandbox-mcp:8443/mcp",
+        )
+
+    def test_byo_tls_and_external_secrets(self):
+        flags = [
+            "--set",
+            "tls.certManager.enabled=false,tls.serviceSecretName=app-tls",
+            "--set",
+            "preferences.tls.serviceSecretName=preferences-tls",
+        ]
+        for component in ["mcp", "manager", "ipc"]:
+            flags += ["--set", f"sandbox.{component}.tlsSecretName={component}-tls"]
+            flags += ["--set", f"sandbox.{component}.existingSecret={component}-credentials"]
+        docs = self.documents(*flags, "--set", "tls.caBundle.secretName=app-ca")
+        self.assertFalse(any(kind == "Certificate" for kind, _ in docs))
+        for component in ["mcp", "manager", "ipc"]:
+            self.assertNotIn(("Secret", f"ads-sandbox-{component}"), docs)
+        manager = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+        objects = json.loads(manager["ADS_SANDBOX_MANAGER_SESSION_OBJECTS"])
+        self.assertEqual(objects["ipc_secret"], "ipc-credentials")
+        self.assertEqual(objects["ipc_tls_secret"], "ipc-tls")
+        self.assertNotIn("ipc_ca_secret", objects)  # Never cross-namespace Secret reuse.
+        for component in ["mcp", "manager"]:
+            pod = docs["Deployment", f"ads-sandbox-{component}"]["spec"]["template"]["spec"]
+            self.assertIn(
+                {"secretRef": {"name": f"{component}-credentials"}}, pod["containers"][0]["envFrom"]
+            )
+            self.assertIn(
+                {
+                    "name": "ca",
+                    "secret": {
+                        "secretName": "app-ca",
+                        "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                    },
+                },
+                pod["volumes"],
+            )
+        for component in ["mcp", "manager", "ipc"]:
+            result = self.render(*flags, "--set", f"sandbox.{component}.tlsSecretName=")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"sandbox.{component}.tlsSecretName", result.stderr)
+
+    def test_manager_sasl_secret_and_ca(self):
+        docs = self.documents(
+            "--set",
+            "sandbox.manager.kafka.securityProtocol=SASL_SSL",
+            "--set",
+            "sandbox.manager.kafka.saslUsername=test-user",
+            "--set",
+            "sandbox.manager.kafka.saslPassword=fixture-only",
+            "--set",
+            "sandbox.manager.kafka.caBundle.secretName=kafka-ca",
+        )
+        config = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+        secret = docs["Secret", "ads-sandbox-manager"]["stringData"]
+        self.assertNotIn("fixture-only", json.dumps(config))
+        self.assertEqual(secret["ADS_SANDBOX_MANAGER_KAFKA_SASL_PASSWORD"], "fixture-only")
+        self.assertEqual(config["ADS_SANDBOX_MANAGER_KAFKA_CA_BUNDLE"], "/kafka-ca/ca.crt")
+        pod = docs["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
+        self.assertIn(
+            {
+                "name": "kafka-ca",
+                "secret": {
+                    "secretName": "kafka-ca",
+                    "items": [{"key": "ca.crt", "path": "ca.crt"}],
+                },
+            },
+            pod["volumes"],
+        )
+
+    def test_release_packaging_carries_ci_size_and_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chart = Path(directory) / "ads"
+            shutil.copytree(CHART, chart)
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(chart / "package_release.py"),
+                    "--chart",
+                    str(chart),
+                    "--version",
+                    "0.0.123-rc.1",
+                    "--session-size",
+                    "30Gi",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run(
+                [HELM, "package", str(chart), "--destination", directory],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            archive = next(Path(directory).glob("*.tgz"))
+            result = subprocess.run(
+                [HELM, "template", "ads", str(archive)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('ADS_SESSION_SIZE: "30Gi"', result.stdout)
+            self.assertIn('ADS_SANDBOX_MANAGER_GOLDEN_VERSION: "v0.0.123-rc.1"', result.stdout)
+            self.assertNotIn(':0.0.1"', result.stdout)
+            self.assertIn("ads-sandbox-golden:0.0.123-rc.1", result.stdout)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,26 @@
+{{- if .Values.tls.certManager.enabled }}
+{{- $root := . -}}
+{{- $sb := .Values.sandbox -}}
+{{- range $component, $settings := dict "mcp" $sb.mcp "manager" $sb.manager "ipc" $sb.ipc }}
+{{- $ctx := dict "root" $root "component" $component "settings" $settings }}
+{{- $name := include "ads.sandboxName" $ctx }}
+{{- $namespace := ternary $sb.namespace $root.Values.namespace (eq $component "ipc") }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+spec:
+  secretName: {{ include "ads.sandboxTLS" $ctx }}
+  issuerRef:
+    {{- toYaml $root.Values.tls.certManager.issuer | nindent 4 }}
+  dnsNames:
+    - {{ $name | quote }}
+    - {{ printf "%s.%s" $name $namespace | quote }}
+    - {{ printf "%s.%s.svc" $name $namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $name $namespace | quote }}
+{{- end }}
+{{- end }}

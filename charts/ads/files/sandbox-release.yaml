@@ -1,0 +1,2 @@
+# CI stamps this file into the published chart; not an install-time override.
+sessionSize: "20Gi"

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ads.sandboxName" (dict "root" . "component" "mcp") }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-mcp
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: {{ .Values.sandbox.mcp.port }}
+      targetPort: https
+  selector:
+    {{- include "ads.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-mcp
