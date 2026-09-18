@@ -99,7 +99,7 @@ default 120-second MCP timeout. Refresh recomputes claims from client scopes and
 mappers, so `audience` on the initial STE alone is not a durable restriction.
 See [Keycloak token exchange](https://www.keycloak.org/securing-apps/token-exchange).
 
-The engine has only `basic` as a default scope, a direct MCP audience mapper, a
+The engine has only `basic` and metadata-only `service_account` as default scopes, a direct MCP audience mapper, a
 direct realm-role mapper, `fullScopeAllowed=false`, and explicit `user` role
 scope mapping. It has no default `roles`, audience-resolve, service-account role,
 offline, or broad client-role mapper. The separate `ads-engine-ack` optional
@@ -108,7 +108,8 @@ does. Do not attach that scope as default or request it for the MCP refresh pair
 Because declaring custom scopes suppresses automatic built-in scope creation on
 realm import, the sample also includes explicit Keycloak 26.7.2 definitions for
 `basic`, `roles`, `profile`, `email`, and `service_account`, exported without IDs
-from a disposable realm. The engine still attaches only `basic` by default.
+from a disposable realm. Keycloak automatically attaches `service_account` for
+service-account-enabled clients; its session-note mappers add no roles or audiences.
 
 For an existing lab realm, **do not apply the create-only import to reconcile it**.
 At the deferred deployment stage, use an authenticated Keycloak Admin REST client
@@ -125,8 +126,8 @@ resources from `spec.realm` in the sample:
    reconcile its `/protocol-mappers/models` explicitly as well. This shared
    scope must have no additional mappers or role mappings.
 3. For `/clients/{id}/default-client-scopes`, remove every attached scope except
-   `basic` with `DELETE .../{scope-id}`. Attach `basic` if missing using
-   `PUT .../{scope-id}`. Inspect `basic` itself for unexpected custom role or
+   `basic` and `service_account` with `DELETE .../{scope-id}`. Attach either if missing using
+   `PUT .../{scope-id}`. Inspect both scopes for unexpected custom role or
    audience mappers before proceeding; do not silently modify a shared scope.
 4. Reconcile `/clients/{id}/optional-client-scopes` to only `ads-engine-ack`
    using the same GET/DELETE/PUT membership endpoints.

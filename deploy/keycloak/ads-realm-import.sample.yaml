@@ -429,7 +429,9 @@ spec:
         fullScopeAllowed: false
         # No built-in roles scope: its audience resolver/client-role mapper can
         # widen a refreshed token. Only the scoped realm role mapper below.
-        defaultClientScopes: [basic]
+        # Keycloak automatically attaches service_account for enabled service
+        # accounts; its session-note mappers add metadata, not roles/audiences.
+        defaultClientScopes: [basic, service_account]
         optionalClientScopes: [ads-engine-ack]
         attributes:
           standard.token.exchange.enabled: "true"

@@ -268,6 +268,8 @@ async def test_resume_keeps_disk_identity_and_recreates_compute(sessions_harness
 )
 async def test_resume_rejects_bad_bind_without_clone_attach_or_delete(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
+    # This proves bind rejection, not cleanup latency on a busy CI database.
+    h.service.settings = replace(h.settings, control_seconds=10)
     row = await seed(h, sid)
     disk = h.kube.put(
         session_pvc(h.settings, sid, row.sandbox_id, row.golden_version, "22Gi", row.pvc_id)

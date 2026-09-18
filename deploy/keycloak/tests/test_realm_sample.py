@@ -70,7 +70,7 @@ def test_flows_scopes_audiences_and_role_assignment():
         assert "offline_access" not in client["defaultClientScopes"]
         assert "basic" in client["defaultClientScopes"]
         if name == "ads-engine":
-            assert client["defaultClientScopes"] == ["basic"]
+            assert client["defaultClientScopes"] == ["basic", "service_account"]
             assert (
                 client["attributes"]["standard.token.exchange.enableRefreshRequestedTokenType"]
                 == "SAME_SESSION"
@@ -111,6 +111,9 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
     assert {m["protocolMapper"] for m in scopes["basic"]["protocolMappers"]} == {
         "oidc-sub-mapper",
         "oidc-usersessionmodel-note-mapper",
+    }
+    assert {m["protocolMapper"] for m in scopes["service_account"]["protocolMappers"]} == {
+        "oidc-usersessionmodel-note-mapper"
     }
     scope = next(s for s in realm["clientScopes"] if s["name"] == "ads-engine-ack")
     assert len(scope["protocolMappers"]) == 1
