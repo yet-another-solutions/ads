@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 
-def test_manager_read_only_observer_amendment_does_not_add_write_privileges():
+def test_manager_cleanup_is_namespace_scoped_and_cluster_observation_stays_read_only():
     template = Path(__file__).parents[3] / "charts/ads/templates/sandbox-rbac.yaml"
     # These RBAC documents contain only the two namespace substitutions. Real Helm
     # rendering remains in charts/ads/tests, run by the separate Helm CI job.
@@ -29,11 +29,14 @@ def test_manager_read_only_observer_amendment_does_not_add_write_privileges():
         ("batch", "jobs"): ["create", "delete", "get", "list", "watch"],
         ("apps", "deployments"): ["create", "delete", "get", "list", "watch"],
         ("", "persistentvolumeclaims"): ["create", "delete", "get", "list", "watch"],
-        ("", "pods"): ["list"],
+        ("", "pods"): ["list", "delete"],
         ("", "persistentvolumes"): ["get"],
         ("", "nodes"): ["get"],
         ("storage.k8s.io", "volumeattachments"): ["list"],
     }
+    assert docs[0]["metadata"]["namespace"] == "ads-sandbox"
+    assert all(set(rule["verbs"]) <= {"get", "list", "watch"} for rule in docs[1]["rules"])
+    assert all("pods" not in rule["resources"] for rule in docs[1]["rules"])
     assert docs[2]["subjects"] == [
         {"kind": "ServiceAccount", "name": "ads-sandbox-manager", "namespace": "ads"}
     ]
