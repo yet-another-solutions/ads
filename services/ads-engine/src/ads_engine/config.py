@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -36,6 +38,24 @@ class Settings:
     ack_audience: str
     allowed_callers: frozenset[str]
     tls_ca_bundle: Path | None
+    mcp_url: str = "https://ads-sandbox-mcp:8443/mcp"
+    mcp_timeout_seconds: float = 120
+    max_tool_calls: int = 32
+
+    def __post_init__(self) -> None:
+        url = urlsplit(self.mcp_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.fragment
+        ):
+            raise ValueError("ADS_ENGINE_MCP_URL must be an HTTPS endpoint without credentials")
+        if not math.isfinite(self.mcp_timeout_seconds) or self.mcp_timeout_seconds <= 0:
+            raise ValueError("ADS_ENGINE_MCP_TIMEOUT_SECONDS must be positive and finite")
+        if self.max_tool_calls < 1:
+            raise ValueError("ADS_ENGINE_MAX_TOOL_CALLS must be positive")
 
 
 def load_settings() -> Settings:
@@ -59,4 +79,7 @@ def load_settings() -> Settings:
         ack_audience=_env("ADS_ENGINE_ACK_AUDIENCE", "ads"),
         allowed_callers=_callers(_env("ADS_ENGINE_ALLOWED_CALLERS", "ads")),
         tls_ca_bundle=tls_ca_bundle,
+        mcp_url=_env("ADS_ENGINE_MCP_URL", "https://ads-sandbox-mcp:8443/mcp"),
+        mcp_timeout_seconds=float(_env("ADS_ENGINE_MCP_TIMEOUT_SECONDS", "120")),
+        max_tool_calls=int(_env("ADS_ENGINE_MAX_TOOL_CALLS", "32")),
     )

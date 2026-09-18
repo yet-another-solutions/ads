@@ -98,6 +98,24 @@ def test_exchange_posts_ste_v2_and_returns_access_token(monkeypatch: pytest.Monk
     assert form["subject_token_type"] == ["urn:ietf:params:oauth:token-type:access_token"]
     assert form["requested_token_type"] == ["urn:ietf:params:oauth:token-type:access_token"]
     assert form["audience"] == ["ads-preferences"]
+    assert "scope" not in form
+
+
+def test_mint_passes_optional_scope_without_caching(monkeypatch):
+    captured = []
+    context = _bound()
+
+    def urlopen(request, **kwargs):
+        captured.append(parse_qs(request.data.decode()))
+        return _Response({"access_token": "exchanged"})
+
+    monkeypatch.setattr("ads_commons_beans.token_exchange.urlopen", urlopen)
+    exchanger = _exchanger(_Verifier(context))
+    with SecurityContextHolder.bound(context):
+        exchanger.mint("ads", scope="ads-engine-ack")
+        exchanger.mint("ads-sandbox-mcp")
+    assert captured[0]["scope"] == ["ads-engine-ack"]
+    assert "scope" not in captured[1]
 
 
 def test_exchange_accepts_explicit_subject_token(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ from dishka import Provider, Scope, provide
 
 from ads_commons.engine import EngineOutput, encode_output
 from ads_commons.security import (
+    SecurityContext,
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
@@ -18,10 +19,13 @@ from ads_commons_beans import (
     TokenExchange,
     TokenExchangeSettings,
 )
-from ads_engine.chat import ChatStreamer, LangChainChatStreamer
+from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings
+from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener, TokenAuthenticator
+from ads_engine.mcp_client import SandboxClient
+from ads_engine.mcp_credentials import McpCredentials
 from ads_engine.service import EngineService, OutputPublisher, TokenMinter
 from ads_engine.store import ActiveSessionStore
 
@@ -45,6 +49,14 @@ class KafkaPublisher:
         )
 
 
+class AcknowledgeTokens:
+    def __init__(self, exchange: TokenExchange) -> None:
+        self._exchange = exchange
+
+    def mint(self, audience: str) -> SecurityContext:
+        return self._exchange.mint(audience, scope="ads-engine-ack")
+
+
 class AppProvider(Provider):
     def __init__(self, settings: Settings) -> None:
         super().__init__()
@@ -56,7 +68,9 @@ class AppProvider(Provider):
 
     store = provide(ActiveSessionStore, scope=Scope.APP)
 
-    chat = provide(LangChainChatStreamer, scope=Scope.APP, provides=ChatStreamer)
+    credentials = provide(McpCredentials, scope=Scope.APP)
+    sandbox = provide(SandboxClient, scope=Scope.APP)
+    chat = provide(ExecutorChatStreamer, scope=Scope.APP, provides=ChatStreamer)
 
     @provide(scope=Scope.APP)
     def producer(self, settings: Settings) -> AIOKafkaProducer:
@@ -82,7 +96,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def tokens(self, exchange: TokenExchange) -> TokenMinter:
-        return exchange
+        return AcknowledgeTokens(exchange)
 
     engine_service = provide(EngineService, scope=Scope.APP)
 

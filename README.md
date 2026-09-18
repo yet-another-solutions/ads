@@ -2,7 +2,7 @@
 
 Autonomous Development System: a Litestar service with Keycloak OIDC login serving Threadline (projects, sessions, streaming transcript), plus a stub egress control plane, an S2S model catalog, and a Kafka ads-engine worker.
 
-Unauthenticated browsers are sent to Keycloak. After login the shell renders the project/session rail, the transcript, and the composer. Mutating routes are `AuthenticatedController` POST/PATCH/DELETE; services are guarded with wrapt `@require_role("user")` reading `SecurityContextHolder`. v1 is a chat wrapper: `ads` owns memory and streaming, `ads-engine` wraps the model.
+Unauthenticated browsers are sent to Keycloak. After login the shell renders the project/session rail, the transcript, and the composer. Mutating routes are `AuthenticatedController` POST/PATCH/DELETE; services are guarded with wrapt `@require_role("user")` reading `SecurityContextHolder`. `ads` owns memory and streaming; `ads-engine` runs the bounded LangChain executor and calls sandbox tools through the official MCP SDK.
 
 ## Layout
 
@@ -10,7 +10,7 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `libraries/ads-commons-beans` — shared Dishka beans
 - `libraries/ads-commons-schema` — shared Alembic upgrade and schema validation
 - `services/ads` — Threadline UI, domain memory (SQLAlchemy + Alembic), engine request/output, preferences facade
-- `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
+- `services/ads-engine` — Kafka LangChain executor with sequential MCP sandbox tools
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
 - `services/ads-sandbox-manager`: golden-ensure service, included in workspace Nox gates and CI image builds; application deployment wiring follows in a later slice
@@ -43,9 +43,13 @@ ads-engine is a Kafka worker (no HTTP). It reads `ADS_ENGINE_*`:
 - Kafka: `ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS`, `ADS_ENGINE_REQUEST_TOPIC`, `ADS_ENGINE_OUTPUT_TOPIC`, `ADS_ENGINE_CONSUMER_GROUP`
 - Store: `ADS_ENGINE_DATABASE_URL` (required; `postgresql+psycopg://` in production for the in-flight session table)
 - Ping: `ADS_ENGINE_PING_INTERVAL_SECONDS` (default 10)
-- Keycloak (loaded, unused until JWT verification): `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`
+- Keycloak: `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`, `ADS_ENGINE_KEYCLOAK_CLIENT_SECRET`
+- MCP: `ADS_ENGINE_MCP_URL` (default `https://ads-sandbox-mcp:8443/mcp`), `ADS_ENGINE_MCP_TIMEOUT_SECONDS` (default 120), `ADS_ENGINE_MAX_TOOL_CALLS` (default 32)
+- TLS trust for Keycloak and MCP: `ADS_ENGINE_TLS_CA_BUNDLE` (optional additional CA bundle; HTTPS is mandatory)
 
-The request `authorization` field is required on the wire.
+The request `authorization` field is required on the wire. See
+[engine execution and credential lifecycle](services/ads-engine/README.md) and
+[Keycloak refresh configuration](deploy/keycloak/README.md#engine-mcp-refresh-and-existing-realms).
 
 ads-preferences is a TLS-only JSON resource server (`python -m ads_preferences`). ClusterIP only: no HTTPRoute and no WAN slug. It does not import ads-engine. It reads `ADS_PREFERENCES_*`:
 

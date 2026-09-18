@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -24,7 +24,7 @@ class StreamDelta:
 
 
 class ChatStreamer(Protocol):
-    def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]: ...
+    def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]: ...
 
 
 def _history_messages(request: EngineRequest) -> list[BaseMessage]:
@@ -144,10 +144,12 @@ class AdsChatOpenAI(ChatOpenAI):
 
 
 class LangChainChatStreamer:
-    def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+    """Tool-free model path: no dispatcher, MCP client or credentials injected."""
+
+    def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         return self._stream(request)
 
-    async def _stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+    async def _stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         token = request.model.authentication.openai_bearer.token
         model = AdsChatOpenAI(
             model=request.model.options.model_name,
