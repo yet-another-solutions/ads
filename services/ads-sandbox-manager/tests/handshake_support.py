@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock
 from urllib.parse import parse_qs
 from uuid import UUID, uuid4
 
+import msgspec
 from httpx import ASGITransport, AsyncClient
 
-from ads_commons.sandbox import decode_inbound, decode_outbound, decode_ready
+from ads_commons.sandbox import decode_inbound, decode_outbound, decode_ping, decode_ready
 from ads_commons.security import SecurityContextHolder
 from ads_commons_beans import JwtVerifier, JwtVerifierSettings, TokenExchange, TokenExchangeSettings
 from ads_sandbox_ipc.auth import ClientCredentials
@@ -24,6 +25,7 @@ from ads_sandbox_ipc.service import IpcService
 from ads_sandbox_manager import kafka as manager_kafka
 from ads_sandbox_manager.auth import IPC, MANAGER, MCP
 from ads_sandbox_manager.controller import KafkaController as ManagerController
+from ads_sandbox_manager.lifecycle import PING_REPLY, PING_REQUEST, RECOVER, Signal
 from ads_sandbox_manager.service import READY_TOPIC, REPLY_TOPIC, REQUEST_TOPIC, TransitService
 from ads_sandbox_mcp.kafka import KafkaPublisher as McpPublisher
 from ads_sandbox_mcp.kafka import ReplyController
@@ -42,6 +44,10 @@ class Record:
 
     @property
     def message(self):
+        if self.topic in (PING_REQUEST, PING_REPLY):
+            return decode_ping(self.value)
+        if self.topic == RECOVER:
+            return msgspec.json.decode(self.value, type=Signal)
         if self.topic == READY_TOPIC:
             return decode_ready(self.value)
         if self.topic == REQUEST_TOPIC or self.topic.startswith("sandbox.req."):
@@ -81,6 +87,7 @@ class Identity:
         self.client_subject = str(uuid4())
         monkeypatch.setattr("ads_commons_beans.token_exchange.urlopen", self.endpoint)
         monkeypatch.setattr("ads_sandbox_ipc.auth.urlopen", self.endpoint)
+        monkeypatch.setattr("ads_sandbox_manager.auth.urlopen", self.endpoint)
 
     def verifier(self, client):
         return JwtVerifier(
@@ -100,8 +107,8 @@ class Identity:
         body = {key: values[0] for key, values in parse_qs(request.data.decode()).items()}
         client = body["client_id"]
         if body["grant_type"] == "client_credentials":
-            assert client == IPC
-            token = self.keys.token(aud=MANAGER, azp=IPC, sub=self.client_subject)
+            assert client in (IPC, MANAGER)
+            token = self.keys.token(aud=MANAGER, azp=client, sub=self.client_subject)
         else:
             assert body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
             assert body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
@@ -225,7 +232,7 @@ class Handshake:
         assert SecurityContextHolder.get() is None
         if record.topic == REPLY_TOPIC:
             await self.mcp_replies.on_message(record.value, record.headers)
-        elif self.ipc and record.topic == self.ipc.settings.request_topic:
+        elif self.ipc and record.topic in (self.ipc.settings.request_topic, PING_REQUEST):
             await self.ipc.controller.on_message(record.topic, record.value, record.headers)
         else:
             await self.manager_controller.on_message(

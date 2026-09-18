@@ -30,6 +30,7 @@ class TopicPreparation(Protocol):
     """Topics, local result subscription/seek, and best-effort replica barrier."""
 
     async def prepare(self, sandbox_id: UUID) -> None: ...
+    async def remove(self, sandbox_id: UUID) -> bool: ...
 
 
 class SessionBindError(RuntimeError):
@@ -103,11 +104,19 @@ class SessionProvisioner:
                 assert current is not None
                 return current
             row = claimed
+        return await self.build(row, resume=resuming)
+
+    async def build(self, row: SandboxSession, *, resume: bool) -> SandboxSession:
+        """Run an already committed, fenced creating claim, including recovery rebuilds."""
+        config = self.settings.session_objects
+        if config is None or row.claimed_by is None:
+            raise RuntimeError("a configured provisioning claim is required")
+        owner = row.claimed_by
         # No SQL transaction spans network I/O. Interruption leaves a durable
         # creating row; only the later watchdog/recover may take it over.
         try:
             async with asyncio.timeout(config.create_seconds):
-                row = await self._disk(row, owner, resume=resuming)
+                row = await self._disk(row, owner, resume=resume)
                 await self.topics.prepare(row.sandbox_id)
                 row = await self._current(row, owner)
                 row = await self._object(

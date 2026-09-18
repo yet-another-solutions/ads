@@ -18,7 +18,7 @@ class TokenMinter(Protocol):
 
 
 class ClientCredentials:
-    """Fresh manager service identity for barrier coordination; never a user identity."""
+    """Fresh manager identity for coordination and lifecycle; never a user identity."""
 
     def __init__(self, settings: TokenExchangeSettings, verifier: JwtVerifier) -> None:
         self.settings = settings

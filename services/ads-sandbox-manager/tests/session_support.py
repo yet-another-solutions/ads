@@ -56,3 +56,7 @@ class FakeTopics:
         self.kube.calls.append(("topics-and-seek", str(sandbox_id)))
         if self.hook:
             await self.hook(sandbox_id)
+
+    async def remove(self, sandbox_id):
+        self.kube.calls.append(("delete-topics", str(sandbox_id)))
+        return True

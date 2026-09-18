@@ -9,10 +9,10 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 import msgspec
-from sqlalchemy import select, text
+from sqlalchemy import delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ads_commons.sandbox import SandboxShutdown, encode_ready
+from ads_commons.sandbox import SandboxPing, SandboxShutdown, encode_ping, encode_ready
 from ads_sandbox_manager.auth import IPC, ClientCredentials, TokenMinter
 from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
@@ -20,7 +20,7 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import SANDBOX, SESSION, ipc_name, session_name
-from ads_sandbox_manager.store import SandboxSession, SessionPVC
+from ads_sandbox_manager.store import PingProbe, SandboxSession, SessionPVC
 
 log = logging.getLogger(__name__)
 IDLE = "ads.sandbox.idle"
@@ -28,6 +28,8 @@ REAP = "ads.sandbox.pvc.reap"
 ORPHAN = "ads.sandbox.orphan"
 RECOVER = "ads.sandbox.recover"
 TOPICS = (IDLE, REAP, ORPHAN, RECOVER)
+PING_REQUEST = "ads.sandbox.ping.req"
+PING_REPLY = "ads.sandbox.ping.res"
 
 
 class Signal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -64,6 +66,7 @@ class LifecycleService:
             tokens,
         )
         self._task: asyncio.Task[None] | None = None
+        self._ping_task: asyncio.Task[None] | None = None
 
     async def emit(self, topic: str, message: Signal) -> None:
         async with asyncio.timeout(self.settings.control_seconds):
@@ -99,7 +102,7 @@ class LifecycleService:
                     s.cleanup_seconds,
                 )
             elif topic == RECOVER:
-                await r.recover(db, message.session_id, message.sandbox_id, now, s.cleanup_seconds)
+                await r.recover(db, message.session_id, message.sandbox_id, now, s.recovery_seconds)
             elif topic == ORPHAN:
                 await self._orphan(db, message, now, observed)
 
@@ -120,12 +123,93 @@ class LifecycleService:
                 if await self.repository.owns(db, work):
                     work.acknowledged = True
 
+    async def ping_reply(self, message: SandboxPing) -> None:
+        now = datetime.now(UTC)
+        async with self.sessions.begin() as db:
+            row = await db.scalar(
+                select(SandboxSession)
+                .where(SandboxSession.sandbox_id == message.sandbox_id)
+                .with_for_update()
+            )
+            if row is None or row.status != "ready":
+                return
+            probe = await db.get(PingProbe, message.ping_id, with_for_update=True)
+            if probe is None or probe.sandbox_id != row.sandbox_id:
+                return
+            if probe.sent_at >= now - timedelta(seconds=self.settings.ping_timeout_seconds):
+                row.last_ping_at = max(row.last_ping_at or now, now)
+            await db.delete(probe)  # Duplicate replies cannot refresh liveness.
+
+    async def ping_scan(self) -> None:
+        now, s = datetime.now(UTC), self.settings
+        async with self.sessions.begin() as db:
+            await db.execute(
+                delete(PingProbe).where(
+                    PingProbe.sent_at < now - timedelta(seconds=s.ping_timeout_seconds)
+                )
+            )
+            rows = list(
+                await db.scalars(
+                    select(SandboxSession)
+                    .where(
+                        SandboxSession.status == "ready",
+                        or_(
+                            SandboxSession.last_ping_sent_at.is_(None),
+                            SandboxSession.last_ping_sent_at
+                            <= now - timedelta(seconds=s.ping_interval_seconds),
+                        ),
+                    )
+                    .order_by(SandboxSession.last_ping_sent_at.asc().nullsfirst())
+                    .limit(s.lifecycle_batch)
+                )
+            )
+        for observed in rows:
+            # Claim correlation before publication, outside any network-spanning transaction.
+            async with self.sessions.begin() as db:
+                row = await db.get(SandboxSession, observed.session_id, with_for_update=True)
+                if row is None or row.sandbox_id != observed.sandbox_id or row.status != "ready":
+                    continue
+                timed_out = (row.last_ping_at or row.status_changed_at) <= now - timedelta(
+                    seconds=s.ping_timeout_seconds
+                )
+                row.last_ping_sent_at = now
+                message = SandboxPing(uuid4(), row.sandbox_id)
+                if not timed_out:
+                    db.add(
+                        PingProbe(ping_id=message.ping_id, sandbox_id=row.sandbox_id, sent_at=now)
+                    )
+            if timed_out:
+                await self.emit(RECOVER, Signal(observed.session_id, observed.sandbox_id))
+            else:
+                async with asyncio.timeout(s.control_seconds):
+                    subject = await asyncio.to_thread(self.credentials.mint)
+                    context = await asyncio.to_thread(self.tokens.mint, IPC, subject)
+                    if not context.access_token:
+                        raise RuntimeError("ping STE returned no token")
+                    await self.publisher.send(
+                        PING_REQUEST, message.sandbox_id, encode_ping(message), context.access_token
+                    )
+
     async def service_expired(self, row: SandboxSession) -> None:
         if row.service_deadline is not None and datetime.now(UTC) >= row.service_deadline:
             await self.emit(RECOVER, Signal(row.session_id, row.sandbox_id))
 
     async def _ownership(self, db: AsyncSession, message: Signal) -> str:
         row = await db.get(SandboxSession, message.session_id, with_for_update=True)
+        recovery = await db.scalars(
+            select(CleanupWork).where(
+                CleanupWork.session_id == message.session_id, CleanupWork.kind == "recovery"
+            )
+        )
+        if any(
+            obj["kind"] == message.kind
+            and obj["name"] == message.name
+            and obj["uid"] in (None, message.uid)
+            and not obj.get("cleaned")
+            for work in recovery
+            for obj in work.targets
+        ):
+            return "owned"  # Recovery alone owns its persisted cleanup evidence.
         if message.kind == "PersistentVolumeClaim" and message.name:
             # Valid retained/attaching volumes are owned even before UID is recorded.
             pvcs = await db.scalars(
@@ -301,6 +385,44 @@ class LifecycleService:
                     signals.extend(
                         (RECOVER, Signal(row.session_id, row.sandbox_id)) for row in services
                     )
+                    create_seconds = max(
+                        s.ready_seconds,
+                        s.session_objects.create_seconds if s.session_objects else s.ready_seconds,
+                    )
+                    stalled = await db.scalars(
+                        select(SandboxSession)
+                        .where(
+                            or_(
+                                SandboxSession.status == "failed",
+                                (
+                                    SandboxSession.status.in_(("pending", "creating"))
+                                    & (
+                                        SandboxSession.status_changed_at
+                                        <= now - timedelta(seconds=create_seconds)
+                                    )
+                                ),
+                                (
+                                    (SandboxSession.status == "shutting_down")
+                                    & (
+                                        SandboxSession.status_changed_at
+                                        <= now - timedelta(seconds=s.cleanup_seconds)
+                                    )
+                                ),
+                                (
+                                    (SandboxSession.status == "recovering")
+                                    & (
+                                        SandboxSession.status_changed_at
+                                        <= now - timedelta(seconds=s.recovery_seconds)
+                                    )
+                                ),
+                            )
+                        )
+                        .order_by(SandboxSession.status_changed_at)
+                        .limit(s.lifecycle_batch)
+                    )
+                    signals.extend(
+                        (RECOVER, Signal(row.session_id, row.sandbox_id)) for row in stalled
+                    )
         for topic, message in signals:
             await self.emit(topic, message)  # No outbox: unpublished observation loss is accepted.
 
@@ -328,7 +450,8 @@ class LifecycleService:
         try:
             if work.kind == "idle" and not work.acknowledged:
                 async with asyncio.timeout(self.settings.control_seconds):
-                    context = await asyncio.to_thread(self.tokens.mint, IPC)
+                    subject = await asyncio.to_thread(self.credentials.mint)
+                    context = await asyncio.to_thread(self.tokens.mint, IPC, subject)
                     if not context.access_token:
                         raise RuntimeError("shutdown STE returned no token")
                     await self.publisher.send(
@@ -436,8 +559,23 @@ class LifecycleService:
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="manager-lifecycle")
+            self._ping_task = asyncio.create_task(self._ping_run(), name="manager-ipc-ping")
+
+    async def _ping_run(self) -> None:
+        while True:
+            try:
+                await self._locked("manager-scheduler-ping", self.ping_scan)
+            except Exception:
+                log.warning("manager ping pass unavailable")
+            await asyncio.sleep(
+                min(self.settings.poll_seconds, self.settings.ping_interval_seconds)
+            )
 
     async def stop(self) -> None:
+        if self._ping_task:
+            self._ping_task.cancel()
+            await asyncio.gather(self._ping_task, return_exceptions=True)
+            self._ping_task = None
         if self._task:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)

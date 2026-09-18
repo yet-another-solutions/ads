@@ -19,7 +19,7 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import VERSION
 from ads_sandbox_manager.session_objects import SESSION, ipc_name, session_name, session_pvc
 from ads_sandbox_manager.sessions import ClaimLost, SessionBindError, SessionProvisioner
-from ads_sandbox_manager.store import SandboxSession, SessionPVC, SessionRepository
+from ads_sandbox_manager.store import PingProbe, SandboxSession, SessionPVC, SessionRepository
 from session_support import FakeSessionKube, FakeTopics
 from test_session_objects import object_settings  # noqa: F401
 
@@ -31,11 +31,12 @@ async def sessions_harness(baked, object_settings, manager_database_url):  # noq
     prepare_schema(
         alembic_ini=Path(__file__).parents[1] / "alembic.ini",
         database_url=manager_database_url,
-        tables=mapped_tables(SandboxSession, SessionPVC, CleanupWork),
+        tables=mapped_tables(SandboxSession, SessionPVC, CleanupWork, PingProbe),
     )
     sync = create_engine(manager_database_url)
     with sync.begin() as db:
         db.execute(text("DELETE FROM sandbox_session"))
+        db.execute(text("DELETE FROM ping_probe"))
     sync.dispose()
     engine = create_async_engine(manager_database_url, poolclass=NullPool)
     sessions = async_sessionmaker(engine, expire_on_commit=False)

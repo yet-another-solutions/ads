@@ -4,13 +4,13 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, select
+from sqlalchemy import DateTime, ForeignKey, delete, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.session_objects import ipc_name, session_name
-from ads_sandbox_manager.store import Base, SandboxSession, SessionPVC, advance
+from ads_sandbox_manager.store import Base, PingProbe, SandboxSession, SessionPVC, advance
 
 
 class CleanupWork(Base):
@@ -229,14 +229,20 @@ class LifecycleRepository:
         now: datetime,
         timeout: float,
     ) -> bool:
-        """Slice-12 handoff: durable boundary/targets only, no rebuild executor here.
-
-        A published verdict wins over late success. No transition timestamp/state pardon.
-        """
+        """Published verdicts win over late success; active recovery duplicates do not."""
         row, pvc = await self.locked(db, session_id, sandbox_id)
-        if row is None or row.status == "recovering":
+        if row is None:
             return False
+        if row.status == "recovering":
+            if row.status_changed_at > now - timedelta(seconds=timeout):
+                return False
+            row.status = "failed"
         old = self.work(db, row, pvc, "recovery", now, timeout, sandbox_targets(row, retain=False))
+        if pvc and pvc.release_evidence:
+            old.targets = [
+                {**pvc.release_evidence, **obj} if obj["name"] == session_name(pvc.pvc_id) else obj
+                for obj in old.targets
+            ]
         # Preserve prior evidence and every unfinished generation, rather than replace it.
         previous = list(
             await db.scalars(select(CleanupWork).where(CleanupWork.session_id == session_id))
@@ -248,6 +254,11 @@ class LifecycleRepository:
         row.status = "recovering"
         row.status_changed_at = advance(row.status_changed_at, now)
         row.service_deadline = None
+        row.claimed_by = None
+        row.pvc_id = row.pvc_uid = None
+        row.guest_deployment_uid = row.ipc_deployment_uid = row.ipc_pvc_uid = None
+        row.last_ping_at = row.last_ping_sent_at = None
+        await db.execute(delete(PingProbe).where(PingProbe.sandbox_id == sandbox_id))
         if pvc:
             pvc.state = "failed"
             pvc.last_state_change = advance(pvc.last_state_change, now)
