@@ -6,11 +6,12 @@ import time
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from dishka import Provider, Scope, provide
+from litestar import Litestar
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from ads_commons.sandbox.handshake import (
@@ -27,8 +28,8 @@ from ads_sandbox_mcp.app import create_app
 from ads_sandbox_mcp.config import Settings
 from ads_sandbox_mcp.kafka import KafkaRuntime, ReplyController
 from ads_sandbox_mcp.scheduler import ClusterScheduler
-from ads_sandbox_mcp.service import ExecService, Publisher, TokenMinter, Watchdog
-from ads_sandbox_mcp.store import InFlightRepository
+from ads_sandbox_mcp.service import ExecService, Watchdog
+from ads_sandbox_mcp.store import InFlight, InFlightRepository
 
 SUBJECT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 META = {
@@ -242,39 +243,47 @@ class Harness:
             headers["Mcp-Name"] = name
         return headers
 
-    def app(self) -> Any:
-        h = self
+    def app(self) -> Litestar:
+        return create_app(self.settings, overrides=(HarnessOverrides(self),))
 
-        class Overrides(Provider):
-            @provide(scope=Scope.APP, override=True)
-            def verifier(self) -> JwtVerifier:
-                return h.verifier
 
-            @provide(scope=Scope.APP, override=True)
-            def engine(self) -> AsyncEngine:
-                return h.engine
+class HarnessOverrides(Provider):
+    """Use the harness service for controlled races; keep SDK and runtime assembly real."""
 
-            @provide(scope=Scope.APP, override=True)
-            def publisher(self) -> Publisher:
-                return h.publisher
+    def __init__(self, harness: Harness) -> None:
+        super().__init__()
+        self.harness = harness
 
-            @provide(scope=Scope.APP, override=True)
-            def tokens(self) -> TokenMinter:
-                return h.tokens
+    @provide(scope=Scope.APP, override=True)
+    def verifier(self) -> JwtVerifier:
+        return self.harness.verifier
 
-            @provide(scope=Scope.APP, override=True)
-            def service(self) -> ExecService:
-                return h.service
+    @provide(scope=Scope.APP, override=True)
+    def service(self) -> ExecService:
+        return self.harness.service
 
-            @provide(scope=Scope.APP, override=True)
-            def runtime(self) -> KafkaRuntime:
-                return FakeRuntime(h.publisher)
+    @provide(scope=Scope.APP, override=True)
+    def runtime(self) -> KafkaRuntime:
+        return FakeRuntime(self.harness.publisher)
 
-            @provide(scope=Scope.APP, override=True)
-            def scheduler(self) -> ClusterScheduler:
-                return FakeScheduler(h.engine, h.repository, h.settings)
+    @provide(scope=Scope.APP, override=True)
+    def scheduler(self) -> ClusterScheduler:
+        h = self.harness
+        return FakeScheduler(h.engine, h.repository, h.settings)
 
-        return create_app(self.settings, overrides=(Overrides(),))
+
+async def row(h: Harness, execution_id: UUID) -> InFlight | None:
+    async with h.sessions() as session:
+        return await session.get(InFlight, execution_id)
+
+
+async def wait_for_message(h: Harness, kind: type) -> object:
+    async with asyncio.timeout(5):
+        while True:
+            for message in h.publisher.messages:
+                if isinstance(message, kind):
+                    return message
+            await asyncio.sleep(0.005)
 
 
 def rpc(method: str = "tools/list", **params: Any) -> dict[str, Any]:
