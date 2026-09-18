@@ -72,6 +72,35 @@ Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is
 
 ads-engine tests mock Kafka and the LLM. They do not start a broker.
 
+### Sandbox handshake cross-service proof
+
+Slice 10 connects the real MCP HTTP/SDK tool callback, execution service, manager
+provisioning/transit, IPC state machine, and guest-executor adapter in one test loop.
+Run the focused proof with:
+
+```bash
+uv run --group dev nox -s test -- services/ads-sandbox-manager/tests/test_handshake_e2e.py
+```
+
+The test uses separate real PostgreSQL databases for MCP and manager, signed JWTs,
+the production verifier and token-exchange adapters, and production wire publishers
+and controllers. Testcontainers provides PostgreSQL by default. The existing
+`ADS_MCP_TEST_DATABASE_URL` and `ADS_MANAGER_TEST_DATABASE_URL` overrides must point
+to separate disposable databases: fixtures clear their state.
+
+The encoded-message broker, token endpoint, Kubernetes API and guest process
+streams are simulated. This is **not** a live Kafka/Keycloak/Kata or shell/Python
+interpreter proof. The test checks both tool payloads and successful results,
+eight fresh user-token exchanges per call, session reuse, PID and database
+cleanup, pre-ack reset, post-ack abort, and invalid ack-reply rejection. Explicit
+record delivery proves no guest command starts before IPC receives the matching
+authorized `ack-reply`; the startup `true` ping is separate.
+
+Live `exec_shell` and `exec_python` checks through deployed MCP → manager → IPC →
+Kata guest remain deferred until the complete sandbox plan is implemented.
+Existing component and race tests remain in place; this cross-service proof
+complements them rather than replacing them.
+
 ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON on SQLite so this sandbox can run `nox -s test` without Docker. GitHub CI has Docker.
 
 ## Helm
