@@ -1,9 +1,8 @@
 #!/usr/bin/python3
-"""Prepare the agent leaf before accepting exec; all operations are rootless outside."""
+"""Base-owned initialization, streamed to the rootless container's Python on stdin."""
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -30,7 +29,6 @@ def prepare() -> None:
 if __name__ == "__main__":
     try:
         prepare()
-        os.execv("/bin/sleep", ["/bin/sleep", "infinity"])
     except (OSError, RuntimeError) as error:
         print(f"ads-agent-init: {error}", file=sys.stderr)
         sys.exit(1)

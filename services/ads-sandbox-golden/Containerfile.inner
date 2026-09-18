@@ -37,6 +37,3 @@ RUN apt-get update \
         '[engine]' \
         'cgroup_manager = "cgroupfs"' \
         > /etc/containers/containers.conf
-
-COPY scripts/ads-agent-init /usr/local/sbin/ads-agent-init
-RUN chmod 0755 /usr/local/sbin/ads-agent-init

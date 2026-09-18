@@ -51,12 +51,17 @@ else
   for path in /sys/fs/cgroup /proc/acpi /proc/keys /proc/timer_list /proc/bus /proc/fs /proc/irq /proc/sys; do
     unmask+=(--security-opt "unmask=$path")
   done
-  podman_cmd create --name dev-sandbox --network=none --cgroupns=private --cgroup-parent=/ads-budget/podman --label ads.io/runtime-contract=nested-v1 "${unmask[@]}" --rootfs /session/rootfs /usr/local/sbin/ads-agent-init
+  podman_cmd create --name dev-sandbox --network=none --cgroupns=private --cgroup-parent=/ads-budget/podman --label ads.io/runtime-contract=nested-v1 "${unmask[@]}" --rootfs /session/rootfs /bin/sleep infinity
   podman_cmd start dev-sandbox
 fi
 
-# Startup is asynchronous. Readiness means the agent leaf and controllers exist,
-# not merely that Podman started a process. This runs on both create and resume.
+# Keep initialization code in the base image, never in the writable rootfs.
+# Missing/broken inner software fails startup; do not repair agent modifications.
+podman_cmd exec -i dev-sandbox python3 - < /usr/local/sbin/ads-agent-init \
+  || fail "agent cgroup initialization failed"
+
+# Readiness means the agent leaf and controllers exist, not merely that Podman
+# started a process. This runs on both create and resume.
 ready=false
 for _ in {1..30}; do
   if podman_cmd exec dev-sandbox python3 -c '

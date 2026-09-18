@@ -67,18 +67,23 @@ No `unmask=ALL`, `/dev/mqueue` exception, or seccomp-unconfined option is needed
 
 The golden rootfs configures inner ranges `root:1:65536`, private IPC/PID/cgroup
 namespaces, host network/UTS namespaces, enabled cgroups and cgroupfs management.
-Its initializer moves the agent into a leaf before enabling controllers.
-Readiness waits for that leaf and controller availability, on create and resume.
+The container starts its preinstalled `/bin/sleep infinity`. The base-owned
+`ads-agent-init` is then streamed over stdin to `podman exec -i dev-sandbox python3 -`;
+no initialization helper script is stored in the writable session rootfs.
+It moves the agent into a leaf before enabling controllers. Initialization must
+succeed, then readiness checks that leaf and controller availability, on both
+create and resume. If the agent removes or breaks required inner software,
+startup fails without readiness; it does not repair those modifications.
 No setuid helper permission restoration is introduced.
 
 ## Existing sessions and proof gates
 
 An existing `dev-sandbox` without label `ads.io/runtime-contract=nested-v1`
 is rejected; it is not automatically removed, recreated or upgraded. A new
-runtime also requires the matching new golden rootfs containing `ads-agent-init`
-and the corrected inner configuration. Retained older sessions need a separately
-reviewed migration plan. Compatible resume does not recursively chown their
-rootfs, preserving nested storage ownership.
+runtime also requires the corrected inner configuration and preinstalled Python
+and sleep in the golden rootfs, but no ADS initialization script there.
+Retained older sessions need a separately reviewed migration plan. Compatible
+resume does not recursively chown their rootfs, preserving nested storage ownership.
 
 Unit tests simulate proc/cgroup files and verify fail-closed decisions,
 delegation ownership, placement order, configuration and namespace separation.
@@ -91,6 +96,7 @@ rollout, run an isolated canary with the built images and prove:
 - Negative attempts to raise the ancestor budget or migrate to guest siblings.
 - Container restart and Pod recreation/resume on the same disposable disk,
   retaining files and correct UID/GID ownership.
+- Missing/broken inner Python or sleep fails startup without readiness or repair.
 - Exit-code propagation, timeout/abort behavior, and full authenticated MCP.
 
 Do not mark those live acceptance gates passed from a successful image build.

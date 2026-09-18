@@ -4,6 +4,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 BOOT = ROOT / "services/ads-sandbox-base/scripts/ads-sandbox-boot"
 
@@ -29,7 +31,8 @@ def test_guest_boot_uses_device_free_isolated_outer_container():
         "${unmask[@]}",
         "--rootfs",
         "/session/rootfs",
-        "/usr/local/sbin/ads-agent-init",
+        "/bin/sleep",
+        "infinity",
     ]
     assert "/dev/fuse" not in script
     assert script.index("\ngreen2\n") < script.index("\n/usr/local/sbin/ads-session-device-check\n")
@@ -70,3 +73,64 @@ def test_inner_image_uses_private_ipc_and_mapped_ranges():
         'cgroup_manager = "cgroupfs"',
     ):
         assert setting in inner
+
+
+def test_initialization_code_is_packaged_only_in_base_image():
+    base = (ROOT / "services/ads-sandbox-base/Containerfile").read_text()
+    inner = (ROOT / "services/ads-sandbox-golden/Containerfile.inner").read_text()
+    assert "COPY scripts/ads-agent-init /usr/local/sbin/ads-agent-init" in base
+    assert "ads-agent-init" not in inner
+    assert not (ROOT / "services/ads-sandbox-golden/scripts/ads-agent-init").exists()
+    assert 'os.execv("/bin/sleep"' not in BOOT.with_name("ads-agent-init").read_text()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("init_status", [0, 1, 127])
+def test_base_owned_init_streamed_before_readiness(tmp_path, existing, init_status):
+    """Exercise the real boot control flow with Podman mocked, without kernel mounts."""
+    script = BOOT.read_text()
+    startup = script[script.index("if podman_cmd container exists") : script.index("exec capsh")]
+    startup = startup.replace(
+        "/usr/local/sbin/ads-agent-init", shlex.quote(str(BOOT.with_name("ads-agent-init")))
+    )
+    harness = f"""
+set -euo pipefail
+fail() {{ echo "$*" >&2; exit 1; }}
+chown() {{ :; }}
+sleep() {{ :; }}
+touch() {{ printf '%s\\n' "$*" >> ready; }}
+podman_cmd() {{
+  printf '%s\\n' "$*" >> calls
+  case "$1" in
+    container) return {0 if existing else 1};;
+    inspect) echo nested-v1;;
+    exec)
+      if [[ "$2" == -i ]]; then
+        cat > received-stdin
+        return {init_status}
+      fi
+      ;;
+  esac
+}}
+{startup}
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    calls = (tmp_path / "calls").read_text()
+    assert (tmp_path / "received-stdin").read_bytes() == BOOT.with_name(
+        "ads-agent-init"
+    ).read_bytes()
+    assert calls.index("start dev-sandbox") < calls.index("exec -i dev-sandbox python3 -")
+    assert ("create --name dev-sandbox" in calls) is not existing
+    if init_status:
+        assert result.returncode != 0
+        assert "agent cgroup initialization failed" in result.stderr
+        assert not (tmp_path / "ready").exists()
+        assert "exec dev-sandbox python3 -c" not in calls
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "ready").read_text().strip() == "/run/ads-sandbox-ready"
+        assert calls.index("exec -i dev-sandbox python3 -") < calls.index(
+            "exec dev-sandbox python3 -c"
+        )

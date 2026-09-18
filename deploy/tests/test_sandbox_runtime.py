@@ -22,7 +22,7 @@ def load(name, service, script):
 
 
 runtime = load("sandbox_runtime", "ads-sandbox-base", "ads-sandbox-runtime")
-agent = load("agent_init", "ads-sandbox-golden", "ads-agent-init")
+agent = load("agent_init", "ads-sandbox-base", "ads-agent-init")
 
 
 @pytest.fixture
