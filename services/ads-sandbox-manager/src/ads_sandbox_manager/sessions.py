@@ -41,17 +41,30 @@ class ClaimLost(RuntimeError):
     pass
 
 
-def contains(actual: object, expected: object) -> bool:
+_OMITTABLE_POD_LISTS = {
+    ("spec", "template", "spec", "tolerations"),
+    ("spec", "template", "spec", "imagePullSecrets"),
+}
+
+
+def contains(actual: object, expected: object, path: tuple[str, ...] = ()) -> bool:
     """Compare owned manifest fields while accepting API defaults and injected fields."""
     if isinstance(expected, dict):
         return isinstance(actual, dict) and all(
-            k in actual and contains(actual[k], v) for k, v in expected.items()
+            (k in actual or (v == [] and (*path, k) in _OMITTABLE_POD_LISTS))
+            and contains(actual.get(k), v, (*path, k))
+            for k, v in expected.items()
         )
     if isinstance(expected, list):
+        # The API omits these optional PodSpec lists when empty. This is not a
+        # blanket missing-field allowance: nonempty policy and all other lists
+        # (containers, volumes, capabilities, etc.) must still match exactly.
+        if actual is None and not expected and path in _OMITTABLE_POD_LISTS:
+            return True
         return (
             isinstance(actual, list)
             and len(actual) == len(expected)
-            and all(contains(a, e) for a, e in zip(actual, expected, strict=True))
+            and all(contains(a, e, path) for a, e in zip(actual, expected, strict=True))
         )
     return actual == expected
 

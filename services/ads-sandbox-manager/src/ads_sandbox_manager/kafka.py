@@ -11,7 +11,13 @@ import msgspec
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.abc import ConsumerRebalanceListener
 from aiokafka.admin import AIOKafkaAdminClient, NewTopic
-from aiokafka.errors import TopicAlreadyExistsError, UnknownTopicOrPartitionError, for_code
+from aiokafka.errors import (
+    IllegalStateError,
+    TopicAlreadyExistsError,
+    UnknownTopicOrPartitionError,
+    for_code,
+)
+from aiokafka.structs import TopicPartition
 
 from ads_sandbox_manager.auth import ClientCredentials
 from ads_sandbox_manager.barrier import GROUP, TOPIC, BarrierMessage, ManagerBarrier
@@ -55,7 +61,13 @@ class SubscriptionReady(ConsumerRebalanceListener):  # type: ignore[misc]
         self.complete.clear()
         self.topics.clear()
         for partition in revoked:
-            self.positions[partition] = await self.consumer.position(partition)
+            try:
+                self.positions[partition] = await self.consumer.position(partition)
+            except IllegalStateError:
+                # Pattern subscription updates can invalidate the assignment
+                # before this callback. Keep the last delivered next offset.
+                # Never reset an existing partition to its new end offset.
+                continue
 
     async def on_partitions_assigned(self, assigned: Collection[Any]) -> None:
         # Do not skip an existing local partition's live records when a new topic joins.
@@ -64,9 +76,10 @@ class SubscriptionReady(ConsumerRebalanceListener):  # type: ignore[misc]
             offsets = await self.consumer.end_offsets(list(new))
             for partition, offset in offsets.items():
                 self.consumer.seek(partition, offset)
+                self.positions[partition] = offset
                 self.seen.add(partition)
         for partition in assigned:
-            if partition in self.positions:
+            if partition not in new and partition in self.positions:
                 self.consumer.seek(partition, self.positions[partition])
         self.topics = set(self.consumer.subscription() or ())
         # Empty assignment still completes the subscription on a non-owning replica.
@@ -236,11 +249,11 @@ class KafkaRuntime:
                 ):
                     consumer.subscribe(topics, listener=seek)
                     await consumer.start()
-                    self._tasks.append(asyncio.create_task(self._consume(consumer)))
+                    self._tasks.append(asyncio.create_task(self._consume(consumer, seek)))
                     await seek.complete.wait()
                 t.shared.subscribe(pattern=RESPONSE_PATTERN, listener=t.shared_seek)
                 await t.shared.start()
-                self._tasks.append(asyncio.create_task(self._consume(t.shared)))
+                self._tasks.append(asyncio.create_task(self._consume(t.shared, t.shared_seek)))
                 await t.shared_seek.complete.wait()
                 admission = DurableAdmission(t.maintenance, self.controller)
                 t.maintenance.subscribe(list(TOPICS), listener=admission)
@@ -253,9 +266,12 @@ class KafkaRuntime:
             log.warning("manager Kafka startup failed")
             await self._close()
 
-    async def _consume(self, consumer: AIOKafkaConsumer) -> None:
+    async def _consume(self, consumer: AIOKafkaConsumer, seek: SubscriptionReady) -> None:
         try:
             async for record in consumer:
+                # Record before awaiting dispatch: rebalance may run while the
+                # handler is suspended. Delivery is not replayed after reset.
+                seek.positions[TopicPartition(record.topic, record.partition)] = record.offset + 1
                 await self.controller.on_message(
                     record.topic, record.value, record.key, record.headers
                 )
