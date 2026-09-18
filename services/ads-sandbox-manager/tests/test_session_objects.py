@@ -99,7 +99,7 @@ def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
     assert container["securityContext"] == {
         "runAsUser": 0,
         "privileged": False,
-        "allowPrivilegeEscalation": False,
+        "allowPrivilegeEscalation": True,
         "capabilities": {"add": ["SYS_ADMIN"]},
     }
     assert container["readinessProbe"]["exec"]["command"] == [
@@ -114,6 +114,7 @@ def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
     assert "runtimeClassName" not in i
     assert i["securityContext"]["fsGroup"] == 1000
     c = i["containers"][0]
+    assert c["securityContext"]["allowPrivilegeEscalation"] is False
     env = {e["name"]: e["value"] for e in c["env"]}
     assert env["ADS_SANDBOX_IPC_SANDBOX_ID"] == str(sandbox)
     assert env["ADS_SANDBOX_IPC_PID_DIRECTORY"] == "/var/lib/ads-sandbox-ipc"
