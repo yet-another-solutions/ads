@@ -5,13 +5,15 @@ from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from dishka import Provider, Scope, provide
+from dishka import Provider, Scope, make_async_container, provide
 from kubernetes.client.exceptions import ApiException
 from litestar.testing import AsyncTestClient
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from ads_commons_beans import CommonsBeansProvider
 from ads_sandbox_manager.app import create_app
 from ads_sandbox_manager.health import Dependencies, DependencyHealth
+from ads_sandbox_manager.ioc import AppProvider
 from ads_sandbox_manager.kafka import KafkaRuntime
 from ads_sandbox_manager.kube import Kubernetes
 from ads_sandbox_manager.runtime import ManagerRuntime
@@ -137,6 +139,7 @@ async def test_dependency_health_uses_select_one_and_kafka_metadata_only(
     engine.connect.return_value.__aenter__ = AsyncMock(return_value=connection)
     engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
     kafka = AsyncMock()
+    kafka.force_metadata_update.return_value = True
     factory = Mock(return_value=kafka)
     monkeypatch.setattr("ads_sandbox_manager.health.AIOKafkaClient", factory)
     settings = replace(
@@ -147,13 +150,20 @@ async def test_dependency_health_uses_select_one_and_kafka_metadata_only(
     )
     health = DependencyHealth(settings, engine)
     assert await health.check()
+    assert await health.check()
     assert str(connection.execute.call_args.args[0]) == "SELECT 1"
+    assert connection.execute.await_count == 2
+    factory.assert_called_once()
     kafka.bootstrap.assert_awaited_once()
-    kafka.close.assert_awaited_once()
+    assert kafka.force_metadata_update.await_count == 2
+    kafka.close.assert_not_awaited()
     assert factory.call_args.kwargs["security_protocol"] == "SASL_SSL"
     assert factory.call_args.kwargs["ssl_context"].check_hostname
     assert factory.call_args.kwargs["sasl_plain_password"] == "fixture-secret"
     assert not kafka.send.called
+    await health.close()
+    await health.close()
+    kafka.close.assert_awaited_once()
 
 
 async def test_kafka_failure_closes_client_and_postgres_failure_does_not_connect_kafka(
@@ -182,11 +192,90 @@ async def test_health_against_real_postgres_without_creating_slice_eight_schema(
 ):
     settings = replace(manager_settings, database_url=manager_database_url, control_seconds=5)
     kafka = AsyncMock()
+    kafka.force_metadata_update.return_value = True
     monkeypatch.setattr("ads_sandbox_manager.health.AIOKafkaClient", Mock(return_value=kafka))
     engine = create_async_engine(settings.database_url)
+    health = DependencyHealth(settings, engine)
     try:
-        assert await DependencyHealth(settings, engine).check()
+        assert await health.check()
         kafka.bootstrap.assert_awaited_once()
-        kafka.close.assert_awaited_once()
+        kafka.force_metadata_update.assert_awaited_once()
+        kafka.close.assert_not_awaited()
     finally:
+        await health.close()
         await engine.dispose()
+    kafka.close.assert_awaited_once()
+
+
+@pytest.mark.parametrize("failure", ["false", "error", "timeout", "cancel", "bootstrap"])
+async def test_failed_metadata_check_discards_client_and_next_check_recovers(
+    manager_settings, monkeypatch, failure
+):
+    engine, connection = Mock(), AsyncMock()
+    engine.connect.return_value.__aenter__ = AsyncMock(return_value=connection)
+    engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
+    broken, replacement = AsyncMock(), AsyncMock()
+    broken.force_metadata_update.return_value = True
+    replacement.force_metadata_update.return_value = True
+    factory = Mock(side_effect=[broken, replacement])
+    monkeypatch.setattr("ads_sandbox_manager.health.AIOKafkaClient", factory)
+    health = DependencyHealth(replace(manager_settings, control_seconds=0.02), engine)
+    if failure != "bootstrap":
+        assert await health.check()
+    if failure == "false":
+        broken.force_metadata_update.return_value = False
+        assert not await health.check()
+    else:
+        entered = asyncio.Event()
+
+        async def stuck():
+            entered.set()
+            await asyncio.Event().wait()
+
+        if failure in ("timeout", "cancel"):
+            broken.force_metadata_update.side_effect = stuck
+            task = asyncio.create_task(health.check())
+            await entered.wait()
+            if failure == "cancel":
+                task.cancel()
+            with pytest.raises(asyncio.CancelledError if failure == "cancel" else TimeoutError):
+                await task
+        else:
+            method = broken.bootstrap if failure == "bootstrap" else broken.force_metadata_update
+            method.side_effect = RuntimeError("offline")
+            with pytest.raises(RuntimeError, match="offline"):
+                await health.check()
+    broken.close.assert_awaited_once()
+    assert await health.check()
+    assert factory.call_count == 2
+    replacement.bootstrap.assert_awaited_once()
+    replacement.force_metadata_update.assert_awaited_once()
+    replacement.close.assert_not_awaited()
+    await health.close()
+    replacement.close.assert_awaited_once()
+
+
+async def test_app_container_owns_health_client_shutdown(manager_settings, monkeypatch):
+    engine, connection = Mock(spec=AsyncEngine), AsyncMock()
+    engine.connect.return_value.__aenter__ = AsyncMock(return_value=connection)
+    engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
+    kafka = AsyncMock()
+    kafka.force_metadata_update.return_value = True
+    monkeypatch.setattr("ads_sandbox_manager.health.AIOKafkaClient", Mock(return_value=kafka))
+
+    class Overrides(Provider):
+        @provide(scope=Scope.APP, override=True)
+        def engine(self) -> AsyncEngine:
+            return engine
+
+    container = make_async_container(
+        CommonsBeansProvider(), AppProvider(manager_settings), Overrides()
+    )
+    try:
+        health = await container.get(Dependencies)
+        assert await health.check()
+        assert await container.get(Dependencies) is health
+        kafka.close.assert_not_awaited()
+    finally:
+        await container.close()
+    kafka.close.assert_awaited_once()

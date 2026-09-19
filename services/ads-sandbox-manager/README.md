@@ -321,7 +321,14 @@ Ready requires all of:
   can skip attachment
   ([CSIDriver API](https://kubernetes.io/docs/reference/kubernetes-api/storage/csi-driver-v1/)).
 - Unchanged Job and PVC UID/resourceVersion after the observation.
-- PostgreSQL `SELECT 1` and a successful Kafka metadata bootstrap.
+- PostgreSQL `SELECT 1` and a successful fresh Kafka metadata request.
+
+The health checker bootstraps one application-owned Kafka client and reuses its
+broker connections across polls, rather than authenticating a new client every
+poll. Metadata checks remain bounded by `control_seconds`; failed refreshes,
+exceptions, and cancellation discard the client so a subsequent poll can recover.
+Application shutdown closes the client. This changes neither Kafka transport
+security nor the producer/consumer lifecycle.
 
 Missing permissions, unknown fields, stale Nodes, missing retained bake evidence,
 or uncertain release keep readiness false. Do not force-delete Pods or introduce
