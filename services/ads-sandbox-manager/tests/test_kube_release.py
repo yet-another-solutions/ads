@@ -188,18 +188,32 @@ async def test_terminating_and_missing_bake_pod_are_not_proof(api, manager_setti
     [
         ("volumesInUse", ["kubernetes.io/csi/example.csi.test^disk-1"]),
         ("volumesAttached", [{"name": "kubernetes.io/csi/example.csi.test^disk-1"}]),
-        ("conditions", [{"type": "Ready", "status": "False"}]),
-        ("conditions", []),
-        (
-            "conditions",
-            [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2000-01-01T00:00:00Z"}],
-        ),
     ],
 )
-async def test_node_use_or_unavailable_stale_node_fails_closed(api, manager_settings, field, value):
+async def test_volume_use_fails_closed(api, manager_settings, field, value):
     job, pvc = pair(manager_settings)
     api.core.read_node.return_value["status"][field] = value
     assert not await api.released(pvc, job)
+
+
+@pytest.mark.parametrize(
+    "conditions",
+    [
+        [],
+        [{"type": "Ready", "status": "False"}],
+        [{"type": "Ready", "status": "Unknown"}],
+        [{"type": "Ready", "status": "True"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2000-01-01T00:00:00Z"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2999-01-01T00:00:00Z"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "invalid"}],
+    ],
+)
+async def test_node_health_does_not_gate_golden_release(api, manager_settings, conditions):
+    job, pvc = pair(manager_settings)
+    api.core.read_node.return_value["status"]["conditions"] = conditions
+    assert await api.released(pvc, job)
+    api.core.list_namespaced_pod.return_value["items"][0]["status"]["conditions"] = []
+    assert not await api.released(pvc, job)  # Runtime-sandbox evidence still required.
 
 
 @pytest.mark.parametrize("state", [True, False, None])
