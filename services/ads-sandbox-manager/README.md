@@ -205,12 +205,21 @@ by default. Each request uses fresh manager client credentials and fresh STE to 
 the IPC reply uses fresh STE back to the manager. No user holder or token cache is
 used. Shutdown likewise uses fresh service identity. The ready broadcast listener
 also receives ping replies. Database `ping_probe` rows correlate UUIDs across
-replicas and are expired after the ping timeout; consumed or unknown UUIDs cannot
+replicas; consumed or unknown UUIDs cannot
 refresh liveness. Out-of-order outstanding replies remain valid within the deadline.
 Ready initializes the liveness baseline; only an authenticated matching reply
 updates it. Ping tests IPC's Kafka loop, never guest health or execution activity.
 
-After 30 seconds without a valid reply, the scheduler publishes recovery with a
+Each probe starts unconfirmed; `published_at` is committed only after the broker
+acknowledges the send. Credential, STE, send and cancellation failures remove
+that attempt, propagate an operational failure, and do not prove IPC death.
+A crash before recording publication likewise leaves no death evidence; the next
+scan sends a fresh probe. A fast reply may consume the correlation before that
+commit. Old unconfirmed, superseded and inactive-sandbox probes are reclaimed.
+The additive migration leaves pre-upgrade probes unconfirmed.
+
+After a confirmed publication has gone 30 seconds without a newer valid reply,
+the scheduler publishes recovery with a
 fresh manager service JWT. Publication is the failure verdict even if a late reply
 arrives before admission. Durable admission changes identity before any external
 cleanup; recovery work survives manager restarts. The worker has a per-session

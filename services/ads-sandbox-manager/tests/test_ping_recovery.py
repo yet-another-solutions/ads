@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import msgspec
 import pytest
+from sqlalchemy import select
 
 from ads_commons.sandbox import SandboxPing, decode_ping
 from ads_sandbox_manager.lifecycle import PING_REQUEST, RECOVER, Signal
@@ -38,6 +39,11 @@ async def age_ping(h):
         row = await db.get(SandboxSession, h.row.session_id)
         row.last_ping_at = datetime.now(UTC) - timedelta(seconds=40)
         row.last_ping_sent_at = None
+        for probe in await db.scalars(
+            select(PingProbe).where(PingProbe.sandbox_id == row.sandbox_id)
+        ):
+            if probe.published_at is not None:
+                probe.published_at = datetime.now(UTC) - timedelta(seconds=31)
 
 
 async def test_ping_uses_fresh_service_ste_and_correlates_once_across_replicas(life):
@@ -50,6 +56,8 @@ async def test_ping_uses_fresh_service_ste_and_correlates_once_across_replicas(l
     h.lifecycle.tokens.mint.assert_called_once_with("ads-sandbox-ipc", "manager-token")
     assert call.args[3] == "ipc-token"
     assert ping.sandbox_id == h.row.sandbox_id
+    async with h.sessions.begin() as db:
+        assert (await db.get(PingProbe, ping.ping_id)).published_at is not None
     assert (await row_for(h, h.row.session_id)).last_ping_at == before.last_ping_at
     await h.lifecycle.ping_reply(SandboxPing(uuid4(), ping.sandbox_id))
     await h.lifecycle.ping_reply(SandboxPing(ping.ping_id, uuid4()))
@@ -156,6 +164,102 @@ async def test_ping_never_publishes_without_successful_service_exchange(life):
         await h.lifecycle.ping_scan()
     h.publisher.send.assert_not_awaited()
     assert (await row_for(h, h.row.session_id)).last_ping_at == h.row.last_ping_at
+    async with h.sessions.begin() as db:
+        assert not list(await db.scalars(select(PingProbe)))
+
+
+@pytest.mark.parametrize("failure", ["credentials", "exchange", "publication", "cancel"])
+async def test_unsent_probe_never_becomes_death_after_repeated_failures(life, failure):
+    h = life
+    failing = {
+        "credentials": h.lifecycle.credentials.mint,
+        "exchange": h.lifecycle.tokens.mint,
+        "publication": h.publisher.send,
+        "cancel": h.publisher.send,
+    }[failure]
+    error = asyncio.CancelledError if failure == "cancel" else RuntimeError
+    failing.side_effect = error("unavailable")
+    for _ in range(2):
+        await age_ping(h)
+        with pytest.raises(error):
+            await h.lifecycle.ping_scan()
+        assert (await row_for(h, h.row.session_id)).status == "ready"
+        async with h.sessions.begin() as db:
+            assert not list(await db.scalars(select(PingProbe)))
+    assert all(call.args[0] == PING_REQUEST for call in h.publisher.send.call_args_list)
+    failing.side_effect = None
+    await age_ping(h)
+    await h.lifecycle.ping_scan()
+    assert h.publisher.send.call_args.args[0] == PING_REQUEST
+
+
+async def test_restart_ignores_unconfirmed_probe_and_times_out_confirmed_send(life):
+    h = life
+    old = datetime.now(UTC) - timedelta(seconds=60)
+    pending_id = uuid4()
+    async with h.sessions.begin() as db:
+        db.add(PingProbe(ping_id=pending_id, sandbox_id=h.row.sandbox_id, sent_at=old))
+    await age_ping(h)
+    await h.lifecycle.ping_scan()
+    assert h.publisher.send.call_args.args[0] == PING_REQUEST
+    async with h.sessions.begin() as db:
+        assert await db.get(PingProbe, pending_id) is None
+    await age_ping(h)
+    from ads_sandbox_manager.lifecycle import LifecycleService
+
+    restarted = LifecycleService(
+        h.lifecycle.settings,
+        h.sessions,
+        h.lifecycle_repository,
+        h.cleanup,
+        h.publisher,
+        h.lifecycle.credentials,
+        h.lifecycle.tokens,
+    )
+    await restarted.ping_scan()
+    assert h.publisher.send.call_args.args[0] == RECOVER
+
+
+async def test_ping_reply_before_publication_commit_is_not_lost(life):
+    h = life
+
+    async def immediate_reply(topic, key, raw, token):
+        assert topic == PING_REQUEST
+        await h.lifecycle.ping_reply(decode_ping(raw))
+
+    h.publisher.send.side_effect = immediate_reply
+    await h.lifecycle.ping_scan()
+    assert (await row_for(h, h.row.session_id)).last_ping_at > h.row.last_ping_at
+    async with h.sessions.begin() as db:
+        assert not list(await db.scalars(select(PingProbe)))
+
+
+async def test_fresh_reply_supersedes_older_published_timeout(life):
+    h = life
+    await h.lifecycle.ping_scan()
+    ping = decode_ping(h.publisher.send.call_args.args[2])
+    await age_ping(h)
+    async with h.sessions.begin() as db:
+        old = datetime.now(UTC) - timedelta(seconds=40)
+        db.add(
+            PingProbe(ping_id=uuid4(), sandbox_id=h.row.sandbox_id, sent_at=old, published_at=old)
+        )
+    await h.lifecycle.ping_reply(ping)
+    await h.lifecycle.ping_scan()
+    assert h.publisher.send.call_args.args[0] == PING_REQUEST
+
+
+async def test_expired_reply_cannot_erase_confirmed_timeout_evidence(life):
+    h = life
+    await h.lifecycle.ping_scan()
+    ping = decode_ping(h.publisher.send.call_args.args[2])
+    await age_ping(h)
+    async with h.sessions.begin() as db:
+        probe = await db.get(PingProbe, ping.ping_id)
+        probe.sent_at = datetime.now(UTC) - timedelta(seconds=35)
+    await h.lifecycle.ping_reply(ping)
+    await h.lifecycle.ping_scan()
+    assert h.publisher.send.call_args.args[0] == RECOVER
 
 
 async def test_shutdown_uses_service_subject_without_user_holder(life):

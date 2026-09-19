@@ -52,6 +52,7 @@ class PingProbe(Base):
     ping_id: Mapped[UUID] = mapped_column(primary_key=True)
     sandbox_id: Mapped[UUID] = mapped_column(index=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class SessionPVC(Base):

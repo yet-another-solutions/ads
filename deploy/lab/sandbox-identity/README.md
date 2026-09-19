@@ -117,10 +117,12 @@ callers are rejected; an unrelated client cannot exchange a token not addressed
 to it. Temporary direct grant on the test login client is restored in `finally`.
 New clients do not enable browser/direct-grant/implicit flows.
 
-IPC and manager client-credentials tokens use the **Keycloak client UUID** as
-`sub`, not the service-account user's UUID. An admin-only user-profile attribute
-and mapper implement that service-only subject; normal user exchanges preserve
-the user UUID. These lifecycle tokens are not user-role authorization.
+IPC and manager client-credentials tokens retain the native **service-account
+user UUID** in `sub`; caller checks use verified `azp`. The reconciler removes the
+obsolete `ads-service-subject` mappers and their service-user attributes, while
+leaving the unused profile attribute admin-only. It also proves a real
+manager → IPC → manager service-token exchange round trip. Normal user exchanges
+still preserve the user UUID. Lifecycle tokens are not user-role authorization.
 Existing engine client settings and audience mappers are preserved.
 
 See [Keycloak Standard Token Exchange](https://www.keycloak.org/securing-apps/token-exchange)

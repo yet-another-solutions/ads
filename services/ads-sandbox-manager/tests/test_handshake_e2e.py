@@ -154,6 +154,17 @@ async def test_ipc_loss_recovers_fresh_disk_then_next_execution_works(handshake)
             row.last_ping_at = datetime.now(UTC) - timedelta(seconds=40)
             row.last_ping_sent_at = None
         await lifecycle.ping_scan()
+        unanswered = await h.broker.next(PING_REQUEST, SandboxPing)
+        # Publication without IPC delivery, then advance the confirmed deadline.
+        async with manager.sessions.begin() as db:
+            from ads_sandbox_manager.store import PingProbe
+
+            probe = await db.get(PingProbe, unanswered.message.ping_id)
+            assert probe.published_at is not None
+            probe.published_at = datetime.now(UTC) - timedelta(seconds=31)
+            row = await db.get(SandboxSession, old.session_id)
+            row.last_ping_sent_at = None
+        await lifecycle.ping_scan()
         signal = await h.broker.next(RECOVER, Signal)
         assert (
             h.identity.verifier(MANAGER).authenticate(signal.token).subject
