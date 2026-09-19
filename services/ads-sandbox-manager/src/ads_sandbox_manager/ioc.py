@@ -69,7 +69,16 @@ class AppProvider(Provider):
         finally:
             await engine.dispose()
 
-    dependencies = provide(DependencyHealth, scope=Scope.APP, provides=Dependencies)
+    @provide(scope=Scope.APP)
+    async def dependencies(
+        self, settings: Settings, engine: AsyncEngine
+    ) -> AsyncIterator[Dependencies]:
+        health = DependencyHealth(settings, engine)
+        try:
+            yield health
+        finally:
+            await health.close()
+
     golden = provide(GoldenEnsure, scope=Scope.APP)
     runtime = provide(ManagerRuntime, scope=Scope.APP)
     repository = provide(SessionRepository, scope=Scope.APP)
