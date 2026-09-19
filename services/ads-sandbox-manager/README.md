@@ -154,9 +154,16 @@ inactivity by default. The manager sends authenticated shutdown with the capture
 transition timestamp. IPC stops admission, drains the execution and its result,
 then echoes that timestamp in its acknowledgement. Missing or stale acknowledgements
 cannot authorize teardown. Results still forward while shutting down.
-Cleanup removes IPC Deployment and its Filesystem PVC, then guest Deployment.
-It retains the session Block PVC. Only observed compute disappearance and storage
-release permit stopped/detached completion.
+Cleanup requests deletion of both IPC and guest Deployments before waiting for
+either foreground deletion to finish, including for persisted old-order intents.
+Only then does it release storage, delete the IPC Filesystem PVC, and retain the
+session Block PVC. Only observed compute disappearance and positive storage
+release permit stopped/detached completion. A slow Node Ready status report can
+outlast the cleanup interval; a fresh Node Lease is not storage-release evidence.
+Idle cleanup renews its retry deadline without changing ownership timestamps,
+retains the exact workspace and shutdown acknowledgement, and survives restart.
+Missing drain acknowledgement or release evidence keeps the session unavailable
+in shutting_down/detaching, never falsely stopped and never rebuilt from golden.
 
 Retention requires both 30-minute execution inactivity and two hours continuously
 detached by default. Reap exclusively claims the exact lifetime into destroying;
@@ -189,13 +196,20 @@ No previous-state field or service claim UUID exists. Late-created resources are
 found by subsequent scans. Bound true-orphan disks without retained node evidence
 remain unresolved rather than being guessed safe to delete.
 
-Cleanup/service timeout and the PVC-state watchdog publish whole-sandbox recovery.
+Non-idle cleanup/service timeout and the attaching/destroying PVC-state watchdog
+publish whole-sandbox recovery. Idle timeout and API/publication failures instead
+retry the same retained intent. Shutting-down sessions and stopped sessions without
+an active destroying claim reject recovery verdicts, including delayed messages.
 The verdict begins at acknowledged Kafka publication, not scheduler observation;
-pre-publication loss is accepted without an outbox. Admission condemns the
-observed sandbox even after late success, advances its sandbox ID, and durably
+pre-publication loss is accepted without an outbox. Outside those retention fences,
+admission condemns the observed sandbox even after late readiness, advances its sandbox ID, and durably
 retains every old cleanup target for recovery. Replaced IDs and active-recovery
 duplicates are ignored. Timed-out recovery rotates again and carries unfinished
 targets forward rather than forgetting a partially destroyed generation.
+Any existing retained cleanup target blocks recovery admission and execution:
+legacy idle-to-recovery records require operator reconciliation, not automatic
+conversion of `retain=true` into permission to delete. Already-deleted data is
+not restored by this change.
 Ordinary idle/reap never deletes Kafka topics.
 
 ## IPC ping and recovery
@@ -238,7 +252,7 @@ Only then does one transaction claim a fresh PVC lifetime under the already-new
 sandbox ID. The ordinary golden-clone builder prepares new topics/subscriptions
 before new compute. Authenticated IPC ready, not the recovery worker, marks ready.
 Failures preserve targets and publish another recovery verdict. The watchdog
-covers failed and timed-out creating/shutting-down/recovering states, including
+covers failed and timed-out creating/recovering states, including
 rows with no current PVC. The recovery deadline defaults to 600 seconds.
 
 `ADS_SANDBOX_MANAGER_PING_INTERVAL_SECONDS`,
@@ -262,7 +276,8 @@ Idle release evidence survives in the retained PVC record for later reaping.
 Reclamation additionally requires observed PVC and PV disappearance under the
 captured Delete policy and CSI external-provisioner deletion-protection finalizer.
 Unknown/missing evidence, stale nodes, remaining consumers, permission failures,
-and API errors fail closed. Cleanup deadlines retain targets for recovery.
+and API errors fail closed. Idle deadlines retain targets for retry, not destructive
+recovery; other cleanup deadlines retain their original deletion intent for recovery.
 
 This is a Kubernetes/CSI-controller observation contract, not a physical-storage
 probe or fencing against administrator force deletion or a faulty node/driver.
@@ -365,8 +380,8 @@ TLS materials are loaded on the main thread before any client creation.
 | `BARRIER_SECONDS` | Best-effort round timeout, including membership discovery, default 3 |
 | `IDLE_SECONDS` | Execution inactivity gate for idle and retention, default 1800 |
 | `DETACHED_SECONDS` | Minimum continuous detached age before reap, default 7200 |
-| `CLEANUP_SECONDS` | Persisted cleanup/service deadline interval, default 120 |
-| `PVC_TIMEOUT_SECONDS` | Watchdog timeout for attaching/detaching/destroying, default 120 |
+| `CLEANUP_SECONDS` | Idle retry window or non-idle cleanup/service deadline, default 120 |
+| `PVC_TIMEOUT_SECONDS` | Watchdog timeout for attaching/destroying, default 120 |
 | `LIFECYCLE_BATCH` | Positive scheduler/work batch limit, default 50 |
 | `TOPIC_REPLICATION_FACTOR` | Dynamic request/result topics, default 1; each has one partition |
 | `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL` |

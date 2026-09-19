@@ -57,6 +57,23 @@ async def test_capture_persistable_positive_release_and_reclaim_contract(api, cl
     assert await adapter.reclaimed(captured)
 
 
+@pytest.mark.parametrize("csi", [False, True])
+async def test_slow_node_report_waits_without_weakening_release_evidence(api, cleanup, csi):
+    adapter, original = cleanup
+    if not csi:
+        del api.core.read_persistent_volume.return_value["spec"]["csi"]
+    captured = await adapter.capture(original)
+    api.core.list_namespaced_pod.return_value["items"] = []
+    # Ready is true and recent, but its report predates capture. No lease or
+    # elapsed cleanup deadline can substitute for a subsequent node observation.
+    assert not await adapter.released(captured)
+    release(api)
+    assert await adapter.released(captured)
+    if csi:
+        api.core.read_node.return_value["status"]["volumesInUse"] = [captured["volume_key"]]
+        assert not await adapter.released(captured)
+
+
 @pytest.mark.parametrize(
     "broken",
     ["node", "heartbeat", "inuse", "attached", "attachment", "missing-nodes", "not-captured"],

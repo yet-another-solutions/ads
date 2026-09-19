@@ -94,6 +94,11 @@ class RecoveryService:
     async def _execute(self, row: SandboxSession, works: list[CleanupWork]) -> None:
         if not works:
             raise RuntimeError("recovery has no durable intent")
+        if any(obj.get("retain") for work in works for obj in work.targets):
+            # Older versions converted idle timeouts into destructive recovery.
+            # Do not silently turn their retained workspace into a delete target.
+            log.error("recovery blocked by retained workspace intent: %s", row.session_id)
+            return
         kube = self.lifecycle.kube
         for sandbox_id in {w.sandbox_id for w in works}:
             async with self.sessions.begin() as db:
@@ -117,7 +122,6 @@ class RecoveryService:
                 obj = {
                     **obj,
                     **evidence.get((obj["kind"], obj["name"], obj["uid"]), {}),
-                    "retain": False,
                 }
                 if not obj.get("captured") and not obj.get("cleaned"):
                     if obj["uid"] is None:
@@ -143,6 +147,7 @@ class RecoveryService:
         # Stop all old compute before releasing dependent storage, across every carried
         # generation. Kubernetes foreground deletion and storage evidence remain mandatory.
         for kind in ("Deployment", "PersistentVolumeClaim"):
+            compute_pending = False
             for work in works:
                 for index, obj in enumerate(work.targets):
                     if obj["kind"] != kind or obj.get("cleaned"):
@@ -160,6 +165,9 @@ class RecoveryService:
                     await kube.delete(obj)
                     observed = await kube.observe(obj)
                     if observed is not None and observed["metadata"]["uid"] == obj["uid"]:
+                        if kind == "Deployment":
+                            compute_pending = True
+                            continue
                         return
                     if (
                         kind == "PersistentVolumeClaim"
@@ -171,6 +179,8 @@ class RecoveryService:
                     targets[index] = {**obj, "cleaned": True}
                     if not await self._save(row, work, targets):
                         return
+            if compute_pending:
+                return
 
         # Delete records only after proven reclamation. The fresh PVC and creating claim
         # commit together; ordinary requests never see stopped or claim this boundary.

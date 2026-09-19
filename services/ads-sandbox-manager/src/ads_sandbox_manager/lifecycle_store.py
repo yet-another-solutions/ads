@@ -39,8 +39,8 @@ def target(kind: str, name: str, uid: str | None, *, retain: bool = False) -> di
 def sandbox_targets(row: SandboxSession, *, retain: bool) -> list[dict[str, Any]]:
     objects = [
         target("Deployment", ipc_name(row.sandbox_id), row.ipc_deployment_uid),
-        target("PersistentVolumeClaim", ipc_name(row.sandbox_id), row.ipc_pvc_uid),
         target("Deployment", session_name(row.sandbox_id), row.guest_deployment_uid),
+        target("PersistentVolumeClaim", ipc_name(row.sandbox_id), row.ipc_pvc_uid),
     ]
     if row.pvc_id:
         objects.append(
@@ -229,9 +229,20 @@ class LifecycleRepository:
         now: datetime,
         timeout: float,
     ) -> bool:
-        """Published verdicts win over late success; active recovery duplicates do not."""
+        """Fence recovery from idle retention, including delayed published verdicts."""
         row, pvc = await self.locked(db, session_id, sandbox_id)
         if row is None:
+            return False
+        if row.status == "shutting_down" or (
+            row.status == "stopped" and (pvc is None or pvc.state != "destroying")
+        ):
+            return False
+        previous = list(
+            await db.scalars(select(CleanupWork).where(CleanupWork.session_id == session_id))
+        )
+        # A legacy timeout may already have reclassified an idle intent as recovery.
+        # Retention is not deletion authority, even after a restart or ID rotation.
+        if any(obj.get("retain") for work in previous for obj in work.targets):
             return False
         if row.status == "recovering":
             if row.status_changed_at > now - timedelta(seconds=timeout):
@@ -244,9 +255,6 @@ class LifecycleRepository:
                 for obj in old.targets
             ]
         # Preserve prior evidence and every unfinished generation, rather than replace it.
-        previous = list(
-            await db.scalars(select(CleanupWork).where(CleanupWork.session_id == session_id))
-        )
         for work in previous:
             work.kind = "recovery"
         old.kind = "recovery"
