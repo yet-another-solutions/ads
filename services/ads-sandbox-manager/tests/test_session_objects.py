@@ -84,7 +84,7 @@ def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
     assert g["nodeSelector"] == s.node_selector
     assert g["tolerations"] == s.tolerations
     assert i["nodeSelector"] == s.session_objects.ipc_node_selector
-    assert g["runtimeClassName"] == "kata-qemu"
+    assert g["runtimeClassName"] == "kata-qemu-ads"
     assert not g["automountServiceAccountToken"] and not g["enableServiceLinks"]
     assert g["dnsPolicy"] == "None" and g["dnsConfig"] == {"nameservers": ["127.0.0.1"]}
     assert g["volumes"] == [
@@ -108,7 +108,10 @@ def test_guest_airgap_and_ipc_identity_are_separate(object_settings):
         "/run/ads-sandbox-ready",
     ]
     assert not {"command", "args", "ports", "volumeMounts", "envFrom"} & container.keys()
-    assert len(container["env"]) == 1
+    assert {entry["name"]: entry["value"] for entry in container["env"]} == {
+        "ADS_SESSION_DEVICE": "/dev/ads-session",
+        **{f"ADS_SANDBOX_{k}": str(v) for k, v in s.session_objects.guest_budget.items()},
+    }
     assert i["automountServiceAccountToken"]
     assert i["serviceAccountName"] == "sandbox-ipc"
     assert "runtimeClassName" not in i
@@ -158,6 +161,10 @@ def test_builders_do_not_mutate_helm_inputs_and_ca_is_optional(object_settings):
         ("create_seconds", float("nan")),
         ("ipc_node_selector", {}),
         ("ipc_node_selector", {"x": 1}),
+        ("guest_runtime_class", "../foreign"),
+        ("guest_runtime_class", ""),
+        ("guest_budget", {}),
+        ("guest_budget", {"PIDS": True}),
         ("ipc_resources", []),
         ("ipc_tolerations", {}),
     ],

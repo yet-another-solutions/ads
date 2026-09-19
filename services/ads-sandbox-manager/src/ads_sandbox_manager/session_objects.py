@@ -93,7 +93,7 @@ def guest_deployment(
         session_name(sandbox_id),
         pod_labels,
         {
-            "runtimeClassName": "kata-qemu",
+            "runtimeClassName": config.guest_runtime_class,
             "automountServiceAccountToken": False,
             "enableServiceLinks": False,
             "dnsPolicy": "None",
@@ -106,7 +106,13 @@ def guest_deployment(
                 {
                     "name": "sandbox",
                     "image": config.guest_image,
-                    "env": [{"name": "ADS_SESSION_DEVICE", "value": "/dev/ads-session"}],
+                    "env": [
+                        {"name": "ADS_SESSION_DEVICE", "value": "/dev/ads-session"},
+                        *[
+                            {"name": f"ADS_SANDBOX_{key}", "value": str(value)}
+                            for key, value in sorted(config.guest_budget.items())
+                        ],
+                    ],
                     "resources": deepcopy(config.guest_resources),
                     "securityContext": {
                         "runAsUser": 0,

@@ -13,6 +13,8 @@ _SRC = (
     "deploy/tests",
     "deploy/keycloak/tests",
     "services/ads-sandbox-base/scripts/ads-session-device-check",
+    "services/ads-sandbox-base/scripts/ads-sandbox-runtime",
+    "services/ads-sandbox-base/scripts/ads-agent-init",
     "services/ads-sandbox-golden/scripts/ads-session-device-check",
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",

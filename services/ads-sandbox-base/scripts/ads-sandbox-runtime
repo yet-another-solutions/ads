@@ -1,0 +1,213 @@
+#!/usr/bin/python3
+"""Trusted guest-local setup and placement. Never execute a caller's command as root."""
+
+from __future__ import annotations
+
+import os
+import pwd
+import subprocess
+import sys
+from pathlib import Path
+
+CG = Path("/sys/fs/cgroup")
+PROC = Path("/proc")
+CONTROLLERS = {"cpu", "memory", "pids"}
+PROC_MASKS = {
+    "/proc/interrupts": ("tmpfs", "/null"),
+    "/proc/keys": ("tmpfs", "/null"),
+    "/proc/timer_list": ("tmpfs", "/null"),
+    "/proc/bus": ("proc", "/bus"),
+    "/proc/fs": ("proc", "/fs"),
+    "/proc/irq": ("proc", "/irq"),
+    "/proc/sys": ("proc", "/sys"),
+}
+BUDGET_DEFAULTS = {
+    "CPU_MILLIS": 750,
+    "MEMORY_BYTES": 805306368,
+    "PIDS": 256,
+    "MAX_DEPTH": 8,
+    "MAX_DESCENDANTS": 32,
+}
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def mounts() -> dict[str, str]:
+    return {line.split()[0]: line for line in (PROC / "self/mountinfo").read_text().splitlines()}
+
+
+def check_namespaces() -> None:
+    require(os.geteuid() == 0, "guest root is required")
+    for namespace in ("mnt", "user"):
+        require(
+            os.readlink(PROC / f"self/ns/{namespace}") == os.readlink(PROC / f"1/ns/{namespace}"),
+            f"unexpected {namespace} namespace",
+        )
+
+
+def check_cgroup_mount() -> None:
+    entries = [line for line in mounts().values() if line.split()[4] == str(CG)]
+    require(len(entries) == 1, "expected one cgroup mount")
+    left, right = entries[0].split(" - ", 1)
+    require(
+        right.split()[0] == "cgroup2"
+        and "rw" in left.split()[5].split(",")
+        and "nsdelegate" in right.split()[2].split(","),
+        "require writable cgroup v2 with nsdelegate; check the dedicated Kata handler",
+    )
+
+
+def limits() -> dict[str, str]:
+    values = {}
+    for key, default in BUDGET_DEFAULTS.items():
+        raw = os.environ.get(f"ADS_SANDBOX_{key}", str(default))
+        require(raw.isascii() and raw.isdecimal(), f"invalid {key}")
+        value = int(raw)
+        require(0 < value < 2**63, f"invalid {key}")
+        values[key] = value
+    require(values["MEMORY_BYTES"] % 4096 == 0, "MEMORY_BYTES must be page-aligned")
+    quota, period = (CG / "cpu.max").read_text().split()
+    memory = (CG / "memory.max").read_text().strip()
+    require(quota != "max" and memory != "max", "guest CPU and memory limits are mandatory")
+    require(
+        values["CPU_MILLIS"] * int(period) < int(quota) * 1000,
+        "sandbox CPU budget must leave room for guest services",
+    )
+    require(
+        values["MEMORY_BYTES"] < int(memory),
+        "sandbox memory budget must leave room for guest services",
+    )
+    return {
+        "cpu.max": f"{values['CPU_MILLIS'] * 100} 100000",
+        "memory.max": str(values["MEMORY_BYTES"]),
+        "memory.swap.max": "0",
+        "pids.max": str(values["PIDS"]),
+        "cgroup.max.depth": str(values["MAX_DEPTH"]),
+        "cgroup.max.descendants": str(values["MAX_DESCENDANTS"]),
+    }
+
+
+def prepare_proc() -> None:
+    expected = mounts()
+    targets = {}
+    for mount_id, line in expected.items():
+        left, right = line.split(" - ", 1)
+        fields = left.split()
+        target = fields[4]
+        if not target.startswith("/proc/"):
+            continue
+        require(target in PROC_MASKS and target not in targets, "unexpected proc submount")
+        require(
+            (right.split()[0], fields[3]) == PROC_MASKS[target],
+            f"unexpected mount backing for {target}",
+        )
+        require(
+            not any(part.startswith(("shared:", "master:")) for part in fields[6:]),
+            f"propagating mount at {target}",
+        )
+        targets[target] = mount_id
+    require(set(targets) == set(PROC_MASKS), "unexpected guest proc mask set")
+    # Validate the complete allowlist before changing anything.
+    for target in sorted(targets):
+        require(mounts() == expected, "mount table changed during preparation")
+        subprocess.run(["umount", "--", target], check=True)
+        del expected[targets[target]]
+        require(mounts() == expected, "unexpected unmount effect")
+
+
+def enable(directory: Path) -> None:
+    require(
+        CONTROLLERS <= set((directory / "cgroup.controllers").read_text().split()),
+        "CPU, memory and PID controllers are required",
+    )
+    (directory / "cgroup.subtree_control").write_text("+cpu +memory +pids")
+
+
+def prepare() -> None:
+    check_namespaces()
+    require(
+        os.readlink(PROC / "self/ns/cgroup") == os.readlink(PROC / "1/ns/cgroup")
+        and (PROC / "self/cgroup").read_text().strip() == "0::/",
+        "bootstrap must start at its private cgroup root",
+    )
+    check_cgroup_mount()
+    budget_limits = limits()
+    delegate_files = (Path("/sys/kernel/cgroup/delegate")).read_text().split()
+    require(
+        bool(delegate_files)
+        and set(delegate_files) <= {"cgroup.procs", "cgroup.threads", "cgroup.subtree_control"},
+        "unexpected kernel delegation file list",
+    )
+    require(not (CG / "ads-budget").exists(), "budget already exists; refuse partial bootstrap")
+    prepare_proc()
+    (CG / "init").mkdir(exist_ok=True)
+    for pid in (CG / "cgroup.procs").read_text().split():
+        (CG / "init/cgroup.procs").write_text(pid)
+    require(not (CG / "cgroup.procs").read_text().strip(), "cgroup root is not empty")
+    enable(CG)
+    budget = CG / "ads-budget"
+    budget.mkdir()
+    for name, value in budget_limits.items():
+        (budget / name).write_text(value)
+        require((budget / name).read_text().strip() == value, f"{name} was not applied")
+    enable(budget)
+    delegated = budget / "podman"
+    delegated.mkdir()
+    enable(delegated)
+    launcher = delegated / "launcher"
+    launcher.mkdir()
+    account = pwd.getpwnam("podman")
+    for directory in (delegated, launcher):
+        os.chown(directory, account.pw_uid, account.pw_gid)
+        for name in delegate_files:
+            if (directory / name).exists():
+                os.chown(directory / name, account.pw_uid, account.pw_gid)
+
+
+def podman(arguments: list[str]) -> None:
+    check_namespaces()
+    # Kata exec may enter a cgroup namespace rooted at the init leaf. Align to
+    # the trusted bootstrap, then move only this helper into the delegated leaf.
+    with (PROC / "1/ns/cgroup").open() as namespace:
+        os.setns(namespace.fileno(), 0)
+    check_cgroup_mount()
+    launcher = CG / "ads-budget/podman/launcher/cgroup.procs"
+    require(launcher.is_file(), "guest delegation is not ready")
+    launcher.write_text(str(os.getpid()))
+    command = [
+        "runuser",
+        "-u",
+        "podman",
+        "--",
+        "env",
+        "HOME=/home/podman",
+        "XDG_RUNTIME_DIR=/run/ads-podman",
+        "podman",
+        "--cgroup-manager=cgroupfs",
+        "--root",
+        "/session/outer-podman",
+        "--runroot",
+        "/run/ads-podman",
+        *arguments,
+    ]
+    os.execvp(command[0], command)
+
+
+def main() -> None:
+    if sys.argv[1:] == ["prepare"]:
+        prepare()
+    elif len(sys.argv) > 2 and sys.argv[1] == "podman":
+        podman(sys.argv[2:])
+    else:
+        raise RuntimeError("usage: ads-sandbox-runtime prepare | podman <arguments>")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"ads-sandbox-runtime: {error}", file=sys.stderr)
+        sys.exit(1)
