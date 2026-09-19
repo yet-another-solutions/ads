@@ -158,8 +158,8 @@ Cleanup requests deletion of both IPC and guest Deployments before waiting for
 either foreground deletion to finish, including for persisted old-order intents.
 Only then does it release storage, delete the IPC Filesystem PVC, and retain the
 session Block PVC. Only observed compute disappearance and positive storage
-release permit stopped/detached completion. A slow Node Ready status report can
-outlast the cleanup interval; a fresh Node Lease is not storage-release evidence.
+release permit stopped/detached completion. Node health and Ready heartbeat
+freshness are not lifecycle gates; the manager does not wait for a new Node report.
 Idle cleanup renews its retry deadline without changing ownership timestamps,
 retains the exact workspace and shutdown acknowledgement, and survives restart.
 Missing drain acknowledgement or release evidence keeps the session unavailable
@@ -269,18 +269,25 @@ until the full plan is implemented. Helm settings remain slice 14.
 
 Before teardown, persist each bound PV UID, claim identity, consuming nodes, and
 CSI volume key. Require no remaining Pods referencing the claim, no VolumeAttachment,
-and fresh Ready node observations after capture with no matching attached/in-use
-volume. Pending never-bound claims need no nonexistent node evidence, but a concurrent
+and no matching attached/in-use volume in the captured nodes' volume lists.
+Node Ready conditions and heartbeat timestamps are not checked.
+Pending never-bound claims need no nonexistent node evidence, but a concurrent
 bind fails the captured-binding gate and delete resourceVersion precondition.
 Idle release evidence survives in the retained PVC record for later reaping.
 Reclamation additionally requires observed PVC and PV disappearance under the
 captured Delete policy and CSI external-provisioner deletion-protection finalizer.
-Unknown/missing evidence, stale nodes, remaining consumers, permission failures,
+Unknown/missing resource evidence, remaining consumers, permission failures,
 and API errors fail closed. Idle deadlines retain targets for retry, not destructive
 recovery; other cleanup deadlines retain their original deletion intent for recovery.
 
 This is a Kubernetes/CSI-controller observation contract, not a physical-storage
 probe or fencing against administrator force deletion or a faulty node/driver.
+For normal Pod deletion, kubelet waits for volume unmount and local volume cleanup
+before marking termination finished; its status manager then removes the Pod
+([kubelet cleanup](https://github.com/kubernetes/kubernetes/blob/v1.36.4/pkg/kubelet/kubelet.go),
+[Pod deletion](https://github.com/kubernetes/kubernetes/blob/v1.36.4/pkg/kubelet/status/status_manager.go)).
+Node volume lists are additional negative blockers, not a heartbeat-based proof
+of release, and can themselves lag. This is not a zero-delay shutdown guarantee.
 The adapter never force-deletes Pods or mutates Nodes/PVs. Live validation of the
 lab driver's finalizer/reclamation behavior is deferred, not asserted by tests.
 
@@ -328,9 +335,9 @@ Ready requires all of:
   This condition reports the absence of a ready runtime sandbox; terminal
   container exit alone is insufficient
   ([Kubernetes Pod conditions](https://kubernetes.io/docs/concepts/workloads/pods/pod-condition/)).
-- A fresh `Ready=True` Node observation after each consumer's finish, no matching
-  CSI volume in `volumesInUse` or `volumesAttached`, and the PV still bound to this
-  exact PVC UID.
+- No matching CSI volume in `volumesInUse` or `volumesAttached` on the consumer
+  nodes, and the PV still bound to this exact PVC UID. Node Ready and heartbeat
+  freshness are not release gates.
 - No VolumeAttachment referencing that PV, including deleting, errored, or
   `attached=False` records. Absence alone is not release proof because CSI drivers
   can skip attachment
@@ -345,7 +352,7 @@ exceptions, and cancellation discard the client so a subsequent poll can recover
 Application shutdown closes the client. This changes neither Kafka transport
 security nor the producer/consumer lifecycle.
 
-Missing permissions, unknown fields, stale Nodes, missing retained bake evidence,
+Missing permissions, unknown resource fields, missing retained bake evidence,
 or uncertain release keep readiness false. Do not force-delete Pods or introduce
 a Job TTL. This is Kubernetes-observed release, not storage fencing against an
 administrator force-deleting resources or a faulty node/CSI driver. Node
@@ -392,7 +399,6 @@ TLS materials are loaded on the main thread before any client creation.
 | `TLS_CA_BUNDLE` | Optional validated additional trust material |
 | `POLL_SECONDS`, `CONTROL_SECONDS` | Default 10 each; polling interval and individual control/DB bounds |
 | `BAKE_SECONDS` | Job active deadline, default 1800 |
-| `NODE_FRESH_SECONDS` | Maximum Node heartbeat age, default 600 |
 | `BIND_HOST`, `PORT` | Default `0.0.0.0`, `8080`; always TLS |
 
 The golden container inherits the ordinary runtime capability set plus

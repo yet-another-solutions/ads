@@ -210,7 +210,6 @@ sandbox:
     pollSeconds: 10
     controlSeconds: 10
     bakeSeconds: 1800
-    nodeFreshSeconds: 600
     createSeconds: 120
     readySeconds: 120
     barrierSeconds: 3
