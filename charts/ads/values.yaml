@@ -62,6 +62,10 @@ guardrail:
     pullPolicy: IfNotPresent
   service:
     port: 8083
+  # The confidential client the guardrail exchanges tokens with, for the audience of
+  # each server behind it. Its secret is secrets.guardrailKeycloakClientSecret.
+  keycloak:
+    clientId: ads-guardrail
   attributes:
     - repo.write=true
     - agent=true
@@ -187,6 +191,13 @@ engine:
   ackTimeoutSeconds: 10
   mcpTimeoutSeconds: 120
   maxToolCalls: 32
+  # What a run of the engine works on. The guardrail records it on the run and the
+  # policy decides against it, so both tool paths need it whenever guardrail.enabled.
+  workspace:
+    project: ""
+    repo: ""
+    env: ""
+    workdir: ""
   # Tool calls go through the guardrail as the person, with their token exchanged for
   # mcpAudience. Needs guardrail.enabled and tls.caBundle.secretName.
   tools:
@@ -194,11 +205,6 @@ engine:
     # Empty takes the probe's sites when mcpProbe is enabled.
     mcpServers: []
     mcpAudience: ads-mcp
-    workspace:
-      project: ""
-      repo: ""
-      env: ""
-      workdir: ""
     maxModelRounds: 8
     callAttempts: 3
 
@@ -300,6 +306,9 @@ secrets:
   policyApiToken: ""
   auditApiToken: ""
   guardrailApiToken: ""
+  # Required with guardrail.enabled: the guardrail exchanges a caller's token for one
+  # the server behind it accepts, so it needs its own confidential client.
+  guardrailKeycloakClientSecret: ""
   injectionScannerApiToken: ""
 
 nodes:

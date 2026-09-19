@@ -35,6 +35,8 @@ class Settings:
     person_token_audience: str = ""
     keycloak_well_known_url: str = ""
     keycloak_issuer: str = ""
+    keycloak_client_id: str = ""
+    keycloak_client_secret: str = ""
     injection_scanner_url: str = ""
     injection_scanner_api_token: str = ""
     injection_scanner_timeout_seconds: float = 30.0
@@ -156,6 +158,8 @@ def load_settings() -> Settings:
         person_token_audience=_env("ADS_MCP_AUDIENCE", "").strip(),
         keycloak_well_known_url=_env("ADS_KEYCLOAK_WELL_KNOWN_URL", "").strip(),
         keycloak_issuer=_env("ADS_KEYCLOAK_ISSUER", "").strip(),
+        keycloak_client_id=_env("ADS_KEYCLOAK_CLIENT_ID", "").strip(),
+        keycloak_client_secret=_env("ADS_KEYCLOAK_CLIENT_SECRET", "").strip(),
         injection_scanner_url=_env("ADS_INJECTION_SCANNER_URL", "").strip().rstrip("/"),
         injection_scanner_api_token=_env("ADS_INJECTION_SCANNER_API_TOKEN", "").strip(),
         injection_scanner_timeout_seconds=float(
@@ -171,6 +175,15 @@ def load_settings() -> Settings:
     ):
         raise RuntimeError(
             "ADS_MCP_AUDIENCE needs ADS_KEYCLOAK_WELL_KNOWN_URL and ADS_KEYCLOAK_ISSUER"
+        )
+    if any(server.audience for server in settings.mcp_servers) and not (
+        settings.keycloak_well_known_url
+        and settings.keycloak_client_id
+        and settings.keycloak_client_secret
+    ):
+        raise RuntimeError(
+            "an MCP server with an audience needs ADS_KEYCLOAK_WELL_KNOWN_URL, "
+            "ADS_KEYCLOAK_CLIENT_ID and ADS_KEYCLOAK_CLIENT_SECRET to mint for it"
         )
     load_tls_context(settings)
     return settings

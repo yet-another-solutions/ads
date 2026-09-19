@@ -28,6 +28,10 @@ data:
   {{- end }}
   {{- end }}
   {{- if eq $component "mcp" }}
+  {{- if $root.Values.guardrail.enabled }}
+  # Only through the guardrail: a token the engine holds is refused here.
+  {{ $prefix }}ALLOWED_CALLERS: {{ $root.Values.guardrail.keycloak.clientId | quote }}
+  {{- end }}
   {{ $prefix }}ALLOWED_HOSTS: {{ printf "%s,%s:*,%s.%s,%s.%s:*,%s.%s.svc,%s.%s.svc:*,%s.%s.svc.cluster.local,%s.%s.svc.cluster.local:*" $name $name $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace | quote }}
   {{- end }}
   {{- if eq $component "manager" }}

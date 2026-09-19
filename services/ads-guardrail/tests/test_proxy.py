@@ -3,18 +3,22 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
+import jwt
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 from anyio.from_thread import start_blocking_portal
 from litestar.testing import TestClient
 
+from ads_commons.security import SecurityContext, TokenExchangeError
+from ads_commons_beans import TokenExchange
 from ads_guardrail.app import create_app
 from ads_guardrail.config import Settings
 from ads_guardrail.contract import Application, McpServer
 from ads_guardrail.guardrail import fingerprint
+from ads_guardrail.upstream import UpstreamTokens
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.client import PolicyClient
 from ads_policy.config import DENIED_MESSAGE
@@ -695,6 +699,90 @@ def test_unreachable_server_is_a_bad_gateway(
     with _client_for(unreachable, policy_client) as api:
         response = api.post("/mcp/gone", json={"jsonrpc": "2.0", "id": 1, "method": "ping"})
     assert response.status_code == 502
+
+
+SANDBOX_AUDIENCE = "ads-sandbox-mcp"
+
+
+class RecordingExchange:
+    """Stands in for Keycloak: records what was asked and mints a token for that audience."""
+
+    def __init__(self, failing: bool = False) -> None:
+        self.asked: list[tuple[str, str]] = []
+        self.failing = failing
+
+    def mint(self, audience: str, subject_token: str | None = None, **_: Any) -> SecurityContext:
+        self.asked.append((audience, subject_token or ""))
+        if self.failing:
+            raise TokenExchangeError("keycloak said no")
+        return SecurityContext(
+            subject=ALICE,
+            name="Alice",
+            roles=frozenset({"user"}),
+            authorized_party="ads-guardrail",
+            access_token=person_token(aud=audience, azp="ads-guardrail"),
+        )
+
+
+def _client_minting_for(
+    settings: Settings,
+    policy_client: PolicyClient,
+    mcp: FakeMcpServer,
+    exchange: RecordingExchange,
+) -> TestClient:
+    pointed = replace(
+        settings,
+        mcp_servers=(McpServer("retriever", mcp.url, KATA_VM_SITE, audience=SANDBOX_AUDIENCE),),
+    )
+    app = create_app(
+        pointed,
+        policy_client,
+        CollectingAuditSink(),
+        PERSON_TOKEN_VERIFIER,
+        MarkerInjectionScanner(),
+        UpstreamTokens(cast(TokenExchange, exchange)),
+    )
+    return TestClient(app=app)
+
+
+def test_a_server_with_an_audience_gets_a_token_minted_for_it(
+    settings: Settings, policy_client: PolicyClient, mcp: FakeMcpServer
+) -> None:
+    exchange = RecordingExchange()
+    with _client_minting_for(settings, policy_client, mcp, exchange) as api:
+        _open_run(api)
+        _post_to_mcp(api, _read_workdir_file())
+    assert exchange.asked == [(SANDBOX_AUDIENCE, ALICE_TOKEN)]
+    forwarded = mcp.received_headers[-1]["authorization"].removeprefix("Bearer ")
+    assert forwarded != ALICE_TOKEN
+    assert jwt.decode(forwarded, options={"verify_signature": False})["aud"] == SANDBOX_AUDIENCE
+
+
+def test_a_minted_token_is_reused_while_it_lives(
+    settings: Settings, policy_client: PolicyClient, mcp: FakeMcpServer
+) -> None:
+    exchange = RecordingExchange()
+    with _client_minting_for(settings, policy_client, mcp, exchange) as api:
+        _open_run(api)
+        _post_to_mcp(api, _read_workdir_file())
+        _post_to_mcp(api, _read_workdir_file())
+    assert len(exchange.asked) == 1
+    minted = {headers["authorization"] for headers in mcp.received_headers}
+    assert len(minted) == 1
+
+
+def test_nothing_is_relayed_when_no_token_can_be_minted(
+    settings: Settings, policy_client: PolicyClient, mcp: FakeMcpServer
+) -> None:
+    with _client_minting_for(settings, policy_client, mcp, RecordingExchange(failing=True)) as api:
+        _open_run(api)
+        response = api.post(
+            "/mcp/retriever",
+            json=_read_workdir_file(),
+            headers=_headers_with_bearer(ALICE_TOKEN),
+        )
+    assert response.status_code == 502
+    assert mcp.received_bodies == []
 
 
 def test_decision_api_names_the_recognised_capability(api: TestClient) -> None:

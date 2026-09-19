@@ -171,7 +171,12 @@ def test_a_tool_call_opens_the_chat_run_and_feeds_the_result_back(
         assert opening["conversation"] == str(CHAT)
         assert opening["workspace"]["project"] == "ads"
         (call,) = harness.guardrail.calls
-        assert call == {"server": "probe", "name": "echo", "arguments": {"text": "hi"}}
+        # The SDK also carries its own `_meta` on the call; the tool is what matters.
+        assert {key: call[key] for key in ("server", "name", "arguments")} == {
+            "server": "probe",
+            "name": "echo",
+            "arguments": {"text": "hi"},
+        }
         headers = harness.guardrail.call_headers[0]
         assert headers["authorization"] == f"Bearer {MCP_TOKEN}"
         assert headers["x-ads-run"] == await store.run_of_conversation(CHAT)

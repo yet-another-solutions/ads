@@ -8,8 +8,17 @@ from aio_pika.abc import AbstractRobustConnection
 from dishka import Provider, Scope, provide
 from jwt import PyJWKClient
 
-from ads_commons.security import AccessTokenVerifier, jwks_uri_from_well_known
-from ads_commons_beans import JwtVerifier, JwtVerifierSettings
+from ads_commons.security import (
+    AccessTokenVerifier,
+    jwks_uri_from_well_known,
+    token_endpoint_from_well_known,
+)
+from ads_commons_beans import (
+    JwtVerifier,
+    JwtVerifierSettings,
+    TokenExchange,
+    TokenExchangeSettings,
+)
 from ads_guardrail.config import Settings
 from ads_guardrail.guardrail import Guardrail
 from ads_guardrail.proxy import Proxy
@@ -18,6 +27,7 @@ from ads_guardrail.scanner import (
     InjectionScanner,
     UnconfiguredInjectionScanner,
 )
+from ads_guardrail.upstream import UpstreamTokens
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
 from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
@@ -46,6 +56,32 @@ def build_person_token_verifier(settings: Settings) -> AccessTokenVerifier | Non
     )
 
 
+def build_upstream_tokens(
+    settings: Settings, verifier: AccessTokenVerifier | None
+) -> UpstreamTokens | None:
+    """Only servers that name an audience need one; the minted token is verified for it."""
+    if not any(server.audience for server in settings.mcp_servers) or verifier is None:
+        return None
+    context = (
+        ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
+        if settings.tls_ca_bundle is not None
+        else None
+    )
+    return UpstreamTokens(
+        TokenExchange(
+            TokenExchangeSettings(
+                token_endpoint=token_endpoint_from_well_known(
+                    settings.keycloak_well_known_url, context
+                ),
+                client_id=settings.keycloak_client_id,
+                client_secret=settings.keycloak_client_secret,
+                ssl_context=context,
+            ),
+            verifier,
+        )
+    )
+
+
 def build_injection_scanner(settings: Settings) -> InjectionScanner:
     if not settings.injection_scanner_url:
         return UnconfiguredInjectionScanner()
@@ -68,6 +104,7 @@ class AppProvider(Provider):
         sink: AuditSink | None = None,
         person_token_verifier: AccessTokenVerifier | None = None,
         injection_scanner: InjectionScanner | None = None,
+        upstream_tokens: UpstreamTokens | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -75,6 +112,7 @@ class AppProvider(Provider):
         self._sink = sink
         self._person_token_verifier = person_token_verifier
         self._injection_scanner = injection_scanner
+        self._upstream_tokens = upstream_tokens
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -141,10 +179,22 @@ class AppProvider(Provider):
             await scanner.close()
 
     @provide(scope=Scope.APP)
+    def upstream_tokens(self, settings: Settings) -> UpstreamTokens | None:
+        if self._upstream_tokens is not None:
+            return self._upstream_tokens
+        return build_upstream_tokens(
+            settings, self._person_token_verifier or build_person_token_verifier(settings)
+        )
+
+    @provide(scope=Scope.APP)
     async def proxy(
-        self, settings: Settings, guardrail: Guardrail, injection_scanner: InjectionScanner
+        self,
+        settings: Settings,
+        guardrail: Guardrail,
+        injection_scanner: InjectionScanner,
+        upstream_tokens: UpstreamTokens | None,
     ) -> AsyncIterator[Proxy]:
-        proxy = Proxy(settings, guardrail, injection_scanner)
+        proxy = Proxy(settings, guardrail, injection_scanner, upstream_tokens)
         try:
             yield proxy
         finally:

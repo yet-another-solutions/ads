@@ -13,7 +13,12 @@ data:
   ADS_ENGINE_CONSUMER_GROUP: {{ .Values.engine.kafka.consumerGroup | quote }}
   ADS_ENGINE_PING_INTERVAL_SECONDS: {{ .Values.engine.pingIntervalSeconds | quote }}
   ADS_ENGINE_ACK_TIMEOUT_SECONDS: {{ .Values.engine.ackTimeoutSeconds | quote }}
+  {{- if .Values.guardrail.enabled }}
+  # Through the guardrail: every exec is decided, inspected and journalled on the way.
+  ADS_ENGINE_MCP_URL: {{ printf "%s/mcp/sandbox" (include "ads.guardrailUrl" .) | quote }}
+  {{- else }}
   ADS_ENGINE_MCP_URL: {{ printf "https://%s:%v/mcp" (include "ads.sandboxName" (dict "root" . "component" "mcp")) .Values.sandbox.mcp.port | quote }}
+  {{- end }}
   ADS_ENGINE_MCP_TIMEOUT_SECONDS: {{ .Values.engine.mcpTimeoutSeconds | quote }}
   ADS_ENGINE_MAX_TOOL_CALLS: {{ .Values.engine.maxToolCalls | quote }}
   ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.engine.keycloak.wellKnownUrl | quote }}
@@ -25,13 +30,20 @@ data:
   {{- if .Values.tls.caBundle.secretName }}
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}
+  {{- if .Values.guardrail.enabled }}
+  {{- if not .Values.tls.caBundle.secretName }}
+  {{- fail "guardrail.enabled needs tls.caBundle.secretName: the engine must trust the guardrail's certificate" }}
+  {{- end }}
+  ADS_ENGINE_GUARDRAIL_URL: {{ include "ads.guardrailUrl" . | quote }}
+  ADS_ENGINE_WORKSPACE_PROJECT: {{ required "engine.workspace.project is required with the guardrail" .Values.engine.workspace.project | quote }}
+  ADS_ENGINE_WORKSPACE_REPO: {{ required "engine.workspace.repo is required with the guardrail" .Values.engine.workspace.repo | quote }}
+  ADS_ENGINE_WORKSPACE_ENV: {{ required "engine.workspace.env is required with the guardrail" .Values.engine.workspace.env | quote }}
+  ADS_ENGINE_WORKSPACE_WORKDIR: {{ .Values.engine.workspace.workdir | default .Values.policy.workdir | quote }}
+  {{- end }}
   {{- with .Values.engine.tools }}
   {{- if .enabled }}
   {{- if not $.Values.guardrail.enabled }}
   {{- fail "engine.tools.enabled needs guardrail.enabled: every tool call goes through it" }}
-  {{- end }}
-  {{- if not $.Values.tls.caBundle.secretName }}
-  {{- fail "engine.tools.enabled needs tls.caBundle.secretName: the engine must trust the guardrail's certificate" }}
   {{- end }}
   {{- $servers := .mcpServers }}
   {{- if not $servers }}
@@ -40,12 +52,7 @@ data:
   {{- end }}
   {{- end }}
   ADS_ENGINE_MCP_SERVERS: {{ required "engine.tools.mcpServers is required (or enable mcpProbe)" (join "," $servers) | quote }}
-  ADS_ENGINE_GUARDRAIL_URL: {{ include "ads.guardrailUrl" $ | quote }}
   ADS_ENGINE_MCP_AUDIENCE: {{ .mcpAudience | quote }}
-  ADS_ENGINE_WORKSPACE_PROJECT: {{ required "engine.tools.workspace.project is required" .workspace.project | quote }}
-  ADS_ENGINE_WORKSPACE_REPO: {{ required "engine.tools.workspace.repo is required" .workspace.repo | quote }}
-  ADS_ENGINE_WORKSPACE_ENV: {{ required "engine.tools.workspace.env is required" .workspace.env | quote }}
-  ADS_ENGINE_WORKSPACE_WORKDIR: {{ .workspace.workdir | default $.Values.policy.workdir | quote }}
   ADS_ENGINE_MAX_MODEL_ROUNDS: {{ .maxModelRounds | quote }}
   ADS_ENGINE_TOOL_CALL_ATTEMPTS: {{ .callAttempts | quote }}
   {{- end }}

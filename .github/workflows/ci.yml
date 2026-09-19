@@ -216,6 +216,10 @@ jobs:
       - name: Lint and template
         run: |
           VALUES="-f charts/ads/values-ci.yaml"
+          # With a guardrail in front the engine needs its CA and a workspace to open a run for.
+          GOVERNED="--set=guardrail.enabled=true --set tls.caBundle.secretName=lab-ca
+            --set engine.workspace.project=ads --set engine.workspace.repo=r
+            --set engine.workspace.env=test"
           helm lint charts/ads $VALUES
           helm template ads charts/ads $VALUES >/tmp/ads-cm.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 8
@@ -266,14 +270,20 @@ jobs:
             echo 'audit rendered without a journal' >&2
             exit 1
           fi
-          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
-            --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp","site":{"runtimeClassName":"kata-clh","nodeLabels":{"ads.io/sandbox-node":"true"}}}]' \
+          helm template ads charts/ads $VALUES $GOVERNED \
+            --set-json 'guardrail.mcpServers=[{"name":"retriever","url":"http://retriever:8080/mcp","site":{"runtimeClassName":"kata-clh","nodeLabels":{"ads.io/sandbox-node":"true"}}}]' \
             >/tmp/ads-guard.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-guard.yaml)" -eq 9
           grep -q 'app.kubernetes.io/component: ads-guardrail' /tmp/ads-guard.yaml
           grep -q 'ADS_GUARDRAIL_API_TOKEN' /tmp/ads-guard.yaml
-          grep -q '\\"name\\":\\"sandbox\\"' /tmp/ads-guard.yaml
+          grep -q '\\"name\\":\\"retriever\\"' /tmp/ads-guard.yaml
           grep -q '\\"runtime_class_name\\":\\"kata-clh\\"' /tmp/ads-guard.yaml
+          if helm template ads charts/ads $VALUES $GOVERNED \
+            --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://elsewhere:8080/mcp","site":{"runtimeClassName":"kata-clh"}}]' \
+            >/tmp/ads-guard-shadow.yaml 2>&1; then
+            echo 'a declared server shadowed the chart-owned sandbox' >&2
+            exit 1
+          fi
           if grep -qE 'ADS_PLACEMENT|ADS_SUBJECT' /tmp/ads-guard.yaml; then
             echo 'the shared service must not describe a sandbox or a person it does not serve' >&2
             exit 1
@@ -281,25 +291,23 @@ jobs:
           grep -q 'ADS_APPLICATIONS: "\[\]"' /tmp/ads-guard.yaml
           grep -q 'ADS_MCP_AUDIENCE: ""' /tmp/ads-guard.yaml
           grep -q 'ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-guard.yaml
-          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
-            --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp"}]' >/tmp/ads-guard-bad.yaml; then
+          if helm template ads charts/ads $VALUES $GOVERNED \
+            --set-json 'guardrail.mcpServers=[{"name":"retriever","url":"http://retriever:8080/mcp"}]' >/tmp/ads-guard-bad.yaml; then
             echo 'an MCP server rendered without saying where its tools execute' >&2
             exit 1
           fi
-          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
+          helm template ads charts/ads $VALUES $GOVERNED \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"'"$(printf 'a%.0s' $(seq 64))"'","workspace":{"project":"ads","repo":"r","env":"test"}}]' \
             >/tmp/ads-apps.yaml
           grep -q '\\"name\\":\\"hermes\\"' /tmp/ads-apps.yaml
-          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
+          if helm template ads charts/ads $VALUES $GOVERNED \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"x"}]' >/tmp/ads-apps-bad.yaml; then
             echo 'an application rendered without a workspace' >&2
             exit 1
           fi
-          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
+          helm template ads charts/ads $VALUES $GOVERNED \
             --set injectionScanner.enabled=true --set mcpProbe.enabled=true \
-            --set engine.tools.enabled=true --set tls.caBundle.secretName=lab-ca \
-            --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
-            --set engine.tools.workspace.env=test >/tmp/ads-chain.yaml
+            --set engine.tools.enabled=true >/tmp/ads-chain.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-chain.yaml)" -eq 12
           test "$(grep -c '^kind: Certificate$' /tmp/ads-chain.yaml)" -eq 11
           grep -q 'app.kubernetes.io/component: ads-injection-scanner' /tmp/ads-chain.yaml
@@ -319,9 +327,30 @@ jobs:
           fi
           if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set engine.tools.enabled=true --set-json 'engine.tools.mcpServers=["probe"]' \
-            --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
-            --set engine.tools.workspace.env=test >/tmp/ads-tools-no-ca.yaml 2>&1; then
+            --set engine.workspace.project=ads --set engine.workspace.repo=r \
+            --set engine.workspace.env=test >/tmp/ads-tools-no-ca.yaml 2>&1; then
             echo 'engine tools rendered without a CA to trust the guardrail' >&2
+            exit 1
+          fi
+          # The sandbox behind the guardrail: the engine reaches it only through the
+          # proxy, the proxy mints for it, and a token of the engine's own is refused.
+          helm template ads charts/ads $VALUES $GOVERNED >/tmp/ads-governed-sandbox.yaml
+          grep -q 'ADS_ENGINE_MCP_URL: "https://ads-guardrail:8083/mcp/sandbox"' /tmp/ads-governed-sandbox.yaml
+          grep -q 'ADS_SANDBOX_MCP_ALLOWED_CALLERS: "ads-guardrail"' /tmp/ads-governed-sandbox.yaml
+          grep -q '\\"name\\":\\"sandbox\\"' /tmp/ads-governed-sandbox.yaml
+          grep -q '\\"audience\\":\\"ads-sandbox-mcp\\"' /tmp/ads-governed-sandbox.yaml
+          grep -q 'ADS_KEYCLOAK_CLIENT_ID: "ads-guardrail"' /tmp/ads-governed-sandbox.yaml
+          grep -q 'ADS_KEYCLOAK_CLIENT_SECRET' /tmp/ads-governed-sandbox.yaml
+          grep -q 'ADS_ENGINE_GUARDRAIL_API_TOKEN' /tmp/ads-governed-sandbox.yaml
+          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
+            --set tls.caBundle.secretName=lab-ca >/tmp/ads-governed-no-workspace.yaml 2>&1; then
+            echo 'the guardrail rendered with no workspace to open a run for' >&2
+            exit 1
+          fi
+          # Without the guardrail the engine talks to the sandbox itself.
+          grep -q 'ADS_ENGINE_MCP_URL: "https://ads-sandbox-mcp:8080/mcp"' /tmp/ads-cm.yaml
+          if grep -q 'ADS_SANDBOX_MCP_ALLOWED_CALLERS' /tmp/ads-cm.yaml; then
+            echo 'callers were narrowed with no guardrail in front' >&2
             exit 1
           fi
           if helm template ads charts/ads $VALUES --set=mcpProbe.enabled=true \

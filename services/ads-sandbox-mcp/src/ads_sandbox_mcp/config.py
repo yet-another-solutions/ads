@@ -26,6 +26,7 @@ class Settings:
     input_bytes: int = 262144
     allowed_hosts: tuple[str, ...] = ("ads-sandbox-mcp:*", "ads-sandbox-mcp")
     allowed_origins: tuple[str, ...] = ()
+    allowed_callers: tuple[str, ...] = ("ads-engine",)
     request_topic: str = "ads.sandbox.exec.request"
     reply_topic: str = "ads.sandbox.exec.reply"
     kafka_security_protocol: str = "PLAINTEXT"
@@ -42,6 +43,8 @@ class Settings:
             raise ValueError("ADS sandbox MCP requires dedicated PostgreSQL via psycopg")
         if not self.allowed_hosts:
             raise ValueError("allowed_hosts must not be empty")
+        if not self.allowed_callers:
+            raise ValueError("allowed_callers must name who may reach the sandbox")
         if self.kafka_security_protocol not in ("PLAINTEXT", "SASL_PLAINTEXT"):
             raise ValueError("unsupported Kafka security protocol")
         if self.kafka_security_protocol == "SASL_PLAINTEXT" and not (
@@ -103,6 +106,7 @@ def load_settings() -> Settings:
         input_bytes=int(os.environ.get(prefix + "INPUT_BYTES", "262144")),
         allowed_hosts=csv("ALLOWED_HOSTS", "ads-sandbox-mcp,ads-sandbox-mcp:*"),
         allowed_origins=csv("ALLOWED_ORIGINS", ""),
+        allowed_callers=csv("ALLOWED_CALLERS", "ads-engine"),
     )
     load_tls_context(settings)
     return settings

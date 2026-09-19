@@ -15,6 +15,7 @@ from ads_guardrail.config import Settings
 from ads_guardrail.contract import McpServer
 from ads_guardrail.guardrail import Guardrail, Reading, RunNotOpen
 from ads_guardrail.scanner import InjectionScan, InjectionScanner
+from ads_guardrail.upstream import UpstreamTokens
 from ads_policy.contract import (
     CheckKind,
     InterceptionPoint,
@@ -75,12 +76,17 @@ class Relayed:
 
 class Proxy:
     def __init__(
-        self, settings: Settings, guardrail: Guardrail, injection_scanner: InjectionScanner
+        self,
+        settings: Settings,
+        guardrail: Guardrail,
+        injection_scanner: InjectionScanner,
+        upstream_tokens: UpstreamTokens | None = None,
     ) -> None:
         self._settings = settings
         self._servers_by_name = {server.name: server for server in settings.mcp_servers}
         self._guardrail = guardrail
         self._injection_scanner = injection_scanner
+        self._upstream_tokens = upstream_tokens
         silence_limit = settings.mcp_timeout_seconds
         self._session = aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=_upstream_tls(settings)),
@@ -184,24 +190,46 @@ class Proxy:
         self, method: str, server: McpServer, body: bytes, headers: dict[str, str]
     ) -> aiohttp.ClientResponse:
         timeout = self._listening_stream_timeout if method == "GET" else None
+        forwarded = await self._forwarded_request_headers(server, headers)
         try:
             return await self._session.request(
                 method,
                 server.url,
                 data=body or None,
-                headers=self._forwarded_request_headers(headers),
+                headers=forwarded,
                 timeout=timeout,
             )
         except aiohttp.ClientError as exc:
             raise UpstreamUnavailable(str(exc)) from exc
 
-    def _forwarded_request_headers(self, headers: dict[str, str]) -> dict[str, str]:
+    async def _forwarded_request_headers(
+        self, server: McpServer, headers: dict[str, str]
+    ) -> dict[str, str]:
         run_header = self._settings.run_header
-        return {
+        forwarded = {
             name: value
             for name, value in headers.items()
             if name.lower() not in HEADERS_NOT_FORWARDED and name.lower() != run_header
         }
+        if not server.audience:
+            return forwarded
+        minted = await self._minted_for(server, _bearer_of(headers))
+        return {
+            name: value for name, value in forwarded.items() if name.lower() != "authorization"
+        } | {"authorization": f"Bearer {minted}"}
+
+    async def _minted_for(self, server: McpServer, bearer: str) -> str:
+        if self._upstream_tokens is None or not bearer:
+            raise UpstreamUnavailable(f"no token can be minted for {server.name!r}")
+        try:
+            return await anyio.to_thread.run_sync(
+                self._upstream_tokens.bearer_for, server.audience, bearer
+            )
+        except Exception as exc:
+            logger.warning(
+                "upstream token not minted", server=server.name, audience=server.audience
+            )
+            raise UpstreamUnavailable(f"no token for {server.name!r}") from exc
 
     async def _inspected_event_stream(
         self, response: aiohttp.ClientResponse, run: Run, decision: PolicyDecision

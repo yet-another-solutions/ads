@@ -12,11 +12,23 @@ import httpx2
 from langchain_core.messages import AIMessage, ToolCall, ToolMessage
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import MCPError
 from mcp.types import DiscoverResult
 
 from ads_commons.engine import EngineRequest
 from ads_engine.config import Settings
+from ads_engine.guardrail import RUN_HEADER, Refusal, refusal_in
 from ads_engine.mcp_credentials import ExecutionFailed, RunCredentials
+
+
+class ToolCallRefused(Exception):
+    """The guardrail refused this call. The model is told; the executor keeps going."""
+
+    def __init__(self, refusal: Refusal, tool: str, tool_call_id: str) -> None:
+        super().__init__(refusal.for_model())
+        self.refusal = refusal
+        self.tool = tool
+        self.tool_call_id = tool_call_id
 
 
 class SandboxTools:
@@ -113,9 +125,16 @@ class SandboxTools:
         self._remaining -= 1
         self._busy = True
         try:
-            result = await self._client.session.call_tool(
-                native["name"], native["args"], read_timeout_seconds=self._timeout
-            )
+            try:
+                result = await self._client.session.call_tool(
+                    native["name"], native["args"], read_timeout_seconds=self._timeout
+                )
+            except MCPError as exc:
+                refusal = refusal_in(exc.error.data)
+                if refusal is None:
+                    raise
+                # Refused before the sandbox saw it: nothing ran, so the run goes on.
+                raise ToolCallRefused(refusal, native["name"], native["id"] or "") from None
             return ToolMessage(
                 content=result.model_dump_json(by_alias=True, exclude_none=True),
                 tool_call_id=native["id"] or "",
@@ -132,7 +151,7 @@ class SandboxClient:
 
     @asynccontextmanager
     async def open(
-        self, request: EngineRequest, credentials: RunCredentials
+        self, request: EngineRequest, credentials: RunCredentials, run_id: str = ""
     ) -> AsyncIterator[SandboxTools]:
         async def authorize(outgoing: httpx2.Request) -> None:
             # Runs for discovery, listing and every tools/call, not just at open.
@@ -141,6 +160,9 @@ class SandboxClient:
             outgoing.headers["Authorization"] = f"Bearer {pair.context.access_token}"
             outgoing.headers["x-ads-session-id"] = str(request.session_id)
             outgoing.headers["x-ads-message-id"] = str(request.message_id)
+            if run_id:
+                # Named for the guardrail in front; the sandbox never sees this header.
+                outgoing.headers[RUN_HEADER] = run_id
 
         verify = ssl.create_default_context(
             cafile=str(self._settings.tls_ca_bundle) if self._settings.tls_ca_bundle else None

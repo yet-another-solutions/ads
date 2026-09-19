@@ -6,10 +6,10 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from typing import cast
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langsmith import tracing_context
 
-from ads_commons.engine import EngineRequest
+from ads_commons.engine import EngineRequest, Notice
 from ads_engine.chat import (
     AdsChatOpenAI,
     StreamDelta,
@@ -18,14 +18,24 @@ from ads_engine.chat import (
     tool_call_from_native,
     tool_result_from_message,
 )
-from ads_engine.mcp_client import SandboxClient
+from ads_engine.config import Settings
+from ads_engine.guardrail import ConversationRuns, ToolsUnavailable
+from ads_engine.mcp_client import SandboxClient, ToolCallRefused
 from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
 
 
 class ExecutorChatStreamer:
-    def __init__(self, credentials: McpCredentials, sandbox: SandboxClient) -> None:
+    def __init__(
+        self,
+        credentials: McpCredentials,
+        sandbox: SandboxClient,
+        settings: Settings,
+        runs: ConversationRuns | None = None,
+    ) -> None:
         self._credentials = credentials
         self._sandbox = sandbox
+        self._settings = settings
+        self._runs = runs
 
     async def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         # No credential, dispatcher or MCP session enters messages, callbacks,
@@ -33,8 +43,9 @@ class ExecutorChatStreamer:
         # around this credential-bearing run; trace IDs belong in runtime logs.
         with tracing_context(enabled=False):
             try:
+                run_id = await self._run_of(request)
                 async with self._credentials.open(request.authorization.token) as credentials:
-                    async with self._sandbox.open(request, credentials) as tools:
+                    async with self._sandbox.open(request, credentials, run_id) as tools:
                         schemas = await tools.schemas()
                         model_token = request.model.authentication.openai_bearer.token
                         model = AdsChatOpenAI(
@@ -94,8 +105,22 @@ class ExecutorChatStreamer:
                                 # Mark before send: an ambiguous failure must never
                                 # replay a possibly executed shell/Python side effect.
                                 dispatched = True
-                                result = await tools.call(tools.executor_run_id, call)
+                                refused_notice: Notice | None = None
+                                try:
+                                    result = await tools.call(tools.executor_run_id, call)
+                                except ToolCallRefused as refused:
+                                    result = _refusal_message(refused)
+                                    refused_notice = refused.refusal.notice(refused.tool, "")
                                 messages.append(result)
+                                if refused_notice is not None:
+                                    try:
+                                        yield StreamDelta(
+                                            kind="notice",
+                                            text=refused_notice.text,
+                                            notice=refused_notice,
+                                        )
+                                    except GeneratorExit:
+                                        return
                                 try:
                                     yield StreamDelta(
                                         kind="tool_result",
@@ -107,3 +132,25 @@ class ExecutorChatStreamer:
                 # SDK/provider exceptions and exception groups can carry request
                 # bodies. Never log/emit them and never retry the entire run.
                 raise ExecutionFailed("sandbox executor failed") from None
+
+    async def _run_of(self, request: EngineRequest) -> str:
+        """The guardrail in front needs a run; without one configured there is no proxy."""
+        if self._runs is None or self._settings.guardrail is None:
+            return ""
+        try:
+            return await self._runs.id_for(
+                request.authorization.token,
+                self._settings.guardrail.workspace,
+                request.session_id,
+            )
+        except ToolsUnavailable as exc:
+            raise ExecutionFailed("no run was opened for the tools") from exc
+
+
+def _refusal_message(refused: ToolCallRefused) -> ToolMessage:
+    return ToolMessage(
+        content=refused.refusal.for_model(),
+        tool_call_id=refused.tool_call_id,
+        name=refused.tool,
+        status="error",
+    )

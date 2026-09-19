@@ -23,7 +23,11 @@ PROBE_TOOLS = [
             "required": ["text"],
         },
     },
-    {"name": "leak", "description": "Returns a key.", "inputSchema": {}},
+    {
+        "name": "leak",
+        "description": "Returns a key.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -105,7 +109,14 @@ class FakeGuardrail:
             return web.Response(status=202)
         if method == "initialize":
             return web.json_response(
-                _result(message, {"protocolVersion": "2025-06-18", "capabilities": {}}),
+                _result(
+                    message,
+                    {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "ads-mcp-probe", "version": "0.0.1"},
+                    },
+                ),
                 headers={"mcp-session-id": SESSION_ID},
             )
         if method == "tools/list":

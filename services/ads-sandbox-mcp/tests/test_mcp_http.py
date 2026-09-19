@@ -47,6 +47,17 @@ def test_wrong_caller_403_before_header_validation(harness: Harness, azp: str | 
     assert harness.publisher.messages == []
 
 
+def test_only_the_configured_callers_are_served(harness: Harness) -> None:
+    harness.settings = replace(harness.settings, allowed_callers=("ads-guardrail",))
+    harness.rebuild()
+    with TestClient(harness.app()) as client:
+        headers = harness.headers()
+        headers["Authorization"] = f"Bearer {harness.keys.token(azp='ads-engine')}"
+        assert client.post("/mcp", headers=headers, json=rpc()).status_code == 403
+        headers["Authorization"] = f"Bearer {harness.keys.token(azp='ads-guardrail')}"
+        assert client.post("/mcp", headers=headers, json=rpc()).status_code != 403
+
+
 @pytest.mark.parametrize(
     "header,value",
     [

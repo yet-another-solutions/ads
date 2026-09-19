@@ -39,3 +39,5 @@ class McpServer(msgspec.Struct, frozen=True):
     name: str
     url: str
     site: Site
+    audience: str = ""
+    """Mint a token for this audience upstream. Empty forwards the caller's own token."""

@@ -120,6 +120,10 @@ DEFAULT_BINDINGS: tuple[Binding, ...] = (
     Binding("opencode", "list", Capability.FS_READ, argument="path"),
     Binding("opencode", "webfetch", Capability.NET_EGRESS, argument="url"),
     Binding("opencode", "websearch", Capability.NET_EGRESS, value=SEARCH_PROVIDER),
+    # The sandbox behind the guardrail. Its server is named `sandbox`, so its calls
+    # arrive as mcp:sandbox; the isolation level follows from the site it runs on.
+    Binding("mcp:sandbox", "exec_shell", Capability.PROCESS_EXEC, argument="command"),
+    Binding("mcp:sandbox", "exec_python", Capability.PROCESS_EXEC, argument="code"),
 )
 
 DEFAULT_EGRESS_ALLOWLIST = (

@@ -43,12 +43,22 @@ class Workspace:
 
 
 @dataclass(frozen=True, slots=True)
+class GuardrailSettings:
+    """Where the guardrail is and what a run of it stands for. Both tool paths need it."""
+
+    url: str
+    api_token: str
+    workspace: Workspace
+
+
+@dataclass(frozen=True, slots=True)
 class ToolSettings:
     mcp_servers: tuple[str, ...]
     guardrail_url: str
     guardrail_api_token: str
     mcp_audience: str
     workspace: Workspace
+    tls_ca_bundle: Path | None = None
     max_model_rounds: int = 8
     call_attempts: int = 3
     retry_pause_seconds: float = 1.0
@@ -73,6 +83,7 @@ class Settings:
     allowed_callers: frozenset[str]
     tls_ca_bundle: Path | None
     tools: ToolSettings | None = None
+    guardrail: GuardrailSettings | None = None
     mcp_url: str = "https://ads-sandbox-mcp:8443/mcp"
     mcp_timeout_seconds: float = 120
     max_tool_calls: int = 32
@@ -93,27 +104,42 @@ class Settings:
             raise ValueError("ADS_ENGINE_MAX_TOOL_CALLS must be positive")
 
 
-def _tool_settings() -> ToolSettings | None:
-    servers = _names(os.environ.get("ADS_ENGINE_MCP_SERVERS", ""))
-    if not servers:
+def _guardrail_settings() -> GuardrailSettings | None:
+    url = os.environ.get("ADS_ENGINE_GUARDRAIL_URL", "").strip().rstrip("/")
+    if not url:
         return None
-    guardrail_url = _env("ADS_ENGINE_GUARDRAIL_URL").strip().rstrip("/")
-    if not guardrail_url.startswith("https://"):
+    if not url.startswith("https://"):
         raise RuntimeError("ADS_ENGINE_GUARDRAIL_URL must be an https URL")
-    guardrail_api_token = _env("ADS_ENGINE_GUARDRAIL_API_TOKEN").strip()
-    if not guardrail_api_token:
-        raise RuntimeError("ADS_ENGINE_GUARDRAIL_API_TOKEN is required with MCP servers")
-    return ToolSettings(
-        mcp_servers=servers,
-        guardrail_url=guardrail_url,
-        guardrail_api_token=guardrail_api_token,
-        mcp_audience=_env("ADS_ENGINE_MCP_AUDIENCE", "ads-mcp").strip(),
+    api_token = _env("ADS_ENGINE_GUARDRAIL_API_TOKEN").strip()
+    if not api_token:
+        raise RuntimeError("ADS_ENGINE_GUARDRAIL_API_TOKEN is required with a guardrail")
+    return GuardrailSettings(
+        url=url,
+        api_token=api_token,
         workspace=Workspace(
             project=_env("ADS_ENGINE_WORKSPACE_PROJECT").strip(),
             repo=_env("ADS_ENGINE_WORKSPACE_REPO").strip(),
             env=_env("ADS_ENGINE_WORKSPACE_ENV").strip(),
             workdir=_env("ADS_ENGINE_WORKSPACE_WORKDIR", "/workspace").strip(),
         ),
+    )
+
+
+def _tool_settings(
+    guardrail: GuardrailSettings | None, tls_ca_bundle: Path | None
+) -> ToolSettings | None:
+    servers = _names(os.environ.get("ADS_ENGINE_MCP_SERVERS", ""))
+    if not servers:
+        return None
+    if guardrail is None:
+        raise RuntimeError("ADS_ENGINE_GUARDRAIL_URL is required with MCP servers")
+    return ToolSettings(
+        mcp_servers=servers,
+        guardrail_url=guardrail.url,
+        guardrail_api_token=guardrail.api_token,
+        mcp_audience=_env("ADS_ENGINE_MCP_AUDIENCE", "ads-mcp").strip(),
+        workspace=guardrail.workspace,
+        tls_ca_bundle=tls_ca_bundle,
         max_model_rounds=int(_env("ADS_ENGINE_MAX_MODEL_ROUNDS", "8")),
         call_attempts=int(_env("ADS_ENGINE_TOOL_CALL_ATTEMPTS", "3")),
         retry_pause_seconds=float(_env("ADS_ENGINE_TOOL_RETRY_PAUSE_SECONDS", "1")),
@@ -126,6 +152,7 @@ def load_settings() -> Settings:
     tls_ca_bundle = Path(ca_raw) if ca_raw else None
     if tls_ca_bundle is not None and not tls_ca_bundle.is_file():
         raise RuntimeError("ADS_ENGINE_TLS_CA_BUNDLE must exist")
+    guardrail = _guardrail_settings()
     return Settings(
         kafka_bootstrap_servers=_env("ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS"),
         request_topic=_env("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request"),
@@ -142,7 +169,8 @@ def load_settings() -> Settings:
         ack_audience=_env("ADS_ENGINE_ACK_AUDIENCE", "ads"),
         allowed_callers=_callers(_env("ADS_ENGINE_ALLOWED_CALLERS", "ads")),
         tls_ca_bundle=tls_ca_bundle,
-        tools=_tool_settings(),
+        tools=_tool_settings(guardrail, tls_ca_bundle),
+        guardrail=guardrail,
         mcp_url=_env("ADS_ENGINE_MCP_URL", "https://ads-sandbox-mcp:8443/mcp"),
         mcp_timeout_seconds=float(_env("ADS_ENGINE_MCP_TIMEOUT_SECONDS", "120")),
         max_tool_calls=int(_env("ADS_ENGINE_MAX_TOOL_CALLS", "32")),

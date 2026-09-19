@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import functools
 import re
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
@@ -23,35 +22,30 @@ from ads_engine.chat import (
     deltas_from_chunk,
 )
 from ads_engine.config import ToolSettings
-from ads_engine.mcp import (
+from ads_engine.guardrail import (
+    ALTERNATIVE_FOR_MODEL,
+    ALTERNATIVE_NOTICE,
+    INJECTION_FOR_MODEL,
+    INJECTION_NOTICE,
+    REFUSED_FOR_MODEL,
+    REFUSED_NOTICE,
+    RUN_FINISHED,
     GuardrailRuns,
-    McpSession,
-    McpTool,
-    McpUnavailable,
     PromptReading,
-    ToolOutcome,
+    ToolsUnavailable,
 )
+from ads_engine.mcp import McpSession, McpTool, McpUnavailable, ToolOutcome
 
 log = structlog.get_logger("ads_engine")
 
-RUN_FINISHED = "finished"
 TOOL_NAME_SEPARATOR = "__"
 TOOL_NAME_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 MAX_TOOL_NAME_LENGTH = 64
 
-REFUSED_NOTICE = "Запрос к инструменту {tool} отклонён политикой безопасности."
-ALTERNATIVE_NOTICE = " Можно так: {alternative}."
-INJECTION_NOTICE = "Результат инструмента {tool} скрыт: в нём обнаружена попытка промпт-инъекции."
 UNAVAILABLE_NOTICE = "Сервис инструментов {server} недоступен, попробуйте позже."
 PROMPT_REFUSED_NOTICE = "Запрос отклонён политикой безопасности и модели не передан."
 ROUNDS_EXHAUSTED_MESSAGE = "\n\n(Остановлено: слишком много вызовов инструментов подряд.)"
 
-REFUSED_FOR_MODEL = "The security policy refused this tool call."
-ALTERNATIVE_FOR_MODEL = " A permitted alternative: {alternative}."
-INJECTION_FOR_MODEL = (
-    "The security policy withheld this result: it contained a prompt injection. "
-    "Do not retry; tell the user."
-)
 UNAVAILABLE_FOR_MODEL = "The tool service is unavailable. Tell the user to try again later."
 UNKNOWN_TOOL_FOR_MODEL = "There is no such tool."
 
@@ -135,9 +129,6 @@ class _ToolTurn:
             if self.tools_were_called:
                 raise SideEffectsHappened(f"failed after tools were called: {exc}") from exc
             raise
-        finally:
-            for session in self.sessions.values():
-                await session.close()
 
     async def _stream(self) -> AsyncIterator[StreamDelta]:
         async for unavailable_notice in self._offer_tools():
@@ -204,10 +195,13 @@ class _ToolTurn:
             return
         for server in self.settings.mcp_servers:
             session = McpSession(
-                self.streamer.http, f"{self.settings.guardrail_url}/mcp/{server}", self.bearer
+                f"{self.settings.guardrail_url}/mcp/{server}",
+                self.bearer,
+                self.settings.timeout_seconds,
+                self.settings.tls_ca_bundle,
             )
             try:
-                tools = await self._with_retries(functools.partial(_opened_tools, session))
+                tools = await self._with_retries(session.list_tools)
             except McpUnavailable as exc:
                 log.warning("mcp server unavailable", server=server, error=str(exc))
                 if notice := self._unavailable(server):
@@ -263,7 +257,7 @@ class _ToolTurn:
             try:
                 with anyio.fail_after(self.settings.timeout_seconds):
                     return await attempt()
-            except (McpUnavailable, TimeoutError) as exc:
+            except (ToolsUnavailable, TimeoutError) as exc:
                 if number == attempts:
                     raise McpUnavailable(str(exc)) from exc
                 await anyio.sleep(self.settings.retry_pause_seconds)
@@ -274,12 +268,6 @@ class _ToolTurn:
             return None
         self.unavailable_servers.add(server)
         return _notice("tools-unavailable", server, UNAVAILABLE_NOTICE.format(server=server))
-
-
-async def _opened_tools(session: McpSession) -> list[McpTool]:
-    if not session.session_id:
-        await session.open()
-    return await session.list_tools()
 
 
 def _answer_for(label: str, outcome: ToolOutcome) -> tuple[str, StreamDelta | None]:

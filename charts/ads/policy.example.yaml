@@ -102,6 +102,12 @@ bindings:
   # but `local` until a proxy for it is added — deliberately, not by oversight.
   - {source: opencode, tool: websearch, capability: net.egress, value: search-proxy.interlab}
 
+  # The session sandbox, reached through the guardrail as `mcp:sandbox`. Both tools run
+  # what they are given, so the resource is the program itself and the journal records
+  # it verbatim; whether it may run at all follows from the site — Kata, level vm.
+  - {source: "mcp:sandbox", tool: exec_shell, capability: process.exec, argument: command}
+  - {source: "mcp:sandbox", tool: exec_python, capability: process.exec, argument: code}
+
   # The MCP probe, once per site in `mcpProbe.sites`: the source is `mcp:<site name>`.
   # Its tools do nothing real; each is bound so that it trips one check. The same tool
   # is decided by where its server runs, so `run_command` is allowed on probe-vm (Kata,

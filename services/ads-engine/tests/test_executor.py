@@ -17,6 +17,7 @@ from mcp.types import CallToolResult, ListToolsResult, Tool
 
 from ads_commons.security import SecurityContextHolder, ensure_role
 from ads_engine.chat import LangChainChatStreamer
+from ads_engine.config import GuardrailSettings, Workspace
 from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.mcp_client import SandboxClient, SandboxTools
 from ads_engine.mcp_credentials import ExecutionFailed, RunCredentials, TokenPair
@@ -80,7 +81,7 @@ def sdk_harness(settings, monkeypatch):
     credentials = FakeCredentials(run)
     http_requests, executions = [], []
     started, released, cancelled = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    behavior = SimpleNamespace(block=False, fail=False, is_error=False)
+    behavior = SimpleNamespace(block=False, fail=False, is_error=False, refuse=False)
     schemas = [
         Tool(
             name=name,
@@ -133,7 +134,22 @@ def sdk_harness(settings, monkeypatch):
     real_client = httpx2.AsyncClient
 
     async def route(request):
-        http_requests.append((dict(request.headers), json.loads(request.content)))
+        body = json.loads(request.content)
+        http_requests.append((dict(request.headers), body))
+        if behavior.refuse and body.get("method") == "tools/call":
+            # What the guardrail in front answers; the sandbox never sees the call.
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {
+                        "code": -32600,
+                        "message": "the security policy refused this",
+                        "data": {"refused_by": "ads-guardrail", "reason": "policy"},
+                    },
+                },
+            )
         return await asgi.handle_async_request(request)
 
     monkeypatch.setattr(
@@ -157,7 +173,7 @@ def sdk_harness(settings, monkeypatch):
         cancelled=cancelled,
         behavior=behavior,
         schemas=schemas,
-        streamer=ExecutorChatStreamer(credentials, SandboxClient(settings)),
+        streamer=ExecutorChatStreamer(credentials, SandboxClient(settings), settings),
     )
 
 
@@ -312,9 +328,8 @@ def test_sdk_timeout_does_not_replay_tool(sdk_harness):
     h = sdk_harness
     h.behavior.block = True
     FakeModel.scripts = [[native()]]
-    streamer = ExecutorChatStreamer(
-        h.credentials, SandboxClient(replace(h.settings, mcp_timeout_seconds=0.05))
-    )
+    impatient = replace(h.settings, mcp_timeout_seconds=0.05)
+    streamer = ExecutorChatStreamer(h.credentials, SandboxClient(impatient), impatient)
 
     async def scenario():
         async with h.sdk.session_manager.run():
@@ -521,3 +536,72 @@ def test_cancellation_closes_blocking_sdk_http_call_and_credentials(sdk_harness)
             assert h.run._pair is None
 
     asyncio.run(scenario())
+
+
+class FakeRuns:
+    """Stands in for the guardrail's run bookkeeping; the proxy only needs the id."""
+
+    def __init__(self, run_id="run-7"):
+        self.run_id = run_id
+        self.asked = []
+
+    async def id_for(self, bearer, workspace, conversation):
+        self.asked.append((bearer, workspace, conversation))
+        return self.run_id
+
+
+def _guarded(settings):
+    return replace(
+        settings,
+        guardrail=GuardrailSettings(
+            url="https://guardrail.test",
+            api_token="guardrail-api-token-32-bytes",
+            workspace=Workspace(project="ads", repo="r", env="test", workdir="/workspace"),
+        ),
+    )
+
+
+def _streamer_through_guardrail(h, runs):
+    guarded = _guarded(h.settings)
+    return ExecutorChatStreamer(h.credentials, SandboxClient(guarded), guarded, runs)
+
+
+def test_every_sandbox_request_names_the_conversation_run(sdk_harness):
+    h = sdk_harness
+    FakeModel.scripts = [[native()], [AIMessageChunk(content="done")]]
+    runs = FakeRuns()
+    streamer = _streamer_through_guardrail(h, runs)
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(make_request()))
+
+    asyncio.run(scenario())
+    assert [headers.get("x-ads-run") for headers, _ in h.requests] == ["run-7"] * len(h.requests)
+    assert runs.asked[0][2] == make_request().session_id
+    assert runs.asked[0][1].project == "ads"
+
+
+def test_a_refused_call_is_told_to_the_model_and_the_person_without_ending_the_run(sdk_harness):
+    h = sdk_harness
+    h.behavior.refuse = True
+    FakeModel.scripts = [[native()], [AIMessageChunk(content="I cannot run that.")]]
+    streamer = _streamer_through_guardrail(h, FakeRuns())
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(make_request()))
+
+    output = asyncio.run(scenario())
+    assert [delta.kind for delta in output] == ["tool_call", "notice", "tool_result", "message"]
+    assert output[1].notice is not None
+    assert output[1].notice.kind == "tool-refused"
+    assert output[1].notice.tool == "exec_shell"
+    assert output[2].tool_result is not None
+    assert output[2].tool_result.status == "error"
+    assert output[3].text == "I cannot run that."
+    assert h.executions == []
+    told = FakeModel.calls[1][-1]
+    assert isinstance(told, ToolMessage)
+    assert told.status == "error"
+    assert "refused" in told.content

@@ -22,9 +22,15 @@ from ads_sandbox_mcp.runtime import McpRuntime
 
 
 class AdsAuthentication:
-    def __init__(self, app: ASGIApp, verifier: JwtVerifier) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        verifier: JwtVerifier,
+        allowed_callers: tuple[str, ...] = ("ads-engine",),
+    ) -> None:
         self.app = app
         self._verifier = verifier
+        self._allowed_callers = allowed_callers
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != ScopeType.HTTP or scope["path"] in ("/health/live", "/health/ready"):
@@ -48,7 +54,7 @@ class AdsAuthentication:
             await reject(401, "unauthorized")
             return
         try:
-            ensure_caller(context, "ads-engine")
+            ensure_caller(context, *self._allowed_callers)
         except AccessDenied:
             await reject(403, "forbidden")
             return

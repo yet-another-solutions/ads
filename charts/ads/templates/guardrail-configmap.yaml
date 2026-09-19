@@ -19,14 +19,27 @@ data:
   ADS_MCP_AUDIENCE: {{ .Values.guardrail.personTokenAudience | quote }}
   ADS_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.keycloak.wellKnownUrl | quote }}
   ADS_KEYCLOAK_ISSUER: {{ .Values.keycloak.issuer | quote }}
+  ADS_KEYCLOAK_CLIENT_ID: {{ .Values.guardrail.keycloak.clientId | quote }}
   {{- if .Values.injectionScanner.enabled }}
   ADS_INJECTION_SCANNER_URL: {{ include "ads.injectionScannerUrl" . | quote }}
   {{- end }}
   {{- $servers := list }}
+  {{- $sandboxSite := dict
+        "placement" "cluster"
+        "runtimeClassName" .Values.sandbox.guest.runtimeClassName
+        "nodeLabels" (dict .Values.nodes.sandbox.labelKey .Values.nodes.sandbox.labelValue) }}
+  {{- $servers = append $servers (dict
+        "name" "sandbox"
+        "url" (printf "https://%s:%v/mcp" (include "ads.sandboxName" (dict "root" . "component" "mcp")) .Values.sandbox.mcp.port)
+        "audience" "ads-sandbox-mcp"
+        "site" (include "ads.guardrailSite" $sandboxSite | fromJson)) }}
   {{- range (include "ads.mcpProbeServers" . | fromJsonArray) }}
   {{- $servers = append $servers (dict "name" .name "url" .url "site" (include "ads.guardrailSite" .site | fromJson)) }}
   {{- end }}
   {{- range .Values.guardrail.mcpServers }}
+  {{- if eq (.name | toString) "sandbox" }}
+  {{- fail "guardrail.mcpServers[] may not be named \"sandbox\": the chart owns that name" }}
+  {{- end }}
   {{- $servers = append $servers (dict
         "name" (required "guardrail.mcpServers[].name is required" .name)
         "url" (required "guardrail.mcpServers[].url is required" .url)
@@ -57,6 +70,7 @@ metadata:
 type: Opaque
 stringData:
   ADS_GUARDRAIL_API_TOKEN: {{ required "secrets.guardrailApiToken is required: it guards the permissions API" .Values.secrets.guardrailApiToken | quote }}
+  ADS_KEYCLOAK_CLIENT_SECRET: {{ required "secrets.guardrailKeycloakClientSecret is required: the guardrail mints a token for the server behind it" .Values.secrets.guardrailKeycloakClientSecret | quote }}
   ADS_POLICY_API_TOKEN: {{ required "secrets.policyApiToken is required: guardrail asks the policy service with it" .Values.secrets.policyApiToken | quote }}
   {{- if .Values.injectionScanner.enabled }}
   ADS_INJECTION_SCANNER_API_TOKEN: {{ required "secrets.injectionScannerApiToken is required with the injection scanner" .Values.secrets.injectionScannerApiToken | quote }}

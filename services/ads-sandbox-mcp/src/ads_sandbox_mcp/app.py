@@ -31,6 +31,6 @@ def create_app(settings: Settings, *, overrides: tuple[Provider, ...] = ()) -> L
     return Litestar(
         route_handlers=[live, ready, mcp_endpoint],
         lifespan=[lifespan],
-        middleware=[lambda app: AdsAuthentication(app, verifier)],
+        middleware=[lambda app: AdsAuthentication(app, verifier, settings.allowed_callers)],
         openapi_config=None,
     )

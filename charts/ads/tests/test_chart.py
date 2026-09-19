@@ -442,6 +442,36 @@ class ChartTests(unittest.TestCase):
             if doc
         }
 
+    def test_the_sandbox_is_reached_through_the_guardrail_and_only_through_it(self):
+        governed = [
+            "--set",
+            "guardrail.enabled=true,tls.caBundle.secretName=lab-ca",
+            "--set",
+            "engine.workspace.project=ads,engine.workspace.repo=r,engine.workspace.env=test",
+        ]
+        docs = self.documents(*governed)
+        engine = docs["ConfigMap", "ads-engine"]["data"]
+        self.assertEqual(engine["ADS_ENGINE_MCP_URL"], "https://ads-guardrail:8083/mcp/sandbox")
+        self.assertEqual(engine["ADS_ENGINE_GUARDRAIL_URL"], "https://ads-guardrail:8083")
+        self.assertEqual(engine["ADS_ENGINE_WORKSPACE_PROJECT"], "ads")
+        mcp = docs["ConfigMap", "ads-sandbox-mcp"]["data"]
+        self.assertEqual(mcp["ADS_SANDBOX_MCP_ALLOWED_CALLERS"], "ads-guardrail")
+        guardrail = docs["ConfigMap", "ads-guardrail"]["data"]
+        servers = {server["name"]: server for server in json.loads(guardrail["ADS_MCP_SERVERS"])}
+        self.assertEqual(servers["sandbox"]["audience"], "ads-sandbox-mcp")
+        self.assertEqual(servers["sandbox"]["url"], "https://ads-sandbox-mcp:8080/mcp")
+        self.assertEqual(servers["sandbox"]["site"]["runtime_class_name"], "kata-qemu-ads")
+        self.assertIn("ADS_KEYCLOAK_CLIENT_SECRET", docs["Secret", "ads-guardrail"]["stringData"])
+
+    def test_without_a_guardrail_the_engine_reaches_the_sandbox_itself(self):
+        docs = self.documents()
+        engine = docs["ConfigMap", "ads-engine"]["data"]
+        self.assertEqual(engine["ADS_ENGINE_MCP_URL"], "https://ads-sandbox-mcp:8080/mcp")
+        self.assertNotIn("ADS_ENGINE_GUARDRAIL_URL", engine)
+        self.assertNotIn(
+            "ADS_SANDBOX_MCP_ALLOWED_CALLERS", docs["ConfigMap", "ads-sandbox-mcp"]["data"]
+        )
+
     def test_storage_lookup_independent_of_node_list(self):
         objects = fixtures()
         del objects["/api/v1/nodes"]
