@@ -37,6 +37,7 @@ def make_request(
     message_id: uuid.UUID | None = None,
     user_input: str = "hello",
     authorization_token: str = "jwt-not-verified",
+    model_name: str = "glm-5.3",
 ) -> EngineRequest:
     return EngineRequest(
         session_id=session_id or uuid.UUID("11111111-1111-1111-1111-111111111111"),
@@ -49,7 +50,7 @@ def make_request(
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="test-model"),
+            options=OpenAiStreamOptions(model_name=model_name),
         ),
         authorization=Authorization(token=authorization_token),
     )

@@ -9,6 +9,7 @@ import msgspec
 from sqlalchemy.orm import Session
 
 from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
+from ads_commons.model_catalog import SUPPORTED_MODEL_TYPES
 from ads_commons.preferences import (
     ModelInfo,
     ModelList,
@@ -75,7 +76,7 @@ class PreferencesService:
 
     @require_role("user")
     async def list_model_types(self) -> ModelTypeList:
-        return ModelTypeList(types=["openai-stream"])
+        return ModelTypeList(types=list(SUPPORTED_MODEL_TYPES))
 
     @require_role("user")
     async def list_models(self) -> ModelList:

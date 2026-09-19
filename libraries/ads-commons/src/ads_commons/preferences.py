@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 import msgspec
 
 from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
-
-OpenAiStreamType = Literal["openai-stream"]
+from ads_commons.model_catalog import ModelTypeInfo
+from ads_commons.model_catalog import OpenAiStreamType as OpenAiStreamType
 
 
 class ModelSummary(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -22,7 +22,7 @@ class ModelList(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class ModelTypeList(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    types: list[str]
+    types: list[ModelTypeInfo]
 
 
 class ModelInfo(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

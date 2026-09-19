@@ -32,12 +32,12 @@
       <label>Type
         <select name="type" required>
           {% for type in types %}
-          <option value="{{ type }}" {% if selected.type == type %}selected{% endif %}>{{ type }}</option>
+          <option value="{{ type.type }}" {% if selected.type == type.type %}selected{% endif %}>{{ type.type }}</option>
           {% endfor %}
         </select>
       </label>
       <label>Model name
-        <input name="model-name" value="{{ selected.model_name }}">
+        {% include "partials/model_names.html" %}
       </label>
       <label>URL
         <input name="url" type="url" value="{{ selected.url }}" placeholder="https://" autocomplete="off">
@@ -47,7 +47,7 @@
                placeholder="Write only. Leave blank to keep.">
       </label>
       <p class="note">ads-preferences is S2S. This page never receives the stored bearer.
-        No default model in v1. Model name is the openai-stream API id.</p>
+        No default model in v1. Model name is a system-supported API id.</p>
     </form>
     {% else %}
     <form class="fields" id="model-form"
@@ -61,12 +61,12 @@
       <label>Type
         <select name="type" required>
           {% for type in types %}
-          <option value="{{ type }}">{{ type }}</option>
+          <option value="{{ type.type }}">{{ type.type }}</option>
           {% endfor %}
         </select>
       </label>
       <label>Model name
-        <input name="model-name" required autocomplete="off">
+        {% include "partials/model_names.html" %}
       </label>
       <label>URL
         <input name="url" type="url" required placeholder="https://" autocomplete="off">
@@ -75,8 +75,8 @@
         <input name="bearer" type="password" required autocomplete="off"
                placeholder="Write only. Stored by ads-preferences.">
       </label>
-      <p class="note">Type comes from ads-preferences. The bearer is forwarded once and never
-        rendered back. Model name is the openai-stream API id.</p>
+      <p class="note">Type and model name come from the system catalog. The bearer is forwarded
+        once and never rendered back.</p>
     </form>
     {% endif %}
   </div>

@@ -54,7 +54,7 @@ def test_request_round_trip() -> None:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="gpt-test"),
+            options=OpenAiStreamOptions(model_name="glm-5.3"),
         ),
         authorization=Authorization(token="jwt-token"),
     )
@@ -63,7 +63,7 @@ def test_request_round_trip() -> None:
     assert payload["type"] == "request"
     assert payload["model"]["type"] == "openai-stream"
     assert payload["model"]["authentication"]["openai-bearer"] == {"token": "sk-test"}
-    assert payload["model"]["options"] == {"model-name": "gpt-test"}
+    assert payload["model"]["options"] == {"model-name": "glm-5.3"}
     assert "name" not in payload["model"]
     assert payload["history"][0] == {"type": "user", "text": "hi"}
     decoded = decode_request(raw)
@@ -203,7 +203,7 @@ def test_tool_primitives_round_trip_in_partial_and_history() -> None:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="gpt-test"),
+            options=OpenAiStreamOptions(model_name="glm-5.3"),
         ),
         authorization=Authorization(token="jwt-token"),
     )

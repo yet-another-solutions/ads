@@ -1,0 +1,9 @@
+{% set current_type = selected.type if selected else (types[0].type if types else '') %}
+<select name="model-name" required>
+  <option value="">Choose model name</option>
+  {% for type in types %}
+  {% for name in type.names %}
+  <option value="{{ name }}" data-model-type="{{ type.type }}"{% if type.type != current_type %} hidden disabled{% elif selected and selected.model_name == name %} selected{% endif %}>{{ name }}</option>
+  {% endfor %}
+  {% endfor %}
+</select>

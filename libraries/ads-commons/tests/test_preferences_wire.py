@@ -6,6 +6,7 @@ import msgspec
 import pytest
 
 from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication, OpenAiStreamOptions
+from ads_commons.model_catalog import SUPPORTED_MODEL_TYPES
 from ads_commons.preferences import (
     ModelInfo,
     ModelList,
@@ -26,16 +27,16 @@ def test_model_info_json_uses_openai_bearer_key() -> None:
         authentication=OpenAiStreamAuthentication(
             openai_bearer=OpenAiBearerToken(token="sk-secret"),
         ),
-        options=OpenAiStreamOptions(model_name="gpt-4o"),
+        options=OpenAiStreamOptions(model_name="glm-5.3"),
     )
     payload = msgspec.json.decode(msgspec.json.encode(info))
     assert payload["authentication"] == {"openai-bearer": {"token": "sk-secret"}}
     assert "openai_bearer" not in payload["authentication"]
-    assert payload["options"] == {"model-name": "gpt-4o"}
+    assert payload["options"] == {"model-name": "glm-5.3"}
     assert "model_name" not in payload["options"]
     restored = msgspec.json.decode(msgspec.json.encode(info), type=ModelInfo)
     assert restored.authentication.openai_bearer.token == "sk-secret"
-    assert restored.options.model_name == "gpt-4o"
+    assert restored.options.model_name == "glm-5.3"
 
 
 def test_model_write_rejects_id_and_user_id() -> None:
@@ -45,7 +46,7 @@ def test_model_write_rejects_id_and_user_id() -> None:
         "type": "openai-stream",
         "url": "https://example.invalid/v1",
         "authentication": {"openai-bearer": {"token": "sk-secret"}},
-        "options": {"model-name": "gpt-4o"},
+        "options": {"model-name": "glm-5.3"},
         "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
     }
     with pytest.raises(msgspec.ValidationError):
@@ -66,12 +67,12 @@ def test_model_write_requires_openai_stream_options() -> None:
     }
     with pytest.raises(msgspec.ValidationError):
         msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
-    body["options"] = {"model-name": "gpt-4o", "temperature": 0.2}
+    body["options"] = {"model-name": "glm-5.3", "temperature": 0.2}
     with pytest.raises(msgspec.ValidationError):
         msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
-    body["options"] = {"model-name": "gpt-4o"}
+    body["options"] = {"model-name": "glm-5.3"}
     decoded = msgspec.json.decode(msgspec.json.encode(body), type=ModelWrite)
-    assert decoded.options.model_name == "gpt-4o"
+    assert decoded.options.model_name == "glm-5.3"
 
 
 def test_model_list_and_patch_round_trip() -> None:
@@ -88,5 +89,25 @@ def test_preferences_api_is_a_protocol() -> None:
 
 
 def test_model_type_list_round_trip() -> None:
-    listing = ModelTypeList(types=["openai-stream"])
-    assert msgspec.json.decode(msgspec.json.encode(listing)) == {"types": ["openai-stream"]}
+    listing = ModelTypeList(types=list(SUPPORTED_MODEL_TYPES))
+    assert msgspec.json.decode(msgspec.json.encode(listing)) == {
+        "types": [{"type": "openai-stream", "names": ["glm-5.3", "glm-5.2"]}]
+    }
+    assert msgspec.json.decode(msgspec.json.encode(listing), type=ModelTypeList) == listing
+
+
+@pytest.mark.parametrize("name", ["glm-5.3", "glm-5.2"])
+def test_supported_invoke_names_round_trip(name: str) -> None:
+    options = OpenAiStreamOptions(model_name=name)
+    assert (
+        msgspec.json.decode(msgspec.json.encode(options), type=OpenAiStreamOptions).model_name
+        == name
+    )
+
+
+@pytest.mark.parametrize("name", ["gpt-4o", "GLM-5.3", "", " glm-5.3 "])
+def test_unknown_invoke_names_rejected_by_constructor_and_wire(name: str) -> None:
+    with pytest.raises(ValueError, match="unsupported model type/name"):
+        OpenAiStreamOptions(model_name=name)
+    with pytest.raises(msgspec.ValidationError, match="unsupported model type/name"):
+        msgspec.json.decode(msgspec.json.encode({"model-name": name}), type=OpenAiStreamOptions)

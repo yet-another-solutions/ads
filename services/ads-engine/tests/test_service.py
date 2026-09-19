@@ -253,6 +253,27 @@ def test_garbage_authorization_is_error_without_ack(
     assert not any(isinstance(item, Acknowledge) for item in publisher.messages)
 
 
+def test_unsupported_model_name_is_error_before_ack_or_start(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    chat = ScriptedChat()
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    payload = json.loads(encode_request(request))
+    payload["model"]["options"]["model-name"] = "unsupported"
+    _run(listener.on_message(json.dumps(payload).encode()))
+    assert len(publisher.messages) == 1
+    error = publisher.messages[0]
+    assert isinstance(error, ErrorOutput)
+    assert error.session_id == request.session_id
+    assert error.message_id == request.message_id
+    assert "unsupported model type/name" in error.text
+    assert chat.calls == 0
+
+
 def test_disallowed_azp_is_error_without_ack(
     store: ActiveSessionStore,
     jwt_verifier: Any,
