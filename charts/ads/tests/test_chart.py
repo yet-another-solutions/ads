@@ -96,6 +96,26 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_context_meter_is_one_internal_tls_deployment(self):
+        docs = self.documents()
+        name = "ads-context-meter"
+        pod = docs["Deployment", name]["spec"]["template"]["spec"]
+        self.assertEqual(len(pod["containers"]), 1)
+        container = pod["containers"][0]
+        self.assertEqual(container["name"], name)
+        self.assertEqual(container["readinessProbe"]["httpGet"]["scheme"], "HTTPS")
+        self.assertEqual(container["livenessProbe"]["httpGet"]["scheme"], "HTTPS")
+        self.assertEqual(docs["Service", name]["spec"]["type"], "ClusterIP")
+        self.assertNotIn(("Secret", name), docs)
+        config = docs["ConfigMap", name]["data"]
+        self.assertEqual(config["ADS_CONTEXT_METER_KEYCLOAK_AUDIENCE"], name)
+        self.assertFalse(any("DATABASE" in key or "KAFKA" in key for key in config))
+        cert = docs["Certificate", name]
+        self.assertIn(name, cert["spec"]["dnsNames"])
+        for (kind, _), obj in docs.items():
+            if kind in {"HTTPRoute", "Ingress"}:
+                self.assertNotIn(name, json.dumps(obj))
+
     def test_main_database_url_is_rendered_only_into_secret(self):
         url = "postgresql+psycopg://fixture:fixture@database/ads"
         rendered = self.render("--set", f"database.url={url}")
@@ -512,7 +532,7 @@ class ChartTests(unittest.TestCase):
             "KeycloakRealmImport",
         }
         self.assertFalse({kind for kind, _ in docs} & forbidden)
-        self.assertEqual(sum(kind == "Deployment" for kind, _ in docs), 6)
+        self.assertEqual(sum(kind == "Deployment" for kind, _ in docs), 7)
         self.assertNotIn(("Deployment", "ads-sandbox-ipc"), docs)
         for component in ["mcp", "manager"]:
             deployment = docs["Deployment", f"ads-sandbox-{component}"]
@@ -643,6 +663,8 @@ class ChartTests(unittest.TestCase):
             "tls.certManager.enabled=false,tls.serviceSecretName=app-tls",
             "--set",
             "preferences.tls.serviceSecretName=preferences-tls",
+            "--set",
+            "contextMeter.tls.serviceSecretName=context-meter-tls",
         ]
         for component in ["mcp", "manager", "ipc"]:
             flags += ["--set", f"sandbox.{component}.tlsSecretName={component}-tls"]

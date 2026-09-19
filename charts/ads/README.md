@@ -1,5 +1,12 @@
 # ADS Helm chart
 
+`ads-context-meter` is an internal-only HTTPS Deployment/ClusterIP Service,
+configured under `contextMeter`. It has no public route, database or Kafka.
+It requires its own certificate (`contextMeter.tls.serviceSecretName` for BYO)
+and verifies the `ads-context-meter` audience with caller `ads-engine` only,
+without a role check. Tokenizers are baked by CI, not downloaded by the pod.
+See [the service contract](../../services/ads-context-meter/README.md).
+
 ## Install
 
 Keep Helm's release record in the existing `default` namespace. The chart

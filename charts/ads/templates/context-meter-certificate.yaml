@@ -1,0 +1,22 @@
+{{- if .Values.tls.certManager.enabled }}
+{{- $svc := printf "%s-context-meter" (include "ads.fullname" .) }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: {{ .Values.namespace }}
+  name: {{ $svc }}
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-context-meter
+spec:
+  secretName: {{ include "ads.contextMeterServiceSecretName" . }}
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuer.name }}
+    kind: {{ .Values.tls.certManager.issuer.kind }}
+    group: {{ .Values.tls.certManager.issuer.group }}
+  dnsNames:
+    - {{ $svc | quote }}
+    - {{ printf "%s.%s" $svc .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc" $svc .Values.namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc .Values.namespace | quote }}
+{{- end }}

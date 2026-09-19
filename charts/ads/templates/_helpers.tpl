@@ -61,6 +61,19 @@ app.kubernetes.io/component: ads-preferences
 {{ .Values.nodes.application.labelKey }}: {{ .Values.nodes.application.labelValue | quote }}
 {{- end }}
 
+{{- define "ads.contextMeterSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-context-meter
+{{- end }}
+
+{{- define "ads.contextMeterServiceSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-context-meter-service-tls
+{{- else -}}
+{{ required "contextMeter.tls.serviceSecretName is required when tls.certManager.enabled is false" .Values.contextMeter.tls.serviceSecretName }}
+{{- end -}}
+{{- end }}
+
 {{- define "ads.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "ads.fullname" .) .Values.serviceAccount.name }}
