@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from kubernetes.client import Configuration
 
 from ads_sandbox_ipc.guest import CappedOutput, Frame, Pod
 from ads_sandbox_ipc.kube import PID_FILE, KubeClient, KubeProcess
@@ -77,9 +78,66 @@ async def test_kube_v5_stdin_eof_and_no_tty_or_keycloak_token(kube, monkeypatch)
     }
     assert connect.call_args.kwargs["proxy"] is None
     assert [call.args[0] for call in socket.send.call_args_list] == [b"\x00x=1", b"\xff\x00"]
-    assert kube.configuration.get_api_key_with_prefix.call_args.args == ("authorization",)
+    kube.configuration.get_api_key_with_prefix.assert_called_once_with(
+        "BearerToken", alias="authorization"
+    )
     await process.close()
     socket.close.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", ["BearerToken", "authorization"])
+async def test_exec_uses_real_sdk_token_lookup_and_rotation(kube, monkeypatch, key) -> None:
+    configuration = Configuration(host="https://kube.test")
+    # InClusterConfigLoader stores the complete bearer value, not a separate prefix.
+    configuration.api_key[key] = "bearer stale-projected-token"
+    tokens = iter(["bearer first-projected-token", "bearer rotated-projected-token"])
+
+    def refresh(current):
+        current.api_key[key] = next(tokens)
+
+    configuration.refresh_api_key_hook = Mock(side_effect=refresh)
+    kube.configuration = configuration
+    socket = SimpleNamespace(subprotocol="v5.channel.k8s.io", send=AsyncMock(), close=AsyncMock())
+    connect = AsyncMock(return_value=socket)
+    monkeypatch.setattr("ads_sandbox_ipc.kube.connect", connect)
+    for expected in ["bearer first-projected-token", "bearer rotated-projected-token"]:
+        process = await kube.start(Pod("actual-replica", "pod-uid"), ["true"], b"")
+        assert connect.call_args.kwargs["additional_headers"] == {"Authorization": expected}
+        await process.close()
+    assert configuration.refresh_api_key_hook.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_exec_prefers_current_sdk_key_over_legacy_alias(kube, monkeypatch) -> None:
+    configuration = Configuration(host="https://kube.test")
+    configuration.api_key = {
+        "BearerToken": "bearer current-projected-token",
+        "authorization": "bearer stale-legacy-token",
+    }
+    kube.configuration = configuration
+    socket = SimpleNamespace(subprotocol="v5.channel.k8s.io", send=AsyncMock(), close=AsyncMock())
+    connect = AsyncMock(return_value=socket)
+    monkeypatch.setattr("ads_sandbox_ipc.kube.connect", connect)
+    process = await kube.start(Pod("actual-replica", "pod-uid"), ["true"], b"")
+    assert connect.call_args.kwargs["additional_headers"] == {
+        "Authorization": "bearer current-projected-token"
+    }
+    await process.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("token", [None, ""])
+async def test_missing_projected_token_fails_before_websocket(kube, monkeypatch, token) -> None:
+    configuration = Configuration(host="https://kube.test")
+    if token is not None:
+        configuration.api_key["BearerToken"] = token
+    kube.configuration = configuration
+    connect = AsyncMock()
+    monkeypatch.setattr("ads_sandbox_ipc.kube.connect", connect)
+    with pytest.raises(RuntimeError, match="projected service account token is unavailable"):
+        await kube.start(Pod("actual-replica", "pod-uid"), ["true"], b"")
+    connect.assert_not_awaited()
 
 
 @pytest.mark.anyio
