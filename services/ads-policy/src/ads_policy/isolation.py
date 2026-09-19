@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PlacementRules
 from ads_policy.contract import IsolationLevel, Placement
 
 _RANK: Mapping[IsolationLevel, int] = {
@@ -37,9 +37,9 @@ def assign_isolation_level(
     placement: Placement = Placement.CLUSTER,
     runtime_class_name: str | None = None,
     node_labels: Mapping[str, str] | None = None,
-    settings: GovernanceSettings | None = None,
+    settings: PlacementRules | None = None,
 ) -> IsolationLevel:
-    config = settings or GovernanceSettings()
+    config = settings or PlacementRules()
     if placement is Placement.WORKSTATION:
         return IsolationLevel.LOCAL
     labels = node_labels or {}
@@ -63,9 +63,9 @@ class RuntimeProfile:
 
 
 def runtime_profile(
-    level: IsolationLevel, settings: GovernanceSettings | None = None
+    level: IsolationLevel, settings: PlacementRules | None = None
 ) -> RuntimeProfile:
-    config = settings or GovernanceSettings()
+    config = settings or PlacementRules()
     if level is IsolationLevel.VM:
         return RuntimeProfile(
             runtime_class_name=config.vm_runtime_class,

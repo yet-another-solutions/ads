@@ -6,7 +6,6 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
-from ads_policy.config import GovernanceSettings
 from ads_policy.contract import Capability, Effect, IsolationLevel, Run, RunState
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.run import KEY_PREFIX, RedisRunStore
@@ -25,7 +24,7 @@ class _UnreachableStore(RedisRunStore):
 
 @pytest.fixture
 def store(redis: Redis) -> RedisRunStore:
-    return RedisRunStore(redis, GovernanceSettings(run_ttl_seconds=TTL))
+    return RedisRunStore(redis, TTL)
 
 
 async def _start(store: RedisRunStore, pdp: PolicyDecisionPoint) -> str:
@@ -85,7 +84,7 @@ async def test_revocation_keeps_the_remaining_lifetime(
 
 
 def _service(redis: Redis, pdp: PolicyDecisionPoint, audit: BufferedAuditSink) -> PolicyService:
-    return PolicyService(pdp, RedisRunStore(redis, GovernanceSettings(run_ttl_seconds=TTL)), audit)
+    return PolicyService(pdp, RedisRunStore(redis, TTL), audit)
 
 
 async def test_a_run_in_use_does_not_run_out(

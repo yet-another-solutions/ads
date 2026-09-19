@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PayloadInspection
 from ads_policy.contract import (
     CheckKind,
     Effect,
@@ -20,10 +20,10 @@ SCANNER_UNAVAILABLE_RULE = "payload.injection.unchecked"
 def inspect_payload(
     text: str,
     point: InterceptionPoint,
-    settings: GovernanceSettings | None = None,
+    settings: PayloadInspection | None = None,
     checks: frozenset[CheckKind] = ALL_CHECKS,
 ) -> PolicyDecision:
-    config = settings or GovernanceSettings()
+    config = settings or PayloadInspection()
     findings = find_secrets(text) if CheckKind.SECRETS in checks else ()
     rules = tuple(sorted({finding.rule_id for finding in findings}))
     if point is InterceptionPoint.REQUEST:
@@ -60,7 +60,7 @@ def inspect_payload(
 
 def inspect_texts(
     texts: Sequence[str],
-    settings: GovernanceSettings | None = None,
+    settings: PayloadInspection | None = None,
     checks: frozenset[CheckKind] = ALL_CHECKS,
 ) -> tuple[PolicyDecision, tuple[str, ...]]:
     per_text_decisions = [
@@ -97,9 +97,9 @@ def inspect_texts(
 
 
 def prompt_injection_found(
-    score: float, settings: GovernanceSettings | None = None
+    score: float, settings: PayloadInspection | None = None
 ) -> PolicyDecision:
-    config = settings or GovernanceSettings()
+    config = settings or PayloadInspection()
     return PolicyDecision(
         effect=Effect.DENY,
         rule_id=PROMPT_INJECTION_RULE,
@@ -111,9 +111,9 @@ def prompt_injection_found(
 
 
 def prompt_injection_unchecked(
-    reason: str, settings: GovernanceSettings | None = None
+    reason: str, settings: PayloadInspection | None = None
 ) -> PolicyDecision:
-    config = settings or GovernanceSettings()
+    config = settings or PayloadInspection()
     return PolicyDecision(
         effect=Effect.DENY,
         rule_id=SCANNER_UNAVAILABLE_RULE,

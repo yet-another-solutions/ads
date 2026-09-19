@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import msgspec
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PolicyDefaults
 from ads_policy.contract import (
+    DEFAULT_PROMPT,
     DEFAULT_REQUEST,
     DEFAULT_RESPONSE,
     Binding,
@@ -28,8 +30,8 @@ from ads_policy.contract import (
 from ads_policy.pdp import PolicyDecisionPoint
 
 
-def org_policy(settings: GovernanceSettings | None = None) -> Policy:
-    config = settings or GovernanceSettings()
+def org_policy(settings: PolicyDefaults | None = None) -> Policy:
+    config = settings or PolicyDefaults()
     return Policy(
         schema_version=config.schema_version,
         version=config.policy_version,
@@ -41,22 +43,20 @@ def org_policy(settings: GovernanceSettings | None = None) -> Policy:
         capabilities=config.capabilities,
         bindings=config.bindings,
         default_weight=config.default_weight,
-        interception=Interception(request=DEFAULT_REQUEST, response=DEFAULT_RESPONSE),
+        interception=Interception(
+            request=DEFAULT_REQUEST, response=DEFAULT_RESPONSE, prompt=DEFAULT_PROMPT
+        ),
     )
 
 
-def read_policy_document(
-    settings: GovernanceSettings | None = None,
-) -> dict[str, Any] | None:
-    config = settings or GovernanceSettings()
-    document = config.policy_dir / config.policy_document_name
+def read_policy_document(document: Path) -> dict[str, Any] | None:
     if not document.is_file():
         return None
     return msgspec.yaml.decode(document.read_bytes(), type=dict[str, Any])
 
 
-def load_policy(document: Mapping[str, Any], settings: GovernanceSettings | None = None) -> Policy:
-    config = settings or GovernanceSettings()
+def load_policy(document: Mapping[str, Any], settings: PolicyDefaults | None = None) -> Policy:
+    config = settings or PolicyDefaults()
     rules = tuple(_load_rule(raw) for raw in document.get("rules", ()))
     declared_capabilities = document.get("capabilities")
     capabilities = (
@@ -90,10 +90,11 @@ def _load_interception(raw: object, where: str) -> Interception:
     if raw is None:
         return Interception()
     if not isinstance(raw, Mapping):
-        raise ValueError(f"{where} must be a mapping of request and response")
+        raise ValueError(f"{where} must be a mapping of prompt, request and response")
     return Interception(
         request=_load_side(raw.get("request"), f"{where}.request", DEFAULT_REQUEST),
         response=_load_side(raw.get("response"), f"{where}.response", DEFAULT_RESPONSE),
+        prompt=_load_side(raw.get("prompt"), f"{where}.prompt", DEFAULT_PROMPT),
     )
 
 
@@ -218,13 +219,12 @@ def _known_level(level: object) -> bool:
 
 
 def reload_policy(
-    pdp: PolicyDecisionPoint, settings: GovernanceSettings | None = None
+    pdp: PolicyDecisionPoint, path: Path, settings: PolicyDefaults | None = None
 ) -> str | None:
-    config = settings or GovernanceSettings()
-    document = read_policy_document(config)
+    document = read_policy_document(path)
     if document is None:
         return None
-    candidate = load_policy(document, config)
+    candidate = load_policy(document, settings)
     if candidate.digest() == pdp.policy_hash:
         return None
     return pdp.reload(candidate)

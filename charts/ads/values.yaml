@@ -5,9 +5,10 @@ image:
   tag: "0.0.1"
   pullPolicy: IfNotPresent
 
-# Sessions, projects and chat history of ads itself.
+# Sessions, projects and chat history of ads itself. The URL carries the password, so
+# it is a secret and is left empty here; values-local.yaml has the local one.
 database:
-  url: postgresql+psycopg://ads:change-me@ads-postgres:5432/ads
+  url: ""
 
 policy:
   replicaCount: 1
@@ -143,11 +144,11 @@ audit:
   rabbitmq:
     service: ads-rabbitmq
     namespace: ""
-    url: amqps://ads:change-me@ads-rabbitmq:5671/
+    url: ""
   postgres:
     service: ads-postgres
     namespace: ""
-    url: postgresql+asyncpg://ads:change-me@ads-postgres:5432/ads_audit
+    url: ""
 
 egressControlplane:
   replicaCount: 1
@@ -168,7 +169,7 @@ engine:
     outputTopic: ads.engine.output
     consumerGroup: ads-engine
   database:
-    url: postgresql+psycopg://ads_engine:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_engine
+    url: ""
   keycloak:
     wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
     issuer: https://keycloak.interlab/realms/ads
@@ -220,7 +221,7 @@ preferences:
     allowedCallers:
       - ads
   database:
-    url: postgresql+psycopg://ads_preferences:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads_preferences
+    url: ""
   tls:
     serviceSecretName: ""
 
@@ -279,15 +280,21 @@ keycloak:
   clientId: ads
   audience: ads
   role: user
+  # Reads another person's chat, reads the journal, lifts a block. Every reading of
+  # someone else's chat is journalled.
+  auditorRole: auditor
 
+# No values here on purpose: an install that does not supply its own secrets fails
+# rather than coming up with something guessable. Demo values live in
+# values-local.yaml, which is for the local stand and nothing else.
 secrets:
-  keycloakClientSecret: change-me
-  sessionSecret: change-me-change-me-32b
-  engineKeycloakClientSecret: change-me
-  policyApiToken: change-me-change-me-32b
-  auditApiToken: change-me-change-me-32b
-  guardrailApiToken: change-me-change-me-32b
-  injectionScannerApiToken: change-me-change-me-32b
+  keycloakClientSecret: ""
+  sessionSecret: ""
+  engineKeycloakClientSecret: ""
+  policyApiToken: ""
+  auditApiToken: ""
+  guardrailApiToken: ""
+  injectionScannerApiToken: ""
 
 nodes:
   application:

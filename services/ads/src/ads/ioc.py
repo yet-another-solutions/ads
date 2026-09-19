@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 
+import aio_pika
+from aio_pika.abc import AbstractRobustConnection
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from dishka import Provider, Scope, provide
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from ads.abort_subjects import AbortSubjects
+from ads.audit_client import AuditApi, AuditClient
+from ads.auditing import AuditingService
 from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_controller import EngineOutputController
@@ -45,8 +49,11 @@ from ads_commons_beans import (
     TokenExchange,
     TokenExchangeSettings,
 )
+from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
+from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE
+from ads_policy.contract import AuditEvent
 
 
 class SecuritySettingsProvider(Provider):
@@ -84,6 +91,13 @@ class SecuritySettingsProvider(Provider):
         )
 
 
+class DiscardingAuditSink:
+    """Where the journal is not configured, events go nowhere rather than pile up."""
+
+    async def send(self, event: AuditEvent) -> None:
+        return None
+
+
 class AppProvider(Provider):
     """APP: engine, settings, gateways. REQUEST: Session, repositories, services."""
 
@@ -94,6 +108,8 @@ class AppProvider(Provider):
         preferences: PreferencesApi | None = None,
         kafka: EngineRequests | None = None,
         hub: LiveHub | None = None,
+        journal: AuditSink | None = None,
+        audit_api: AuditApi | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -101,6 +117,8 @@ class AppProvider(Provider):
         self._preferences = preferences
         self._kafka = kafka
         self._hub = hub
+        self._journal = journal
+        self._audit_api = audit_api
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -110,6 +128,24 @@ class AppProvider(Provider):
     def db_engine(self) -> Engine:
         return self._engine
 
+    @provide(scope=Scope.APP)
+    async def broker(self, settings: Settings) -> AsyncIterator[AbstractRobustConnection | None]:
+        if self._journal is not None or not settings.amqp_url:
+            yield None
+            return
+        connection = await aio_pika.connect_robust(settings.amqp_url)
+        try:
+            yield connection
+        finally:
+            await connection.close()
+
+    @provide(scope=Scope.APP)
+    def audit(self, broker: AbstractRobustConnection | None) -> BufferedAuditSink:
+        sink = self._journal or (
+            DiscardingAuditSink() if broker is None else RabbitAuditSink(broker)
+        )
+        return BufferedAuditSink(sink, decided_by=identity("ads"))
+
     oidc_client = provide(OidcClient, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
@@ -117,7 +153,7 @@ class AppProvider(Provider):
         return build_policy_client(
             settings.policy_url,
             settings.policy_api_token,
-            denied_message=GovernanceSettings().denied_message,
+            denied_message=DENIED_MESSAGE,
             ca_bundle=settings.tls_ca_bundle,
         )
 
@@ -208,6 +244,12 @@ class AppProvider(Provider):
     entry_repository = provide(SessionEntryRepository, scope=Scope.REQUEST)
     run_repository = provide(SessionRunRepository, scope=Scope.REQUEST)
     buffer_repository = provide(SessionRunBufferRepository, scope=Scope.REQUEST)
+
+    @provide(scope=Scope.APP)
+    def audit_api(self, settings: Settings) -> AuditApi:
+        return self._audit_api if self._audit_api is not None else AuditClient(settings)
+
+    auditing_service = provide(AuditingService, scope=Scope.REQUEST)
     project_service = provide(ProjectService, scope=Scope.REQUEST)
     session_service = provide(SessionService, scope=Scope.REQUEST)
     send_service = provide(SendService, scope=Scope.REQUEST)

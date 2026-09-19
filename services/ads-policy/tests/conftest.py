@@ -5,7 +5,6 @@ import pytest
 from redis.asyncio import Redis
 
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
-from ads_policy.config import GovernanceSettings
 from ads_policy.contract import Policy
 from ads_policy.logconfig import configure_logging
 from ads_policy.pdp import PolicyDecisionPoint
@@ -13,7 +12,7 @@ from ads_policy.policy import org_policy
 from ads_policy.run import RedisRunStore, RunStore
 from ads_policy.service import PolicyService
 
-_NO_ROOM = GovernanceSettings(audit_backlog=0)
+_NO_ROOM = 0
 
 
 @pytest.fixture(scope="session", autouse=True)

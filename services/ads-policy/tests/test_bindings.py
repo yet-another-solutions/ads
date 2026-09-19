@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from ads_policy.contract import Capability, Policy, ToolCallRequest
@@ -8,7 +10,7 @@ from ads_policy.policy import load_policy, org_policy
 
 
 def _call(
-    tool: str, arguments: dict[str, str] | None = None, source: str = "opencode"
+    tool: str, arguments: dict[str, Any] | None = None, source: str = "opencode"
 ) -> ToolCallRequest:
     return ToolCallRequest(
         run_id="run-1",
@@ -37,6 +39,19 @@ def test_a_bound_tool_resolves_to_what_it_amounts_to(
     tool: str, arguments: dict[str, str], capability: Capability, resource: str
 ) -> None:
     assert resolve(_call(tool, arguments), org_policy()) == (capability, resource)
+
+
+def test_an_argument_that_is_not_a_string_becomes_one() -> None:
+    capability, resource = resolve(_call("bash", {"command": ["uv", "sync"]}), org_policy())
+    assert capability is Capability.PROCESS_EXEC
+    assert resource == '["uv","sync"]'
+
+
+def test_a_nested_argument_arrives_whole_rather_than_flattened_on_the_way_in() -> None:
+    call = _call("read", {"filePath": {"path": "/workspace/app.py"}})
+    assert call.arguments["filePath"] == {"path": "/workspace/app.py"}
+    _, resource = resolve(call, org_policy())
+    assert resource == '{"path":"/workspace/app.py"}'
 
 
 def test_a_search_resolves_to_the_provider_not_the_query() -> None:
@@ -92,6 +107,18 @@ def test_a_document_that_declares_bindings_replaces_the_built_in_ones() -> None:
     policy = load_policy({"bindings": [], "rules": []})
     with pytest.raises(Unbound):
         resolve(_call("bash", {"command": "uv sync"}), policy)
+
+
+def test_one_tool_cannot_be_bound_twice() -> None:
+    twice = {"source": "opencode", "tool": "read", "capability": "fs.read", "argument": "filePath"}
+    with pytest.raises(ValueError, match="two different things"):
+        load_policy({"bindings": [twice, {**twice, "capability": "fs.write"}], "rules": []})
+
+
+def test_one_row_of_the_matrix_cannot_be_written_twice() -> None:
+    row = {"id": "process.exec", "capability": "process.exec", "resourceClass": "any"}
+    with pytest.raises(ValueError, match="two different things"):
+        load_policy({"rules": [row, {**row, "id": "process.exec.again", "levels": ["vm"]}]})
 
 
 def test_a_binding_needs_exactly_one_source_of_the_resource() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PlacementRules
 from ads_policy.contract import IsolationLevel, Placement
 from ads_policy.isolation import (
     RuntimeProfile,
@@ -13,7 +13,7 @@ from ads_policy.isolation import (
     runtime_profile,
 )
 
-SETTINGS = GovernanceSettings()
+SETTINGS = PlacementRules()
 
 
 def test_kata_runtime_on_a_sandbox_node_is_vm() -> None:
@@ -52,7 +52,7 @@ def test_a_workstation_owes_no_cluster_placement() -> None:
 
 
 def test_a_cluster_without_a_sandbox_cannot_produce_a_vm() -> None:
-    without = GovernanceSettings(sandbox_available=False)
+    without = PlacementRules(sandbox_available=False)
     level = assign_isolation_level(
         runtime_class_name=SETTINGS.vm_runtime_class,
         node_labels={

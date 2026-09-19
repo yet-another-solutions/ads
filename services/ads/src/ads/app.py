@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from pathlib import Path
 
 import structlog
@@ -13,6 +15,8 @@ from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from sqlalchemy import Engine
 
+from ads.audit_client import AuditApi
+from ads.auditor_controller import AuditorController
 from ads.auth import AuthController
 from ads.config import Settings
 from ads.db import Base, create_db_engine
@@ -36,6 +40,7 @@ from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
 from ads_commons_beans import CommonsBeansProvider, JwtVerifier
+from ads_policy.audit import AuditSink, BufferedAuditSink
 
 _ = Project
 
@@ -96,6 +101,8 @@ def create_app(
     tokens: TokenMinter | None = None,
     jwt_verifier: TokenAuthenticator | None = None,
     oidc_verifier: JwtVerifier | None = None,
+    journal: AuditSink | None = None,
+    audit_api: AuditApi | None = None,
 ) -> Litestar:
     configure_logging()
     root = Path(__file__).resolve().parent
@@ -115,6 +122,8 @@ def create_app(
             preferences=preferences,
             kafka=kafka,
             hub=hub,
+            journal=journal,
+            audit_api=audit_api,
         ),
         CommonsBeansProvider(),
         SecuritySettingsProvider(settings),
@@ -135,6 +144,16 @@ def create_app(
         else None
     )
     session_config = build_session_config(settings)
+    flusher: list[asyncio.Task[None]] = []
+
+    async def _publish_audit() -> None:
+        audit = await container.get(BufferedAuditSink)
+        while True:
+            await asyncio.sleep(settings.audit_flush_seconds)
+            try:
+                await audit.drain()
+            except Exception:
+                log.exception("audit backlog not drained", pending=len(audit.pending))
 
     async def _startup() -> None:
         nonlocal requests, engine_output, watchdog, output_controller, consumer
@@ -153,12 +172,18 @@ def create_app(
         await watchdog.start()
         if consumer is not None:
             await consumer.start()
+        flusher.append(asyncio.create_task(_publish_audit()))
 
     async def _shutdown() -> None:
         if consumer is not None:
             await consumer.stop()
         if watchdog is not None:
             await watchdog.stop()
+        for task in flusher:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await (await container.get(BufferedAuditSink)).drain()
         await container.close()
 
     app = Litestar(
@@ -166,6 +191,7 @@ def create_app(
             ShellController,
             ProjectController,
             SessionController,
+            AuditorController,
             ModelsController,
             ModelTypesController,
             AuthController,

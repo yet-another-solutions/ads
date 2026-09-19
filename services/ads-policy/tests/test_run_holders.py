@@ -12,14 +12,13 @@ from redis.asyncio import Redis
 from ads_policy.app import create_app
 from ads_policy.audit import CollectingAuditSink
 from ads_policy.client import HttpPolicyClient, PolicyUnavailable, UnconfiguredPolicyClient
-from ads_policy.config import GovernanceSettings, Settings
+from ads_policy.config import DENIED_MESSAGE, Settings
 from ads_policy.contract import IsolationLevel, Run, RunState
 from ads_policy.run import InMemoryRunStore, RedisRunStore, RunStore
 from ads_policy.service import PolicyService
 from policy_helpers import run_context, run_request
 
 TOKEN = "policy-api-token-32-bytes-long"
-SETTINGS = GovernanceSettings()
 ALICE = "user:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 HERMES = "key:" + "b" * 64
 
@@ -80,8 +79,31 @@ async def test_an_expired_run_drops_out_of_its_holder(redis: Redis) -> None:
 
 
 @pytest.mark.anyio
+async def test_the_store_itself_keeps_a_revoked_run_revoked(store: RunStore) -> None:
+    run = await _start(store)
+    await store.revoke(run.id)
+    assert (await store.finish(run.id)).state is RunState.REVOKED
+
+
+@pytest.mark.anyio
+async def test_a_finished_run_can_still_be_revoked(store: RunStore) -> None:
+    run = await _start(store)
+    await store.finish(run.id)
+    assert (await store.revoke(run.id)).state is RunState.REVOKED
+
+
+@pytest.mark.anyio
+async def test_a_state_that_changes_nothing_keeps_the_lifetime(redis: Redis) -> None:
+    store = RedisRunStore(redis, 120)
+    run = await _start(store)
+    await store.revoke(run.id)
+    await store.finish(run.id)
+    assert 0 < await redis.ttl(f"ads:run:{run.id}") <= 120
+
+
+@pytest.mark.anyio
 async def test_the_index_lives_as_long_as_a_run(redis: Redis) -> None:
-    store = RedisRunStore(redis, GovernanceSettings(run_ttl_seconds=120))
+    store = RedisRunStore(redis, 120)
     await _start(store)
     assert 0 < await redis.ttl(f"ads:holder:{ALICE}") <= 120
 
@@ -139,7 +161,7 @@ def api(tmp_path: Path, redis: Redis) -> Iterator[TestClient]:
         tls_key_path=key,
         redis_url="redis://unused",
         amqp_url="amqp://unused",
-        governance=GovernanceSettings(policy_dir=tmp_path / "missing"),
+        policy_dir=tmp_path / "missing",
     )
     with TestClient(app=create_app(settings, redis, CollectingAuditSink())) as client:
         client.headers["authorization"] = f"Bearer {TOKEN}"
@@ -191,7 +213,7 @@ def _client(handler: object) -> HttpPolicyClient:
     return HttpPolicyClient(
         "https://ads-policy.interlab:8081",
         TOKEN,
-        denied_message=SETTINGS.denied_message,
+        denied_message=DENIED_MESSAGE,
         transport=httpx2.MockTransport(handler),  # type: ignore[arg-type]
     )
 
@@ -287,7 +309,7 @@ def test_an_unreachable_service_is_unavailable() -> None:
 
 
 def test_an_unconfigured_client_looks_nothing_up() -> None:
-    client = UnconfiguredPolicyClient(SETTINGS.denied_message)
+    client = UnconfiguredPolicyClient(DENIED_MESSAGE)
     with pytest.raises(PolicyUnavailable):
         client.runs_held(ALICE)
     with pytest.raises(PolicyUnavailable):

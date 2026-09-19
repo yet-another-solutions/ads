@@ -30,6 +30,6 @@ metadata:
     {{- include "ads.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ required "secrets.policyApiToken is required: it guards every decision the service makes" .Values.secrets.policyApiToken | quote }}
   ADS_REDIS_URL: {{ required "policy.redis.url is required: the policy service keeps runs in Redis" .Values.policy.redis.url | quote }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}

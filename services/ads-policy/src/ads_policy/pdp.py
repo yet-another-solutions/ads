@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE, ResourceNaming
 from ads_policy.contract import (
     Capability,
     Classifier,
@@ -40,10 +40,8 @@ def resolve(call: ToolCallRequest, policy: Policy) -> tuple[Capability, str]:
     return binding.capability, resource
 
 
-def classify(
-    request: PolicyRequest, policy: Policy, settings: GovernanceSettings | None = None
-) -> str:
-    config = settings or GovernanceSettings()
+def classify(request: PolicyRequest, policy: Policy, settings: ResourceNaming | None = None) -> str:
+    config = settings or ResourceNaming()
     classifier = policy.classifier_for(request.capability)
     if classifier is None:
         return ResourceClass.ANY
@@ -60,7 +58,7 @@ def _resource_matches(
     classifier: Classifier,
     request: PolicyRequest,
     policy: Policy,
-    config: GovernanceSettings,
+    config: ResourceNaming,
 ) -> bool:
     resource = request.resource
     workdir = request.context.workdir
@@ -76,8 +74,16 @@ def _resource_matches(
 
 
 class PolicyDecisionPoint:
-    def __init__(self, policy: Policy, settings: GovernanceSettings | None = None) -> None:
-        self._settings = settings or GovernanceSettings()
+    def __init__(
+        self,
+        policy: Policy,
+        naming: ResourceNaming | None = None,
+        versions_kept: int = 32,
+        denied_message: str = DENIED_MESSAGE,
+    ) -> None:
+        self._naming = naming or ResourceNaming()
+        self._versions_kept = versions_kept
+        self._denied_message = denied_message
         self._versions: OrderedDict[str, Policy] = OrderedDict()
         self._current = self._remember_keeping_recent_versions(policy)
 
@@ -115,13 +121,13 @@ class PolicyDecisionPoint:
         digest = policy.digest()
         self._versions[digest] = policy
         self._versions.move_to_end(digest)
-        while len(self._versions) > self._settings.policy_versions_kept:
+        while len(self._versions) > self._versions_kept:
             self._versions.popitem(last=False)
         return digest
 
     def _evaluate(self, policy: Policy, policy_hash: str, request: PolicyRequest) -> PolicyDecision:
         try:
-            resource_class = classify(request, policy, self._settings)
+            resource_class = classify(request, policy, self._naming)
         except Exception as exc:
             if not policy.deny_on_policy_error:
                 raise
@@ -186,7 +192,7 @@ class PolicyDecisionPoint:
             effect=Effect.DENY,
             rule_id=rule_id,
             reason=reason,
-            message=f"use {alternative}" if alternative else self._settings.denied_message,
+            message=f"use {alternative}" if alternative else self._denied_message,
             weight=weight,
             policy_hash=policy_hash,
             mode=policy.mode,
@@ -198,7 +204,7 @@ class PolicyDecisionPoint:
             effect=Effect.DENY,
             rule_id=rule_id,
             reason=reason,
-            message=self._settings.denied_message,
+            message=self._denied_message,
             policy_hash=policy_hash,
             mode=Mode.ENFORCE,
         )

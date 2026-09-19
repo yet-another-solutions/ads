@@ -11,7 +11,7 @@ import aiohttp
 import anyio
 import anyio.to_thread
 import structlog
-from langchain_core.messages import AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
 
 from ads_commons.engine import EngineRequest, Notice, NoticeKind
@@ -23,7 +23,14 @@ from ads_engine.chat import (
     history_messages,
 )
 from ads_engine.config import ToolSettings
-from ads_engine.mcp import GuardrailRuns, McpSession, McpTool, McpUnavailable, ToolOutcome
+from ads_engine.mcp import (
+    GuardrailRuns,
+    McpSession,
+    McpTool,
+    McpUnavailable,
+    PromptReading,
+    ToolOutcome,
+)
 
 log = structlog.get_logger("ads_engine")
 
@@ -36,6 +43,7 @@ REFUSED_NOTICE = "Запрос к инструменту {tool} отклонён
 ALTERNATIVE_NOTICE = " Можно так: {alternative}."
 INJECTION_NOTICE = "Результат инструмента {tool} скрыт: в нём обнаружена попытка промпт-инъекции."
 UNAVAILABLE_NOTICE = "Сервис инструментов {server} недоступен, попробуйте позже."
+PROMPT_REFUSED_NOTICE = "Запрос отклонён политикой безопасности и модели не передан."
 ROUNDS_EXHAUSTED_MESSAGE = "\n\n(Остановлено: слишком много вызовов инструментов подряд.)"
 
 REFUSED_FOR_MODEL = "The security policy refused this tool call."
@@ -113,6 +121,7 @@ class _ToolTurn:
     unavailable_servers: set[str] = field(default_factory=set)
     run_id: str = ""
     bearer: str = ""
+    tools_were_called: bool = False
 
     @property
     def settings(self) -> ToolSettings:
@@ -123,7 +132,7 @@ class _ToolTurn:
             async for delta in self._stream():
                 yield delta
         except Exception as exc:
-            if self.run_id:
+            if self.tools_were_called:
                 raise SideEffectsHappened(f"failed after tools were called: {exc}") from exc
             raise
         finally:
@@ -133,10 +142,17 @@ class _ToolTurn:
     async def _stream(self) -> AsyncIterator[StreamDelta]:
         async for unavailable_notice in self._offer_tools():
             yield unavailable_notice
+        messages = history_messages(self.request)
+        read = await self._read_prompt()
+        if read is not None:
+            if read.withheld:
+                yield _notice("prompt-refused", "", PROMPT_REFUSED_NOTICE)
+                return
+            if read.texts and read.texts[0] != self.request.user_input:
+                messages[-1] = HumanMessage(content=read.texts[0])
         model = self.streamer.model_factory(self.request)
         specs = [offered.spec(name) for name, offered in self.offered.items()]
         answering: StreamingModel = model.bind_tools(specs) if specs else model
-        messages = history_messages(self.request)
         for _ in range(self.settings.max_model_rounds):
             gathered: AIMessageChunk | None = None
             async for chunk in answering.astream(messages):
@@ -157,6 +173,21 @@ class _ToolTurn:
                     ToolMessage(content=outcome_for_model, tool_call_id=call.get("id") or "")
                 )
         yield StreamDelta(kind="message", text=ROUNDS_EXHAUSTED_MESSAGE)
+
+    async def _read_prompt(self) -> PromptReading | None:
+        if not self.bearer:
+            return None
+        runs = GuardrailRuns(
+            self.streamer.http, self.settings.guardrail_url, self.settings.guardrail_api_token
+        )
+        try:
+            await self._ensure_run()
+            return await self._with_retries(
+                lambda: runs.inspect_prompt(self.run_id, [self.request.user_input])
+            )
+        except McpUnavailable as exc:
+            log.warning("prompt not inspected", error=str(exc))
+            return None
 
     async def _offer_tools(self) -> AsyncIterator[StreamDelta]:
         try:
@@ -192,6 +223,7 @@ class _ToolTurn:
             return UNKNOWN_TOOL_FOR_MODEL, None
         try:
             await self._ensure_run()
+            self.tools_were_called = True
             outcome = await self._with_retries(
                 lambda: offered.session.call_tool(offered.tool.name, call.get("args") or {})
             )

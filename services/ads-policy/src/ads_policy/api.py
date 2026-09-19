@@ -5,7 +5,7 @@ from typing import Any
 
 import msgspec
 from dishka.integrations.litestar import FromDishka, inject
-from litestar import Controller, get, post
+from litestar import Controller, delete, get, post
 from litestar.connection import ASGIConnection
 from litestar.exceptions import ClientException, NotAuthorizedException, NotFoundException
 from litestar.handlers import BaseRouteHandler
@@ -15,6 +15,7 @@ from ads_policy.contract import (
     ConversationId,
     DecisionRequest,
     PolicyDecision,
+    PromptRequest,
     Run,
     RunRequest,
     ToolCallRequest,
@@ -93,6 +94,15 @@ class PolicyController(Controller):
             raise ClientException(detail="a conversation is required")
         await service.block_conversation(conversation, data.budget, data.by)
 
+    @delete("/conversations/{conversation:str}/revoke", status_code=204)
+    @inject
+    async def lift_conversation_block(
+        self, conversation: str, service: FromDishka[PolicyService]
+    ) -> None:
+        if not conversation:
+            raise ClientException(detail="a conversation is required")
+        await service.lift_conversation_block(conversation)
+
     @post("/decide")
     @inject
     async def decide(
@@ -106,6 +116,13 @@ class PolicyController(Controller):
         self, data: ToolCallRequest, service: FromDishka[PolicyService]
     ) -> PolicyDecision:
         return await service.decide_call(data)
+
+    @post("/prompts")
+    @inject
+    async def decide_prompt(
+        self, data: PromptRequest, service: FromDishka[PolicyService]
+    ) -> PolicyDecision:
+        return await service.decide_prompt(data)
 
     @get("/version")
     @inject

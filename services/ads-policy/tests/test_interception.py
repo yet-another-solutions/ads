@@ -175,7 +175,7 @@ def test_every_switch_the_document_may_carry(value: str) -> None:
 @pytest.mark.parametrize(
     ("section", "message"),
     [
-        (["off"], "must be a mapping of request and response"),
+        (["off"], "must be a mapping of prompt, request and response"),
         ({"request": "off"}, "must be a mapping of on and checks"),
         ({"request": {"on": "maybe"}}, r"interception\.request\.on must be one of"),
         ({"response": {"checks": ["telepathy"]}}, r"interception\.response\.checks must be"),

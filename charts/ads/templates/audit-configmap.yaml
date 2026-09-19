@@ -26,7 +26,7 @@ metadata:
     {{- include "ads.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  ADS_AUDIT_API_TOKEN: {{ .Values.secrets.auditApiToken | quote }}
-  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  ADS_AUDIT_API_TOKEN: {{ required "secrets.auditApiToken is required: it guards the journal's reads" .Values.secrets.auditApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ required "secrets.policyApiToken is required: it is how a chat block reaches the policy service" .Values.secrets.policyApiToken | quote }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
   ADS_DATABASE_URL: {{ required "audit.postgres.url is required: the journal lives in PostgreSQL" .Values.audit.postgres.url | quote }}

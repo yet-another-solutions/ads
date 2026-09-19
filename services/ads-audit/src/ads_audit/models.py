@@ -43,4 +43,7 @@ conversation_blocks = Table(
     Column("conversation", String(64), primary_key=True),
     Column("blocked_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("budget", Integer, nullable=False),
+    Column("lifted_at", DateTime(timezone=True)),
+    Column("lifted_by", String(128)),
+    Column("lifted_budget", Integer),
 )

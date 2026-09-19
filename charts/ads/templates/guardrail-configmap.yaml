@@ -54,10 +54,10 @@ metadata:
     {{- include "ads.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  ADS_GUARDRAIL_API_TOKEN: {{ .Values.secrets.guardrailApiToken | quote }}
-  ADS_POLICY_API_TOKEN: {{ .Values.secrets.policyApiToken | quote }}
+  ADS_GUARDRAIL_API_TOKEN: {{ required "secrets.guardrailApiToken is required: it guards the permissions API" .Values.secrets.guardrailApiToken | quote }}
+  ADS_POLICY_API_TOKEN: {{ required "secrets.policyApiToken is required: guardrail asks the policy service with it" .Values.secrets.policyApiToken | quote }}
   {{- if .Values.injectionScanner.enabled }}
-  ADS_INJECTION_SCANNER_API_TOKEN: {{ .Values.secrets.injectionScannerApiToken | quote }}
+  ADS_INJECTION_SCANNER_API_TOKEN: {{ required "secrets.injectionScannerApiToken is required with the injection scanner" .Values.secrets.injectionScannerApiToken | quote }}
   {{- end }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
 {{- end }}

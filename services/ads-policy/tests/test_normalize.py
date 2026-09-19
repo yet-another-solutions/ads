@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import ResourceNaming
 from ads_policy.normalize import branch_name, egress_host, within_workdir
 
-WORKDIR = GovernanceSettings().workdir
+WORKDIR = ResourceNaming().workdir
 
 
 def test_workdir_paths_are_inside() -> None:

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Any
@@ -15,6 +16,34 @@ MAX_CONVERSATION_LENGTH = 64
 ConversationId = Annotated[
     str, msgspec.Meta(max_length=MAX_CONVERSATION_LENGTH, pattern=r"^[A-Za-z0-9._:-]*$")
 ]
+
+
+def as_text(value: Any) -> str:
+    """A tool argument as the policy reads it: a resource is a string, whatever it arrived as."""
+    if isinstance(value, str):
+        return value
+    return msgspec.json.encode(value).decode("utf-8")
+
+
+def _one_each[K, V](pairs: Iterable[tuple[K, V]]) -> dict[K, V]:
+    table: dict[K, V] = {}
+    for key, value in pairs:
+        if key in table:
+            raise ValueError(f"the policy says two different things about {key}")
+        table[key] = value
+    return table
+
+
+def string_values(node: Any) -> Iterator[str]:
+    """Every string anywhere in a decoded JSON value, for the checks that read text."""
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for value in node.values():
+            yield from string_values(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from string_values(value)
 
 
 class Capability(StrEnum):
@@ -73,11 +102,11 @@ class Binding:
     argument: str = ""
     value: str = ""
 
-    def resource(self, arguments: Mapping[str, str]) -> str | None:
+    def resource(self, arguments: Mapping[str, Any]) -> str | None:
         if self.value:
             return self.value
         found = arguments.get(self.argument)
-        return found if found else None
+        return as_text(found) if found else None
 
 
 class IsolationLevel(StrEnum):
@@ -99,6 +128,7 @@ class Effect(StrEnum):
 
 class InterceptionPoint(StrEnum):
     CALL = "call"
+    PROMPT = "prompt"
     REQUEST = "request"
     RESPONSE = "response"
 
@@ -153,22 +183,29 @@ DEFAULT_RESPONSE = Side(
     checks=frozenset({CheckKind.SECRETS, CheckKind.INJECTION}),
     review=frozenset({CheckKind.INJECTION}),
 )
+DEFAULT_PROMPT = Side(
+    checks=frozenset({CheckKind.SECRETS, CheckKind.INJECTION}),
+    review=frozenset({CheckKind.INJECTION}),
+)
 
 
 class Interception(msgspec.Struct, frozen=True):
     request: Side | None = None
     response: Side | None = None
+    prompt: Side | None = None
 
     def filled_from(self, fallback: Interception) -> Interception:
         return Interception(
             request=self.request or fallback.request,
             response=self.response or fallback.response,
+            prompt=self.prompt or fallback.prompt,
         )
 
     def stricter(self, other: Interception) -> Interception:
         return Interception(
             request=_stricter_of_stated(self.request, other.request),
             response=_stricter_of_stated(self.response, other.response),
+            prompt=_stricter_of_stated(self.prompt, other.prompt),
         )
 
     def side(self, point: InterceptionPoint) -> Side:
@@ -176,10 +213,16 @@ class Interception(msgspec.Struct, frozen=True):
             return self.request or DEFAULT_REQUEST
         if point is InterceptionPoint.RESPONSE:
             return self.response or DEFAULT_RESPONSE
+        if point is InterceptionPoint.PROMPT:
+            return self.prompt or DEFAULT_PROMPT
         raise ValueError(f"{point.value} is not a payload side")
 
     def canonical(self) -> list[Any]:
-        return [_canonical_side(self.request), _canonical_side(self.response)]
+        return [
+            _canonical_side(self.request),
+            _canonical_side(self.response),
+            _canonical_side(self.prompt),
+        ]
 
 
 def _stricter_of_stated(one: Side | None, other: Side | None) -> Side | None:
@@ -238,18 +281,38 @@ class Policy:
     bindings: tuple[Binding, ...] = ()
     default_weight: int = 1
     interception: Interception = Interception()
+    _binding_by_tool: dict[tuple[str, str], Binding] = dataclass_field(
+        init=False, repr=False, compare=False
+    )
+    _rule_by_key: dict[tuple[Capability, str], Rule] = dataclass_field(
+        init=False, repr=False, compare=False
+    )
+    _classifier_by_capability: dict[Capability, Classifier] = dataclass_field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_binding_by_tool",
+            _one_each(((binding.source, binding.tool), binding) for binding in self.bindings),
+        )
+        object.__setattr__(
+            self, "_rule_by_key", _one_each((rule.key(), rule) for rule in self.rules)
+        )
+        object.__setattr__(
+            self,
+            "_classifier_by_capability",
+            _one_each(
+                (definition.capability, definition.classifier) for definition in self.capabilities
+            ),
+        )
 
     def binding_for(self, source: str, tool: str) -> Binding | None:
-        for binding in self.bindings:
-            if binding.source == source and binding.tool == tool:
-                return binding
-        return None
+        return self._binding_by_tool.get((source, tool))
 
     def rule_for(self, capability: Capability, resource_class: str) -> Rule | None:
-        for rule in self.rules:
-            if rule.key() == (capability, str(resource_class)):
-                return rule
-        return None
+        return self._rule_by_key.get((capability, str(resource_class)))
 
     def inspection_for(self, rule: Rule | None) -> Interception:
         if rule is None:
@@ -257,10 +320,7 @@ class Policy:
         return rule.inspect.filled_from(self.interception)
 
     def classifier_for(self, capability: Capability) -> Classifier | None:
-        for definition in self.capabilities:
-            if definition.capability is capability:
-                return definition.classifier
-        return None
+        return self._classifier_by_capability.get(capability)
 
     def digest(self) -> str:
         return hashlib.sha256(msgspec.json.encode(self._canonical())).hexdigest()
@@ -424,11 +484,16 @@ class DecisionRequest(msgspec.Struct, frozen=True):
     site: Site | None = None
 
 
+class PromptRequest(msgspec.Struct, frozen=True):
+    run_id: str
+    subject: str
+
+
 class ToolCallRequest(msgspec.Struct, frozen=True):
     run_id: str
     subject: str
     source: str
     tool: str
-    arguments: dict[str, str] = msgspec.field(default_factory=dict)
+    arguments: dict[str, Any] = msgspec.field(default_factory=dict)
     attributes: dict[str, str] = msgspec.field(default_factory=dict)
     site: Site | None = None

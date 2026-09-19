@@ -12,7 +12,7 @@ from ads.governance.enforcement import Enforcer, require_permission
 from ads.governance.middleware import PolicyEnforcementMiddleware
 from ads.security_middleware import SecurityContextMiddleware
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Capability, IsolationLevel
 from ads_policy.service import PolicyService
 from tests.policy import ATTRIBUTES, DirectPolicyClient, journalled, run_request
@@ -91,7 +91,7 @@ def test_denied_tool_call_is_forbidden_without_a_map_of_the_perimeter(
         login(client)
         response = client.get("/tools/file", params={"path": "/home/dev/other/.env"})
     assert response.status_code == 403
-    assert GovernanceSettings().denied_message in response.text
+    assert DENIED_MESSAGE in response.text
     assert Capability.FS_READ.value not in response.text
     assert IsolationLevel.VM.value not in response.text
 

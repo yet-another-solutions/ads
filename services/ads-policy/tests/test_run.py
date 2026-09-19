@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PolicyDefaults
 from ads_policy.contract import (
     Capability,
     Effect,
@@ -70,7 +70,7 @@ async def test_the_policy_version_is_pinned_at_start(
 ) -> None:
     run = await _start(runs, pdp)
     pinned = pdp.policy_hash
-    tightened = org_policy(GovernanceSettings(rules=(), policy_version="org-2"))
+    tightened = org_policy(PolicyDefaults(rules=(), policy_version="org-2"))
     pdp.reload(tightened)
     assert run.policy_hash == pinned
     assert pdp.policy_hash != pinned
@@ -94,7 +94,7 @@ async def test_revocation_is_visible_on_the_next_request(
 
 
 async def test_revocation_applies_even_in_review_mode(runs: RunStore) -> None:
-    watching = PolicyDecisionPoint(org_policy(GovernanceSettings(mode=Mode.REVIEW)))
+    watching = PolicyDecisionPoint(org_policy(PolicyDefaults(mode=Mode.REVIEW)))
     run = await _start(runs, watching)
     revoked = await runs.revoke(run.id)
     decision = watching.decide_for_run(

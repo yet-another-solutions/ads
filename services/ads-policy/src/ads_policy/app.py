@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 
 from ads_policy.api import PolicyController
 from ads_policy.audit import AuditSink, BufferedAuditSink
-from ads_policy.config import Settings
+from ads_policy.config import Settings, policy_document_path
 from ads_policy.health import live, ready
 from ads_policy.ioc import AppProvider
 from ads_policy.logconfig import configure_logging
@@ -61,6 +61,12 @@ async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
             await audit.drain()
         except Exception:
             logger.exception("audit backlog not drained", pending=len(audit.pending))
+        if audit.lost:
+            logger.warning(
+                "decisions made without a journal entry",
+                lost=audit.lost,
+                pending=len(audit.pending),
+            )
 
 
 async def _watch_policy(container: AsyncContainer, settings: Settings) -> None:
@@ -68,7 +74,9 @@ async def _watch_policy(container: AsyncContainer, settings: Settings) -> None:
     while True:
         await asyncio.sleep(settings.policy_reload_seconds)
         try:
-            published = await asyncio.to_thread(reload_policy, pdp, settings.governance)
+            published = await asyncio.to_thread(
+                reload_policy, pdp, policy_document_path(settings), settings.policy_defaults
+            )
         except Exception:
             logger.exception("delivered policy not readable, keeping the current version")
             continue

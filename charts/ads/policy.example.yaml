@@ -27,8 +27,12 @@ defaultWeight: 1
 #
 # `checks`:
 #   secrets    credentials, by the vendored gitleaks rule set
-#   injection  instructions planted in a result, read by ads-injection-scanner;
-#              inbound only
+#   injection  an attempt to take over the reader, read by ads-injection-scanner
+#
+# `prompt` is the third side: what a person sends the model, before the model sees it.
+# Nothing is refused there by default — an injection in one's own message is a person
+# trying to talk the model out of its instructions, and that belongs in the journal
+# rather than in a refusal.
 #
 # `review` lists checks whose findings are only journalled even when the side is
 # enforced. Injection is there by default until the scanner's model is trusted; a
@@ -41,6 +45,7 @@ defaultWeight: 1
 # usual checks. A dev policy composed over this one may add checks and switch a side
 # up, never remove or switch down.
 interception:
+  prompt: {on: enforce, checks: [secrets, injection], review: [injection]}
   request: {on: enforce, checks: [secrets]}
   response: {on: enforce, checks: [secrets, injection], review: [injection]}
 

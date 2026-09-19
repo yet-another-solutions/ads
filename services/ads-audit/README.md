@@ -45,23 +45,32 @@ forever would block everything behind it.
 | | |
 |---|---|
 | `GET /audit/events` | the whole journal, newest first, a page at a time |
-| `GET /audit/runs/{run_id}` | one run, in the order it happened |
-| `GET /audit/subjects/{subject}` | everything one subject did |
+| `GET /audit/runs/{run_id}` | one run, newest first, a page at a time |
+| `GET /audit/subjects/{subject}` | everything one subject did, the same way |
 | `GET /audit/runs/{run_id}/budget` | the accumulated cost of denials within one run |
 | `GET /audit/subjects/{subject}/budget` | the same across a subject's runs |
 | `GET /audit/conversations/{id}` | every run of one chat |
-| `GET /audit/conversations/{id}/budget` | the chat's budget, and when it was blocked if it was |
+| `GET /audit/conversations/{id}/budget` | the chat's budget, when it was blocked if it stands, and when and by whom it was lifted |
+| `DELETE /audit/conversations/{id}/block` | `?by=…` lifts the block and tells the policy service |
 
-Only the journal is paged, because only it is unbounded; a run is bounded by its own
-lifetime. Paging is keyset on `(recorded_at, event_id)` rather than an offset: the
+Every read of events is paged, the journal and the narrower ones alike: a run is bounded
+by its lifetime rather than by a count of events, and an agent that keeps being refused
+can fill one. Paging is keyset on `(recorded_at, event_id)` rather than an offset: the
 journal only grows, so a cursor keeps pointing at the same row however much lands after
 it. Carry `next_cursor` back to continue, and a page size above the service's ceiling is
-capped rather than refused.
+capped rather than refused. A cursor whose moment carries no time zone is refused rather
+than guessed at.
+
+Moments are stored and served in UTC. `?tz=Europe/Moscow` on any of the reads above
+converts them on the way out, so a journal can be read against the clock on the wall;
+what the journal holds does not change, and an unknown zone is refused.
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | the journal answers. 503 otherwise |
 
 The budget is derived from the journal on every read, never stored as a counter, so it
-cannot drift away from the events it summarises. Accumulation per subject is a signal
+cannot drift away from the events it summarises. PostgreSQL sums it: a denial repeated
+on the same capability and resource is counted at its multiple by the query itself,
+so nothing has to travel out of the database to be added up. Accumulation per subject is a signal
 for whoever reviews the journal, not an automatic block: blocking a person for what an
 agent did is a guaranteed argument.
 
@@ -70,8 +79,13 @@ budget, and once it reaches `ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` the chat is bl
 for good: the block is written to `conversation_blocks` in the same transaction as the
 event, then sent to the policy service, which refuses every later decision in the chat.
 The table is the record; the policy service's copy is re-sent at start and every
-`ADS_AUDIT_BLOCK_DELIVERY_SECONDS`, so a lost copy comes back. There is no unblocking
-yet.
+`ADS_AUDIT_BLOCK_DELIVERY_SECONDS`, so a lost copy comes back.
+
+`DELETE /audit/conversations/{id}/block?by=…` lifts a block. Who lifted it is required
+and stays in the row beside the budget at that moment, so a lift is as much a record as
+the block was. The chat is not blocked again by the budget it was forgiven: what it
+spends after the lift is counted against the limit instead. A lifted row is not re-sent
+to the policy service, and the copy there is deleted at once.
 
 ## Configuration
 

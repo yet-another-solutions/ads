@@ -69,6 +69,19 @@ What a result is read for comes with the decision (`interception`, per rule):
 A decision recorded under `review` carries weight 0, so it never adds to a chat's
 budget.
 
+### Reading a prompt
+
+The third side is what a person sends the model, read before the model sees it
+(`POST /guardrail/prompts`). The same two checks run there: a credential someone
+pasted into their own message is cut out before it leaves, and an injection —
+a person talking the model out of its instructions — is journalled. By default
+nothing is refused on this side; with `injection` out of the side's `review` list the
+message is withheld and never reaches the model.
+
+The policy service decides this side as it decides a call, so a prompt in a chat whose
+run is finished, unknown or blocked comes back uninspected rather than refused: a
+blocked chat loses its tools, not its answers.
+
 A refusal is a JSON-RPC error with the request's id, the decision's `message`, and
 `data` saying who refused and, broadly, why:
 
@@ -84,7 +97,9 @@ Only `prompt-injection` is meant to be shown to the person; everything else stay
 
 It does not decide, and it does not translate. The tool call goes on in the agent's own
 words — `{source, tool, arguments}` — and the policy service says both what that amounts
-to and whether it is allowed.
+to and whether it is allowed. Arguments travel as the MCP server sent them, nested
+objects and lists included: turning one into the resource a rule is written over is the
+binding's job, and the checks that read text walk the whole structure.
 
 It does not guess who a task is for or what it works on: whoever creates the sandbox
 says that when opening the run. Where tools execute is not the run's business either —
@@ -169,6 +184,7 @@ are public.
 | `GET /guardrail/runs/{id}` | the run as it stands, so a launcher can tell a live run from one to replace |
 | `POST /guardrail/runs/{id}/finish` | the task is over → the finished run |
 | `POST /guardrail/permissions` | `{run_id, source, tool, arguments}` → the decision; a source `mcp:<name>` is decided at that server's site |
+| `POST /guardrail/prompts` | `{run_id, texts}` → what the model may see: the texts as they may go on, and whether they were withheld |
 | `GET /health/live`, `/health/ready` | the process is up |
 
 ## Configuration

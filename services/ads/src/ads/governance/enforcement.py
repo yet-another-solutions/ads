@@ -12,7 +12,7 @@ from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Capability, DecisionRequest, PolicyDecision, Run
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -34,7 +34,7 @@ class Enforcer:
         self._run = run
         self._audit = audit
         self._attributes = dict(attributes or {})
-        self._denied_message = denied_message or GovernanceSettings().denied_message
+        self._denied_message = denied_message or DENIED_MESSAGE
 
     def check(self, capability: Capability, resource: str) -> PolicyDecision:
         context = SecurityContextHolder.require()
@@ -52,7 +52,9 @@ class Enforcer:
         try:
             self._audit.enqueue(record(request, decision))
         except AuditBacklogFull as exc:
-            return unreachable(f"cannot journal the decision: {exc}", self._denied_message)
+            refusal = unreachable(f"cannot journal the decision: {exc}", self._denied_message)
+            self._audit.enqueue_refusal(record(request, refusal))
+            return refusal
         return decision
 
 

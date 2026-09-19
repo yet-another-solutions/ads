@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PlacementRules, ResourceNaming
 from ads_policy.contract import (
     Capability,
     DecisionRequest,
@@ -13,7 +13,8 @@ from ads_policy.contract import (
     RunRequest,
 )
 
-SETTINGS = GovernanceSettings()
+NAMING = ResourceNaming()
+PLACEMENT = PlacementRules()
 ATTRIBUTES = {"repo.write": "true", "agent": "true"}
 
 
@@ -22,7 +23,7 @@ def run_context(**overrides: str) -> RunContext:
         "project": "ads",
         "repo": "yet-another-solutions/ads",
         "env": "dev",
-        "workdir": SETTINGS.workdir,
+        "workdir": NAMING.workdir,
     }
     values.update(overrides)
     return RunContext(**values)
@@ -52,13 +53,13 @@ def run_request(level: IsolationLevel, subject: str = "alice", holder: str = "")
     runtime: str | None = None
     placement = Placement.CLUSTER
     if level is IsolationLevel.CONTAINER:
-        labels = {SETTINGS.application_node_label: SETTINGS.node_label_value}
+        labels = {PLACEMENT.application_node_label: PLACEMENT.node_label_value}
     elif level is IsolationLevel.VM:
         labels = {
-            SETTINGS.sandbox_node_label: SETTINGS.node_label_value,
-            SETTINGS.application_node_label: SETTINGS.node_label_value,
+            PLACEMENT.sandbox_node_label: PLACEMENT.node_label_value,
+            PLACEMENT.application_node_label: PLACEMENT.node_label_value,
         }
-        runtime = SETTINGS.vm_runtime_class
+        runtime = PLACEMENT.vm_runtime_class
     else:
         placement = Placement.WORKSTATION
     return RunRequest(
@@ -66,7 +67,7 @@ def run_request(level: IsolationLevel, subject: str = "alice", holder: str = "")
         project="ads",
         repo="yet-another-solutions/ads",
         env="dev",
-        workdir=SETTINGS.workdir,
+        workdir=NAMING.workdir,
         placement=placement,
         runtime_class_name=runtime,
         node_labels=labels,

@@ -8,7 +8,7 @@ from ads.governance.enforcement import Enforcer, EnforcerHolder, require_permiss
 from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Capability, Effect, IsolationLevel
 from ads_policy.service import PolicyService
 from tests.policy import (
@@ -68,7 +68,7 @@ def test_a_denied_call_is_forbidden_and_says_nothing_useful(
         with EnforcerHolder.bound(_enforcer(policy_client, audit)):
             with pytest.raises(AccessDenied) as denied:
                 _AgentTools().read_secret()
-    assert denied.value.detail == GovernanceSettings().denied_message
+    assert denied.value.detail == DENIED_MESSAGE
     assert Capability.SECRET_READ.value not in denied.value.detail
 
 

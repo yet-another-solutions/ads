@@ -6,6 +6,8 @@ from typing import Any
 
 from litestar.testing import TestClient
 
+from ads.audit_client import ConversationBlockView
+from ads.exceptions import NotFound
 from ads.identity import (
     ACCESS_TOKEN_SESSION_KEY,
     identity_from_claims,
@@ -292,6 +294,37 @@ def attach_fake_session_binder(
         "ads",
     )
     return oidc_verifier
+
+
+class FakeAudit:
+    """In-memory ads-audit. Only what an auditor asks it for."""
+
+    def __init__(self) -> None:
+        self.blocked: dict[str, int] = {}
+        self.lifted: list[tuple[str, str]] = []
+
+    def block(self, conversation: uuid.UUID, budget: int = 31) -> None:
+        self.blocked[str(conversation)] = budget
+
+    async def conversation_block(self, conversation: str) -> ConversationBlockView:
+        budget = self.blocked.get(conversation)
+        return ConversationBlockView(
+            conversation=conversation,
+            budget=budget or 0,
+            blocked_at=None if budget is None else "2026-09-19T10:00:00+00:00",
+        )
+
+    async def lift_conversation_block(self, conversation: str, by: str) -> ConversationBlockView:
+        if conversation not in self.blocked:
+            raise NotFound("this chat carries no block")
+        budget = self.blocked.pop(conversation)
+        self.lifted.append((conversation, by))
+        return ConversationBlockView(
+            conversation=conversation,
+            budget=budget,
+            lifted_at="2026-09-19T10:05:00+00:00",
+            lifted_by=by,
+        )
 
 
 def login(client: TestClient, sub: uuid.UUID = USER_ID, roles: list[str] | None = None) -> None:

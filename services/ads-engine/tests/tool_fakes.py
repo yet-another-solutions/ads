@@ -46,11 +46,14 @@ class FakeGuardrail:
     unavailable_servers: set[str] = field(default_factory=set)
     ended_sessions: list[str] = field(default_factory=list)
     failures_so_far: dict[str, int] = field(default_factory=dict)
+    prompts: list[dict[str, Any]] = field(default_factory=list)
+    prompt_reading: dict[str, Any] | None = None
 
     def application(self) -> web.Application:
         app = web.Application()
         app.router.add_get("/guardrail/runs/{run_id}", self.find_run)
         app.router.add_post("/guardrail/runs", self.open_run)
+        app.router.add_post("/guardrail/prompts", self.inspect_prompt)
         app.router.add_post("/mcp/{server}", self.mcp)
         app.router.add_delete("/mcp/{server}", self.end_session)
         return app
@@ -75,6 +78,18 @@ class FakeGuardrail:
         self.openings.append(opening)
         run_id = self.run_in_state("running")
         return web.json_response(self.runs[run_id], status=201)
+
+    async def inspect_prompt(self, request: web.Request) -> web.Response:
+        if request.headers.get("authorization") != f"Bearer {GUARDRAIL_API_TOKEN}":
+            return web.json_response({}, status=401)
+        asked = await request.json()
+        self.prompts.append(asked)
+        reading = self.prompt_reading or {
+            "decision": {"rule_id": "prompt.inspected"},
+            "texts": asked["texts"],
+            "withheld": False,
+        }
+        return web.json_response(reading, status=201)
 
     async def end_session(self, request: web.Request) -> web.Response:
         self.ended_sessions.append(request.headers.get("mcp-session-id", ""))

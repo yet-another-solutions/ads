@@ -9,12 +9,11 @@ from ads_policy.audit import (
     record,
 )
 from ads_policy.build import BUILD_ENV, identity
-from ads_policy.config import GovernanceSettings
 from ads_policy.contract import AuditEvent, Capability, Effect, IsolationLevel
+from ads_policy.pdp import PolicyDecisionPoint
+from ads_policy.run import RunStore
 from ads_policy.service import PolicyService
 from policy_helpers import decision_request, run_request
-
-SETTINGS = GovernanceSettings()
 
 
 class _FlakySink:
@@ -120,11 +119,58 @@ async def test_an_exchange_that_fails_midway_keeps_the_rest() -> None:
 
 
 def test_the_backlog_has_a_ceiling() -> None:
-    buffered = BufferedAuditSink(_FlakySink(), GovernanceSettings(audit_backlog=2))
+    buffered = BufferedAuditSink(_FlakySink(), 2)
     buffered.enqueue(_event(Capability.SECRET_READ, "a", 5))
     buffered.enqueue(_event(Capability.SECRET_READ, "b", 5))
     with pytest.raises(AuditBacklogFull):
         buffered.enqueue(_event(Capability.SECRET_READ, "c", 5))
+
+
+@pytest.mark.anyio
+async def test_the_refusal_to_journal_is_itself_journalled(
+    pdp: PolicyDecisionPoint, runs: RunStore, journal: CollectingAuditSink
+) -> None:
+    audit = BufferedAuditSink(journal, 100)
+    while not audit.saturated:
+        audit.enqueue(_event(Capability.SECRET_READ, "a", 5))
+    service = PolicyService(pdp, runs, audit)
+    run = await service.start(run_request(IsolationLevel.VM))
+    decision = await service.decide(decision_request(run.id, Capability.DB_QUERY, "select 1"))
+    assert decision.rule_id == "audit.backlog"
+    assert audit.pending[-1].rule_id == "audit.backlog"
+    assert audit.lost == 1
+
+
+def _full_backlog(capacity: int = 100) -> BufferedAuditSink:
+    buffered = BufferedAuditSink(_FlakySink(), capacity)
+    while not buffered.saturated:
+        buffered.enqueue(_event(Capability.SECRET_READ, "a", 5))
+    return buffered
+
+
+def test_a_refusal_still_fits_when_a_decision_no_longer_does() -> None:
+    buffered = _full_backlog()
+    with pytest.raises(AuditBacklogFull):
+        buffered.enqueue(_event(Capability.SECRET_READ, "b", 5))
+    buffered.enqueue_refusal(_event(Capability.SECRET_READ, "b", 5))
+    assert len(buffered.pending) == 100
+
+
+def test_a_decision_that_could_not_be_journalled_is_counted() -> None:
+    buffered = _full_backlog()
+    assert buffered.lost == 0
+    for _ in range(3):
+        with pytest.raises(AuditBacklogFull):
+            buffered.enqueue(_event(Capability.SECRET_READ, "b", 5))
+    assert buffered.lost == 3
+
+
+def test_refusals_beyond_the_reserve_are_counted_rather_than_raised() -> None:
+    buffered = _full_backlog()
+    for _ in range(5):
+        buffered.enqueue_refusal(_event(Capability.SECRET_READ, "b", 5))
+    assert len(buffered.pending) == 100
+    assert buffered.lost == 4
 
 
 @pytest.mark.anyio

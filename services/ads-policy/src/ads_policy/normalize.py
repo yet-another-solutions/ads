@@ -3,7 +3,7 @@ from __future__ import annotations
 import posixpath
 from urllib.parse import urlsplit
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import ResourceNaming
 
 
 def within_workdir(resource: str, workdir: str) -> bool:
@@ -26,8 +26,8 @@ def egress_host(resource: str) -> str:
     return (urlsplit(raw).hostname or "").lower()
 
 
-def branch_name(resource: str, settings: GovernanceSettings | None = None) -> str:
-    config = settings or GovernanceSettings()
+def branch_name(resource: str, settings: ResourceNaming | None = None) -> str:
+    config = settings or ResourceNaming()
     name = resource.strip()
     for prefix in config.ref_prefixes:
         if name.startswith(prefix):

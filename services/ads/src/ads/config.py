@@ -37,6 +37,9 @@ class Settings:
     bind_host: str
     port: int
     database_url: str = "sqlite:///:memory:"
+    amqp_url: str = ""
+    keycloak_auditor_role: str = "auditor"
+    audit_flush_seconds: float = 1.0
     kafka_bootstrap_servers: str = ""
     engine_request_topic: str = "ads.engine.request"
     engine_output_topic: str = "ads.engine.output"
@@ -51,6 +54,9 @@ class Settings:
     # Empty means no policy service is configured, and every decision then denies.
     policy_url: str = ""
     policy_api_token: str = ""
+    # Empty means an auditor cannot read or lift a chat's block from here.
+    audit_url: str = ""
+    audit_api_token: str = ""
 
     def session_secret_bytes(self) -> bytes:
         if not self.session_secret.strip():
@@ -94,6 +100,7 @@ def load_settings() -> Settings:
         keycloak_client_secret=_env("ADS_KEYCLOAK_CLIENT_SECRET"),
         keycloak_audience=_env("ADS_KEYCLOAK_AUDIENCE", "ads"),
         keycloak_role=_env("ADS_KEYCLOAK_ROLE", "user"),
+        keycloak_auditor_role=_env("ADS_KEYCLOAK_AUDITOR_ROLE", "auditor"),
         session_secret=session_secret,
         public_base_url=_env("ADS_PUBLIC_BASE_URL").rstrip("/"),
         tls_cert_path=cert_path,
@@ -102,6 +109,7 @@ def load_settings() -> Settings:
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
         database_url=_env("ADS_DATABASE_URL"),
+        amqp_url=_env("ADS_AMQP_URL", ""),
         kafka_bootstrap_servers=_env("ADS_KAFKA_BOOTSTRAP_SERVERS"),
         engine_request_topic=_env("ADS_ENGINE_REQUEST_TOPIC", "ads.engine.request"),
         engine_output_topic=_env("ADS_ENGINE_OUTPUT_TOPIC", "ads.engine.output"),
@@ -112,6 +120,8 @@ def load_settings() -> Settings:
         engine_allowed_azp=_env("ADS_ENGINE_ALLOWED_AZP", "ads-engine"),
         policy_url=_env("ADS_POLICY_URL", "").rstrip("/"),
         policy_api_token=_env("ADS_POLICY_API_TOKEN", ""),
+        audit_url=_env("ADS_AUDIT_URL", "").rstrip("/"),
+        audit_api_token=_env("ADS_AUDIT_API_TOKEN", ""),
     )
     load_tls_context(settings)
     return settings

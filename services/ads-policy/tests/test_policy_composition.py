@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import CallerRoles, PolicyDefaults
 from ads_policy.contract import (
     Capability,
     Effect,
@@ -82,7 +82,7 @@ def test_dev_policy_only_adds_protected_branches(policy: Policy) -> None:
 def test_enforcement_survives_composition(policy: Policy) -> None:
     review = _dev_policy(mode=Mode.REVIEW)
     assert compose(policy, review).mode is Mode.ENFORCE
-    lenient_org = org_policy(GovernanceSettings(mode=Mode.REVIEW, deny_on_policy_error=False))
+    lenient_org = org_policy(PolicyDefaults(mode=Mode.REVIEW, deny_on_policy_error=False))
     assert compose(lenient_org, _dev_policy()).mode is Mode.ENFORCE
     assert compose(lenient_org, _dev_policy(mode=Mode.REVIEW)).mode is Mode.REVIEW
     assert compose(lenient_org, _dev_policy()).deny_on_policy_error is True
@@ -165,9 +165,9 @@ def test_an_unknown_level_in_a_document_is_dropped() -> None:
 
 
 def test_policy_is_written_over_attributes_not_role_names(policy: Policy) -> None:
-    settings = GovernanceSettings()
+    roles_of_callers = CallerRoles()
     rendered = repr(policy)
-    for role in settings.write_roles | settings.agent_roles:
+    for role in roles_of_callers.write_roles | roles_of_callers.agent_roles:
         assert role not in rendered
     for roles in (("developer",), ("maintainer", "viewer")):
         assert attributes_from_roles(roles)["repo.write"] == "true"
@@ -187,8 +187,8 @@ def test_missing_attributes_deny_the_capability(pdp: PolicyDecisionPoint) -> Non
 
 
 def test_the_delivered_policy_is_read_from_the_mounted_directory(tmp_path: Path) -> None:
-    settings = GovernanceSettings(policy_dir=tmp_path)
-    assert read_policy_document(settings) is None
+    document_path = tmp_path / "policy.yaml"
+    assert read_policy_document(document_path) is None
     (tmp_path / "policy.yaml").write_text(
         """
         version: org-2
@@ -199,9 +199,9 @@ def test_the_delivered_policy_is_read_from_the_mounted_directory(tmp_path: Path)
             levels: [vm]
         """
     )
-    document = read_policy_document(settings)
+    document = read_policy_document(document_path)
     assert document is not None
-    loaded = load_policy(document, settings)
+    loaded = load_policy(document)
     assert loaded.version == "org-2"
     rule = loaded.rule_for(Capability.PROCESS_EXEC, ResourceClass.ANY)
     assert rule is not None

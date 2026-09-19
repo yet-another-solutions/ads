@@ -37,7 +37,8 @@ Images:
 
 The ADS process reads `ADS_*` environment variables (Helm ConfigMap and Secret mount them):
 
-- Keycloak: `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_ID`, `ADS_KEYCLOAK_CLIENT_SECRET`, `ADS_KEYCLOAK_AUDIENCE`, `ADS_KEYCLOAK_ROLE`
+- Keycloak: `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_ID`, `ADS_KEYCLOAK_CLIENT_SECRET`, `ADS_KEYCLOAK_AUDIENCE`, `ADS_KEYCLOAK_ROLE`, `ADS_KEYCLOAK_AUDITOR_ROLE` (`auditor`; that role reads another person's chat, and every such reading is journalled)
+- Journal: `ADS_AMQP_URL` — where an auditor's reading is published; `ADS_AUDIT_URL` and `ADS_AUDIT_API_TOKEN` — where an auditor reads and lifts a chat's block. Without them those endpoints answer that the journal is not configured
 - Session: `ADS_SESSION_SECRET` (at least 16 bytes)
 - Public URL: `ADS_PUBLIC_BASE_URL` (HTTPS)
 - TLS: `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`, optional `ADS_TLS_CA_BUNDLE`
@@ -46,6 +47,11 @@ The ADS process reads `ADS_*` environment variables (Helm ConfigMap and Secret m
 TLS is required. Invalid certificate, key, or CA bundle material fails process startup instead of leaving a listening zombie.
 
 Public probes: `/health/live`, `/health/ready`.
+
+An auditor works through ads, where the role and the login already are, and ads asks the
+journal with a service token: `GET /auditor/sessions/{id}/block` says whether a chat is
+blocked, `DELETE` of the same path lifts the block and names the auditor as the one who
+did. Without the role both are 403.
 
 ads-engine is a Kafka worker (no HTTP). It reads `ADS_ENGINE_*`:
 
@@ -88,6 +94,11 @@ ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON
 ## Helm
 
 `charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname for ads, and TLS via cert-manager or bring-your-own secrets (optional CA bundle). ads-preferences is an in-cluster ClusterIP TLS service (`preferences.*`, including `preferences.database.url`). Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The capability matrix, tool-call bindings, run TTL, egress allowlist and protected branches live under `policy.*`; the journal database and broker under `audit.*`; the optional enforcement point under `guardrail.*`. The chart installs none of Kafka, Redis, RabbitMQ or Postgres.
+
+Connection strings and secrets have no defaults: a value that works by accident is worse
+than an install that stops. `charts/ads/values-ci.yaml` fills them with placeholders so
+the chart can be rendered without a cluster, and `helm lint`/`helm template` in CI pass
+it; `charts/ads/values-local.yaml` does the same for the throwaway stand.
 
 Install requires:
 

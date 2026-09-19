@@ -73,3 +73,9 @@ async def _publish_audit(container: AsyncContainer, settings: Settings) -> None:
             await audit.drain()
         except Exception:
             logger.exception("audit backlog not drained", pending=len(audit.pending))
+        if audit.lost:
+            logger.warning(
+                "decisions made without a journal entry",
+                lost=audit.lost,
+                pending=len(audit.pending),
+            )

@@ -7,7 +7,7 @@ from typing import Any
 
 from ads.security_context import SecurityContext
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PlacementRules, ResourceNaming
 from ads_policy.contract import (
     DecisionRequest,
     IsolationLevel,
@@ -22,7 +22,8 @@ from ads_policy.policy import org_policy
 from ads_policy.run import InMemoryRunStore
 from ads_policy.service import PolicyService
 
-SETTINGS = GovernanceSettings()
+PLACEMENT = PlacementRules()
+NAMING = ResourceNaming()
 ATTRIBUTES = {"repo.write": "true", "agent": "true"}
 
 
@@ -80,13 +81,13 @@ def run_request(level: IsolationLevel, subject: str = "alice") -> RunRequest:
     runtime: str | None = None
     placement = Placement.CLUSTER
     if level is IsolationLevel.CONTAINER:
-        labels = {SETTINGS.application_node_label: SETTINGS.node_label_value}
+        labels = {PLACEMENT.application_node_label: PLACEMENT.node_label_value}
     elif level is IsolationLevel.VM:
         labels = {
-            SETTINGS.sandbox_node_label: SETTINGS.node_label_value,
-            SETTINGS.application_node_label: SETTINGS.node_label_value,
+            PLACEMENT.sandbox_node_label: PLACEMENT.node_label_value,
+            PLACEMENT.application_node_label: PLACEMENT.node_label_value,
         }
-        runtime = SETTINGS.vm_runtime_class
+        runtime = PLACEMENT.vm_runtime_class
     else:
         placement = Placement.WORKSTATION
     return RunRequest(
@@ -94,7 +95,7 @@ def run_request(level: IsolationLevel, subject: str = "alice") -> RunRequest:
         project="ads",
         repo="yet-another-solutions/ads",
         env="dev",
-        workdir=SETTINGS.workdir,
+        workdir=NAMING.workdir,
         placement=placement,
         runtime_class_name=runtime,
         node_labels=labels,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE, PolicyDefaults
 from ads_policy.contract import (
     Approval,
     Capability,
@@ -62,7 +62,7 @@ def test_transform_changes_the_action_not_the_verdict() -> None:
 
 
 def test_review_mode_records_a_deny_without_applying_it(policy: Policy) -> None:
-    watching = org_policy(GovernanceSettings(mode=Mode.REVIEW))
+    watching = org_policy(PolicyDefaults(mode=Mode.REVIEW))
     decision = PolicyDecisionPoint(watching).decide(
         policy_request(Capability.SECRET_READ, "ads-client-secret")
     )
@@ -79,7 +79,7 @@ def test_review_mode_records_a_deny_without_applying_it(policy: Policy) -> None:
 def test_a_deny_says_only_what_is_permitted_instead(
     pdp: PolicyDecisionPoint, policy: Policy
 ) -> None:
-    allowed_messages = {GovernanceSettings().denied_message}
+    allowed_messages = {DENIED_MESSAGE}
     allowed_messages |= {f"use {rule.alternative}" for rule in policy.rules if rule.alternative}
     for capability, resource, level in DENIED:
         decision = pdp.decide(policy_request(capability, resource, level=level))
@@ -93,7 +93,7 @@ def test_a_deny_without_an_alternative_describes_nothing(pdp: PolicyDecisionPoin
     decision = pdp.decide(
         policy_request(Capability.PROCESS_EXEC, "uv sync", level=IsolationLevel.CONTAINER)
     )
-    assert decision.message == GovernanceSettings().denied_message
+    assert decision.message == DENIED_MESSAGE
     assert Capability.PROCESS_EXEC.value not in decision.message
 
 
@@ -113,7 +113,7 @@ def test_a_policy_error_denies(monkeypatch: pytest.MonkeyPatch, pdp: PolicyDecis
     decision = pdp.decide(policy_request(Capability.FS_READ, "/workspace/src/app.py"))
     assert decision.effect is Effect.DENY
     assert decision.rule_id == "policy.error"
-    assert decision.message == GovernanceSettings().denied_message
+    assert decision.message == DENIED_MESSAGE
 
 
 def test_a_policy_error_propagates_when_fail_closed_is_off(
@@ -123,7 +123,7 @@ def test_a_policy_error_propagates_when_fail_closed_is_off(
         raise RuntimeError("rule table is corrupt")
 
     monkeypatch.setattr("ads_policy.pdp.classify", explode)
-    lenient = PolicyDecisionPoint(org_policy(GovernanceSettings(deny_on_policy_error=False)))
+    lenient = PolicyDecisionPoint(org_policy(PolicyDefaults(deny_on_policy_error=False)))
     with pytest.raises(RuntimeError, match="corrupt"):
         lenient.decide(policy_request(Capability.FS_READ, "/workspace/src/app.py"))
 

@@ -18,7 +18,7 @@ from ads_policy.blocks import (
     InMemoryConversationBlocks,
     RedisConversationBlocks,
 )
-from ads_policy.config import GovernanceSettings, Settings
+from ads_policy.config import Settings
 from ads_policy.contract import Capability, Effect, IsolationLevel, Mode, RunRequest, RunState
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.run import RunStore
@@ -92,6 +92,19 @@ async def test_a_blocked_conversation_refuses_every_decision(
 
 
 @pytest.mark.anyio
+async def test_a_lifted_block_lets_the_conversation_decide_again(
+    blocking_service: PolicyService,
+) -> None:
+    run = await blocking_service.start(_vm_run_in(CHAT))
+    await blocking_service.block_conversation(CHAT, budget=31, by="ads-audit")
+    await blocking_service.lift_conversation_block(CHAT)
+    decision = await blocking_service.decide(
+        decision_request(run.id, Capability.FS_READ, WORKDIR_FILE)
+    )
+    assert decision.effect is Effect.ALLOW
+
+
+@pytest.mark.anyio
 async def test_a_new_run_of_a_blocked_conversation_is_refused_too(
     blocking_service: PolicyService,
 ) -> None:
@@ -162,7 +175,7 @@ def api(tmp_path: Path, redis: Redis) -> Iterator[TestClient]:
         tls_key_path=key,
         redis_url="redis://unused",
         amqp_url="amqp://unused",
-        governance=GovernanceSettings(policy_dir=tmp_path / "missing"),
+        policy_dir=tmp_path / "missing",
     )
     with TestClient(app=create_app(settings, redis, CollectingAuditSink())) as client:
         client.headers["authorization"] = f"Bearer {TOKEN}"

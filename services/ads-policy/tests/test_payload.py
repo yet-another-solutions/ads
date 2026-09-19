@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE, PayloadInspection
 from ads_policy.contract import Effect, InterceptionPoint
 from ads_policy.output import (
     PROMPT_INJECTION_RULE,
@@ -83,7 +83,7 @@ def test_a_found_injection_is_a_refusal_that_costs_like_a_leak() -> None:
     assert decision.effect is Effect.DENY
     assert decision.rule_id == PROMPT_INJECTION_RULE
     assert decision.point is InterceptionPoint.RESPONSE
-    assert decision.weight == GovernanceSettings().injection_weight
+    assert decision.weight == PayloadInspection().injection_weight
     assert "0.970" in decision.reason
 
 
@@ -91,7 +91,7 @@ def test_a_result_the_scanner_could_not_read_is_refused() -> None:
     decision = prompt_injection_unchecked("scanner unreachable")
     assert decision.effect is Effect.DENY
     assert decision.rule_id == SCANNER_UNAVAILABLE_RULE
-    assert decision.message == GovernanceSettings().denied_message
+    assert decision.message == DENIED_MESSAGE
 
 
 def test_a_secret_on_the_way_out_is_refused_not_redacted() -> None:
@@ -104,7 +104,7 @@ def test_a_secret_on_the_way_out_is_refused_not_redacted() -> None:
 
 def test_a_leak_costs_what_reading_a_secret_costs() -> None:
     decision = inspect_payload(f"export KEY={AWS}\n", InterceptionPoint.REQUEST)
-    assert decision.weight == GovernanceSettings().leak_weight
+    assert decision.weight == PayloadInspection().leak_weight
 
 
 def test_a_clean_request_goes_out() -> None:

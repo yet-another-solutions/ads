@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import fakeredis
@@ -11,11 +12,19 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 from ads_policy.app import create_app
 from ads_policy.audit import CollectingAuditSink
-from ads_policy.config import GovernanceSettings, Settings
+from ads_policy.config import (
+    DENIED_MESSAGE,
+    PlacementRules,
+    PolicyDefaults,
+    ResourceNaming,
+    Settings,
+)
 from ads_policy.contract import Capability, Effect, IsolationLevel
 
 TOKEN = "policy-api-token-32-bytes-long"
-SETTINGS = GovernanceSettings()
+NAMING = ResourceNaming()
+PLACEMENT = PlacementRules()
+DEFAULTS = PolicyDefaults()
 
 
 class _UnreachableRedis(fakeredis.FakeAsyncRedis):  # type: ignore[misc]
@@ -35,7 +44,7 @@ def service_settings(tmp_path: Path) -> Settings:
         tls_key_path=key,
         redis_url="redis://unused",
         amqp_url="amqp://unused",
-        governance=GovernanceSettings(policy_dir=tmp_path / "missing"),
+        policy_dir=tmp_path / "missing",
     )
 
 
@@ -52,15 +61,15 @@ def _start(api: TestClient, *, subject: str = "alice", vm: bool = True) -> dict[
         "project": "ads",
         "repo": "yet-another-solutions/ads",
         "env": "dev",
-        "workdir": SETTINGS.workdir,
-        "runtime_class_name": SETTINGS.vm_runtime_class if vm else None,
+        "workdir": NAMING.workdir,
+        "runtime_class_name": PLACEMENT.vm_runtime_class if vm else None,
         "node_labels": (
             {
-                SETTINGS.sandbox_node_label: SETTINGS.node_label_value,
-                SETTINGS.application_node_label: SETTINGS.node_label_value,
+                PLACEMENT.sandbox_node_label: PLACEMENT.node_label_value,
+                PLACEMENT.application_node_label: PLACEMENT.node_label_value,
             }
             if vm
-            else {SETTINGS.application_node_label: SETTINGS.node_label_value}
+            else {PLACEMENT.application_node_label: PLACEMENT.node_label_value}
         ),
     }
     response = api.post("/policy/runs", json=body)
@@ -81,6 +90,15 @@ def test_readiness_follows_the_run_store(service_settings: Settings) -> None:
         assert client.get("/health/ready").status_code == 503
 
 
+def test_readiness_goes_red_once_decisions_cannot_be_journalled(
+    service_settings: Settings, redis: Redis
+) -> None:
+    no_room = replace(service_settings, audit_backlog=0)
+    with TestClient(app=create_app(no_room, redis, CollectingAuditSink())) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/health/ready").status_code == 503
+
+
 def test_the_api_needs_the_token(service_settings: Settings, redis: Redis) -> None:
     with TestClient(app=create_app(service_settings, redis, CollectingAuditSink())) as client:
         assert client.get("/policy/version").status_code == 401
@@ -92,9 +110,9 @@ def test_the_api_needs_the_token(service_settings: Settings, redis: Redis) -> No
 
 def test_the_version_is_the_hash_the_pdp_computed(api: TestClient) -> None:
     payload = api.get("/policy/version").json()
-    assert payload["version"] == SETTINGS.policy_version
+    assert payload["version"] == DEFAULTS.policy_version
     assert len(payload["hash"]) == 64
-    assert payload["mode"] == SETTINGS.mode.value
+    assert payload["mode"] == DEFAULTS.mode.value
 
 
 def test_the_service_derives_the_level_from_the_placement(api: TestClient) -> None:
@@ -110,7 +128,7 @@ def test_an_unconfirmed_placement_opens_no_run(api: TestClient) -> None:
             "project": "ads",
             "repo": "yet-another-solutions/ads",
             "env": "dev",
-            "workdir": SETTINGS.workdir,
+            "workdir": NAMING.workdir,
         },
     )
     assert response.status_code == 400
@@ -125,7 +143,7 @@ def test_a_workstation_states_its_own_placement(api: TestClient) -> None:
             "project": "ads",
             "repo": "yet-another-solutions/ads",
             "env": "dev",
-            "workdir": SETTINGS.workdir,
+            "workdir": NAMING.workdir,
             "placement": "workstation",
         },
     )
@@ -146,7 +164,7 @@ def test_a_decision_comes_back_over_the_api(api: TestClient) -> None:
             "run_id": run["id"],
             "subject": "alice",
             "capability": Capability.FS_READ.value,
-            "resource": f"{SETTINGS.workdir}/src/app.py",
+            "resource": f"{NAMING.workdir}/src/app.py",
         },
     )
     assert allowed.status_code == 201
@@ -161,7 +179,7 @@ def test_a_decision_comes_back_over_the_api(api: TestClient) -> None:
         },
     )
     assert denied.json()["effect"] == Effect.DENY.value
-    assert denied.json()["message"] == SETTINGS.denied_message
+    assert denied.json()["message"] == DENIED_MESSAGE
 
 
 def test_an_unknown_run_is_denied(api: TestClient) -> None:
@@ -225,7 +243,7 @@ def test_the_service_reads_a_mounted_policy(tmp_path: Path, redis: Redis) -> Non
         tls_key_path=key,
         redis_url="redis://unused",
         amqp_url="amqp://unused",
-        governance=GovernanceSettings(policy_dir=policy_dir),
+        policy_dir=policy_dir,
     )
     with TestClient(app=create_app(settings, redis, CollectingAuditSink())) as client:
         client.headers["authorization"] = f"Bearer {TOKEN}"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from typing import Any
 
 import msgspec
 import pytest
@@ -11,7 +12,7 @@ from ads_guardrail.guardrail import Guardrail, NotAPerson, RunNotOpen, person_ho
 from ads_guardrail.scanner import InjectionScan
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.client import PolicyClient, UnconfiguredPolicyClient
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import (
     DEFAULT_RESPONSE,
     Capability,
@@ -33,10 +34,11 @@ from guardrail_helpers import (
     BOB,
     CLEAN_SCAN,
     FORGING_KEY,
-    GOVERNANCE,
     INJECTION_SCAN,
+    INSPECTION,
     KATA_ON_UNLABELLED_NODE_SITE,
     KATA_VM_SITE,
+    NAMING,
     PERSON_TOKEN_VERIFIER,
     WORKDIR_FILE,
     WORKSTATION_SITE,
@@ -51,7 +53,7 @@ CHAT = "3f2b6c1e-0000-4000-8000-000000000001"
 RUN_NEVER_OPENED = Run(
     id="run-1",
     subject=ALICE,
-    context=RunContext(project="ads", repo="ads", env="dev", workdir=GOVERNANCE.workdir),
+    context=RunContext(project="ads", repo="ads", env="dev", workdir=NAMING.workdir),
     isolation_level=None,
     policy_hash="",
 )
@@ -61,7 +63,7 @@ def _decide(
     guardrail: Guardrail,
     run: Run,
     tool: str,
-    arguments: Mapping[str, str],
+    arguments: Mapping[str, Any],
     site: Site | None = KATA_VM_SITE,
 ) -> PolicyDecision:
     return guardrail.decide_tool_call(run, "opencode", tool, arguments, site=site)
@@ -266,7 +268,7 @@ def test_one_process_serves_many_runs(guardrail: Guardrail) -> None:
 def test_denial_message_reveals_nothing(guardrail: Guardrail, alice_run: Run) -> None:
     decision = _decide(guardrail, alice_run, "read", {"filePath": "/etc/shadow"})
     assert decision.effect is Effect.DENY
-    assert decision.message == GOVERNANCE.denied_message
+    assert decision.message == DENIED_MESSAGE
     assert Capability.FS_READ.value not in decision.message
     for level in IsolationLevel:
         assert level.value not in decision.message
@@ -311,7 +313,7 @@ async def test_decision_made_without_the_policy_service_is_journalled_here(
 ) -> None:
     guardrail = Guardrail(
         settings=settings,
-        client=UnconfiguredPolicyClient(GOVERNANCE.denied_message),
+        client=UnconfiguredPolicyClient(DENIED_MESSAGE),
         audit=audit,
     )
     decision = _decide(guardrail, RUN_NEVER_OPENED, "read", {"filePath": WORKDIR_FILE})
@@ -330,8 +332,21 @@ def test_credential_in_arguments_turns_permission_into_refusal(
     assert decision.effect is Effect.DENY
     assert decision.rule_id == "payload.leak"
     assert decision.point is InterceptionPoint.REQUEST
-    assert decision.weight == GOVERNANCE.leak_weight
-    assert decision.message == GOVERNANCE.denied_message
+    assert decision.weight == INSPECTION.leak_weight
+    assert decision.message == DENIED_MESSAGE
+
+
+def test_a_credential_buried_in_a_nested_argument_is_still_found(
+    guardrail: Guardrail, alice_run: Run
+) -> None:
+    decision = _decide(
+        guardrail,
+        alice_run,
+        "webfetch",
+        {"url": "mirror.interlab", "headers": {"authorization": [f"KEY={AWS_KEY}"]}},
+    )
+    assert decision.effect is Effect.DENY
+    assert decision.rule_id == "payload.leak"
 
 
 def test_clean_arguments_keep_the_permission(guardrail: Guardrail, alice_run: Run) -> None:
@@ -405,7 +420,7 @@ def test_redaction_survives_a_full_journal(
     guardrail = Guardrail(
         settings=settings,
         client=policy_client,
-        audit=BufferedAuditSink(journal, GovernanceSettings(audit_backlog=0)),
+        audit=BufferedAuditSink(journal, 0),
         person_token_verifier=PERSON_TOKEN_VERIFIER,
     )
     run = guardrail.open_run(opening())
@@ -444,7 +459,7 @@ async def test_a_result_with_an_injection_is_withheld_and_journalled(
     assert await guardrail.flush_audit() == 1
     event = journal.events()[-1]
     assert event.rule_id == PROMPT_INJECTION_RULE
-    assert event.weight == GOVERNANCE.injection_weight
+    assert event.weight == INSPECTION.injection_weight
     assert event.capability is Capability.FS_READ
 
 
@@ -499,8 +514,8 @@ def test_full_journal_never_turns_refusal_into_permission(
 ) -> None:
     guardrail = Guardrail(
         settings=settings,
-        client=UnconfiguredPolicyClient(GOVERNANCE.denied_message),
-        audit=BufferedAuditSink(journal, GovernanceSettings(audit_backlog=0)),
+        client=UnconfiguredPolicyClient(DENIED_MESSAGE),
+        audit=BufferedAuditSink(journal, 0),
     )
     decision = _decide(guardrail, RUN_NEVER_OPENED, "read", {"filePath": WORKDIR_FILE})
     assert decision.effect is Effect.DENY

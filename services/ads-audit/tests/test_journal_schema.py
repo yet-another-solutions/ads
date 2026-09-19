@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy.dialects import postgresql
+
 from ads_audit.models import TABLE, audit_decisions
+from ads_audit.repository import deny_budget_statement
 from ads_audit.schema import (
     ADD_CONVERSATION,
     ADD_DECIDED_BY,
@@ -37,6 +40,18 @@ def test_the_written_row_takes_recorded_at_from_the_event_so_a_redelivery_confli
     written = set(statement.compile().binds)
     assert "recorded_at" in written
     assert {"recorded_at", "event_id"} <= written
+
+
+def test_the_deny_budget_is_summed_by_the_database_not_by_pulling_the_events() -> None:
+    statement = deny_budget_statement(audit_decisions.c.conversation == "chat", 3)
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "sum(CASE WHEN" in sql
+    assert (
+        "row_number() OVER (PARTITION BY audit_decisions.capability, audit_decisions.resource"
+        in sql
+    )
+    assert "ORDER BY audit_decisions.recorded_at, audit_decisions.id)" in sql
+    assert "audit_decisions.effect =" in sql
 
 
 def test_month_bounds_roll_over_the_year() -> None:
@@ -93,8 +108,9 @@ def test_the_journal_says_which_conversation_the_row_belongs_to() -> None:
 
 def test_conversation_blocks_live_in_their_own_table() -> None:
     assert "CREATE TABLE IF NOT EXISTS conversation_blocks" in CREATE_BLOCKS_TABLE
-    assert "conversation varchar(64) PRIMARY KEY" in CREATE_BLOCKS_TABLE
+    assert "conversation  varchar(64) PRIMARY KEY" in CREATE_BLOCKS_TABLE
     assert "PARTITION" not in CREATE_BLOCKS_TABLE
+    assert "lifted_by" in CREATE_BLOCKS_TABLE
 
 
 def test_an_existing_journal_without_the_build_column_gets_it_added() -> None:

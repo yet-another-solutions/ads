@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PlacementRules
 from ads_policy.contract import Capability, Effect, IsolationLevel
 from ads_policy.isolation import assign_isolation_level
 from ads_policy.pdp import PolicyDecisionPoint
@@ -98,7 +98,7 @@ def test_container_and_vm_differ_in_exec_migrate_and_push(pdp: PolicyDecisionPoi
 
 
 def test_without_a_sandbox_the_vm_only_rows_are_out_of_reach(pdp: PolicyDecisionPoint) -> None:
-    without = GovernanceSettings(sandbox_available=False)
+    without = PlacementRules(sandbox_available=False)
     claimed = assign_isolation_level(
         runtime_class_name=without.vm_runtime_class,
         node_labels={

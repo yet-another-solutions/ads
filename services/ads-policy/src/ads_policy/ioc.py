@@ -10,7 +10,7 @@ from redis.asyncio import Redis
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
 from ads_policy.blocks import ConversationBlocks, RedisConversationBlocks
 from ads_policy.build import identity
-from ads_policy.config import Settings
+from ads_policy.config import Settings, policy_document_path
 from ads_policy.contract import Policy
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import load_policy, org_policy, read_policy_document
@@ -36,14 +36,19 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def policy(self, settings: Settings) -> Policy:
-        document = read_policy_document(settings.governance)
+        document = read_policy_document(policy_document_path(settings))
         if document is None:
-            return org_policy(settings.governance)
-        return load_policy(document, settings.governance)
+            return org_policy(settings.policy_defaults)
+        return load_policy(document, settings.policy_defaults)
 
     @provide(scope=Scope.APP)
     def pdp(self, settings: Settings, policy: Policy) -> PolicyDecisionPoint:
-        return PolicyDecisionPoint(policy, settings.governance)
+        return PolicyDecisionPoint(
+            policy,
+            settings.naming,
+            settings.policy_versions_kept,
+            settings.denied_message,
+        )
 
     @provide(scope=Scope.APP)
     async def redis(self, settings: Settings) -> AsyncIterator[Redis]:
@@ -58,7 +63,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def runs(self, settings: Settings, redis: Redis) -> RunStore:
-        return RedisRunStore(redis, settings.governance)
+        return RedisRunStore(redis, settings.run_ttl_seconds)
 
     @provide(scope=Scope.APP)
     async def broker(self, settings: Settings) -> AsyncIterator[AbstractRobustConnection | None]:
@@ -77,7 +82,7 @@ class AppProvider(Provider):
     ) -> BufferedAuditSink:
         sink = self._sink if broker is None else RabbitAuditSink(broker)
         assert sink is not None
-        return BufferedAuditSink(sink, settings.governance, decided_by=identity("ads-policy"))
+        return BufferedAuditSink(sink, settings.audit_backlog, decided_by=identity("ads-policy"))
 
     @provide(scope=Scope.APP)
     def blocks(self, redis: Redis) -> ConversationBlocks:
@@ -92,4 +97,12 @@ class AppProvider(Provider):
         audit: BufferedAuditSink,
         blocks: ConversationBlocks,
     ) -> PolicyService:
-        return PolicyService(pdp, runs, audit, settings.governance, blocks)
+        return PolicyService(
+            pdp,
+            runs,
+            audit,
+            settings.placement,
+            blocks,
+            settings.denied_message,
+            settings.policy_defaults.default_weight,
+        )

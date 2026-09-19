@@ -1,0 +1,33 @@
+# Placeholders for rendering the chart in CI. Everything here is required by the chart
+# and deliberately has no default: a connection string or a secret that works by
+# accident is worse than a failed install. Nothing here reaches a cluster.
+
+database:
+  url: postgresql+psycopg://ads:ci@ads-postgres:5432/ads
+
+policy:
+  redis:
+    url: rediss://ads-redis:6379/0
+
+audit:
+  rabbitmq:
+    url: amqps://ads:ci@ads-rabbitmq:5671/
+  postgres:
+    url: postgresql+asyncpg://ads:ci@ads-postgres:5432/ads_audit
+
+engine:
+  database:
+    url: postgresql+psycopg://ads_engine:ci@ads-postgres:5432/ads_engine
+
+preferences:
+  database:
+    url: postgresql+psycopg://ads_preferences:ci@ads-postgres:5432/ads_preferences
+
+secrets:
+  keycloakClientSecret: ci-keycloak-client-secret
+  engineKeycloakClientSecret: ci-engine-client-secret
+  sessionSecret: ci-session-secret-32-bytes-long
+  policyApiToken: ci-policy-token-32-bytes-long
+  auditApiToken: ci-audit-token-32-bytes-long
+  guardrailApiToken: ci-guardrail-token-32-bytes
+  injectionScannerApiToken: ci-scanner-token-32-bytes

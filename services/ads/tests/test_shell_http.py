@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import time
 import uuid
 
 from litestar.testing import TestClient
 
+from ads.session_service import AUDITOR_READ_RULE
+from ads_policy.audit import CollectingAuditSink
+from ads_policy.contract import AuditEvent
 from tests.threadline_fakes import FakePreferences, RecordingKafka, login
 from tests.threadline_flows import create_project as _create_project
 from tests.threadline_flows import create_session as _create_session
+
+AUDITOR = uuid.UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+
+
+def _drained(journal: CollectingAuditSink) -> tuple[AuditEvent, ...]:
+    """The journal is flushed on a timer, so a reading lands shortly after the read."""
+    deadline = time.monotonic() + 5
+    while not journal.events() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return journal.events()
 
 
 def test_unauthenticated_shell_redirects_to_login(client: TestClient) -> None:
@@ -168,4 +182,32 @@ def test_other_users_session_is_403(client: TestClient) -> None:
     session_id = _create_session(client, project)
     login(client, sub=uuid.UUID("cccccccc-cccc-4ccc-8ccc-cccccccccccc"))
     response = client.get(f"/projects/{project}/sessions/{session_id}")
+    assert response.status_code == 403
+
+
+def test_an_auditor_reads_another_persons_chat_and_the_reading_is_journalled(
+    client: TestClient, journal: CollectingAuditSink
+) -> None:
+    login(client)
+    project = _create_project(client)
+    session_id = _create_session(client, project)
+    login(client, sub=AUDITOR, roles=["user", "auditor"])
+    response = client.get(f"/projects/{project}/sessions/{session_id}")
+    assert response.status_code == 200
+    (read,) = [event for event in _drained(journal) if event.rule_id == AUDITOR_READ_RULE]
+    assert read.subject == str(AUDITOR)
+    assert read.resource == str(session_id)
+    assert read.conversation == str(session_id)
+    assert read.weight == 0
+
+
+def test_an_auditor_may_not_write_in_another_persons_chat(client: TestClient) -> None:
+    login(client)
+    project = _create_project(client)
+    session_id = _create_session(client, project)
+    login(client, sub=AUDITOR, roles=["user", "auditor"])
+    response = client.post(
+        f"/projects/{project}/sessions/{session_id}/messages",
+        data={"user_input": "hello", "model_id": str(uuid.uuid4())},
+    )
     assert response.status_code == 403

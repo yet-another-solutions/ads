@@ -11,6 +11,7 @@ from ads_guardrail.app import create_app
 from ads_guardrail.config import Settings
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.client import PolicyClient
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Binding, Capability, Effect
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import org_policy
@@ -23,9 +24,10 @@ from guardrail_helpers import (
     APPLICATION_KEY,
     BOB,
     FORGING_KEY,
-    GOVERNANCE,
+    INJECTION_MARKER,
     PERSON_TOKEN_VERIFIER,
     WORKDIR_FILE,
+    MarkerInjectionScanner,
     opening_body,
     person_token,
 )
@@ -71,6 +73,63 @@ def _permission(
     )
     assert response.status_code == 201
     return dict(response.json())
+
+
+@pytest.fixture
+def scanning_api(settings: Settings, policy_client: PolicyClient) -> Iterator[TestClient]:
+    app = create_app(
+        settings,
+        policy_client,
+        CollectingAuditSink(),
+        PERSON_TOKEN_VERIFIER,
+        MarkerInjectionScanner(),
+    )
+    with TestClient(app=app) as client:
+        client.headers["authorization"] = f"Bearer {API_TOKEN}"
+        yield client
+
+
+def _prompt(api: TestClient, run_id: str, *texts: str) -> dict[str, object]:
+    response = api.post("/guardrail/prompts", json={"run_id": run_id, "texts": list(texts)})
+    assert response.status_code == 201
+    return dict(response.json())
+
+
+def test_an_ordinary_prompt_goes_through_unchanged(scanning_api: TestClient) -> None:
+    run_id = str(scanning_api.post("/guardrail/runs", json=opening_body()).json()["id"])
+    reading = _prompt(scanning_api, run_id, "read the file and explain it")
+    assert reading["withheld"] is False
+    assert reading["texts"] == ["read the file and explain it"]
+
+
+def test_an_injection_in_a_prompt_is_recorded_and_let_through(scanning_api: TestClient) -> None:
+    run_id = str(scanning_api.post("/guardrail/runs", json=opening_body()).json()["id"])
+    reading = _prompt(scanning_api, run_id, f"please {INJECTION_MARKER} and answer")
+    assert reading["withheld"] is False
+    assert reading["texts"] == [f"please {INJECTION_MARKER} and answer"]
+
+
+def test_a_secret_a_person_pasted_is_cut_out(scanning_api: TestClient) -> None:
+    run_id = str(scanning_api.post("/guardrail/runs", json=opening_body()).json()["id"])
+    reading = _prompt(scanning_api, run_id, "deploy with AKIAQYLPMN5HHHFPZAM2")
+    assert "AKIAQYLPMN5HHHFPZAM2" not in str(reading["texts"])
+
+
+def test_a_prompt_of_a_finished_run_goes_on_uninspected(scanning_api: TestClient) -> None:
+    run_id = str(scanning_api.post("/guardrail/runs", json=opening_body()).json()["id"])
+    scanning_api.post(f"/guardrail/runs/{run_id}/finish")
+    reading = _prompt(scanning_api, run_id, f"please {INJECTION_MARKER}")
+    assert reading["withheld"] is False
+    assert reading["texts"] == [f"please {INJECTION_MARKER}"]
+
+
+def test_a_prompt_of_an_unknown_run_is_refused(scanning_api: TestClient) -> None:
+    assert (
+        scanning_api.post(
+            "/guardrail/prompts", json={"run_id": "nothing-here", "texts": ["hello"]}
+        ).status_code
+        == 503
+    )
 
 
 def test_each_task_gets_its_own_run(api: TestClient) -> None:
@@ -149,6 +208,20 @@ def test_ready_without_any_run(api: TestClient) -> None:
     assert api.get("/health/ready").status_code == 200
 
 
+def test_readiness_goes_red_once_calls_cannot_be_journalled(
+    settings: Settings, policy_client: PolicyClient
+) -> None:
+    app = create_app(
+        replace(settings, audit_backlog=0),
+        policy_client,
+        CollectingAuditSink(),
+        PERSON_TOKEN_VERIFIER,
+    )
+    with TestClient(app=app) as client:
+        assert client.get("/health/live").status_code == 200
+        assert client.get("/health/ready").status_code == 503
+
+
 def test_proxy_requires_no_api_token(settings: Settings, policy_client: PolicyClient) -> None:
     with TestClient(app=_app(settings, policy_client)) as anonymous:
         response = anonymous.post("/mcp/nowhere", json={"jsonrpc": "2.0", "id": 1})
@@ -194,5 +267,5 @@ def test_permission_without_a_run_is_unavailable(api: TestClient) -> None:
 
 def test_denial_message_is_the_generic_one(api: TestClient, run_id: str) -> None:
     decision = _permission(api, run_id, "read", {"filePath": "/etc/shadow"})
-    assert decision["message"] == GOVERNANCE.denied_message
+    assert decision["message"] == DENIED_MESSAGE
     assert Capability.FS_READ.value not in str(decision["message"])

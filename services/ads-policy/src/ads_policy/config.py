@@ -132,38 +132,51 @@ DEFAULT_EGRESS_ALLOWLIST = (
 DEFAULT_PROTECTED_BRANCHES = ("main", "master", "release")
 
 
+DENIED_MESSAGE = "this action is not available"
+
+
 @dataclass(frozen=True, slots=True)
-class GovernanceSettings:
-    workdir: str = "/workspace"
-    policy_dir: Path = Path("/policy")
-    policy_document_name: str = "policy.yaml"
+class PolicyDefaults:
     schema_version: str = "ads.governance/v1"
     policy_version: str = "org-1"
     mode: Mode = Mode.ENFORCE
     deny_on_policy_error: bool = True
     default_weight: int = 1
+    egress_allowlist: tuple[str, ...] = DEFAULT_EGRESS_ALLOWLIST
+    protected_branches: tuple[str, ...] = DEFAULT_PROTECTED_BRANCHES
+    rules: tuple[Rule, ...] = DEFAULT_RULES
+    capabilities: tuple[CapabilityDef, ...] = DEFAULT_CAPABILITIES
+    bindings: tuple[Binding, ...] = DEFAULT_BINDINGS
+
+
+@dataclass(frozen=True, slots=True)
+class PayloadInspection:
     leak_weight: int = 5
     injection_weight: int = 5
-    deny_repeat_multiplier: int = 3
-    run_ttl_seconds: int = 3600
-    audit_backlog: int = 10000
-    policy_versions_kept: int = 32
-    denied_message: str = "this action is not available"
+    denied_message: str = DENIED_MESSAGE
+
+
+@dataclass(frozen=True, slots=True)
+class PlacementRules:
     application_node_label: str = "ads.io/application-node"
     sandbox_node_label: str = "ads.io/sandbox-node"
     node_label_value: str = "true"
     vm_runtime_class: str = "kata-clh"
     kata_runtime_classes: frozenset[str] = frozenset({"kata-clh", "kata-qemu"})
     sandbox_available: bool = True
-    egress_allowlist: tuple[str, ...] = DEFAULT_EGRESS_ALLOWLIST
-    protected_branches: tuple[str, ...] = DEFAULT_PROTECTED_BRANCHES
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceNaming:
+    workdir: str = "/workspace"
     ref_prefixes: tuple[str, ...] = ("refs/heads/", "refs/remotes/")
     remote_names: frozenset[str] = frozenset({"origin", "upstream"})
+
+
+@dataclass(frozen=True, slots=True)
+class CallerRoles:
     write_roles: frozenset[str] = frozenset({"developer", "maintainer"})
     agent_roles: frozenset[str] = frozenset({"agent"})
-    rules: tuple[Rule, ...] = DEFAULT_RULES
-    capabilities: tuple[CapabilityDef, ...] = DEFAULT_CAPABILITIES
-    bindings: tuple[Binding, ...] = DEFAULT_BINDINGS
 
 
 def _list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -193,21 +206,31 @@ def _seconds(name: str, default: int) -> int:
     return value
 
 
-def load_governance_settings() -> GovernanceSettings:
+def load_policy_defaults() -> PolicyDefaults:
     raw_mode = os.environ.get("ADS_POLICY_MODE", Mode.ENFORCE.value).strip()
     try:
         mode = Mode(raw_mode)
     except ValueError as exc:
         raise RuntimeError(f"ADS_POLICY_MODE must be one of {[m.value for m in Mode]}") from exc
-    return GovernanceSettings(
-        workdir=os.environ.get("ADS_RUN_WORKDIR", "/workspace").rstrip("/") or "/",
-        policy_dir=Path(os.environ.get("ADS_POLICY_DIR", "/policy")),
+    return PolicyDefaults(
         mode=mode,
         deny_on_policy_error=_flag("ADS_POLICY_DENY_ON_ERROR", True),
-        sandbox_available=_flag("ADS_SANDBOX_AVAILABLE", True),
-        run_ttl_seconds=_seconds("ADS_RUN_TTL_SECONDS", 3600),
         egress_allowlist=_list("ADS_EGRESS_ALLOWLIST", DEFAULT_EGRESS_ALLOWLIST),
         protected_branches=_list("ADS_PROTECTED_BRANCHES", DEFAULT_PROTECTED_BRANCHES),
+    )
+
+
+def load_run_lifetime() -> int:
+    return _seconds("ADS_RUN_TTL_SECONDS", 3600)
+
+
+def load_placement_rules() -> PlacementRules:
+    return PlacementRules(sandbox_available=_flag("ADS_SANDBOX_AVAILABLE", True))
+
+
+def load_resource_naming() -> ResourceNaming:
+    return ResourceNaming(
+        workdir=os.environ.get("ADS_RUN_WORKDIR", "/workspace").rstrip("/") or "/"
     )
 
 
@@ -223,7 +246,21 @@ class Settings:
     tls_ca_bundle: Path | None = None
     bind_host: str = "0.0.0.0"
     port: int = 8080
-    governance: GovernanceSettings = field(default_factory=GovernanceSettings)
+    policy_dir: Path = Path("/policy")
+    policy_document_name: str = "policy.yaml"
+    run_ttl_seconds: int = 3600
+    audit_backlog: int = 10000
+    policy_versions_kept: int = 32
+    denied_message: str = DENIED_MESSAGE
+    policy_defaults: PolicyDefaults = field(default_factory=PolicyDefaults)
+    inspection: PayloadInspection = field(default_factory=PayloadInspection)
+    placement: PlacementRules = field(default_factory=PlacementRules)
+    naming: ResourceNaming = field(default_factory=ResourceNaming)
+    roles: CallerRoles = field(default_factory=CallerRoles)
+
+
+def policy_document_path(settings: Settings) -> Path:
+    return settings.policy_dir / settings.policy_document_name
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -277,7 +314,11 @@ def load_settings() -> Settings:
         bind_host=_env("ADS_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PORT", "8080")),
         policy_reload_seconds=_seconds("ADS_POLICY_RELOAD_SECONDS", 10),
-        governance=load_governance_settings(),
+        policy_dir=Path(os.environ.get("ADS_POLICY_DIR", "/policy")),
+        run_ttl_seconds=load_run_lifetime(),
+        policy_defaults=load_policy_defaults(),
+        placement=load_placement_rules(),
+        naming=load_resource_naming(),
     )
     load_tls_context(settings)
     return settings

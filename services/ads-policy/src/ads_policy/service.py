@@ -9,15 +9,17 @@ from redis.exceptions import RedisError
 
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.blocks import ConversationBlock, ConversationBlocks, InMemoryConversationBlocks
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE, PlacementRules
 from ads_policy.contract import (
     AuditEvent,
     DecisionRequest,
     Effect,
+    InterceptionPoint,
     IsolationLevel,
     Mode,
     PolicyDecision,
     PolicyRequest,
+    PromptRequest,
     Run,
     RunContext,
     RunRequest,
@@ -36,8 +38,10 @@ class PolicyService:
     pdp: PolicyDecisionPoint
     runs: RunStore
     audit: BufferedAuditSink
-    settings: GovernanceSettings = field(default_factory=GovernanceSettings)
+    placement: PlacementRules = field(default_factory=PlacementRules)
     blocks: ConversationBlocks = field(default_factory=InMemoryConversationBlocks)
+    denied_message: str = DENIED_MESSAGE
+    default_weight: int = 1
 
     async def start(self, request: RunRequest) -> Run:
         level = (
@@ -47,7 +51,7 @@ class PolicyService:
                 placement=request.placement,
                 runtime_class_name=request.runtime_class_name,
                 node_labels=request.node_labels,
-                settings=self.settings,
+                settings=self.placement,
             )
         )
         return await self.runs.start(
@@ -96,6 +100,10 @@ class PolicyService:
         )
         logger.info("conversation blocked", conversation=conversation, budget=budget, by=by)
 
+    async def lift_conversation_block(self, conversation: str) -> None:
+        await self.blocks.lift(conversation)
+        logger.info("conversation block lifted", conversation=conversation)
+
     async def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         try:
             run = await self.runs.get(call.run_id)
@@ -137,23 +145,28 @@ class PolicyService:
         self, call: ToolCallRequest, run: Run | None, decision: PolicyDecision
     ) -> PolicyDecision:
         try:
-            self.audit.enqueue(
-                AuditEvent(
-                    run_id=call.run_id,
-                    subject=call.subject,
-                    capability=None,
-                    resource=f"{call.source}/{call.tool}",
-                    effect=decision.effect,
-                    rule_id=decision.rule_id,
-                    weight=decision.weight or self.settings.default_weight,
-                    policy_hash=decision.policy_hash,
-                    point=decision.point,
-                    conversation=_conversation_of(run),
-                )
-            )
+            self.audit.enqueue(self._call_event(call, run, decision))
         except AuditBacklogFull as exc:
-            return self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
+            refusal = self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
+            self.audit.enqueue_refusal(self._call_event(call, run, refusal))
+            return refusal
         return decision
+
+    def _call_event(
+        self, call: ToolCallRequest, run: Run | None, decision: PolicyDecision
+    ) -> AuditEvent:
+        return AuditEvent(
+            run_id=call.run_id,
+            subject=call.subject,
+            capability=None,
+            resource=f"{call.source}/{call.tool}",
+            effect=decision.effect,
+            rule_id=decision.rule_id,
+            weight=decision.weight or self.default_weight,
+            policy_hash=decision.policy_hash,
+            point=decision.point,
+            conversation=_conversation_of(run),
+        )
 
     async def decide(self, request: DecisionRequest) -> PolicyDecision:
         try:
@@ -169,6 +182,41 @@ class PolicyService:
         else:
             decision = await self._decide_in(run, request)
         return self._journal(request, run, decision)
+
+    async def decide_prompt(self, request: PromptRequest) -> PolicyDecision:
+        try:
+            run = await self.runs.get(request.run_id)
+        except RedisError as exc:
+            return self._refuse("run.store", f"run store unreachable: {exc}")
+        if run is None:
+            return self._refuse(
+                "run.unknown", f"run {request.run_id} is unknown or past its lifetime"
+            )
+        if run.subject != request.subject:
+            return self._refuse("run.subject", f"run {run.id} belongs to someone else")
+        if run.state is not RunState.RUNNING:
+            return self._refuse("run.state", f"run {run.id} is {run.state.value}")
+        pinned_policy = self.pdp.policy_of(run)
+        if pinned_policy is None:
+            await self._finish_run_whose_policy_is_gone(run)
+            return self._refuse("policy.missing", "pinned policy is gone")
+        try:
+            blocked = await self.blocks.is_blocked(run.conversation)
+        except RedisError as exc:
+            return self._refuse("run.store", f"conversation blocks unreachable: {exc}")
+        if blocked:
+            return self._refuse(
+                "conversation.revoked", f"conversation {run.conversation} is blocked"
+            )
+        await self._extend_lifetime_from_now(run)
+        return PolicyDecision(
+            effect=Effect.ALLOW,
+            rule_id="prompt.inspected",
+            reason="the prompt is inspected by the checks this policy states",
+            policy_hash=run.policy_hash,
+            point=InterceptionPoint.PROMPT,
+            interception=pinned_policy.interception,
+        )
 
     async def _decide_in(self, run: Run, request: DecisionRequest) -> PolicyDecision:
         if run.subject != request.subject:
@@ -219,7 +267,7 @@ class PolicyService:
             placement=site.placement,
             runtime_class_name=site.runtime_class_name,
             node_labels=site.node_labels,
-            settings=self.settings,
+            settings=self.placement,
         )
 
     async def _finish_run_whose_policy_is_gone(self, run: Run) -> None:
@@ -241,10 +289,13 @@ class PolicyService:
     def _journal(
         self, request: DecisionRequest, run: Run | None, decision: PolicyDecision
     ) -> PolicyDecision:
+        conversation = _conversation_of(run)
         try:
-            self.audit.enqueue(record(request, decision, conversation=_conversation_of(run)))
+            self.audit.enqueue(record(request, decision, conversation=conversation))
         except AuditBacklogFull as exc:
-            return self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
+            refusal = self._refuse("audit.backlog", f"cannot journal the decision: {exc}")
+            self.audit.enqueue_refusal(record(request, refusal, conversation=conversation))
+            return refusal
         return decision
 
     def version(self) -> dict[str, str]:
@@ -264,7 +315,7 @@ class PolicyService:
             effect=Effect.DENY,
             rule_id=rule_id,
             reason=reason,
-            message=self.settings.denied_message,
+            message=self.denied_message,
             policy_hash=self.pdp.policy_hash,
             mode=Mode.ENFORCE,
         )

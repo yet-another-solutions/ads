@@ -15,7 +15,14 @@ from ads_guardrail.config import Settings
 from ads_guardrail.contract import McpServer
 from ads_guardrail.guardrail import Guardrail, Reading, RunNotOpen
 from ads_guardrail.scanner import InjectionScan, InjectionScanner
-from ads_policy.contract import CheckKind, InterceptionPoint, PolicyDecision, Run, Switch
+from ads_policy.contract import (
+    CheckKind,
+    InterceptionPoint,
+    PolicyDecision,
+    Run,
+    Switch,
+    string_values,
+)
 from ads_policy.output import PROMPT_INJECTION_RULE
 
 logger = structlog.get_logger("ads.guardrail")
@@ -97,7 +104,7 @@ class Proxy:
         if isinstance(message, list):
             if any(_is_tool_call(item) for item in message):
                 logger.info("batched tool call refused", server=server.name)
-                denied = self._guardrail.governance.denied_message
+                denied = self._guardrail.inspection.denied_message
                 return _json_response(_refusals_for_batch(message, denied))
             return await self._relay_unchanged(method, server, body, headers)
         call = _tool_call_parts(message)
@@ -117,7 +124,7 @@ class Proxy:
             logger.info(
                 "tool call belongs to no run", server=server.name, tool=tool, reason=str(exc)
             )
-            return _json_response(_refusal(request_id, self._guardrail.governance.denied_message))
+            return _json_response(_refusal(request_id, self._guardrail.inspection.denied_message))
         if not decision.permitted:
             logger.info(
                 "tool call refused", server=server.name, tool=tool, rule_id=decision.rule_id
@@ -149,7 +156,7 @@ class Proxy:
         await self._session.close()
 
     def _alternative_in(self, message: str) -> str:
-        return "" if message == self._guardrail.governance.denied_message else message
+        return "" if message == self._guardrail.inspection.denied_message else message
 
     def _find_run_and_decide(
         self,
@@ -157,7 +164,7 @@ class Proxy:
         named_run_id: str,
         server: McpServer,
         tool: str,
-        arguments: dict[str, str],
+        arguments: dict[str, Any],
     ) -> tuple[Run, PolicyDecision]:
         run = self._guardrail.find_run_of_caller(bearer, named_run_id)
         decision = self._guardrail.decide_tool_call(
@@ -245,7 +252,7 @@ class Proxy:
             if isinstance(item, dict)
             for key in MESSAGE_CONTENT_KEYS
             if key in item
-            for text in _string_values(item[key])
+            for text in string_values(item[key])
         ]
         if not texts:
             return payload
@@ -338,7 +345,7 @@ def _is_tool_call(message: Any) -> bool:
     return isinstance(message, dict) and message.get("method") == TOOL_CALL_METHOD
 
 
-def _tool_call_parts(message: Any) -> tuple[str, dict[str, str], Any] | None:
+def _tool_call_parts(message: Any) -> tuple[str, dict[str, Any], Any] | None:
     if not _is_tool_call(message):
         return None
     params = message.get("params")
@@ -348,27 +355,8 @@ def _tool_call_parts(message: Any) -> tuple[str, dict[str, str], Any] | None:
     if not isinstance(name, str) or not name:
         return None
     raw = params.get("arguments")
-    arguments = (
-        {str(key): _as_text(value) for key, value in raw.items()} if isinstance(raw, dict) else {}
-    )
+    arguments = {str(key): value for key, value in raw.items()} if isinstance(raw, dict) else {}
     return name, arguments, message.get("id")
-
-
-def _as_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return msgspec.json.encode(value).decode("utf-8")
-
-
-def _string_values(node: Any) -> Iterator[str]:
-    if isinstance(node, str):
-        yield node
-    elif isinstance(node, dict):
-        for value in node.values():
-            yield from _string_values(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _string_values(value)
 
 
 def _with_string_values_replaced(node: Any, replacements: Iterator[str]) -> Any:

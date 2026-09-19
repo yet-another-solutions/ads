@@ -15,6 +15,7 @@ from ads_policy.contract import (
     Effect,
     Mode,
     PolicyDecision,
+    PromptRequest,
     Run,
     RunRequest,
     ToolCallRequest,
@@ -42,6 +43,8 @@ class PolicyClient(Protocol):
     def decide(self, request: DecisionRequest) -> PolicyDecision: ...
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision: ...
+
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision: ...
 
 
 def unreachable(reason: str, message: str) -> PolicyDecision:
@@ -105,6 +108,15 @@ class HttpPolicyClient:
         except httpx2.HTTPError as exc:
             raise PolicyUnavailable(f"policy service: {exc}") from exc
 
+    def lift_conversation_block(self, conversation: str) -> None:
+        try:
+            response = self._client.delete(
+                f"/policy/conversations/{quote(conversation, safe='')}/revoke"
+            )
+            response.raise_for_status()
+        except httpx2.HTTPError as exc:
+            raise PolicyUnavailable(f"policy service: {exc}") from exc
+
     def _run_or_none_if_unknown(self, method: str, path: str) -> Run | None:
         try:
             response = self._client.request(
@@ -125,6 +137,9 @@ class HttpPolicyClient:
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         return self._ask("/policy/calls", call)
+
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision:
+        return self._ask("/policy/prompts", prompt)
 
     def _ask(self, path: str, body: msgspec.Struct) -> PolicyDecision:
         try:
@@ -171,6 +186,9 @@ class UnconfiguredPolicyClient:
         return unreachable(UNCONFIGURED, self.denied_message)
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        return unreachable(UNCONFIGURED, self.denied_message)
+
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision:
         return unreachable(UNCONFIGURED, self.denied_message)
 
 

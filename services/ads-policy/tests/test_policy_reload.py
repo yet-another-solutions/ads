@@ -5,7 +5,7 @@ from pathlib import Path
 import msgspec
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import ResourceNaming
 from ads_policy.contract import Capability, Effect, IsolationLevel, ResourceClass, RunState
 from ads_policy.pdp import PolicyDecisionPoint
 from ads_policy.policy import org_policy, reload_policy
@@ -22,29 +22,27 @@ rules:
 """
 
 
-def _settings(tmp_path: Path) -> GovernanceSettings:
-    return GovernanceSettings(policy_dir=tmp_path)
+def _document(tmp_path: Path) -> Path:
+    return tmp_path / "policy.yaml"
 
 
-def _pdp(settings: GovernanceSettings) -> PolicyDecisionPoint:
-    return PolicyDecisionPoint(org_policy(settings), settings)
+def _pdp() -> PolicyDecisionPoint:
+    return PolicyDecisionPoint(org_policy())
 
 
 def test_no_document_leaves_the_built_in_matrix(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    pdp = _pdp(settings)
+    pdp = _pdp()
     before = pdp.policy_hash
-    assert reload_policy(pdp, settings) is None
+    assert reload_policy(pdp, _document(tmp_path)) is None
     assert pdp.policy_hash == before
 
 
 def test_an_edited_document_is_published(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    pdp = _pdp(settings)
+    pdp = _pdp()
     before = pdp.policy_hash
     (tmp_path / "policy.yaml").write_text(TIGHTENED)
 
-    published = reload_policy(pdp, settings)
+    published = reload_policy(pdp, _document(tmp_path))
 
     assert published is not None
     assert published != before
@@ -54,35 +52,32 @@ def test_an_edited_document_is_published(tmp_path: Path) -> None:
 
 
 def test_an_unchanged_document_is_not_republished(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    pdp = _pdp(settings)
+    pdp = _pdp()
     (tmp_path / "policy.yaml").write_text(TIGHTENED)
 
-    first = reload_policy(pdp, settings)
+    first = reload_policy(pdp, _document(tmp_path))
 
     assert first is not None
-    assert reload_policy(pdp, settings) is None
+    assert reload_policy(pdp, _document(tmp_path)) is None
     assert pdp.policy_hash == first
 
 
 def test_an_unreadable_document_keeps_the_current_version(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    pdp = _pdp(settings)
+    pdp = _pdp()
     before = pdp.policy_hash
     (tmp_path / "policy.yaml").write_text("rules: [ this is not a rule")
 
     with pytest.raises(msgspec.DecodeError):
-        reload_policy(pdp, settings)
+        reload_policy(pdp, _document(tmp_path))
 
     assert pdp.policy_hash == before
-    allowed = pdp.decide(policy_request(Capability.FS_READ, f"{settings.workdir}/main.py"))
+    allowed = pdp.decide(policy_request(Capability.FS_READ, f"{ResourceNaming().workdir}/main.py"))
     assert allowed.effect is Effect.ALLOW
 
 
 @pytest.mark.anyio
 async def test_a_rule_the_new_version_drops_is_not_applied_to_a_pinned_run(tmp_path: Path) -> None:
-    settings = _settings(tmp_path)
-    pdp = _pdp(settings)
+    pdp = _pdp()
     store = InMemoryRunStore()
     run = await store.start(
         subject="alice",
@@ -91,7 +86,7 @@ async def test_a_rule_the_new_version_drops_is_not_applied_to_a_pinned_run(tmp_p
         policy_hash=pdp.policy_hash,
     )
     (tmp_path / "policy.yaml").write_text(TIGHTENED)
-    assert reload_policy(pdp, settings) is not None
+    assert reload_policy(pdp, _document(tmp_path)) is not None
 
     pinned = pdp.decide_for_run(
         run, policy_request(Capability.PROCESS_EXEC, "ls", level=IsolationLevel.VM)

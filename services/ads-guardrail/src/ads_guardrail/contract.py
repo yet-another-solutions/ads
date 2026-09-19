@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import msgspec
 
-from ads_policy.contract import ConversationId, Site
+from ads_policy.contract import ConversationId, PolicyDecision, Site
 
 
 class Workspace(msgspec.Struct, frozen=True):
@@ -16,6 +16,17 @@ class Opening(msgspec.Struct, frozen=True):
     bearer: str
     workspace: Workspace
     conversation: ConversationId = ""
+
+
+class Prompt(msgspec.Struct, frozen=True):
+    run_id: str
+    texts: tuple[str, ...]
+
+
+class PromptReading(msgspec.Struct, frozen=True):
+    decision: PolicyDecision
+    texts: tuple[str, ...]
+    withheld: bool = False
 
 
 class Application(msgspec.Struct, frozen=True):

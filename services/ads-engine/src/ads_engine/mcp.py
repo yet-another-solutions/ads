@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
@@ -48,6 +48,18 @@ class RunView(msgspec.Struct, frozen=True):
     state: str
 
 
+class PromptDecision(msgspec.Struct, frozen=True):
+    rule_id: str = ""
+    reason: str = ""
+    message: str = ""
+
+
+class PromptReading(msgspec.Struct, frozen=True):
+    decision: PromptDecision
+    texts: tuple[str, ...]
+    withheld: bool = False
+
+
 class _Workspace(msgspec.Struct, frozen=True):
     project: str
     repo: str
@@ -78,6 +90,20 @@ class GuardrailRuns:
                 return msgspec.json.decode(await response.read(), type=RunView)
         except (aiohttp.ClientError, TimeoutError, msgspec.DecodeError) as exc:
             raise McpUnavailable(f"guardrail runs: {exc}") from exc
+
+    async def inspect_prompt(self, run_id: str, texts: Sequence[str]) -> PromptReading:
+        body = {"run_id": run_id, "texts": list(texts)}
+        try:
+            async with self.http.post(
+                f"{self.base_url}/guardrail/prompts",
+                data=msgspec.json.encode(body),
+                headers={**self._authorization(), "content-type": "application/json"},
+            ) as response:
+                if response.status not in (200, 201):
+                    raise McpUnavailable(f"guardrail answered {response.status}")
+                return msgspec.json.decode(await response.read(), type=PromptReading)
+        except (aiohttp.ClientError, TimeoutError, msgspec.DecodeError) as exc:
+            raise McpUnavailable(f"guardrail prompts: {exc}") from exc
 
     async def open(self, bearer: str, workspace: Workspace, conversation: str) -> RunView:
         opening = _Opening(

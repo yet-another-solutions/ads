@@ -112,12 +112,49 @@ def test_tools_are_offered_under_their_server_names(store: ActiveSessionStore) -
     _run(store, scenario)
 
 
-def test_an_answer_without_tool_calls_opens_no_run(store: ActiveSessionStore) -> None:
+def test_every_message_is_read_before_the_model_sees_it(store: ActiveSessionStore) -> None:
     async def scenario(harness: ToolHarness) -> None:
-        await harness.answer(ScriptedToolModel([[_text("just text")]]))
-        assert harness.guardrail.openings == []
+        deltas = await harness.answer(ScriptedToolModel([[_text("just text")]]))
+        assert len(harness.guardrail.openings) == 1
+        assert harness.guardrail.prompts[0]["texts"] == [make_request().user_input]
+        assert [delta.text for delta in deltas if delta.kind == "message"] == ["just text"]
 
     _run(store, scenario)
+
+
+def test_a_refused_prompt_never_reaches_the_model(store: ActiveSessionStore) -> None:
+    guardrail = FakeGuardrail()
+    guardrail.prompt_reading = {
+        "decision": {"rule_id": "payload.injection"},
+        "texts": [],
+        "withheld": True,
+    }
+
+    async def scenario(harness: ToolHarness) -> None:
+        model = ScriptedToolModel([[_text("the model should never answer")]])
+        deltas = await harness.answer(model)
+        assert [delta.kind for delta in deltas] == ["notice"]
+        assert deltas[0].notice is not None
+        assert deltas[0].notice.kind == "prompt-refused"
+        assert model.received == []
+
+    _run(store, scenario, guardrail)
+
+
+def test_a_secret_in_a_message_is_cut_out_before_the_model(store: ActiveSessionStore) -> None:
+    guardrail = FakeGuardrail()
+    guardrail.prompt_reading = {
+        "decision": {"rule_id": "payload.leak"},
+        "texts": ["deploy with [redacted:aws-access-token]"],
+        "withheld": False,
+    }
+
+    async def scenario(harness: ToolHarness) -> None:
+        model = ScriptedToolModel([[_text("done")]])
+        await harness.answer(model)
+        assert model.received[-1][-1].content == "deploy with [redacted:aws-access-token]"
+
+    _run(store, scenario, guardrail)
 
 
 def test_a_tool_call_opens_the_chat_run_and_feeds_the_result_back(

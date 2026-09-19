@@ -9,6 +9,7 @@ from pathlib import Path
 import msgspec
 
 from ads_guardrail.contract import Application, McpServer
+from ads_policy.config import DENIED_MESSAGE
 
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
@@ -37,6 +38,8 @@ class Settings:
     injection_scanner_url: str = ""
     injection_scanner_api_token: str = ""
     injection_scanner_timeout_seconds: float = 30.0
+    audit_backlog: int = 10000
+    denied_message: str = DENIED_MESSAGE
 
 
 def _env(name: str, default: str | None = None) -> str:

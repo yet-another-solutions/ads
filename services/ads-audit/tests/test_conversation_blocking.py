@@ -20,13 +20,20 @@ LIMIT = 10
 class RecordingPolicy:
     def __init__(self) -> None:
         self.blocked: list[tuple[str, int]] = []
+        self.lifted: list[str] = []
 
     async def block(self, conversation: str, budget: int) -> None:
         self.blocked.append((conversation, budget))
 
+    async def lift(self, conversation: str) -> None:
+        self.lifted.append(conversation)
+
 
 class UnreachablePolicy:
     async def block(self, conversation: str, budget: int) -> None:
+        raise PolicyUnavailable("no route to the policy service")
+
+    async def lift(self, conversation: str) -> None:
         raise PolicyUnavailable("no route to the policy service")
 
 
@@ -177,20 +184,108 @@ async def test_an_unreachable_policy_keeps_the_block_and_the_event(
     assert await repository.conversation_block(CHAT) is not None
 
 
-async def test_every_stored_block_is_delivered_again(
+async def test_a_block_the_policy_service_never_heard_of_is_delivered(
     repository: InMemoryAuditRepository,
 ) -> None:
     await repository.block_conversation(CHAT, 31)
     await repository.block_conversation(OTHER_CHAT, 40)
     policy = RecordingPolicy()
     guard = ConversationGuard(policy, budget_limit=LIMIT)
-    delivered = await guard.tell_policy_about_every_block(fixed_unit_of_work(repository))
+    delivered = await guard.tell_policy_what_it_is_missing(fixed_unit_of_work(repository))
     assert delivered == 2
     assert sorted(policy.blocked) == [(CHAT, 31), (OTHER_CHAT, 40)]
+
+
+async def test_a_block_already_delivered_is_not_sent_every_cycle(
+    repository: InMemoryAuditRepository,
+) -> None:
+    await repository.block_conversation(CHAT, 31)
+    policy = RecordingPolicy()
+    guard = ConversationGuard(policy, budget_limit=LIMIT)
+    unit = fixed_unit_of_work(repository)
+    assert await guard.tell_policy_what_it_is_missing(unit) == 1
+    assert await guard.tell_policy_what_it_is_missing(unit) == 0
+    assert await guard.tell_policy_what_it_is_missing(unit) == 0
+    assert policy.blocked == [(CHAT, 31)]
+
+
+async def test_a_block_that_would_not_go_through_is_tried_again(
+    repository: InMemoryAuditRepository,
+) -> None:
+    await repository.block_conversation(CHAT, 31)
+    guard = ConversationGuard(UnreachablePolicy(), budget_limit=LIMIT)
+    unit = fixed_unit_of_work(repository)
+    assert await guard.tell_policy_what_it_is_missing(unit) == 0
+    assert await guard.tell_policy_what_it_is_missing(unit) == 0
+
+    policy = RecordingPolicy()
+    reachable = ConversationGuard(policy, budget_limit=LIMIT)
+    assert await reachable.tell_policy_what_it_is_missing(unit) == 1
+    assert policy.blocked == [(CHAT, 31)]
+
+
+async def test_a_lift_that_did_not_go_through_is_sent_by_the_next_cycle(
+    repository: InMemoryAuditRepository,
+) -> None:
+    await repository.block_conversation(CHAT, 31)
+    policy = RecordingPolicy()
+    guard = ConversationGuard(policy, budget_limit=LIMIT)
+    unit = fixed_unit_of_work(repository)
+    await guard.tell_policy_what_it_is_missing(unit)
+    await repository.lift_conversation_block(CHAT, "alice the auditor", 31)
+
+    assert await guard.tell_policy_what_it_is_missing(unit) == 1
+    assert policy.lifted == [CHAT]
+    assert await guard.tell_policy_what_it_is_missing(unit) == 0
+
+
+async def test_a_lifted_block_is_not_delivered_as_a_block(
+    repository: InMemoryAuditRepository,
+) -> None:
+    await repository.block_conversation(CHAT, 31)
+    await repository.lift_conversation_block(CHAT, "alice the auditor", 31)
+    policy = RecordingPolicy()
+    guard = ConversationGuard(policy, budget_limit=LIMIT)
+    assert await guard.tell_policy_what_it_is_missing(fixed_unit_of_work(repository)) == 1
+    assert policy.blocked == []
+    assert policy.lifted == [CHAT]
+
+
+async def test_a_lifted_chat_is_not_blocked_again_by_the_budget_it_was_forgiven(
+    repository: InMemoryAuditRepository,
+) -> None:
+    policy = RecordingPolicy()
+    consumer = _consumer(repository, ConversationGuard(policy, budget_limit=LIMIT))
+    await _deliver(consumer, denied(weight=LIMIT, conversation=CHAT))
+    blocked = await repository.conversation_block(CHAT)
+    assert blocked is not None and blocked.in_force
+    await repository.lift_conversation_block(CHAT, "alice the auditor", blocked.budget)
+
+    await _deliver(consumer, denied(weight=1, resource="another", conversation=CHAT))
+    standing = await repository.conversation_block(CHAT)
+    assert standing is not None
+    assert not standing.in_force
+    assert policy.blocked == [(CHAT, LIMIT)]
+
+
+async def test_a_lifted_chat_is_blocked_again_by_what_it_spends_afterwards(
+    repository: InMemoryAuditRepository,
+) -> None:
+    policy = RecordingPolicy()
+    consumer = _consumer(repository, ConversationGuard(policy, budget_limit=LIMIT))
+    await _deliver(consumer, denied(weight=LIMIT, conversation=CHAT))
+    first = await repository.conversation_block(CHAT)
+    assert first is not None
+    await repository.lift_conversation_block(CHAT, "alice the auditor", first.budget)
+
+    await _deliver(consumer, denied(weight=LIMIT, resource="again", conversation=CHAT))
+    again = await repository.conversation_block(CHAT)
+    assert again is not None and again.in_force
+    assert len(policy.blocked) == 2
 
 
 async def test_redelivery_counts_what_could_not_be_delivered() -> None:
     repository = InMemoryAuditRepository()
     await repository.block_conversation(CHAT, 31)
     guard = ConversationGuard(UnconfiguredPolicyBlocker(), budget_limit=LIMIT)
-    assert await guard.tell_policy_about_every_block(fixed_unit_of_work(repository)) == 0
+    assert await guard.tell_policy_what_it_is_missing(fixed_unit_of_work(repository)) == 0

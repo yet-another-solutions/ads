@@ -50,6 +50,7 @@ public. Everything is HTTPS; there is no plain-HTTP mode.
 | `POST /policy/conversations/{id}/revoke` | `{budget, by}` → block a chat for good: every decision in any run carrying that `conversation` is refused as `conversation.revoked`, in either mode. Sent by the audit service |
 | `POST /policy/decide` | a decision for one capability and resource within a run |
 | `POST /policy/calls` | a decision for one tool call, named as the agent names it |
+| `POST /policy/prompts` | `{run_id, subject}` → what the checks on the prompt side are for this run. The content itself stays with the guardrail |
 | `GET /policy/version` | schema version, policy version, the hash the service computed, mode |
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | the run store answers. 503 otherwise |

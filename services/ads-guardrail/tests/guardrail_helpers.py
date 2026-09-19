@@ -15,11 +15,12 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 from ads_guardrail.contract import Opening, Workspace
 from ads_guardrail.scanner import InjectionScan
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PayloadInspection, PlacementRules, ResourceNaming
 from ads_policy.contract import (
     DecisionRequest,
     Placement,
     PolicyDecision,
+    PromptRequest,
     Run,
     RunRequest,
     Site,
@@ -28,28 +29,30 @@ from ads_policy.contract import (
 from ads_policy.service import PolicyService
 
 API_TOKEN = "guardrail-api-token-32-bytes"
-GOVERNANCE = GovernanceSettings()
-WORKDIR_FILE = f"{GOVERNANCE.workdir}/src/app.py"
+NAMING = ResourceNaming()
+PLACEMENT = PlacementRules()
+INSPECTION = PayloadInspection()
+WORKDIR_FILE = f"{NAMING.workdir}/src/app.py"
 
 WORKSPACE = Workspace(
-    project="ads", repo="yet-another-solutions/ads", env="dev", workdir=GOVERNANCE.workdir
+    project="ads", repo="yet-another-solutions/ads", env="dev", workdir=NAMING.workdir
 )
 
 KATA_VM_SITE = Site(
     placement=Placement.CLUSTER,
-    runtime_class_name=GOVERNANCE.vm_runtime_class,
+    runtime_class_name=PLACEMENT.vm_runtime_class,
     node_labels={
-        GOVERNANCE.sandbox_node_label: GOVERNANCE.node_label_value,
-        GOVERNANCE.application_node_label: GOVERNANCE.node_label_value,
+        PLACEMENT.sandbox_node_label: PLACEMENT.node_label_value,
+        PLACEMENT.application_node_label: PLACEMENT.node_label_value,
     },
 )
 APPLICATION_NODE_SITE = Site(
     placement=Placement.CLUSTER,
-    node_labels={GOVERNANCE.application_node_label: GOVERNANCE.node_label_value},
+    node_labels={PLACEMENT.application_node_label: PLACEMENT.node_label_value},
 )
 WORKSTATION_SITE = Site(placement=Placement.WORKSTATION)
 KATA_ON_UNLABELLED_NODE_SITE = Site(
-    placement=Placement.CLUSTER, runtime_class_name=GOVERNANCE.vm_runtime_class
+    placement=Placement.CLUSTER, runtime_class_name=PLACEMENT.vm_runtime_class
 )
 
 ISSUER = "https://keycloak.test/realms/ads"
@@ -102,8 +105,10 @@ APPLICATION_KEY = "api-server-key-of-the-application"
 ALICE_TOKEN = person_token()
 
 
-def opening(bearer: str = ALICE_TOKEN, workspace: Workspace = WORKSPACE) -> Opening:
-    return Opening(bearer=bearer, workspace=workspace)
+def opening(
+    bearer: str = ALICE_TOKEN, workspace: Workspace = WORKSPACE, conversation: str = ""
+) -> Opening:
+    return Opening(bearer=bearer, workspace=workspace, conversation=conversation)
 
 
 def opening_body(bearer: str = ALICE_TOKEN) -> dict[str, Any]:
@@ -143,6 +148,9 @@ class InProcessPolicyClient:
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         return run_blocking(self.service.decide_call(call))
 
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision:
+        return run_blocking(self.service.decide_prompt(prompt))
+
 
 class UnreachablePolicyClient:
     def start_run(self, request: RunRequest) -> Run:
@@ -164,6 +172,9 @@ class UnreachablePolicyClient:
         raise ConnectionError("no route to the policy service")
 
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
+        raise ConnectionError("no route to the policy service")
+
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision:
         raise ConnectionError("no route to the policy service")
 
 

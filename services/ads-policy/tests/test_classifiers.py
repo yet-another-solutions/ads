@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import ResourceNaming
 from ads_policy.contract import (
     Capability,
     CapabilityDef,
@@ -19,8 +19,7 @@ from ads_policy.pdp import PolicyDecisionPoint, classify
 from ads_policy.policy import load_policy, org_policy
 from policy_helpers import policy_request
 
-SETTINGS = GovernanceSettings()
-WORKDIR = SETTINGS.workdir
+WORKDIR = ResourceNaming().workdir
 
 
 @pytest.mark.parametrize(

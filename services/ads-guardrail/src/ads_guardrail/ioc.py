@@ -21,7 +21,7 @@ from ads_guardrail.scanner import (
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
 from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PayloadInspection
 
 
 def build_person_token_verifier(settings: Settings) -> AccessTokenVerifier | None:
@@ -81,17 +81,17 @@ class AppProvider(Provider):
         return self._settings
 
     @provide(scope=Scope.APP)
-    def governance(self) -> GovernanceSettings:
-        return GovernanceSettings()
+    def inspection(self, settings: Settings) -> PayloadInspection:
+        return PayloadInspection(denied_message=settings.denied_message)
 
     @provide(scope=Scope.APP)
-    def policy_client(self, settings: Settings, governance: GovernanceSettings) -> PolicyClient:
+    def policy_client(self, settings: Settings) -> PolicyClient:
         if self._client is not None:
             return self._client
         return build_policy_client(
             settings.policy_url,
             settings.policy_api_token,
-            denied_message=governance.denied_message,
+            denied_message=settings.denied_message,
             ca_bundle=settings.tls_ca_bundle,
         )
 
@@ -108,11 +108,11 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def audit(
-        self, governance: GovernanceSettings, broker: AbstractRobustConnection | None
+        self, settings: Settings, broker: AbstractRobustConnection | None
     ) -> BufferedAuditSink:
         sink = self._sink if broker is None else RabbitAuditSink(broker)
         assert sink is not None
-        return BufferedAuditSink(sink, governance, decided_by=identity("ads-guardrail"))
+        return BufferedAuditSink(sink, settings.audit_backlog, decided_by=identity("ads-guardrail"))
 
     @provide(scope=Scope.APP)
     def guardrail(
@@ -120,13 +120,13 @@ class AppProvider(Provider):
         settings: Settings,
         client: PolicyClient,
         audit: BufferedAuditSink,
-        governance: GovernanceSettings,
+        inspection: PayloadInspection,
     ) -> Guardrail:
         return Guardrail(
             settings=settings,
             client=client,
             audit=audit,
-            governance=governance,
+            inspection=inspection,
             person_token_verifier=(
                 self._person_token_verifier or build_person_token_verifier(settings)
             ),

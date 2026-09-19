@@ -5,7 +5,7 @@ import msgspec
 import pytest
 
 from ads_policy.client import HttpPolicyClient, build_policy_client
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import DENIED_MESSAGE, ResourceNaming
 from ads_policy.contract import (
     Capability,
     DecisionRequest,
@@ -18,7 +18,7 @@ from ads_policy.contract import (
 )
 from policy_helpers import run_request
 
-SETTINGS = GovernanceSettings()
+SETTINGS = ResourceNaming()
 TOKEN = "policy-api-token-32-bytes-long"
 URL = "https://ads-policy.interlab:8081"
 REQUEST = DecisionRequest(
@@ -33,7 +33,7 @@ def _client(handler: object) -> HttpPolicyClient:
     return HttpPolicyClient(
         URL,
         TOKEN,
-        denied_message=SETTINGS.denied_message,
+        denied_message=DENIED_MESSAGE,
         transport=httpx2.MockTransport(handler),  # type: ignore[arg-type]
     )
 
@@ -91,7 +91,7 @@ def test_an_unreachable_service_denies() -> None:
     assert decision.effect is Effect.DENY
     assert decision.enforced
     assert decision.rule_id == "policy.unreachable"
-    assert decision.message == SETTINGS.denied_message
+    assert decision.message == DENIED_MESSAGE
 
 
 def test_a_failing_service_denies() -> None:
@@ -130,15 +130,15 @@ def test_a_run_round_trips() -> None:
 
 
 def test_no_configured_address_denies() -> None:
-    client = build_policy_client("", "", denied_message=SETTINGS.denied_message)
+    client = build_policy_client("", "", denied_message=DENIED_MESSAGE)
     decision = client.decide(REQUEST)
     assert decision.effect is Effect.DENY
     assert decision.enforced
-    assert decision.message == SETTINGS.denied_message
+    assert decision.message == DENIED_MESSAGE
     with pytest.raises(RuntimeError, match="not configured"):
         client.start_run(run_request(IsolationLevel.VM))
 
 
 def test_a_configured_address_is_reached_over_https() -> None:
-    client = build_policy_client(URL, TOKEN, denied_message=SETTINGS.denied_message)
+    client = build_policy_client(URL, TOKEN, denied_message=DENIED_MESSAGE)
     assert isinstance(client, HttpPolicyClient)

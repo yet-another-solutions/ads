@@ -17,6 +17,7 @@ from ads_guardrail.contract import Application, McpServer
 from ads_guardrail.guardrail import fingerprint
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.client import PolicyClient
+from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import (
     DEFAULT_RESPONSE,
     Binding,
@@ -39,7 +40,6 @@ from guardrail_helpers import (
     APPLICATION_NODE_SITE,
     BOB,
     FORGING_KEY,
-    GOVERNANCE,
     INJECTION_MARKER,
     KATA_VM_SITE,
     PERSON_TOKEN_VERIFIER,
@@ -297,7 +297,7 @@ def test_expired_token_is_refused(api: TestClient, mcp: FakeMcpServer) -> None:
     expired = person_token(issued_seconds_from_now=-3600)
     answer = _post_to_mcp(api, _read_workdir_file(), bearer=expired)
     assert mcp.tool_calls_received() == []
-    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["message"] == DENIED_MESSAGE
 
 
 def test_forged_token_is_refused(api: TestClient, mcp: FakeMcpServer) -> None:
@@ -311,12 +311,12 @@ def test_call_without_credentials_is_refused(api: TestClient, mcp: FakeMcpServer
     _open_run(api)
     answer = _post_to_mcp(api, _read_workdir_file(), bearer=None)
     assert mcp.tool_calls_received() == []
-    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["message"] == DENIED_MESSAGE
 
 
 def test_refusal_does_not_explain_itself(api: TestClient) -> None:
     answer = _post_to_mcp(api, _read_workdir_file(), bearer="a-stranger")
-    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["message"] == DENIED_MESSAGE
 
 
 def test_two_runs_of_one_person_need_the_run_header(api: TestClient, mcp: FakeMcpServer) -> None:
@@ -358,7 +358,7 @@ def test_refused_call_never_reaches_the_server(api: TestClient, mcp: FakeMcpServ
     _open_run(api)
     answer = _post_to_mcp(api, _tool_call("read", {"filePath": "/etc/shadow"}))
     assert mcp.tool_calls_received() == []
-    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["message"] == DENIED_MESSAGE
 
 
 def test_refusal_is_a_json_rpc_error_with_the_request_id(api: TestClient) -> None:
@@ -411,7 +411,7 @@ def test_a_result_with_an_injection_never_reaches_the_agent(
     answer = _post_to_mcp(api, _tool_call("read", {"filePath": WORKDIR_FILE}, request_id=5))
     assert INJECTION_MARKER not in json.dumps(answer)
     assert answer["id"] == 5
-    assert answer["error"]["message"] == GOVERNANCE.denied_message
+    assert answer["error"]["message"] == DENIED_MESSAGE
     assert answer["error"]["data"] == {
         "refused_by": "ads-guardrail",
         "reason": "prompt-injection",

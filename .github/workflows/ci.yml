@@ -114,8 +114,9 @@ jobs:
           version: v3.16.4
       - name: Lint and template
         run: |
-          helm lint charts/ads
-          helm template ads charts/ads >/tmp/ads-cm.yaml
+          VALUES="-f charts/ads/values-ci.yaml"
+          helm lint charts/ads $VALUES
+          helm template ads charts/ads $VALUES >/tmp/ads-cm.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 6
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
           test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 4
@@ -139,12 +140,12 @@ jobs:
             echo 'no policy document was set, so none must be rendered' >&2
             exit 1
           fi
-          helm template ads charts/ads \
+          helm template ads charts/ads $VALUES \
             --set-json 'policy.document={"version":"org-2","rules":[]}' >/tmp/ads-doc.yaml
           grep -q 'policy.yaml: |' /tmp/ads-doc.yaml
           grep -q 'ADS_SANDBOX_AVAILABLE' /tmp/ads-cm.yaml
           grep -q 'ADS_REDIS_URL' /tmp/ads-cm.yaml
-          if helm template ads charts/ads --set policy.redis.url= >/tmp/ads-no-redis.yaml; then
+          if helm template ads charts/ads $VALUES --set=policy.redis.url= >/tmp/ads-no-redis.yaml; then
             echo 'policy service rendered without a run store' >&2
             exit 1
           fi
@@ -152,18 +153,19 @@ jobs:
           grep -q 'ADS_DATABASE_URL' /tmp/ads-cm.yaml
           test "$(grep -c 'ADS_DATABASE_URL' /tmp/ads-cm.yaml)" -eq 2
           grep -q 'ADS_PUBLIC_BASE_URL: "https://ads.interlab"' /tmp/ads-cm.yaml
-          helm template ads charts/ads --set httpRoute.publicBaseUrl=https://ads.local:8443/ \
+          helm template ads charts/ads $VALUES --set=httpRoute.publicBaseUrl=https://ads.local:8443/ \
             | grep -q 'ADS_PUBLIC_BASE_URL: "https://ads.local:8443"'
-          test "$(grep -c 'ADS_AMQP_URL' /tmp/ads-cm.yaml)" -eq 2
-          if helm template ads charts/ads --set audit.rabbitmq.url= >/tmp/ads-no-mq.yaml; then
+          test "$(grep -c 'ADS_AMQP_URL' /tmp/ads-cm.yaml)" -eq 3
+          grep -q 'ADS_KEYCLOAK_AUDITOR_ROLE: "auditor"' /tmp/ads-cm.yaml
+          if helm template ads charts/ads $VALUES --set=audit.rabbitmq.url= >/tmp/ads-no-mq.yaml; then
             echo 'decisions rendered with nowhere to be journalled' >&2
             exit 1
           fi
-          if helm template ads charts/ads --set audit.postgres.url= >/tmp/ads-no-pg.yaml; then
+          if helm template ads charts/ads $VALUES --set=audit.postgres.url= >/tmp/ads-no-pg.yaml; then
             echo 'audit rendered without a journal' >&2
             exit 1
           fi
-          helm template ads charts/ads --set guardrail.enabled=true \
+          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp","site":{"runtimeClassName":"kata-clh","nodeLabels":{"ads.io/sandbox-node":"true"}}}]' \
             >/tmp/ads-guard.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-guard.yaml)" -eq 7
@@ -178,21 +180,21 @@ jobs:
           grep -q 'ADS_APPLICATIONS: "\[\]"' /tmp/ads-guard.yaml
           grep -q 'ADS_MCP_AUDIENCE: ""' /tmp/ads-guard.yaml
           grep -q 'ADS_KEYCLOAK_ISSUER: "https://keycloak.interlab/realms/ads"' /tmp/ads-guard.yaml
-          if helm template ads charts/ads --set guardrail.enabled=true \
+          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set-json 'guardrail.mcpServers=[{"name":"sandbox","url":"http://sandbox:8080/mcp"}]' >/tmp/ads-guard-bad.yaml; then
             echo 'an MCP server rendered without saying where its tools execute' >&2
             exit 1
           fi
-          helm template ads charts/ads --set guardrail.enabled=true \
+          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"'"$(printf 'a%.0s' $(seq 64))"'","workspace":{"project":"ads","repo":"r","env":"test"}}]' \
             >/tmp/ads-apps.yaml
           grep -q '\\"name\\":\\"hermes\\"' /tmp/ads-apps.yaml
-          if helm template ads charts/ads --set guardrail.enabled=true \
+          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set-json 'guardrail.applications=[{"name":"hermes","keySha256":"x"}]' >/tmp/ads-apps-bad.yaml; then
             echo 'an application rendered without a workspace' >&2
             exit 1
           fi
-          helm template ads charts/ads --set guardrail.enabled=true \
+          helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set injectionScanner.enabled=true --set mcpProbe.enabled=true \
             --set engine.tools.enabled=true --set tls.caBundle.secretName=lab-ca \
             --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
@@ -209,19 +211,19 @@ jobs:
           grep -q 'ADS_ENGINE_MCP_SERVERS: "probe-vm,probe-container"' /tmp/ads-chain.yaml
           grep -q 'ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"' /tmp/ads-chain.yaml
           grep -q 'ADS_ENGINE_GUARDRAIL_API_TOKEN' /tmp/ads-chain.yaml
-          if helm template ads charts/ads --set engine.tools.enabled=true \
+          if helm template ads charts/ads $VALUES --set=engine.tools.enabled=true \
             --set tls.caBundle.secretName=lab-ca >/tmp/ads-tools-no-guardrail.yaml 2>&1; then
             echo 'engine tools rendered without a guardrail to go through' >&2
             exit 1
           fi
-          if helm template ads charts/ads --set guardrail.enabled=true \
+          if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
             --set engine.tools.enabled=true --set-json 'engine.tools.mcpServers=["probe"]' \
             --set engine.tools.workspace.project=ads --set engine.tools.workspace.repo=r \
             --set engine.tools.workspace.env=test >/tmp/ads-tools-no-ca.yaml 2>&1; then
             echo 'engine tools rendered without a CA to trust the guardrail' >&2
             exit 1
           fi
-          if helm template ads charts/ads --set mcpProbe.enabled=true \
+          if helm template ads charts/ads $VALUES --set=mcpProbe.enabled=true \
             --set-json 'mcpProbe.sites=[{"name":"nowhere"}]' >/tmp/ads-probe-nowhere.yaml 2>&1; then
             echo 'a probe rendered without saying where it runs' >&2
             exit 1
@@ -263,7 +265,7 @@ jobs:
             echo 'plain HTTP toggle still present' >&2
             exit 1
           fi
-          helm template ads charts/ads \
+          helm template ads charts/ads $VALUES \
             --set tls.certManager.enabled=false \
             --set tls.serviceSecretName=byo-service \
             --set tls.policySecretName=byo-policy \
@@ -279,11 +281,11 @@ jobs:
           grep -q 'secretName: byo-audit' /tmp/ads-byo.yaml
           grep -q 'secretName: byo-preferences' /tmp/ads-byo.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-byo.yaml
-          if helm template ads charts/ads --set tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
+          if helm template ads charts/ads $VALUES --set=tls.certManager.enabled=false >/tmp/ads-byo-missing.yaml; then
             echo 'BYO without secrets should fail' >&2
             exit 1
           fi
-          helm template ads charts/ads \
+          helm template ads charts/ads $VALUES \
             --set tls.caBundle.secretName=lab-ca \
             >/tmp/ads-ca.yaml
           grep -q 'ADS_TLS_CA_BUNDLE: "/ca/ca.crt"' /tmp/ads-ca.yaml

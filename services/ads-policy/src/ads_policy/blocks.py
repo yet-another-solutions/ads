@@ -20,6 +20,8 @@ class ConversationBlock(msgspec.Struct, frozen=True):
 class ConversationBlocks(Protocol):
     async def block(self, block: ConversationBlock) -> None: ...
 
+    async def lift(self, conversation: str) -> None: ...
+
     async def is_blocked(self, conversation: str) -> bool: ...
 
 
@@ -29,6 +31,9 @@ class RedisConversationBlocks:
 
     async def block(self, block: ConversationBlock) -> None:
         await self.redis.set(_block_key(block.conversation), msgspec.json.encode(block), nx=True)
+
+    async def lift(self, conversation: str) -> None:
+        await self.redis.delete(_block_key(conversation))
 
     async def is_blocked(self, conversation: str) -> bool:
         if not conversation:
@@ -42,6 +47,9 @@ class InMemoryConversationBlocks:
 
     async def block(self, block: ConversationBlock) -> None:
         self._blocks.setdefault(block.conversation, block)
+
+    async def lift(self, conversation: str) -> None:
+        self._blocks.pop(conversation, None)
 
     async def is_blocked(self, conversation: str) -> bool:
         return bool(conversation) and conversation in self._blocks

@@ -38,11 +38,18 @@ ADD_CONVERSATION = (
 
 CREATE_BLOCKS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {BLOCKS_TABLE} (
-    conversation varchar(64) PRIMARY KEY,
-    blocked_at   timestamptz NOT NULL DEFAULT now(),
-    budget       integer NOT NULL
+    conversation  varchar(64) PRIMARY KEY,
+    blocked_at    timestamptz NOT NULL DEFAULT now(),
+    budget        integer NOT NULL,
+    lifted_at     timestamptz,
+    lifted_by     varchar(128),
+    lifted_budget integer
 )
 """
+
+ADD_LIFTED_AT = f"ALTER TABLE {BLOCKS_TABLE} ADD COLUMN IF NOT EXISTS lifted_at timestamptz"
+ADD_LIFTED_BY = f"ALTER TABLE {BLOCKS_TABLE} ADD COLUMN IF NOT EXISTS lifted_by varchar(128)"
+ADD_LIFTED_BUDGET = f"ALTER TABLE {BLOCKS_TABLE} ADD COLUMN IF NOT EXISTS lifted_budget integer"
 
 CREATE_UNIQUE_EVENT_INDEX = f"""
 CREATE UNIQUE INDEX IF NOT EXISTS {TABLE}_event_id_key
@@ -82,6 +89,9 @@ async def ensure_schema(connection: AsyncConnection, months_ahead: int = 2) -> N
     await connection.execute(text(CREATE_SUBJECT_INDEX))
     await connection.execute(text(CREATE_CONVERSATION_INDEX))
     await connection.execute(text(CREATE_BLOCKS_TABLE))
+    await connection.execute(text(ADD_LIFTED_AT))
+    await connection.execute(text(ADD_LIFTED_BY))
+    await connection.execute(text(ADD_LIFTED_BUDGET))
     moment = datetime.now(UTC)
     for _ in range(months_ahead + 1):
         start, end = month_bounds(moment)

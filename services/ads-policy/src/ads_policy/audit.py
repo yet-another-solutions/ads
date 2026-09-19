@@ -7,12 +7,12 @@ import aio_pika
 import msgspec
 from aio_pika.abc import AbstractRobustConnection
 
-from ads_policy.config import GovernanceSettings
 from ads_policy.contract import AuditEvent, DecisionRequest, PolicyDecision
 
 EXCHANGE = "ads.audit"
 ROUTING_KEY = "decision"
 QUEUE = "ads.audit.decisions"
+RESERVED_FOR_REFUSALS = 100
 
 
 def record(
@@ -69,21 +69,41 @@ class BufferedAuditSink:
     def __init__(
         self,
         sink: AuditSink,
-        settings: GovernanceSettings | None = None,
+        capacity: int = 10000,
         decided_by: str = "",
     ) -> None:
         self._sink = sink
-        self._capacity = (settings or GovernanceSettings()).audit_backlog
+        self._capacity = capacity
+        self._room_for_decisions = self._capacity - self._capacity // RESERVED_FOR_REFUSALS
         self._decided_by = decided_by
         self._pending: list[AuditEvent] = []
+        self._lost = 0
 
     @property
     def pending(self) -> tuple[AuditEvent, ...]:
         return tuple(self._pending)
 
+    @property
+    def lost(self) -> int:
+        return self._lost
+
+    @property
+    def saturated(self) -> bool:
+        return len(self._pending) >= self._room_for_decisions
+
     def enqueue(self, event: AuditEvent) -> None:
-        if len(self._pending) >= self._capacity:
+        if self.saturated:
+            self._lost += 1
             raise AuditBacklogFull(f"{self._capacity} events are waiting to be journalled")
+        self._remember(event)
+
+    def enqueue_refusal(self, event: AuditEvent) -> None:
+        if len(self._pending) >= self._capacity:
+            self._lost += 1
+            return
+        self._remember(event)
+
+    def _remember(self, event: AuditEvent) -> None:
         if self._decided_by:
             event = msgspec.structs.replace(event, decided_by=self._decided_by)
         self._pending.append(event)

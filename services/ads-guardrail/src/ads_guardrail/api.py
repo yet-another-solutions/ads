@@ -18,10 +18,19 @@ from litestar.exceptions import (
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Stream
 
-from ads_guardrail.contract import Opening
+from ads_guardrail.contract import Opening, Prompt, PromptReading
 from ads_guardrail.guardrail import Guardrail, NotAPerson, RunNotOpen
 from ads_guardrail.proxy import Proxy, UnknownServer, UpstreamUnavailable
-from ads_policy.contract import PolicyDecision, Run, Site
+from ads_guardrail.scanner import InjectionScanner
+from ads_policy.contract import (
+    CheckKind,
+    InterceptionPoint,
+    PolicyDecision,
+    PromptRequest,
+    Run,
+    Site,
+    Switch,
+)
 
 BEARER_PREFIX = "Bearer "
 MCP_PATH = "/mcp"
@@ -32,7 +41,7 @@ class PermissionRequest(msgspec.Struct, frozen=True):
     run_id: str
     source: str
     tool: str
-    arguments: dict[str, str]
+    arguments: dict[str, Any]
 
 
 def require_api_token(connection: ASGIConnection[Any, Any, Any, Any], _: BaseRouteHandler) -> None:
@@ -124,6 +133,36 @@ class GuardrailController(Controller):
             return await anyio.to_thread.run_sync(_decide_permission_request, guardrail, data)
         except RunNotOpen as exc:
             raise ServiceUnavailableException(detail=str(exc)) from exc
+
+    @post("/prompts")
+    @inject
+    async def prompt(
+        self,
+        data: Prompt,
+        guardrail: FromDishka[Guardrail],
+        scanner: FromDishka[InjectionScanner],
+    ) -> PromptReading:
+        try:
+            run = await anyio.to_thread.run_sync(guardrail.get_run, data.run_id)
+            decision = await anyio.to_thread.run_sync(
+                guardrail.client.decide_prompt, PromptRequest(run.id, run.subject)
+            )
+        except RunNotOpen as exc:
+            raise ServiceUnavailableException(detail=str(exc)) from exc
+        if not decision.permitted:
+            return PromptReading(decision=decision, texts=data.texts)
+        scan = None
+        if (
+            decision.interception.side(InterceptionPoint.PROMPT).switch_for(CheckKind.INJECTION)
+            is not Switch.OFF
+        ):
+            scan = await scanner.scan(list(data.texts))
+        reading = await anyio.to_thread.run_sync(
+            guardrail.inspect_prompt, run, decision, data.texts, scan
+        )
+        return PromptReading(
+            decision=reading.decision, texts=reading.texts, withheld=reading.withheld
+        )
 
 
 def _decide_permission_request(guardrail: Guardrail, data: PermissionRequest) -> PolicyDecision:

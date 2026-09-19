@@ -7,7 +7,9 @@ import pytest
 from ads_policy.config import (
     Mode,
     Settings,
-    load_governance_settings,
+    load_placement_rules,
+    load_policy_defaults,
+    load_run_lifetime,
     load_settings,
     load_tls_context,
 )
@@ -78,42 +80,42 @@ def test_load_tls_context_rejects_garbage_pem(tmp_path: Path) -> None:
         load_tls_context(settings)
 
 
-def test_governance_settings_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_built_in_policy_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADS_POLICY_MODE", "review")
     monkeypatch.setenv("ADS_EGRESS_ALLOWLIST", "mirror.interlab, git-proxy.interlab")
     monkeypatch.setenv("ADS_PROTECTED_BRANCHES", "main")
     monkeypatch.setenv("ADS_POLICY_DENY_ON_ERROR", "false")
+    defaults = load_policy_defaults()
+    assert defaults.mode is Mode.REVIEW
+    assert defaults.egress_allowlist == ("mirror.interlab", "git-proxy.interlab")
+    assert defaults.protected_branches == ("main",)
+    assert defaults.deny_on_policy_error is False
+
+
+def test_the_run_lifetime_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_run_lifetime() == 3600
     monkeypatch.setenv("ADS_RUN_TTL_SECONDS", "900")
-    settings = load_governance_settings()
-    assert settings.mode is Mode.REVIEW
-    assert settings.egress_allowlist == ("mirror.interlab", "git-proxy.interlab")
-    assert settings.protected_branches == ("main",)
-    assert settings.deny_on_policy_error is False
-    assert settings.run_ttl_seconds == 900
-
-
-def test_the_run_lifetime_defaults_to_an_hour() -> None:
-    assert load_governance_settings().run_ttl_seconds == 3600
+    assert load_run_lifetime() == 900
 
 
 def test_the_sandbox_is_told_to_the_service_not_discovered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert load_governance_settings().sandbox_available is True
+    assert load_placement_rules().sandbox_available is True
     monkeypatch.setenv("ADS_SANDBOX_AVAILABLE", "false")
-    assert load_governance_settings().sandbox_available is False
+    assert load_placement_rules().sandbox_available is False
 
 
 def test_a_nonsense_run_lifetime_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADS_RUN_TTL_SECONDS", "forever")
     with pytest.raises(RuntimeError, match="whole number of seconds"):
-        load_governance_settings()
+        load_run_lifetime()
     monkeypatch.setenv("ADS_RUN_TTL_SECONDS", "0")
     with pytest.raises(RuntimeError, match="greater than zero"):
-        load_governance_settings()
+        load_run_lifetime()
 
 
 def test_an_unknown_mode_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ADS_POLICY_MODE", "advisory")
     with pytest.raises(RuntimeError, match="ADS_POLICY_MODE"):
-        load_governance_settings()
+        load_policy_defaults()

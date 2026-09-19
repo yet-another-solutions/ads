@@ -81,7 +81,7 @@ class AssistantMessage(msgspec.Struct, frozen=True):
     type: Literal["assistant"] = "assistant"
 
 
-NoticeKind = Literal["tool-refused", "prompt-injection", "tools-unavailable"]
+NoticeKind = Literal["tool-refused", "prompt-injection", "tools-unavailable", "prompt-refused"]
 
 
 class Notice(msgspec.Struct, frozen=True):

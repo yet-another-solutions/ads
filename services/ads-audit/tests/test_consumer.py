@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import msgspec
 import pytest
 
 from ads_audit.consumer import AuditConsumer
-from ads_audit.repository import AuditRepository, InMemoryAuditRepository, fixed_unit_of_work
+from ads_audit.repository import (
+    AuditRepository,
+    Cursor,
+    InMemoryAuditRepository,
+    Page,
+    fixed_unit_of_work,
+)
 from ads_policy.contract import AuditEvent, Capability, Effect
 
 pytestmark = pytest.mark.anyio
@@ -34,11 +42,11 @@ class _BrokenRepository:
     async def append(self, event: AuditEvent) -> None:
         raise ConnectionError("journal unreachable")
 
-    async def for_run(self, run_id: str) -> list[AuditEvent]:
-        return []
+    async def for_run(self, run_id: str, limit: int, cursor: Cursor | None = None) -> Page:
+        return Page((), None)
 
-    async def for_subject(self, subject: str) -> list[AuditEvent]:
-        return []
+    async def for_subject(self, subject: str, limit: int, cursor: Cursor | None = None) -> Page:
+        return Page((), None)
 
 
 def _event(resource: str = "ads-client-secret") -> AuditEvent:
@@ -91,6 +99,19 @@ async def test_a_malformed_body_is_rejected_so_it_does_not_block_the_queue(
     assert not delivery.acked
     assert not delivery.nacked
     assert repository.all() == ()
+
+
+async def test_the_same_id_at_another_moment_is_another_row_as_in_the_database(
+    repository: InMemoryAuditRepository,
+) -> None:
+    event = _event()
+    a_second_later = msgspec.structs.replace(
+        event, recorded_at=event.recorded_at + timedelta(seconds=1)
+    )
+    consumer = _consumer(repository)
+    await consumer.handle(_Delivery(msgspec.json.encode(event)))  # type: ignore[arg-type]
+    await consumer.handle(_Delivery(msgspec.json.encode(a_second_later)))  # type: ignore[arg-type]
+    assert len(repository.all()) == 2
 
 
 async def test_a_redelivery_does_not_duplicate(repository: InMemoryAuditRepository) -> None:

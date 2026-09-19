@@ -98,7 +98,7 @@ async def _keep_delivering_conversation_blocks(
     guard = await container.get(ConversationGuard)
     while True:
         try:
-            await guard.tell_policy_about_every_block(unit_of_work)
+            await guard.tell_policy_what_it_is_missing(unit_of_work)
         except Exception:
             logger.exception("conversation blocks not delivered")
         await asyncio.sleep(settings.block_delivery_seconds)

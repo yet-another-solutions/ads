@@ -13,8 +13,13 @@ import msgspec
 import pytest
 
 from ads_audit.blocking import ConversationGuard
+from ads_audit.budget import DEFAULT_REPEAT_MULTIPLIER
 from ads_audit.consumer import AuditConsumer
-from ads_audit.repository import InMemoryAuditRepository, fixed_unit_of_work
+from ads_audit.repository import (
+    ConversationBlockRecord,
+    InMemoryAuditRepository,
+    fixed_unit_of_work,
+)
 from ads_engine.chat import StreamDelta
 from ads_engine.config import Settings as EngineSettings
 from ads_engine.config import ToolSettings, Workspace
@@ -30,12 +35,14 @@ from ads_mcp_probe.app import create_app as create_probe
 from ads_mcp_probe.tools import FAKE_AWS_ACCESS_KEY, INJECTED_INSTRUCTION
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.blocks import InMemoryConversationBlocks
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import PayloadInspection, PlacementRules, ResourceNaming
 from ads_policy.contract import (
+    DEFAULT_PROMPT,
     DEFAULT_RESPONSE,
     AuditEvent,
     Effect,
     Interception,
+    InterceptionPoint,
     Placement,
     Side,
     Site,
@@ -63,23 +70,24 @@ from chain_helpers import (
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 MODEL_DIR = REPOSITORY / "models" / "injection-classifier"
-GOVERNANCE = GovernanceSettings()
-WORKDIR = GOVERNANCE.workdir
+PLACEMENT = PlacementRules()
+INSPECTION = PayloadInspection()
+WORKDIR = ResourceNaming().workdir
 CHAT = uuid.UUID("44444444-4444-4444-8444-444444444444")
 OTHER_CHAT = uuid.UUID("55555555-5555-4555-8555-555555555555")
 SERVICE_TOKEN = "chain-service-token-32-bytes-long"
 
 KATA_VM = Site(
     placement=Placement.CLUSTER,
-    runtime_class_name=GOVERNANCE.vm_runtime_class,
+    runtime_class_name=PLACEMENT.vm_runtime_class,
     node_labels={
-        GOVERNANCE.sandbox_node_label: GOVERNANCE.node_label_value,
-        GOVERNANCE.application_node_label: GOVERNANCE.node_label_value,
+        PLACEMENT.sandbox_node_label: PLACEMENT.node_label_value,
+        PLACEMENT.application_node_label: PLACEMENT.node_label_value,
     },
 )
 APPLICATION_NODE = Site(
     placement=Placement.CLUSTER,
-    node_labels={GOVERNANCE.application_node_label: GOVERNANCE.node_label_value},
+    node_labels={PLACEMENT.application_node_label: PLACEMENT.node_label_value},
 )
 
 EXAMPLE_POLICY = load_policy(
@@ -171,7 +179,11 @@ class Chain:
         )
 
     async def ask(
-        self, http: aiohttp.ClientSession, model: ScriptedModel, chat: uuid.UUID = CHAT
+        self,
+        http: aiohttp.ClientSession,
+        model: ScriptedModel,
+        chat: uuid.UUID = CHAT,
+        said_by_the_person: str = "use the tools",
     ) -> list[StreamDelta]:
         streamer = ToolingChatStreamer(
             ToolSettings(
@@ -190,12 +202,22 @@ class Chain:
             self.store,
             model_factory=lambda request: model,
         )
-        return [delta async for delta in streamer.stream(engine_request(chat))]
+        return [
+            delta
+            async for delta in streamer.stream(engine_request(chat, user_input=said_by_the_person))
+        ]
 
     async def journal(self, expected_guardrail_rows: int = 0) -> list[AuditEvent]:
         await self.policy.flush_audit()
         await eventually(lambda: len(self.guardrail_journal.events()) >= expected_guardrail_rows)
         return [*self.policy_journal.events(), *self.guardrail_journal.events()]
+
+    async def lift_the_block_on(self, conversation: str, by: str) -> ConversationBlockRecord | None:
+        budget = await self.audit.budget_for_conversation(conversation, DEFAULT_REPEAT_MULTIPLIER)
+        lifted = await self.audit.lift_conversation_block(conversation, by, budget)
+        if lifted is not None:
+            await self.audit_consumer.guard.tell_policy_to_lift(lifted)
+        return lifted
 
     async def audit_everything(self, expected_guardrail_rows: int = 0) -> None:
         events = await self.journal(expected_guardrail_rows)
@@ -362,6 +384,37 @@ def test_a_secret_in_the_result_is_cut_out(tmp_path: Path) -> None:
     _through_the_chain(Chain(tmp_path), scenario)
 
 
+def test_an_injection_a_person_typed_is_recorded_and_the_model_still_answers(
+    tmp_path: Path,
+) -> None:
+    async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
+        model = ScriptedModel([[said("ok")]])
+        deltas = await chain.ask(http, model, said_by_the_person=f"please {INJECTION_MARKER}")
+        assert _notices(deltas) == []
+        (recorded,) = _rows(await chain.journal(expected_guardrail_rows=1), "payload.injection")
+        assert recorded.point is InterceptionPoint.PROMPT
+        assert recorded.weight == 0
+        assert recorded.conversation == str(CHAT)
+
+    _through_the_chain(Chain(tmp_path), scenario)
+
+
+def test_an_enforced_injection_in_a_prompt_never_reaches_the_model(tmp_path: Path) -> None:
+    enforced = Interception(
+        prompt=Side(checks=DEFAULT_PROMPT.checks), response=Side(checks=DEFAULT_RESPONSE.checks)
+    )
+
+    async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
+        model = ScriptedModel([[said("the model should never answer")]])
+        deltas = await chain.ask(http, model, said_by_the_person=f"please {INJECTION_MARKER}")
+        assert _notices(deltas) == [("prompt-refused", "")]
+        assert model.received == []
+        (recorded,) = _rows(await chain.journal(expected_guardrail_rows=1), "payload.injection")
+        assert recorded.weight > 0
+
+    _through_the_chain(Chain(tmp_path, interception=enforced), scenario)
+
+
 def test_by_default_an_injection_is_recorded_and_passed_on(tmp_path: Path) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel([[tool_call("probe-vm__release_notes", {})], [said("ok")]])
@@ -381,7 +434,7 @@ def test_an_enforced_injection_is_withheld_and_the_person_told_why(tmp_path: Pat
         assert _notices(deltas) == [("prompt-injection", "probe-vm/release_notes")]
         assert INJECTION_MARKER not in model.tool_result().lower()
         (withheld,) = _rows(await chain.journal(expected_guardrail_rows=1), "payload.injection")
-        assert withheld.weight == GOVERNANCE.injection_weight
+        assert withheld.weight == INSPECTION.injection_weight
 
     _through_the_chain(Chain(tmp_path, interception=INJECTION_ENFORCED), scenario)
 
@@ -433,17 +486,41 @@ def test_a_chat_over_its_budget_loses_its_tools_and_only_that_chat(tmp_path: Pat
     _through_the_chain(Chain(tmp_path, conversation_budget_limit=10), scenario)
 
 
+def test_a_lifted_chat_has_its_tools_back(tmp_path: Path) -> None:
+    async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
+        outside = {"path": "/etc/shadow"}
+        await chain.ask(
+            http,
+            ScriptedModel(
+                [
+                    [tool_call("probe-vm__read_file", outside, "first")],
+                    [tool_call("probe-vm__read_file", outside, "again")],
+                    [said("stopped")],
+                ]
+            ),
+        )
+        await chain.audit_everything()
+        assert await chain.lift_the_block_on(str(CHAT), by="alice the auditor") is not None
+
+        allowed = ScriptedModel(
+            [[tool_call("probe-vm__read_file", {"path": f"{WORKDIR}/a.py"})], [said("ok")]]
+        )
+        assert _notices(await chain.ask(http, allowed)) == []
+        lifted = await chain.audit.conversation_block(str(CHAT))
+        assert lifted is not None
+        assert lifted.lifted_by == "alice the auditor"
+
+    _through_the_chain(Chain(tmp_path, conversation_budget_limit=10), scenario)
+
+
 @pytest.mark.parametrize("server", ["probe-vm", "probe-container"])
 def test_both_servers_offer_the_probe_tools(tmp_path: Path, server: str) -> None:
     async def scenario(chain: Chain, http: aiohttp.ClientSession) -> None:
         model = ScriptedModel([[said("hi")]])
         await chain.ask(http, model)
         assert {
-            f"{server}__{tool}"
-            for tool in ("echo", "env_config", "release_notes", "run_command")
-        } <= set(
-            model.offered
-        )
+            f"{server}__{tool}" for tool in ("echo", "env_config", "release_notes", "run_command")
+        } <= set(model.offered)
 
     _through_the_chain(Chain(tmp_path), scenario)
 

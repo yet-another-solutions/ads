@@ -18,6 +18,7 @@ from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.service import PolicyService
 from tests.policy import DirectPolicyClient, policy_service
 from tests.threadline_fakes import (
+    FakeAudit,
     FakeAuthenticator,
     FakeOidcVerifier,
     FakePreferences,
@@ -61,6 +62,7 @@ def settings(tmp_path: Path) -> Settings:
         port=8080,
         database_url="sqlite:///:memory:",
         kafka_bootstrap_servers="",
+        audit_flush_seconds=0.01,
     )
 
 
@@ -106,6 +108,8 @@ def app(
     tokens: FakeTokens,
     authenticator: FakeAuthenticator,
     oidc_verifier: JwtVerifier,
+    journal: CollectingAuditSink,
+    audit_api: FakeAudit,
 ) -> Litestar:
     return create_app(
         settings,
@@ -115,7 +119,14 @@ def app(
         tokens=tokens,
         jwt_verifier=authenticator,
         oidc_verifier=oidc_verifier,
+        journal=journal,
+        audit_api=audit_api,
     )
+
+
+@pytest.fixture
+def audit_api() -> FakeAudit:
+    return FakeAudit()
 
 
 @pytest.fixture
@@ -142,7 +153,7 @@ def policy_client(service: PolicyService) -> DirectPolicyClient:
 
 @pytest.fixture
 def journal() -> CollectingAuditSink:
-    """What the PEP publishes: only the decisions the policy service never saw."""
+    """What ads publishes: an auditor's reading, and decisions the policy service missed."""
     return CollectingAuditSink()
 
 

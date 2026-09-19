@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 import msgspec
 import structlog
 from redis.asyncio import Redis
+from redis.exceptions import WatchError
 
-from ads_policy.config import GovernanceSettings
+from ads_policy.config import CallerRoles
 from ads_policy.contract import IsolationLevel, Run, RunContext, RunState
 
 KEY_PREFIX = "ads:run:"
@@ -19,9 +20,9 @@ logger = structlog.get_logger("ads.policy")
 
 
 def attributes_from_roles(
-    roles: Iterable[str], settings: GovernanceSettings | None = None
+    roles: Iterable[str], settings: CallerRoles | None = None
 ) -> dict[str, str]:
-    config = settings or GovernanceSettings()
+    config = settings or CallerRoles()
     held = set(roles)
     return {
         "repo.write": _flag(bool(held & config.write_roles)),
@@ -60,7 +61,7 @@ class RunStore(Protocol):
 @dataclass(frozen=True, slots=True, eq=False)
 class RedisRunStore:
     redis: Redis
-    settings: GovernanceSettings = field(default_factory=GovernanceSettings)
+    run_ttl_seconds: int = 3600
 
     async def start(
         self,
@@ -82,7 +83,7 @@ class RedisRunStore:
             holder=holder,
             conversation=conversation,
         )
-        lifetime = self.settings.run_ttl_seconds
+        lifetime = self.run_ttl_seconds
         await self.redis.set(_key(run.id), msgspec.json.encode(run), ex=lifetime)
         if holder:
             await self.redis.sadd(_holder_key(holder), run.id)
@@ -111,7 +112,7 @@ class RedisRunStore:
         return runs
 
     async def touch(self, run: Run) -> None:
-        lifetime = self.settings.run_ttl_seconds
+        lifetime = self.run_ttl_seconds
         await self.redis.expire(_key(run.id), lifetime)
         if run.holder:
             await self.redis.expire(_holder_key(run.holder), lifetime)
@@ -123,12 +124,25 @@ class RedisRunStore:
         return await self._change_state_keeping_lifetime(run_id, RunState.FINISHED)
 
     async def _change_state_keeping_lifetime(self, run_id: str, state: RunState) -> Run:
-        run = await self.get(run_id)
-        if run is None:
-            raise KeyError(run_id)
-        moved = msgspec.structs.replace(run, state=state)
-        await self.redis.set(_key(run_id), msgspec.json.encode(moved), keepttl=True)
-        return moved
+        key = _key(run_id)
+        async with self.redis.pipeline() as pipe:
+            while True:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    if raw is None:
+                        raise KeyError(run_id)
+                    run = msgspec.json.decode(raw, type=Run)
+                    if _keeps_its_state(run, state):
+                        await pipe.unwatch()  # type: ignore[no-untyped-call]
+                        return run
+                    moved = msgspec.structs.replace(run, state=state)
+                    pipe.multi()  # type: ignore[no-untyped-call]
+                    await pipe.set(key, msgspec.json.encode(moved), keepttl=True)
+                    await pipe.execute()
+                    return moved
+                except WatchError:
+                    continue
 
 
 class InMemoryRunStore:
@@ -177,9 +191,17 @@ class InMemoryRunStore:
         run = self._runs.get(run_id)
         if run is None:
             raise KeyError(run_id)
+        if _keeps_its_state(run, state):
+            return run
         moved = msgspec.structs.replace(run, state=state)
         self._runs[run_id] = moved
         return moved
+
+
+def _keeps_its_state(run: Run, wanted: RunState) -> bool:
+    if run.state is wanted:
+        return True
+    return wanted is RunState.FINISHED and run.state is RunState.REVOKED
 
 
 def _key(run_id: str) -> str:

@@ -29,6 +29,7 @@ from ads_commons_beans import JwtVerifier, JwtVerifierSettings
 from ads_policy.contract import (
     DecisionRequest,
     PolicyDecision,
+    PromptRequest,
     Run,
     RunRequest,
     ToolCallRequest,
@@ -86,12 +87,16 @@ class KeycloakExchange:
         return person_token()
 
 
-def engine_request(chat: uuid.UUID, user_token: str = "user-token-for-engine") -> EngineRequest:
+def engine_request(
+    chat: uuid.UUID,
+    user_token: str = "user-token-for-engine",
+    user_input: str = "use the tools",
+) -> EngineRequest:
     return EngineRequest(
         session_id=chat,
         message_id=uuid.uuid4(),
         history=[],
-        user_input="use the tools",
+        user_input=user_input,
         instructions="",
         model=OpenAiStreamModel(
             url="https://llm.example/v1",
@@ -139,6 +144,9 @@ class InProcessPolicyClient:
     def decide(self, request: DecisionRequest) -> PolicyDecision:
         return run_blocking(self.service.decide(request))
 
+    def decide_prompt(self, prompt: PromptRequest) -> PolicyDecision:
+        return run_blocking(self.service.decide_prompt(prompt))
+
     def decide_call(self, call: ToolCallRequest) -> PolicyDecision:
         return run_blocking(self.service.decide_call(call))
 
@@ -149,6 +157,9 @@ class PolicyServiceBlocker:
 
     async def block(self, conversation: str, budget: int) -> None:
         await self.service.block_conversation(conversation, budget, "ads-audit")
+
+    async def lift(self, conversation: str) -> None:
+        await self.service.lift_conversation_block(conversation)
 
 
 @contextmanager
