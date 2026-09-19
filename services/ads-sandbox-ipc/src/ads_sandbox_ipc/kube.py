@@ -121,7 +121,11 @@ class KubeClient:
         if not self._matches(item) or item.metadata.uid != pod.uid:
             raise RuntimeError("sandbox pod identity changed")
         # The SDK refreshes the projected token here; never send a Keycloak JWT to kube.
-        authorization = self.configuration.get_api_key_with_prefix("authorization")
+        authorization = self.configuration.get_api_key_with_prefix(
+            "BearerToken", alias="authorization"
+        )
+        if not authorization:
+            raise RuntimeError("Kubernetes projected service account token is unavailable")
         query: list[tuple[str, str]] = [
             ("container", "sandbox"),
             ("stdin", "true"),
