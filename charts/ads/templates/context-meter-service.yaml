@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: {{ .Values.namespace }}
+  name: {{ include "ads.fullname" . }}-context-meter
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-context-meter
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.contextMeter.service.port }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "ads.contextMeterSelectorLabels" . | nindent 4 }}

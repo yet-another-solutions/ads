@@ -39,6 +39,7 @@ jobs:
           - services/ads-egress-controlplane/Containerfile
           - services/ads-engine/Containerfile
           - services/ads-preferences/Containerfile
+          - services/ads-context-meter/Containerfile
           - services/ads-sandbox-mcp/Containerfile
           - services/ads-sandbox-ipc/Containerfile
           - services/ads-sandbox-manager/Containerfile
@@ -80,6 +81,11 @@ jobs:
             file: services/ads-preferences/Containerfile
             context: .
             smoke: "import ads_preferences; print(ads_preferences.__version__)"
+            pack: "false"
+          - image: ads-context-meter
+            file: services/ads-context-meter/Containerfile
+            context: .
+            smoke: "import ads_context_meter; print(ads_context_meter.__version__)"
             pack: "false"
           - image: ads-sandbox-golden
             file: services/ads-sandbox-golden/Containerfile
@@ -167,6 +173,11 @@ jobs:
           st=$?
           set -e
           test "$st" -eq 1
+      - name: Cold offline context meter
+        if: matrix.image == 'ads-context-meter'
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            ads-context-meter:ci python -m ads_context_meter.smoke
       - name: Smoke guest entrypoint
         if: matrix.image == 'ads-sandbox-base'
         run: |
@@ -187,9 +198,9 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 6
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 7
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 5
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 6
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
@@ -240,6 +251,7 @@ jobs:
             --set tls.certManager.enabled=false \
             --set tls.serviceSecretName=byo-service \
             --set preferences.tls.serviceSecretName=byo-preferences \
+            --set contextMeter.tls.serviceSecretName=byo-context-meter \
             --set sandbox.mcp.tlsSecretName=byo-mcp \
             --set sandbox.manager.tlsSecretName=byo-manager \
             --set sandbox.ipc.tlsSecretName=byo-ipc \

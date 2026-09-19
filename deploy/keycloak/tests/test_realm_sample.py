@@ -13,6 +13,7 @@ CLIENTS = {
     "ads",
     "ads-engine",
     "ads-preferences",
+    "ads-context-meter",
     "ads-sandbox-mcp",
     "ads-sandbox-manager",
     "ads-sandbox-ipc",
@@ -21,6 +22,7 @@ AUDIENCES = {
     "ads": {"ads", "ads-engine", "ads-preferences"},
     "ads-engine": {"ads-sandbox-mcp"},
     "ads-preferences": {"ads-preferences"},
+    "ads-context-meter": set(),
     "ads-sandbox-mcp": {"ads-sandbox-manager"},
     "ads-sandbox-manager": {"ads-sandbox-manager", "ads-sandbox-ipc", "ads-sandbox-mcp"},
     "ads-sandbox-ipc": {"ads-sandbox-manager"},
@@ -37,7 +39,7 @@ def test_operator_resource_and_secret_placeholders():
     assert spec["keycloakCRName"] == "keycloak"
     placeholders = spec["placeholders"]
     assert set(re.findall(r"\$\{([A-Z_]+)\}", text)) == set(placeholders)
-    assert len(placeholders) == 6
+    assert len(placeholders) == 7
     assert {p["secret"]["key"] for p in placeholders.values()} == CLIENTS
     for placeholder in placeholders.values():
         assert placeholder["secret"]["name"] == "ads-realm-client-secrets"
@@ -52,7 +54,7 @@ def test_flows_scopes_audiences_and_role_assignment():
     assert realm["accessTokenLifespan"] > 120
     assert realm["registrationAllowed"] is False
     assert {c["clientId"] for c in realm["clients"]} == CLIENTS
-    assert {m["client"] for m in realm["scopeMappings"]} == CLIENTS
+    assert {m["client"] for m in realm["scopeMappings"]} == CLIENTS - {"ads-context-meter"}
     assert all(m["roles"] == ["user"] for m in realm["scopeMappings"])
     assert realm["roles"]["realm"][0]["name"] == "user"
     assert "defaultRoles" not in realm and "defaultRole" not in realm
@@ -60,12 +62,12 @@ def test_flows_scopes_audiences_and_role_assignment():
         name = client["clientId"]
         assert client["publicClient"] is False
         assert client["fullScopeAllowed"] is False
-        assert client["serviceAccountsEnabled"] is True
+        assert client["serviceAccountsEnabled"] == (name != "ads-context-meter")
         assert client["standardFlowEnabled"] == (name == "ads")
         assert client["directAccessGrantsEnabled"] is False
         assert client["implicitFlowEnabled"] is False
         assert client["optionalClientScopes"] == (
-            ["ads-engine-ack"] if name == "ads-engine" else []
+            ["ads-engine-ack", "ads-engine-context-meter"] if name == "ads-engine" else []
         )
         assert "offline_access" not in client["defaultClientScopes"]
         assert "basic" in client["defaultClientScopes"]
@@ -79,10 +81,12 @@ def test_flows_scopes_audiences_and_role_assignment():
                 "oidc-audience-mapper",
                 "oidc-usermodel-realm-role-mapper",
             }
+        elif name == "ads-context-meter":
+            assert client["defaultClientScopes"] == ["basic"]
         else:
             assert "roles" in client["defaultClientScopes"]
         assert client["attributes"]["standard.token.exchange.enabled"] == (
-            "false" if name == "ads-preferences" else "true"
+            "false" if name in {"ads-preferences", "ads-context-meter"} else "true"
         )
         audience_mappers = [
             m for m in client["protocolMappers"] if m["protocolMapper"] == "oidc-audience-mapper"
@@ -105,6 +109,7 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         "email",
         "service_account",
         "ads-engine-ack",
+        "ads-engine-context-meter",
     }
     for client in realm["clients"]:
         assert set(client["defaultClientScopes"] + client["optionalClientScopes"]) <= scopes.keys()
@@ -123,6 +128,15 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
     assert mapper["config"]["access.token.claim"] == "true"
     for client in realm["clients"]:
         assert "ads-engine-ack" not in client["defaultClientScopes"]
+        assert "ads-engine-context-meter" not in client["defaultClientScopes"]
+    meter = scopes["ads-engine-context-meter"]
+    assert len(meter["protocolMappers"]) == 1
+    assert meter["protocolMappers"][0]["protocolMapper"] == "oidc-audience-mapper"
+    assert meter["protocolMappers"][0]["config"] == {
+        "included.client.audience": "ads-context-meter",
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+    }
 
 
 def test_lifecycle_subjects_are_native_and_legacy_attribute_stays_admin_protected():

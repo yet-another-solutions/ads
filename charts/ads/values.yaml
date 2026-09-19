@@ -72,6 +72,21 @@ preferences:
   tls:
     serviceSecretName: ""
 
+contextMeter:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-context-meter
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-context-meter
+  tls:
+    serviceSecretName: ""
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
