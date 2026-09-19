@@ -25,6 +25,8 @@ from ads_commons.engine import (
     PartialResponse,
     Ping,
     Reasoning,
+    ToolCall,
+    ToolResult,
     UserHistoryTurn,
     authorization_headers,
     authorization_token,
@@ -174,3 +176,63 @@ def test_authorization_headers_encode_raw_jwt() -> None:
     assert authorization_token([("x-other", b"jwt-token")]) is None
     assert authorization_token([("authorization", None)]) is None
     assert authorization_token(None) is None
+
+
+def test_tool_primitives_round_trip_in_partial_and_history() -> None:
+    call = ToolCall(
+        id="call-1",
+        name="exec_shell",
+        arguments={"command": "printf hi"},
+        metadata={"index": 0},
+    )
+    result = ToolResult(
+        tool_call_id="call-1",
+        name="exec_shell",
+        status="success",
+        content={"structuredContent": {"stdout": "hi", "exit_code": 0}},
+    )
+    call_partial = json.loads(
+        encode_output(PartialResponse(session_id=SESSION, order=0, tool_call=call))
+    )
+    assert call_partial["type"] == "partial-response"
+    assert "reasoning" not in call_partial
+    assert "message" not in call_partial
+    assert call_partial["tool_call"] == {
+        "type": "tool_call",
+        "id": "call-1",
+        "name": "exec_shell",
+        "arguments": {"command": "printf hi"},
+        "metadata": {"index": 0},
+    }
+    result_partial = json.loads(
+        encode_output(PartialResponse(session_id=SESSION, order=1, tool_result=result))
+    )
+    assert result_partial["tool_result"]["type"] == "tool_result"
+    assert result_partial["tool_result"]["content"]["structuredContent"]["stdout"] == "hi"
+    assert "metadata" not in result_partial["tool_result"]
+
+    request = EngineRequest(
+        session_id=SESSION,
+        message_id=MESSAGE,
+        history=[
+            UserHistoryTurn(text="run it"),
+            AssistantHistoryTurn(text=""),
+            call,
+            result,
+            AssistantHistoryTurn(text="done"),
+        ],
+        user_input="next",
+        instructions="",
+        model=OpenAiStreamModel(
+            url="https://llm.example/v1",
+            authentication=OpenAiStreamAuthentication(
+                openai_bearer=OpenAiBearerToken(token="sk-test"),
+            ),
+            options=OpenAiStreamOptions(model_name="gpt-test"),
+        ),
+        authorization=Authorization(token="jwt-token"),
+    )
+    decoded = decode_request(encode_request(request))
+    assert decoded.history == request.history
+    assert isinstance(decoded.history[2], ToolCall)
+    assert isinstance(decoded.history[3], ToolResult)

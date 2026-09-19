@@ -15,3 +15,5 @@ htmlcov/
 charts/*.tgz
 docs/
 models/
+services/ads-sandbox-golden/rootfs.tar.zst
+services/ads-sandbox-golden/*.tar.gz

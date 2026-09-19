@@ -354,6 +354,33 @@ a { color: inherit; }
   padding: 10px 12px;
   color: #d5ddd2;
 }
+.tool-block {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  background: #0c0e0c;
+  border-radius: 4px;
+  min-width: 0;
+  overflow: auto;
+}
+.tool-block .tool-label {
+  padding: 4px 10px;
+  color: var(--muted);
+  font: 10px/1.3 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+.tool-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  font: 12px/1.45 var(--mono);
+  color: #d5ddd2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tool-block.output .tool-label { color: var(--ok); }
+.tool-block.error .tool-label { color: var(--warn); }
+.tool-block.generic .tool-label { color: var(--faint); }
 
 html { color-scheme: dark; }
 .scroll {

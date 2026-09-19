@@ -1,0 +1,47 @@
+#!/bin/bash
+set -euo pipefail
+
+fail() {
+  echo "ads-session-exec: $*" >&2
+  exit 1
+}
+
+PID_FILE=/run/ads-session-exec.pid
+READY_FILE=/run/ads-sandbox-ready
+
+podman_exec() {
+  /usr/local/sbin/ads-sandbox-runtime podman exec -i -w /workspace dev-sandbox "$@"
+}
+
+[[ -f $READY_FILE ]] || fail "guest not ready"
+[[ $# -ge 1 ]] || fail "usage: ads-session-exec shell <string> | ads-session-exec python"
+
+kind=$1
+shift
+
+case $kind in
+  shell)
+    [[ $# -eq 1 ]] || fail "shell requires one string"
+    ;;
+  python)
+    [[ $# -eq 0 ]] || fail "python takes code on stdin"
+    ;;
+  *)
+    fail "unknown kind $kind"
+    ;;
+esac
+
+clear_pid() {
+  rm -f "$PID_FILE"
+}
+trap clear_pid EXIT
+printf '%s\n' "$$" >"$PID_FILE"
+
+case $kind in
+  shell)
+    podman_exec /bin/bash --noprofile --norc -c "$1"
+    ;;
+  python)
+    podman_exec python3 -u -
+    ;;
+esac

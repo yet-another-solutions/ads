@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+import msgspec
 import pytest
 from litestar import Litestar
 from litestar.testing import TestClient
@@ -19,6 +20,8 @@ from ads_commons.engine import (
     PartialResponse,
     Ping,
     Reasoning,
+    ToolCall,
+    ToolResult,
     UserHistoryTurn,
 )
 from tests.threadline_db import (
@@ -170,6 +173,114 @@ def test_notices_are_their_own_parts_shown_but_never_sent_as_history(
         UserHistoryTurn(text="read the notes"),
         AssistantHistoryTurn(text="Done"),
     ]
+
+
+def test_tool_primitives_persist_render_and_return_in_history(
+    client: TestClient,
+    app: Litestar,
+    db_engine: Engine,
+    kafka: RecordingKafka,
+    opened: tuple[uuid.UUID, uuid.UUID, uuid.UUID],
+) -> None:
+    project, session_id, model_id = opened
+    send(client, project, session_id, "run tools", model_id)
+    shell = ToolCall(
+        id="call-1",
+        name="exec_shell",
+        arguments={"command": "printf hi"},
+        metadata={"index": 0},
+    )
+    shell_out = ToolResult(
+        tool_call_id="call-1",
+        name="exec_shell",
+        status="success",
+        content={
+            "content": [{"type": "text", "text": "hi"}],
+            "structuredContent": {"stdout": "hi", "exit_code": 0},
+        },
+    )
+    py = ToolCall(id="call-2", name="exec_python", arguments={"code": "print(1)"})
+    py_out = ToolResult(
+        tool_call_id="call-2",
+        name="exec_python",
+        status="success",
+        content={"structuredContent": {"stdout": "1\n"}},
+    )
+    generic = ToolCall(
+        id="call-3",
+        name="search",
+        arguments={"query": "ads"},
+        metadata={"provider": "mcp"},
+    )
+    generic_out = ToolResult(
+        tool_call_id="call-3",
+        name="search",
+        status="success",
+        content={"hits": 2},
+    )
+    emit(app, PartialResponse(session_id=session_id, order=0, tool_call=shell))
+    emit(app, PartialResponse(session_id=session_id, order=1, tool_result=shell_out))
+    emit(app, PartialResponse(session_id=session_id, order=2, tool_call=py))
+    emit(app, PartialResponse(session_id=session_id, order=3, tool_result=py_out))
+    emit(app, PartialResponse(session_id=session_id, order=4, tool_call=generic))
+    emit(app, PartialResponse(session_id=session_id, order=5, tool_result=generic_out))
+    emit(
+        app,
+        PartialResponse(session_id=session_id, order=6, message=AssistantMessage(text="done")),
+    )
+    emit(app, Finish(session_id=session_id, last_order=6))
+
+    stored = parts_of(db_engine, session_id)
+    assert stored[0] == ("message", "user", "run tools")
+    assert stored[1][0] == "tool_call"
+    assert msgspec.json.decode(stored[1][2].encode(), type=ToolCall) == shell
+    assert stored[2][0] == "tool_result"
+    assert msgspec.json.decode(stored[2][2].encode(), type=ToolResult) == shell_out
+    assert stored[-1] == ("message", "assistant", "done")
+
+    page = client.get(f"/projects/{project}/sessions/{session_id}")
+    assert 'class="tool-block tool-call terminal"' in page.text
+    assert "printf hi" in page.text
+    assert 'data-tool="exec_shell"' in page.text
+    assert ">output</div>" in page.text
+    assert 'class="tool-block tool-call python"' in page.text
+    assert "print(1)" in page.text
+    assert 'class="tool-block tool-call generic"' in page.text
+    assert 'data-tool="search"' in page.text
+    assert "tool search" in page.text
+    assert "result search" in page.text
+
+    second = send(client, project, session_id, "again", model_id)
+    assert second.status_code in (200, 201)
+    assert kafka.requests[1].history == [
+        UserHistoryTurn(text="run tools"),
+        shell,
+        shell_out,
+        py,
+        py_out,
+        generic,
+        generic_out,
+        AssistantHistoryTurn(text="done"),
+    ]
+
+
+def test_consecutive_tool_calls_are_not_concatenated(
+    client: TestClient,
+    app: Litestar,
+    db_engine: Engine,
+    opened: tuple[uuid.UUID, uuid.UUID, uuid.UUID],
+) -> None:
+    project, session_id, model_id = opened
+    send(client, project, session_id, "hi", model_id)
+    first = ToolCall(id="a", name="exec_shell", arguments={"command": "one"})
+    second = ToolCall(id="b", name="exec_shell", arguments={"command": "two"})
+    emit(app, PartialResponse(session_id=session_id, order=0, tool_call=first))
+    emit(app, PartialResponse(session_id=session_id, order=1, tool_call=second))
+    emit(app, Finish(session_id=session_id, last_order=1))
+    rows = [part for part in parts_of(db_engine, session_id) if part[0] == "tool_call"]
+    assert len(rows) == 2
+    assert msgspec.json.decode(rows[0][2].encode(), type=ToolCall) == first
+    assert msgspec.json.decode(rows[1][2].encode(), type=ToolCall) == second
 
 
 def test_silver_out_of_order_then_continuous_flush(

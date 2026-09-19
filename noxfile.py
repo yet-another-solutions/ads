@@ -4,12 +4,18 @@ import os
 
 import nox
 
-os.environ.setdefault("UV_DEFAULT_INDEX", "https://pypi.org/simple")
-
 nox.options.default_venv_backend = "uv"
 nox.options.sessions = ["lint", "deps", "typecheck", "test", "package"]
 
 _SRC = (
+    "charts/ads/package_release.py",
+    "charts/ads/tests",
+    "deploy/tests",
+    "deploy/keycloak/tests",
+    "services/ads-sandbox-base/scripts/ads-session-device-check",
+    "services/ads-sandbox-base/scripts/ads-sandbox-runtime",
+    "services/ads-sandbox-base/scripts/ads-agent-init",
+    "services/ads-sandbox-golden/scripts/ads-session-device-check",
     "libraries/ads-commons/src",
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/src",
@@ -33,6 +39,12 @@ _SRC = (
     "services/ads-policy/tests",
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
+    "services/ads-sandbox-mcp/src",
+    "services/ads-sandbox-mcp/tests",
+    "services/ads-sandbox-ipc/src",
+    "services/ads-sandbox-ipc/tests",
+    "services/ads-sandbox-manager/src",
+    "services/ads-sandbox-manager/tests",
     "tests/chain",
     "noxfile.py",
 )
@@ -49,6 +61,9 @@ _PACKAGES = (
     "services/ads-mcp-probe",
     "services/ads-policy",
     "services/ads-preferences",
+    "services/ads-sandbox-mcp",
+    "services/ads-sandbox-ipc",
+    "services/ads-sandbox-manager",
 )
 
 
@@ -109,3 +124,6 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads-guardrail", external=True)
     session.run("uv", "build", "--package", "ads-mcp-probe", external=True)
     session.run("uv", "build", "--package", "ads-injection-scanner", external=True)
+    session.run("uv", "build", "--package", "ads-sandbox-mcp", external=True)
+    session.run("uv", "build", "--package", "ads-sandbox-ipc", external=True)
+    session.run("uv", "build", "--package", "ads-sandbox-manager", external=True)

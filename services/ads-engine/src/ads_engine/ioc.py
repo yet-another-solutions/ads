@@ -10,6 +10,7 @@ from dishka import Provider, Scope, provide
 
 from ads_commons.engine import EngineOutput, encode_output
 from ads_commons.security import (
+    SecurityContext,
     jwks_uri_from_well_known,
     token_endpoint_from_well_known,
 )
@@ -19,10 +20,13 @@ from ads_commons_beans import (
     TokenExchange,
     TokenExchangeSettings,
 )
-from ads_engine.chat import ChatStreamer, LangChainChatStreamer
+from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings
+from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener, TokenAuthenticator
+from ads_engine.mcp_client import SandboxClient
+from ads_engine.mcp_credentials import McpCredentials
 from ads_engine.service import EngineService, OutputPublisher, TokenMinter
 from ads_engine.store import ActiveSessionStore
 from ads_engine.tooling import ToolingChatStreamer
@@ -47,6 +51,14 @@ class KafkaPublisher:
         )
 
 
+class AcknowledgeTokens:
+    def __init__(self, exchange: TokenExchange) -> None:
+        self._exchange = exchange
+
+    def mint(self, audience: str) -> SecurityContext:
+        return self._exchange.mint(audience, scope="ads-engine-ack")
+
+
 class AppProvider(Provider):
     def __init__(self, settings: Settings) -> None:
         super().__init__()
@@ -66,16 +78,21 @@ class AppProvider(Provider):
             timeout=aiohttp.ClientTimeout(total=timeout),
         )
 
+    credentials = provide(McpCredentials, scope=Scope.APP)
+    sandbox = provide(SandboxClient, scope=Scope.APP)
+    executor = provide(ExecutorChatStreamer, scope=Scope.APP)
+
     @provide(scope=Scope.APP)
     def chat(
         self,
         settings: Settings,
+        executor: ExecutorChatStreamer,
         tool_http: aiohttp.ClientSession,
         exchange: TokenExchange,
         store: ActiveSessionStore,
     ) -> ChatStreamer:
         if settings.tools is None:
-            return LangChainChatStreamer()
+            return executor
         return ToolingChatStreamer(settings.tools, tool_http, exchange, store)
 
     @provide(scope=Scope.APP)
@@ -102,7 +119,7 @@ class AppProvider(Provider):
 
     @provide(scope=Scope.APP)
     def tokens(self, exchange: TokenExchange) -> TokenMinter:
-        return exchange
+        return AcknowledgeTokens(exchange)
 
     engine_service = provide(EngineService, scope=Scope.APP)
 

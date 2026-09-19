@@ -1,0 +1,32 @@
+{% set tool_name = part.name or 'tool' %}
+{% if part.kind == 'tool_call' and tool_name == 'exec_shell' %}
+<div class="tool-block tool-call terminal" data-kind="tool_call" data-tool="exec_shell"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}>
+  <div class="tool-label">terminal</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% elif part.kind == 'tool_call' and tool_name == 'exec_python' %}
+<div class="tool-block tool-call python" data-kind="tool_call" data-tool="exec_python"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}>
+  <div class="tool-label">python</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% elif part.kind == 'tool_call' %}
+<div class="tool-block tool-call generic" data-kind="tool_call" data-tool="{{ tool_name }}"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}>
+  <div class="tool-label">tool {{ tool_name }}</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% elif part.kind == 'tool_result' and tool_name == 'exec_shell' %}
+<div class="tool-block tool-result output{% if part.status == 'error' %} error{% endif %}" data-kind="tool_result" data-tool="exec_shell"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}{% if part.status %} data-status="{{ part.status }}"{% endif %}>
+  <div class="tool-label">output</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% elif part.kind == 'tool_result' and tool_name == 'exec_python' %}
+<div class="tool-block tool-result output{% if part.status == 'error' %} error{% endif %}" data-kind="tool_result" data-tool="exec_python"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}{% if part.status %} data-status="{{ part.status }}"{% endif %}>
+  <div class="tool-label">output</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% else %}
+<div class="tool-block tool-result generic{% if part.status == 'error' %} error{% endif %}" data-kind="tool_result" data-tool="{{ tool_name }}"{% if part.call_id %} data-call-id="{{ part.call_id }}"{% endif %}{% if part.status %} data-status="{{ part.status }}"{% endif %}>
+  <div class="tool-label">result {{ tool_name }}</div>
+  <pre>{{ part.text }}</pre>
+</div>
+{% endif %}

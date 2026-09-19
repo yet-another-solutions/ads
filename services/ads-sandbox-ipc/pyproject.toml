@@ -1,0 +1,34 @@
+[project]
+name = "ads-sandbox-ipc"
+version = "0.0.1"
+description = "ADS per-sandbox Kafka and Kubernetes execution bridge"
+requires-python = ">=3.12"
+authors = [{ name = "yet-another-solutions" }]
+dependencies = [
+    "ads-commons",
+    "ads-commons-beans",
+    "aiokafka==0.14.0",
+    "dishka==1.10.1",
+    "kubernetes==36.0.3",
+    "litestar==2.24.0",
+    "structlog==26.1.0",
+    "uvicorn[standard]==0.52.4",
+    "websockets==17.1",
+]
+
+[project.scripts]
+ads-sandbox-ipc = "ads_sandbox_ipc.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ads_sandbox_ipc"]
+
+[tool.deptry]
+known_first_party = ["ads_sandbox_ipc"]
+
+[tool.deptry.package_module_name_map]
+ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]

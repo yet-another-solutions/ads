@@ -1,0 +1,34 @@
+#!/usr/bin/python3
+"""Base-owned initialization, streamed to the rootless container's Python on stdin."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+CG = Path("/sys/fs/cgroup")
+
+
+def prepare() -> None:
+    for name in ("subuid", "subgid"):
+        if Path(f"/etc/{name}").read_text().strip() != "root:1:65536":
+            raise RuntimeError("inner UID/GID ranges do not match this runtime contract")
+    status = Path("/proc/self/status").read_text().splitlines()
+    if not any(line.split() == ["Seccomp:", "2"] for line in status):
+        raise RuntimeError("agent seccomp filter is required")
+    if not {"cpu", "memory", "pids"} <= set((CG / "cgroup.controllers").read_text().split()):
+        raise RuntimeError("nested CPU/memory/PID delegation is missing")
+    (CG / "agent").mkdir(exist_ok=True)
+    for pid in (CG / "cgroup.procs").read_text().split():
+        (CG / "agent/cgroup.procs").write_text(pid)
+    if (CG / "cgroup.procs").read_text().strip():
+        raise RuntimeError("agent cgroup root is not empty")
+    (CG / "cgroup.subtree_control").write_text("+cpu +memory +pids")
+
+
+if __name__ == "__main__":
+    try:
+        prepare()
+    except (OSError, RuntimeError) as error:
+        print(f"ads-agent-init: {error}", file=sys.stderr)
+        sys.exit(1)

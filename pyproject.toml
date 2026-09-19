@@ -17,6 +17,9 @@ dependencies = [
     "ads-mcp-probe",
     "ads-policy",
     "ads-preferences",
+    "ads-sandbox-mcp",
+    "ads-sandbox-ipc",
+    "ads-sandbox-manager",
 ]
 
 [tool.uv]
@@ -40,6 +43,9 @@ members = [
     "services/ads-mcp-probe",
     "services/ads-policy",
     "services/ads-preferences",
+    "services/ads-sandbox-mcp",
+    "services/ads-sandbox-ipc",
+    "services/ads-sandbox-manager",
 ]
 
 [tool.uv.sources]
@@ -55,10 +61,13 @@ ads-injection-scanner = { workspace = true }
 ads-mcp-probe = { workspace = true }
 ads-policy = { workspace = true }
 ads-preferences = { workspace = true }
+ads-sandbox-mcp = { workspace = true }
+ads-sandbox-ipc = { workspace = true }
+ads-sandbox-manager = { workspace = true }
 
 [[tool.uv.index]]
-name = "nexus"
-url = "https://nexus.interlab/repository/pypi-group/simple"
+name = "pypi"
+url = "https://pypi.org/simple"
 default = true
 
 [dependency-groups]
@@ -72,6 +81,7 @@ typecheck = [
     "mypy==2.3.1",
 ]
 test = [
+    "PyYAML==6.0.3",
     "fakeredis==2.38.0",
     "pytest==9.1.1",
     "testcontainers==4.15.0",
@@ -105,6 +115,12 @@ src = [
     "services/ads-policy/tests",
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
+    "services/ads-sandbox-mcp/src",
+    "services/ads-sandbox-mcp/tests",
+    "services/ads-sandbox-ipc/src",
+    "services/ads-sandbox-ipc/tests",
+    "services/ads-sandbox-manager/src",
+    "services/ads-sandbox-manager/tests",
     "tests/chain",
 ]
 line-length = 100
@@ -115,7 +131,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-mcp-probe/src:services/ads-policy/src:services/ads-preferences/src"
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-mcp-probe/src:services/ads-policy/src:services/ads-preferences/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
 packages = [
     "ads_commons",
     "ads_commons_beans",
@@ -129,6 +145,9 @@ packages = [
     "ads_mcp_probe",
     "ads_policy",
     "ads_preferences",
+    "ads_sandbox_mcp",
+    "ads_sandbox_ipc",
+    "ads_sandbox_manager",
 ]
 explicit_package_bases = true
 strict = true
@@ -143,6 +162,10 @@ module = ["aiokafka", "aiokafka.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+module = ["kubernetes", "kubernetes.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 module = ["advanced_alchemy", "advanced_alchemy.*"]
 ignore_missing_imports = true
 
@@ -151,7 +174,14 @@ module = ["onnxruntime", "onnxruntime.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+pythonpath = [
+    "services/ads-sandbox-mcp/tests",
+    "services/ads-sandbox-ipc/tests",
+]
 testpaths = [
+    "deploy/tests",
+    "deploy/keycloak/tests",
+    "deploy/lab/sandbox-identity/tests",
     "libraries/ads-commons/tests",
     "libraries/ads-commons-beans/tests",
     "libraries/ads-commons-schema/tests",
@@ -163,6 +193,9 @@ testpaths = [
     "services/ads-mcp-probe/tests",
     "services/ads-policy/tests",
     "services/ads-preferences/tests",
+    "services/ads-sandbox-mcp/tests",
+    "services/ads-sandbox-ipc/tests",
+    "services/ads-sandbox-manager/tests",
     "tests/chain",
 ]
 addopts = "-q"
@@ -184,4 +217,7 @@ known_first_party = [
   "ads_mcp_probe",
   "ads_policy",
   "ads_preferences",
+  "ads_sandbox_mcp",
+  "ads_sandbox_ipc",
+  "ads_sandbox_manager",
 ]

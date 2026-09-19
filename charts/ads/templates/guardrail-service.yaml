@@ -2,6 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}-guardrail
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -19,6 +20,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}-guardrail
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -30,8 +32,8 @@ spec:
     group: {{ .Values.tls.certManager.issuer.group }}
   dnsNames:
     - {{ printf "%s-guardrail" (include "ads.fullname" .) | quote }}
-    - {{ printf "%s-guardrail.%s" (include "ads.fullname" .) .Release.Namespace | quote }}
-    - {{ printf "%s-guardrail.%s.svc" (include "ads.fullname" .) .Release.Namespace | quote }}
-    - {{ printf "%s-guardrail.%s.svc.cluster.local" (include "ads.fullname" .) .Release.Namespace | quote }}
+    - {{ printf "%s-guardrail.%s" (include "ads.fullname" .) .Values.namespace | quote }}
+    - {{ printf "%s-guardrail.%s.svc" (include "ads.fullname" .) .Values.namespace | quote }}
+    - {{ printf "%s-guardrail.%s.svc.cluster.local" (include "ads.fullname" .) .Values.namespace | quote }}
 {{- end }}
 {{- end }}

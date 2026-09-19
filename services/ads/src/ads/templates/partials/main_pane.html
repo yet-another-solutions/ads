@@ -23,6 +23,8 @@
       </details>
       {% elif part.kind == 'notice' %}
       <p class="notice" role="status">{{ part.text }}</p>
+      {% elif part.kind == 'tool_call' or part.kind == 'tool_result' %}
+      {% include 'partials/tool_part.html' %}
       {% elif part.role == 'user' %}
       <p class="user">{{ part.text }}</p>
       {% else %}

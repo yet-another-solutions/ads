@@ -10,6 +10,10 @@ on:
         description: Build without pushing
         required: false
         default: "false"
+      session_size:
+        description: ADS_SESSION_SIZE baked into the release
+        required: false
+        default: "20Gi"
 
 permissions:
   contents: read
@@ -18,7 +22,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   OWNER: ${{ github.repository_owner }}
-  UV_DEFAULT_INDEX: https://pypi.org/simple
+  ADS_SESSION_SIZE: ${{ github.event.inputs.session_size || '20Gi' }}
 
 jobs:
   channel:
@@ -74,28 +78,108 @@ jobs:
         include:
           - image: ads
             file: services/ads/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-egress-controlplane
             file: services/ads-egress-controlplane/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-engine
             file: services/ads-engine/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-policy
             file: services/ads-policy/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-audit
             file: services/ads-audit/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-preferences
             file: services/ads-preferences/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-guardrail
             file: services/ads-guardrail/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-mcp-probe
             file: services/ads-mcp-probe/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-injection-scanner
             file: services/ads-injection-scanner/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-golden
+            file: services/ads-sandbox-golden/Containerfile
+            context: services/ads-sandbox-golden
+            platforms: linux/amd64
+            pack: "true"
+          - image: ads-sandbox-base
+            file: services/ads-sandbox-base/Containerfile
+            context: services/ads-sandbox-base
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-mcp
+            file: services/ads-sandbox-mcp/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-ipc
+            file: services/ads-sandbox-ipc/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-sandbox-manager
+            file: services/ads-sandbox-manager/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
     steps:
       - uses: actions/checkout@v7
       - name: Lowercase owner
         run: echo "OWNER=${OWNER,,}" >> "$GITHUB_ENV"
       - uses: docker/setup-qemu-action@v4
+        if: matrix.pack != 'true'
       - uses: docker/setup-buildx-action@v3
+      - name: Install zstd
+        if: matrix.pack == 'true'
+        run: sudo apt-get update && sudo apt-get install -y zstd
+      - name: Pack inner rootfs
+        if: matrix.pack == 'true'
+        run: |
+          set -euo pipefail
+          echo "ADS_SESSION_SIZE=${ADS_SESSION_SIZE}"
+          docker buildx build --load --platform linux/amd64 \
+            -f services/ads-sandbox-golden/Containerfile.inner \
+            -t ads-sandbox-inner:ci \
+            services/ads-sandbox-golden
+          cid=$(docker create --platform linux/amd64 ads-sandbox-inner:ci /bin/true)
+          rm -f services/ads-sandbox-golden/rootfs.tar.zst
+          docker export "$cid" | python3 services/ads-sandbox-golden/scripts/pack-rootfs | zstd -T0 -19 -o services/ads-sandbox-golden/rootfs.tar.zst
+          docker rm "$cid" >/dev/null
+          docker rmi ads-sandbox-inner:ci >/dev/null || true
+          bytes=$(stat -c '%s' services/ads-sandbox-golden/rootfs.tar.zst)
+          echo "rootfs.tar.zst ${bytes} bytes"
+          if [ "$bytes" -lt 1024 ]; then
+            echo "compressed rootfs too small" >&2
+            exit 1
+          fi
+          if [ "$bytes" -ge 1073741824 ]; then
+            echo "compressed rootfs exceeds 1Gi (sparse disk in image?)" >&2
+            exit 1
+          fi
       - name: Log in to GHCR
         if: ${{ github.event.inputs.dry_run != 'true' }}
         uses: docker/login-action@v4
@@ -115,9 +199,9 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.file }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           push: ${{ github.event.inputs.dry_run != 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           # The release a journal row was decided by; images that write none ignore it.
@@ -131,12 +215,27 @@ jobs:
           cache-from: type=gha,scope=publish-${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}
 
-  release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [channel, python, publish-image]
+  realm-sample:
+    needs: [channel, python]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Stage standalone Keycloak sample
+        env:
+          IMAGE_TAG: ${{ needs.channel.outputs.image_tag }}
+        run: |
+          mkdir -p dist
+          cp deploy/keycloak/ads-realm-import.sample.yaml "dist/ads-keycloak-realm-${IMAGE_TAG}.yaml"
+          cp deploy/keycloak/README.md "dist/ads-keycloak-realm-${IMAGE_TAG}.README.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ads-keycloak-realm-${{ needs.channel.outputs.image_tag }}
+          path: dist/ads-keycloak-realm-*
+          if-no-files-found: error
+
+  chart:
+    needs: [channel, python]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
@@ -146,14 +245,38 @@ jobs:
         env:
           IMAGE_TAG: ${{ needs.channel.outputs.image_tag }}
         run: |
-          sed -i "s/^version: .*/version: ${IMAGE_TAG}/" charts/ads/Chart.yaml
-          sed -i "s/^appVersion: .*/appVersion: \"${IMAGE_TAG}\"/" charts/ads/Chart.yaml
+          python3 charts/ads/package_release.py --version "${IMAGE_TAG}" --session-size "${ADS_SESSION_SIZE}"
+          helm lint charts/ads
           mkdir -p dist
           helm package charts/ads --destination dist
-      - name: Attach chart to GitHub Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ads-chart-${{ needs.channel.outputs.image_tag }}
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [channel, python, publish-image, realm-sample, chart]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ads-keycloak-realm-${{ needs.channel.outputs.image_tag }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: ads-chart-${{ needs.channel.outputs.image_tag }}
+          path: dist
+      - name: Attach chart and standalone Keycloak sample to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tgz
+          files: |
+            dist/*.tgz
+            dist/ads-keycloak-realm-*.yaml
+            dist/ads-keycloak-realm-*.README.md
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ needs.channel.outputs.prerelease == 'true' }}

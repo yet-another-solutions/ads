@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Filter a docker export tar on stdin to a rootfs tar on stdout.
+
+Drops proc/sys/dev (re-adds empty mount points). Refuses huge members so a
+sparse 20Gi session disk cannot become an image layer.
+"""
+
+from __future__ import annotations
+
+import sys
+import tarfile
+
+MAX_MEMBER = 1 * 1024 * 1024 * 1024
+MAX_TOTAL = 3 * 1024 * 1024 * 1024
+
+
+def fail(msg: str) -> None:
+    sys.stderr.write(f"pack-rootfs: {msg}\n")
+    raise SystemExit(1)
+
+
+def skipped(name: str) -> bool:
+    n = name.replace("\\", "/").lstrip("./")
+    return n == "proc" or n.startswith("proc/") or n == "sys" or n.startswith("sys/") or n == "dev" or n.startswith("dev/")
+
+
+def empty_dir(name: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o755
+    info.uid = 0
+    info.gid = 0
+    info.uname = "root"
+    info.gname = "root"
+    return info
+
+
+def main() -> None:
+    total = 0
+    with tarfile.open(fileobj=sys.stdin.buffer, mode="r|") as inp, tarfile.open(
+        fileobj=sys.stdout.buffer, mode="w|"
+    ) as out:
+        for member in inp:
+            if skipped(member.name):
+                if member.isreg():
+                    handle = inp.extractfile(member)
+                    if handle is not None:
+                        handle.read()
+                continue
+            if member.ischr() or member.isblk() or member.isfifo():
+                continue
+            if member.size > MAX_MEMBER:
+                fail(f"member too large ({member.size} bytes): {member.name}")
+            if member.isreg():
+                total += member.size
+                if total > MAX_TOTAL:
+                    fail(f"rootfs too large ({total} bytes)")
+                handle = inp.extractfile(member)
+                if handle is None:
+                    fail(f"missing file data: {member.name}")
+                out.addfile(member, handle)
+            else:
+                out.addfile(member)
+        for name in ("proc", "sys", "dev"):
+            out.addfile(empty_dir(name))
+
+
+if __name__ == "__main__":
+    main()

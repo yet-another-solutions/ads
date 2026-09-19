@@ -16,7 +16,9 @@ from ads.domain import append_entry, detached_context, utc_now
 from ads.kafka import EngineRequests
 from ads.live import LiveHub
 from ads.models import (
-    KIND_NOTICE,
+    KIND_MESSAGE,
+    KIND_REASONING,
+    ROLE_ASSISTANT,
     STATUS_FINISHED,
     STATUS_FINISHING,
     STATUS_PENDING,
@@ -24,8 +26,6 @@ from ads.models import (
     ChatSession,
     SessionRun,
     SessionRunBuffer,
-    assistant_part_kind,
-    assistant_part_role,
 )
 from ads.repository import (
     SessionEntryRepository,
@@ -315,17 +315,31 @@ class EngineOutputService:
         delta: SessionRunBuffer,
         now: datetime,
     ) -> None:
-        kind = assistant_part_kind(delta.kind)
-        tail = entries.get_entry(chat.latest_entry_id) if chat.latest_entry_id is not None else None
-        continues_the_tail = kind != KIND_NOTICE and tail is not None and tail.kind == kind
-        if continues_the_tail and tail is not None and tail.run_id == run.id:
-            tail.text = tail.text + delta.text
+        kind = delta.kind
+        if kind in {KIND_MESSAGE, KIND_REASONING}:
+            tail = (
+                entries.get_entry(chat.latest_entry_id)
+                if chat.latest_entry_id is not None
+                else None
+            )
+            if tail is not None and tail.run_id == run.id and tail.kind == kind:
+                tail.text = tail.text + delta.text
+                return
+            append_entry(
+                entries,
+                chat,
+                kind=kind,
+                role=None if kind == KIND_REASONING else ROLE_ASSISTANT,
+                text=delta.text,
+                run_id=run.id,
+                now=now,
+            )
             return
         append_entry(
             entries,
             chat,
             kind=kind,
-            role=assistant_part_role(kind),
+            role=None,
             text=delta.text,
             run_id=run.id,
             now=now,

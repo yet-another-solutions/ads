@@ -30,6 +30,12 @@ class PartView:
     role: str | None
     text: str
     live: bool = False
+    name: str | None = None
+    call_id: str | None = None
+    status: str | None = None
+    arguments: dict[str, object] | None = None
+    content: object | None = None
+    metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)

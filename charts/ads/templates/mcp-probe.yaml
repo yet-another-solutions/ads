@@ -2,6 +2,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}-mcp-probe
   labels:
     {{- include "ads.labels" . | nindent 4 }}
@@ -18,6 +19,7 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: {{ $.Values.namespace }}
   name: {{ $name }}
   labels:
     {{- include "ads.labels" $ | nindent 4 }}
@@ -88,6 +90,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: {{ $.Values.namespace }}
   name: {{ $name }}
   labels:
     {{- include "ads.labels" $ | nindent 4 }}
@@ -106,6 +109,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: {{ $.Values.namespace }}
   name: {{ $name }}
   labels:
     {{- include "ads.labels" $ | nindent 4 }}
@@ -117,9 +121,9 @@ spec:
     group: {{ $.Values.tls.certManager.issuer.group }}
   dnsNames:
     - {{ $name | quote }}
-    - {{ printf "%s.%s" $name $.Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc" $name $.Release.Namespace | quote }}
-    - {{ printf "%s.%s.svc.cluster.local" $name $.Release.Namespace | quote }}
+    - {{ printf "%s.%s" $name $.Values.namespace | quote }}
+    - {{ printf "%s.%s.svc" $name $.Values.namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" $name $.Values.namespace | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

@@ -2,6 +2,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: {{ .Values.namespace }}
   name: {{ include "ads.fullname" . }}-injection-scanner
   labels:
     {{- include "ads.labels" . | nindent 4 }}

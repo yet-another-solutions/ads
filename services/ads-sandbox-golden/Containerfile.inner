@@ -1,0 +1,39 @@
+# hadolint ignore=DL3007
+FROM debian:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# hadolint ignore=DL4005
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        bind9-dnsutils \
+        ca-certificates \
+        crun \
+        curl \
+        dnsutils \
+        fuse-overlayfs \
+        passt \
+        podman \
+        python3 \
+        python3-pip \
+        python3-venv \
+        slirp4netns \
+        uidmap \
+        wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /bin/bash /bin/sh \
+    && mkdir -p /workspace /etc/containers \
+    && printf 'root:1:65536\n' > /etc/subuid \
+    && printf 'root:1:65536\n' > /etc/subgid \
+    && printf '%s\n' \
+        '[containers]' \
+        'netns = "host"' \
+        'utsns = "host"' \
+        'ipcns = "private"' \
+        'cgroupns = "private"' \
+        'pidns = "private"' \
+        'cgroups = "enabled"' \
+        '[engine]' \
+        'cgroup_manager = "cgroupfs"' \
+        > /etc/containers/containers.conf

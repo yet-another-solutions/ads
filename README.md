@@ -2,7 +2,7 @@
 
 Autonomous Development System: a Litestar service with Keycloak OIDC login serving Threadline (projects, sessions, streaming transcript), plus a stub egress control plane, an S2S model catalog, a Kafka ads-engine worker, and the governance layer (policy decisions, run lifecycle, append-only audit).
 
-Unauthenticated browsers are sent to Keycloak. After login the shell renders the project/session rail, the transcript, and the composer. Mutating routes are `AuthenticatedController` POST/PATCH/DELETE; services are guarded with wrapt `@require_role("user")` reading `SecurityContextHolder`. v1 is a chat wrapper: `ads` owns memory and streaming, `ads-engine` wraps the model.
+Unauthenticated browsers are sent to Keycloak. After login the shell renders the project/session rail, the transcript, and the composer. Mutating routes are `AuthenticatedController` POST/PATCH/DELETE; services are guarded with wrapt `@require_role("user")` reading `SecurityContextHolder`. `ads` owns memory and streaming; `ads-engine` runs the bounded LangChain executor and calls sandbox tools through the official MCP SDK.
 
 ## Layout
 
@@ -10,7 +10,7 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `libraries/ads-commons-beans` — shared Dishka beans
 - `libraries/ads-commons-schema` — shared Alembic upgrade and schema validation
 - `services/ads` — Threadline UI, domain memory (SQLAlchemy + Alembic), engine request/output, preferences facade
-- `services/ads-engine` — Kafka chat wrapper (LangChain OpenAI stream)
+- `services/ads-engine` — Kafka LangChain executor with sequential MCP sandbox tools
 - `services/ads-preferences` — S2S user model catalog (Litestar JWT resource server)
 - `services/ads-policy` — decision point: capability matrix, tool-call bindings, run lifecycle, isolation levels
 - `services/ads-audit` — append-only journal of decisions, deny budget
@@ -18,7 +18,8 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `services/ads-injection-scanner` — prompt-injection classifier on ONNX Runtime for tool results (in `review` until a model is chosen)
 - `services/ads-mcp-probe` — harmless MCP server whose tools trip every check, for end-to-end checks
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
-- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, injection scanner, MCP probe and engine tools, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
+- `services/ads-sandbox-manager`: golden-ensure service, included in workspace Nox gates and CI image builds; application deployment wiring follows in a later slice
+- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, injection scanner, MCP probe and engine tools, sandbox namespace and workloads, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
 
 Images:
@@ -58,9 +59,13 @@ ads-engine is a Kafka worker (no HTTP). It reads `ADS_ENGINE_*`:
 - Kafka: `ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS`, `ADS_ENGINE_REQUEST_TOPIC`, `ADS_ENGINE_OUTPUT_TOPIC`, `ADS_ENGINE_CONSUMER_GROUP`
 - Store: `ADS_ENGINE_DATABASE_URL` (required; `postgresql+psycopg://` in production for the in-flight session table)
 - Ping: `ADS_ENGINE_PING_INTERVAL_SECONDS` (default 10)
-- Keycloak (loaded, unused until JWT verification): `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`
+- Keycloak: `ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL`, `ADS_ENGINE_KEYCLOAK_ISSUER`, `ADS_ENGINE_KEYCLOAK_AUDIENCE`, `ADS_ENGINE_KEYCLOAK_CLIENT_SECRET`
+- MCP: `ADS_ENGINE_MCP_URL` (default `https://ads-sandbox-mcp:8443/mcp`), `ADS_ENGINE_MCP_TIMEOUT_SECONDS` (default 120), `ADS_ENGINE_MAX_TOOL_CALLS` (default 32)
+- TLS trust for Keycloak and MCP: `ADS_ENGINE_TLS_CA_BUNDLE` (optional additional CA bundle; HTTPS is mandatory)
 
-The request `authorization` field is required on the wire.
+The request `authorization` field is required on the wire. See
+[engine execution and credential lifecycle](services/ads-engine/README.md) and
+[Keycloak refresh configuration](deploy/keycloak/README.md#engine-mcp-refresh-and-existing-realms).
 
 ads-preferences is a TLS-only JSON resource server (`python -m ads_preferences`). ClusterIP only: no HTTPRoute and no WAN slug. It does not import ads-engine. It reads `ADS_PREFERENCES_*`:
 
@@ -80,18 +85,59 @@ All three take the same `ADS_TLS_*` and `ADS_BIND_HOST`/`ADS_PORT` as the ADS pr
 
 ## Tests
 
+The workspace declares public PyPI as its single default Python package index.
+Local uv/Nox commands, GitHub CI/CD, and image builds use that same configuration;
+they do not depend on lab DNS, a private package proxy, or index credentials.
+
 ```sh
-UV_DEFAULT_INDEX=https://pypi.org/simple uv sync --group test
-UV_DEFAULT_INDEX=https://pypi.org/simple uv run --group test pytest
+uv sync --group test
+uv run --group test pytest
+# Full lifecycle:
+uv run --group dev nox -s lint deps typecheck test package
 ```
 
 Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is HTTPS. Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.
 
 ads-engine tests mock Kafka and the LLM. They do not start a broker.
 
+### Sandbox handshake cross-service proof
+
+Slice 10 connects the real MCP HTTP/SDK tool callback, execution service, manager
+provisioning/transit, IPC state machine, and guest-executor adapter in one test loop.
+Run the focused proof with:
+
+```bash
+uv run --group dev nox -s test -- services/ads-sandbox-manager/tests/test_handshake_e2e.py
+```
+
+The test uses separate real PostgreSQL databases for MCP and manager, signed JWTs,
+the production verifier and token-exchange adapters, and production wire publishers
+and controllers. Testcontainers provides PostgreSQL by default. The existing
+`ADS_MCP_TEST_DATABASE_URL` and `ADS_MANAGER_TEST_DATABASE_URL` overrides must point
+to separate disposable databases: fixtures clear their state.
+
+The encoded-message broker, token endpoint, Kubernetes API and guest process
+streams are simulated. This is **not** a live Kafka/Keycloak/Kata or shell/Python
+interpreter proof. The test checks both tool payloads and successful results,
+eight fresh user-token exchanges per call, session reuse, PID and database
+cleanup, pre-ack reset, post-ack abort, and invalid ack-reply rejection. Explicit
+record delivery proves no guest command starts before IPC receives the matching
+authorized `ack-reply`; the startup `true` ping is separate.
+
+Live `exec_shell` and `exec_python` checks through deployed MCP → manager → IPC →
+Kata guest remain deferred until the complete sandbox plan is implemented.
+Existing component and race tests remain in place; this cross-service proof
+complements them rather than replacing them.
+
 ads-preferences tests plant JWTs and use SQLite. Catalog JSONB is stored as JSON on SQLite so this sandbox can run `nox -s test` without Docker. GitHub CI has Docker.
 
 ## Helm
+
+See the [chart install and lifecycle guide](charts/ads/README.md). Store the release
+record in the existing `default` namespace; chart templates create the dedicated
+application and sandbox namespaces. Uninstall deletes both and their contents,
+including sandbox PVCs. Existing releases in `ads` need a separately approved
+ownership migration, not an in-place upgrade or an unreviewed uninstall.
 
 `charts/ads/values.yaml` covers Keycloak OIDC URLs and client identity, Gateway HTTPRoute hostname for ads, and TLS via cert-manager or bring-your-own secrets (optional CA bundle). ads-preferences is an in-cluster ClusterIP TLS service (`preferences.*`, including `preferences.database.url`). Engine Kafka bootstrap, topics, Postgres URL (`engine.database.url`, mounted from the engine Secret), and unused Keycloak issuer/audience live under `engine.*`. The capability matrix, tool-call bindings, run TTL, egress allowlist and protected branches live under `policy.*`; the journal database and broker under `audit.*`; the optional enforcement point under `guardrail.*`. The chart installs none of Kafka, Redis, RabbitMQ or Postgres.
 
@@ -104,8 +150,12 @@ Install requires:
 
 - at least one node labeled `ads.io/application-node=true`
 - Services `ads-redis`, `ads-rabbitmq` and `ads-postgres` (none of them installed by this chart)
+- at least one node labeled `ads.io/sandbox-node=true` with Kata (`RuntimeClass` `kata-qemu`)
+- Kyverno already installed with an established ClusterPolicy CRD and available admission controller. ADS ships its exec policy and scoped RBAC, not the Kyverno engine.
 - Keycloak already serving the realm and confidential client in `keycloak.*` (`https://<httpRoute.hostname>/auth/callback`). The operator, instance, realm, and client are not installed by this chart.
 
-Sandbox nodes are not required to install. The chart looks for the `RuntimeClass` named in `nodes.sandbox.runtimeClassName` on nodes labeled `ads.io/sandbox-node=true` and tells the policy service what it found; without Kata no run is ever assigned the `vm` isolation level, and the capabilities the matrix grants only there stay out of reach.
-
 Application pods (ADS, engine, preferences, policy, audit, and egress-controlplane) schedule on application nodes.
+
+A standalone [Keycloak Operator realm-import sample](deploy/keycloak/README.md)
+provides the six ADS clients and identity configuration for a new realm. CD
+publishes it beside the chart, but Helm never applies it or owns the realm.

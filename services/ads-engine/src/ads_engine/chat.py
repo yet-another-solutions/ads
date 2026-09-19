@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+import json
+from collections.abc import AsyncGenerator, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -10,18 +11,28 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 
-from ads_commons.engine import AssistantHistoryTurn, EngineRequest, Notice, UserHistoryTurn
+from ads_commons.engine import (
+    AssistantHistoryTurn,
+    EngineRequest,
+    Notice,
+    ToolCall,
+    ToolResult,
+    UserHistoryTurn,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class StreamDelta:
-    kind: Literal["reasoning", "message", "notice"]
-    text: str
+    kind: Literal["reasoning", "message", "notice", "tool_call", "tool_result"]
+    text: str = ""
     notice: Notice | None = None
+    tool_call: ToolCall | None = None
+    tool_result: ToolResult | None = None
 
 
 class SideEffectsHappened(RuntimeError):
@@ -29,18 +40,115 @@ class SideEffectsHappened(RuntimeError):
 
 
 class ChatStreamer(Protocol):
-    def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]: ...
+    def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]: ...
 
 
-def history_messages(request: EngineRequest) -> list[BaseMessage]:
+def tool_call_from_native(call: Mapping[str, Any]) -> ToolCall:
+    metadata = {
+        key: value for key, value in call.items() if key not in {"name", "args", "id", "type"}
+    }
+    args = call.get("args")
+    arguments = dict(args) if isinstance(args, Mapping) else {}
+    return ToolCall(
+        id=str(call.get("id") or ""),
+        name=str(call.get("name") or ""),
+        arguments=arguments,
+        metadata=metadata,
+    )
+
+
+def tool_result_from_message(message: ToolMessage) -> ToolResult:
+    raw = message.content
+    content: Any
+    if isinstance(raw, str):
+        try:
+            content = json.loads(raw)
+        except json.JSONDecodeError:
+            content = raw
+    else:
+        content = raw
+    metadata = dict(message.additional_kwargs)
+    if message.artifact is not None:
+        metadata["artifact"] = message.artifact
+    status: Literal["success", "error"] = "error" if message.status == "error" else "success"
+    return ToolResult(
+        tool_call_id=message.tool_call_id,
+        name=message.name or "",
+        status=status,
+        content=content,
+        metadata=metadata,
+    )
+
+
+def _langchain_tool_call(call: ToolCall) -> dict[str, Any]:
+    return {
+        "name": call.name,
+        "args": dict(call.arguments),
+        "id": call.id,
+        "type": "tool_call",
+    }
+
+
+def _tool_message(result: ToolResult) -> ToolMessage:
+    content = result.content
+    if not isinstance(content, str):
+        content = json.dumps(content, separators=(",", ":"), ensure_ascii=False)
+    extra = dict(result.metadata)
+    artifact = extra.pop("artifact", None)
+    kwargs: dict[str, Any] = {}
+    if artifact is not None:
+        kwargs["artifact"] = artifact
+    if extra:
+        kwargs["additional_kwargs"] = extra
+    return ToolMessage(
+        content=content,
+        tool_call_id=result.tool_call_id,
+        name=result.name,
+        status=result.status,
+        **kwargs,
+    )
+
+
+def _history_messages(request: EngineRequest) -> list[BaseMessage]:
     messages: list[BaseMessage] = []
     if request.instructions:
         messages.append(SystemMessage(content=request.instructions))
+    pending_text = ""
+    pending_calls: list[ToolCall] = []
+    pending_assistant = False
+
+    def flush_assistant() -> None:
+        nonlocal pending_text, pending_calls, pending_assistant
+        if not pending_assistant:
+            return
+        if pending_calls:
+            messages.append(
+                AIMessage(
+                    content=pending_text,
+                    tool_calls=[_langchain_tool_call(call) for call in pending_calls],
+                )
+            )
+        else:
+            messages.append(AIMessage(content=pending_text))
+        pending_text = ""
+        pending_calls = []
+        pending_assistant = False
+
     for turn in request.history:
         if isinstance(turn, UserHistoryTurn):
+            flush_assistant()
             messages.append(HumanMessage(content=turn.text))
         elif isinstance(turn, AssistantHistoryTurn):
-            messages.append(AIMessage(content=turn.text))
+            flush_assistant()
+            pending_text = turn.text
+            pending_assistant = True
+        elif isinstance(turn, ToolCall):
+            pending_assistant = True
+            pending_calls.append(turn)
+        elif isinstance(turn, ToolResult):
+            flush_assistant()
+            messages.append(_tool_message(turn))
+    flush_assistant()
     messages.append(HumanMessage(content=request.user_input))
     return messages
 
@@ -160,12 +268,14 @@ def build_chat_model(request: EngineRequest) -> AdsChatOpenAI:
 
 
 class LangChainChatStreamer:
-    def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+    """Tool-free model path: no dispatcher, MCP client or credentials injected."""
+
+    def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         return self._stream(request)
 
-    async def _stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+    async def _stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         model = build_chat_model(request)
-        async for chunk in model.astream(history_messages(request)):
+        async for chunk in model.astream(_history_messages(request)):
             if not isinstance(chunk, AIMessageChunk):
                 continue
             for delta in deltas_from_chunk(chunk):

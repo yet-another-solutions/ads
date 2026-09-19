@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
@@ -18,9 +18,9 @@ from ads_commons.engine import EngineRequest, Notice, NoticeKind
 from ads_engine.chat import (
     SideEffectsHappened,
     StreamDelta,
+    _history_messages,
     build_chat_model,
     deltas_from_chunk,
-    history_messages,
 )
 from ads_engine.config import ToolSettings
 from ads_engine.mcp import (
@@ -87,7 +87,7 @@ class ToolingChatStreamer:
     conversation_runs: ConversationRunStore
     model_factory: ChatModelFactory = build_chat_model
 
-    def stream(self, request: EngineRequest) -> AsyncIterator[StreamDelta]:
+    def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
         return _ToolTurn(self, request).stream()
 
 
@@ -127,7 +127,7 @@ class _ToolTurn:
     def settings(self) -> ToolSettings:
         return self.streamer.settings
 
-    async def stream(self) -> AsyncIterator[StreamDelta]:
+    async def stream(self) -> AsyncGenerator[StreamDelta, None]:
         try:
             async for delta in self._stream():
                 yield delta
@@ -142,7 +142,7 @@ class _ToolTurn:
     async def _stream(self) -> AsyncIterator[StreamDelta]:
         async for unavailable_notice in self._offer_tools():
             yield unavailable_notice
-        messages = history_messages(self.request)
+        messages = _history_messages(self.request)
         read = await self._read_prompt()
         if read is not None:
             if read.withheld:
