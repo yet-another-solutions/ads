@@ -125,7 +125,7 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         assert "ads-engine-ack" not in client["defaultClientScopes"]
 
 
-def test_lifecycle_subjects_are_service_only_and_admin_protected():
+def test_lifecycle_subjects_are_native_and_legacy_attribute_stays_admin_protected():
     realm = yaml.safe_load(SAMPLE.read_text())["spec"]["realm"]
     lifecycle = {"ads-sandbox-manager", "ads-sandbox-ipc"}
     users = realm["users"]
@@ -135,15 +135,11 @@ def test_lifecycle_subjects_are_service_only_and_admin_protected():
         client_id = user["serviceAccountClientId"]
         client = next(c for c in realm["clients"] if c["clientId"] == client_id)
         assert UUID(client["id"])
-        assert user["attributes"]["ads_service_client_uuid"] == [client["id"]]
+        assert "ads_service_client_uuid" not in user.get("attributes", {})
     for client in realm["clients"]:
         subjects = [m for m in client["protocolMappers"] if m["config"].get("claim.name") == "sub"]
-        assert len(subjects) == (1 if client["clientId"] in lifecycle else 0)
-        for mapper in subjects:
-            assert mapper["protocolMapper"] == "oidc-usermodel-attribute-mapper"
-            assert mapper["config"]["user.attribute"] == "ads_service_client_uuid"
-            assert mapper["config"]["access.token.claim"] == "true"
-            assert mapper["config"]["id.token.claim"] == "false"
+        assert not subjects, "Native subjects must remain resolvable for stateless STE"
+        assert "basic" in client["defaultClientScopes"]
     component = realm["components"]["org.keycloak.userprofile.UserProfileProvider"][0]
     assert component["providerId"] == "declarative-user-profile"
     profile = json.loads(component["config"]["kc.user.profile.config"][0])

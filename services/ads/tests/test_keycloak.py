@@ -595,9 +595,43 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 )["access_token"]
                 checked = verifier("ads-sandbox-manager")
                 context = checked.authenticate(lifecycle)
-                assert context.user_id == UUID(clients[caller]["id"])
+                service_user = admin(
+                    "GET", admin_path + f"/clients/{clients[caller]['id']}/service-account-user"
+                )
+                assert context.user_id == UUID(service_user["id"])
+                assert context.user_id != UUID(clients[caller]["id"])
                 ensure_caller(context, caller)
                 claims = checked.verified_claims(lifecycle)
                 assert "user" not in claims.get("realm_access", {}).get("roles", [])
+                hops = (
+                    [
+                        ("ads-sandbox-manager", "ads-sandbox-ipc"),
+                        ("ads-sandbox-ipc", "ads-sandbox-manager"),
+                    ]
+                    if caller == "ads-sandbox-manager"
+                    else [("ads-sandbox-ipc", "ads-sandbox-manager")]
+                )
+                for sender, audience in hops:
+                    pair = token(
+                        {
+                            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                            "client_id": sender,
+                            "client_secret": secrets[sender],
+                            "subject_token": lifecycle,
+                            "audience": audience,
+                        }
+                    )
+                    assert "refresh_token" not in pair
+                    assert pair["access_token"] != lifecycle
+                    lifecycle = pair["access_token"]
+                    checked = verifier(audience)
+                    context = checked.authenticate(lifecycle)
+                    assert context.user_id == UUID(service_user["id"])
+                    ensure_caller(context, sender)
+                    claims = checked.verified_claims(lifecycle)
+                    assert claims["aud"] in (audience, [audience])
+                    assert "user" not in claims.get("realm_access", {}).get("roles", [])
         finally:
             admin("DELETE", admin_path)

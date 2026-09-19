@@ -17,8 +17,7 @@ slice plan, reconcile an existing realm, deploy ADS, or contain lab secrets.
    HTTPS origin. Keep the redirect URI restricted to `/auth/callback`; do not
    use wildcard redirects. The example does not require PKCE because the current
    confidential ADS browser client does not send a PKCE challenge.
-3. Select unique UUIDs for the manager and IPC client `id` fields. Update each
-   matching service-account `ads_service_client_uuid` attribute to the same value.
+3. Select unique UUIDs for the manager and IPC client `id` fields.
    The published UUIDs are examples, not live IDs. Do not reuse them for multiple
    realms on one Keycloak instance.
 4. Provision Secret `ads-realm-client-secrets` in the **Keycloak namespace**, with
@@ -70,11 +69,14 @@ people. All client scopes are restricted (`fullScopeAllowed: false`) with explic
 realm-role scope mappings; these permit an already-authorized user's role to
 survive exchange without granting that role to service accounts.
 
-The manager and IPC `sub` mappers read `ads_service_client_uuid`, an attribute
-editable/viewable only by administrators. Their service-account records contain
-the matching client UUID. Client-credentials lifecycle tokens therefore have
-the client UUID subject, while user-subject exchanges retain the user's UUID.
-Do not replace this with an unconditional hardcoded-subject mapper.
+Manager and IPC preserve Keycloak's native service-account user UUID in `sub`.
+Never override it with a client UUID: stateless token exchange must resolve the
+subject to an existing user. Caller identity remains the verified `azp`.
+Normal user exchanges retain the user's UUID. The legacy `ads_service_client_uuid`
+profile attribute stays admin-only but is unused and has no token mapper.
+For an existing realm, remove both `ads-service-subject` mappers using the reviewed
+lab reconciler, then prove manager → IPC → manager with a client-credentials token.
+Do not apply this bootstrap import over an existing realm.
 
 Audiences enable the intended exchange paths but are **not** a substitute for
 ADS caller allowlists. Each callee still verifies signature, issuer, expiry,
@@ -87,7 +89,7 @@ Configure ADS issuer/discovery/JWKS URLs for the imported realm and distribute
 the matching client secrets to the relevant application namespaces. The import
 Secret is not the runtime Secret and is not automatically copied across namespaces.
 The current Helm chart does not yet wire all later sandbox runtime credentials.
-Record the imported manager/IPC client UUIDs for later lifecycle verification.
+Verify lifecycle subjects against each client's `service-account-user` record.
 
 ## Engine MCP refresh and existing realms
 

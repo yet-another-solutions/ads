@@ -520,18 +520,6 @@ spec:
           standard.token.exchange.enabled: "true"
           access.token.lifespan: "300"
         protocolMappers:
-          - name: ads-service-subject
-            protocol: openid-connect
-            protocolMapper: oidc-usermodel-attribute-mapper
-            config:
-              user.attribute: ads_service_client_uuid
-              claim.name: sub
-              jsonType.label: String
-              multivalued: "false"
-              access.token.claim: "true"
-              id.token.claim: "false"
-              userinfo.token.claim: "false"
-              introspection.token.claim: "true"
           - name: audience-ads-sandbox-manager
             protocol: openid-connect
             protocolMapper: oidc-audience-mapper
@@ -571,18 +559,6 @@ spec:
           standard.token.exchange.enabled: "true"
           access.token.lifespan: "300"
         protocolMappers:
-          - name: ads-service-subject
-            protocol: openid-connect
-            protocolMapper: oidc-usermodel-attribute-mapper
-            config:
-              user.attribute: ads_service_client_uuid
-              claim.name: sub
-              jsonType.label: String
-              multivalued: "false"
-              access.token.claim: "true"
-              id.token.claim: "false"
-              userinfo.token.claim: "false"
-              introspection.token.claim: "true"
           - name: audience-ads-sandbox-manager
             protocol: openid-connect
             protocolMapper: oidc-audience-mapper
@@ -591,19 +567,14 @@ spec:
               access.token.claim: "true"
               id.token.claim: "false"
     # These are service-account records only, not human login/test users.
-    # Replace each example client UUID above AND its matching attribute below
-    # together when adapting the sample to another realm.
+    # Preserve native service-account user subjects; never map client IDs to sub.
     users:
       - username: service-account-ads-sandbox-manager
         enabled: true
         serviceAccountClientId: ads-sandbox-manager
-        attributes:
-          ads_service_client_uuid: ["10000000-0000-4000-8000-000000000005"]
       - username: service-account-ads-sandbox-ipc
         enabled: true
         serviceAccountClientId: ads-sandbox-ipc
-        attributes:
-          ads_service_client_uuid: ["10000000-0000-4000-8000-000000000006"]
     components:
       org.keycloak.userprofile.UserProfileProvider:
         - providerId: declarative-user-profile

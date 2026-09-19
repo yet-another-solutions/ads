@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -98,7 +99,15 @@ async def test_terminal_replay_requires_full_tuple(ipc, field, kind) -> None:
     ],
 )
 @pytest.mark.parametrize("kind", ["request", "ack-reply", "ack-reset", "abort", "shutdown", "ping"])
-async def test_every_inbound_auth_path_fails_closed(ipc, changes, kind, ipc_logs) -> None:
+async def test_every_inbound_auth_path_fails_closed(
+    ipc, changes, kind, ipc_logs, monkeypatch
+) -> None:
+    # This tests authorization, not the independent 300ms fixture ack deadline.
+    # Hold that timer so signing/verification under load cannot drop the waiter.
+    async def hold_ack_deadline(unit):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ipc.service, "_ack_timeout", hold_ack_deadline)
     async with ipc.running():
         request = ipc.request()
         if kind != "request":

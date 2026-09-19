@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy import create_engine, inspect, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -347,6 +349,8 @@ async def test_replacement_after_bind_is_rechecked_before_compute(sessions_harne
 @pytest.mark.parametrize("foreign", [False, True])
 async def test_create_conflict_is_reread_not_blindly_adopted(sessions_harness, foreign):
     h, sid = sessions_harness, uuid4()
+    # Ownership rejection is independent of database cleanup latency.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def race(body):
         if body["kind"] == "PersistentVolumeClaim" and body["spec"].get("volumeMode") == "Block":
@@ -367,6 +371,8 @@ async def test_create_conflict_is_reread_not_blindly_adopted(sessions_harness, f
 @pytest.mark.parametrize("fault", ["label", "claim", "replicas", "network", "ipc-source"])
 async def test_existing_compute_or_ipc_disk_cannot_cross_bind(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
+    # Preserve the ownership assertions without a 100 ms database race.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def race(body):
         is_ipc = body["kind"] == "PersistentVolumeClaim" and "ipc" in body["metadata"]["name"]
@@ -538,3 +544,29 @@ async def test_schema_contains_only_lifecycle_and_migration_is_repeatable(sessio
     assert not {"authorization", "token", "stdout", "stderr", "execution_id"} & {
         c["name"] for c in columns
     }
+
+
+async def test_ping_migration_preserves_legacy_probe_without_inventing_delivery(sessions_harness):
+    h = sessions_harness
+    ini = Path(__file__).parents[1] / "alembic.ini"
+    config = Config(str(ini))
+    config.set_main_option("script_location", str(ini.parent / "alembic"))
+    url = h.engine.url.render_as_string(hide_password=False)
+    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+    probe_id, sandbox_id = uuid4(), uuid4()
+    command.downgrade(config, "0001_session")
+    try:
+        async with h.engine.begin() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO ping_probe (ping_id, sandbox_id, sent_at) "
+                    "VALUES (:id, :sandbox, CURRENT_TIMESTAMP)"
+                ),
+                {"id": probe_id, "sandbox": sandbox_id},
+            )
+    finally:
+        prepare_schema(alembic_ini=ini, database_url=url, tables=mapped_tables(PingProbe))
+    async with h.sessions.begin() as db:
+        probe = await db.get(PingProbe, probe_id)
+        assert probe.sandbox_id == sandbox_id
+        assert probe.published_at is None

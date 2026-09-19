@@ -136,8 +136,9 @@ class LifecycleService:
             probe = await db.get(PingProbe, message.ping_id, with_for_update=True)
             if probe is None or probe.sandbox_id != row.sandbox_id:
                 return
-            if probe.sent_at >= now - timedelta(seconds=self.settings.ping_timeout_seconds):
-                row.last_ping_at = max(row.last_ping_at or now, now)
+            if probe.sent_at < now - timedelta(seconds=self.settings.ping_timeout_seconds):
+                return  # Keep confirmed timeout evidence until the scanner decides.
+            row.last_ping_at = max(row.last_ping_at or now, now)
             await db.delete(probe)  # Duplicate replies cannot refresh liveness.
 
     async def ping_scan(self) -> None:
@@ -145,7 +146,20 @@ class LifecycleService:
         async with self.sessions.begin() as db:
             await db.execute(
                 delete(PingProbe).where(
-                    PingProbe.sent_at < now - timedelta(seconds=s.ping_timeout_seconds)
+                    PingProbe.sent_at < now - timedelta(seconds=s.ping_timeout_seconds),
+                    or_(
+                        PingProbe.published_at.is_(None),
+                        ~select(SandboxSession.session_id)
+                        .where(
+                            SandboxSession.sandbox_id == PingProbe.sandbox_id,
+                            SandboxSession.status == "ready",
+                            or_(
+                                SandboxSession.last_ping_at.is_(None),
+                                SandboxSession.last_ping_at < PingProbe.published_at,
+                            ),
+                        )
+                        .exists(),
+                    ),
                 )
             )
             rows = list(
@@ -169,8 +183,14 @@ class LifecycleService:
                 row = await db.get(SandboxSession, observed.session_id, with_for_update=True)
                 if row is None or row.sandbox_id != observed.sandbox_id or row.status != "ready":
                     continue
-                timed_out = (row.last_ping_at or row.status_changed_at) <= now - timedelta(
-                    seconds=s.ping_timeout_seconds
+                timed_out = await db.scalar(
+                    select(PingProbe.ping_id)
+                    .where(
+                        PingProbe.sandbox_id == row.sandbox_id,
+                        PingProbe.published_at <= now - timedelta(seconds=s.ping_timeout_seconds),
+                        PingProbe.published_at > (row.last_ping_at or row.status_changed_at),
+                    )
+                    .limit(1)
                 )
                 row.last_ping_sent_at = now
                 message = SandboxPing(uuid4(), row.sandbox_id)
@@ -181,14 +201,31 @@ class LifecycleService:
             if timed_out:
                 await self.emit(RECOVER, Signal(observed.session_id, observed.sandbox_id))
             else:
-                async with asyncio.timeout(s.control_seconds):
-                    subject = await asyncio.to_thread(self.credentials.mint)
-                    context = await asyncio.to_thread(self.tokens.mint, IPC, subject)
-                    if not context.access_token:
-                        raise RuntimeError("ping STE returned no token")
-                    await self.publisher.send(
-                        PING_REQUEST, message.sandbox_id, encode_ping(message), context.access_token
-                    )
+                try:
+                    async with asyncio.timeout(s.control_seconds):
+                        subject = await asyncio.to_thread(self.credentials.mint)
+                        context = await asyncio.to_thread(self.tokens.mint, IPC, subject)
+                        if not context.access_token:
+                            raise RuntimeError("ping STE returned no token")
+                        await self.publisher.send(
+                            PING_REQUEST,
+                            message.sandbox_id,
+                            encode_ping(message),
+                            context.access_token,
+                        )
+                    async with self.sessions.begin() as db:
+                        # A reply may already have consumed the correlation. A crash
+                        # before this commit leaves an unconfirmed probe, never a
+                        # death verdict. A later scan will send a fresh probe.
+                        probe = await db.get(PingProbe, message.ping_id, with_for_update=True)
+                        if probe is not None:
+                            probe.published_at = datetime.now(UTC)
+                except BaseException:
+                    async with self.sessions.begin() as db:
+                        await db.execute(
+                            delete(PingProbe).where(PingProbe.ping_id == message.ping_id)
+                        )
+                    raise
 
     async def service_expired(self, row: SandboxSession) -> None:
         if row.service_deadline is not None and datetime.now(UTC) >= row.service_deadline:

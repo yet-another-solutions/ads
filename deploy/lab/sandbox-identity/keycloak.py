@@ -83,6 +83,33 @@ def exchange(caller, audience, subject):
     return result["access_token"]
 
 
+def native_service_subject(c):
+    """Remove only our obsolete override; fail on an unexpected subject mapper."""
+    path = f"/admin/realms/ads/clients/{c['id']}/protocol-mappers/models"
+    mappings = api("GET", path)
+    if any(m["name"] != "ads-service-subject"
+           and m.get("config", {}).get("claim.name") == "sub" for m in mappings):
+        raise RuntimeError("Unexpected subject override; review before reconciliation")
+    for mapping in mappings:
+        if mapping["name"] == "ads-service-subject":
+            api("DELETE", path + "/" + mapping["id"])
+    user = api("GET", f"/admin/realms/ads/clients/{c['id']}/service-account-user")
+    if "ads_service_client_uuid" in user.get("attributes", {}):
+        user["attributes"].pop("ads_service_client_uuid")
+        api("PUT", "/admin/realms/ads/users/" + user["id"], user)
+
+
+def prove_lifecycle_round_trip(token, subject):
+    """Use the real service subject, not the normal-user exchange proof."""
+    for caller, audience in (
+        ("ads-sandbox-manager", "ads-sandbox-ipc"),
+        ("ads-sandbox-ipc", "ads-sandbox-manager"),
+    ):
+        token = exchange(caller, audience, token)
+        verify(token, audience, caller, subject, user=False)
+        print(f"PASS: lifecycle STE {caller} -> {audience}; native subject preserved", flush=True)
+
+
 def verify(token, audience, caller, subject, *, user=True):
     verifier = JwtVerifier(
         JwtVerifierSettings(ISSUER, audience, audience, ISSUER + "/protocol/openid-connect/certs", TLS),
@@ -105,7 +132,7 @@ def main():
         "grant_type": "password", "client_id": "admin-cli", "username": "admin",
         "password": SECRETS["keycloak-admin"],
     }, form=True, admin=False)["access_token"]
-    # A normal user must never be able to self-assign the service-only subject.
+    # Keep any legacy attribute admin-only while removing its token mappings.
     profile = api("GET", "/admin/realms/ads/users/profile")
     attributes = profile.setdefault("attributes", [])
     subject_attribute = next(
@@ -140,15 +167,7 @@ def main():
         c = client(name)
         api("POST", f"/admin/realms/ads/clients/{c['id']}/scope-mappings/realm", [role])
         if name in ("ads-sandbox-manager", "ads-sandbox-ipc"):
-            service_user = api("GET", f"/admin/realms/ads/clients/{c['id']}/service-account-user")
-            service_user.setdefault("attributes", {})["ads_service_client_uuid"] = [c["id"]]
-            api("PUT", "/admin/realms/ads/users/" + service_user["id"], service_user)
-            mapper(c, "ads-service-subject", "oidc-usermodel-attribute-mapper", {
-                "user.attribute": "ads_service_client_uuid", "claim.name": "sub",
-                "jsonType.label": "String", "multivalued": "false",
-                "access.token.claim": "true", "id.token.claim": "false",
-                "userinfo.token.claim": "false", "introspection.token.claim": "true",
-            })
+            native_service_subject(c)
     for caller, targets in {
         "ads-engine": ["ads-sandbox-mcp"],
         "ads-sandbox-mcp": ["ads-sandbox-manager"],
@@ -181,9 +200,12 @@ def main():
             jwt.PyJWKClient(ISSUER + "/protocol/openid-connect/certs", ssl_context=TLS),
         )
         ctx = verifier.authenticate(token)
-        assert ctx.user_id == UUID(c["id"]), "Lifecycle sub must be the client UUID"
+        service_user = api("GET", f"/admin/realms/ads/clients/{c['id']}/service-account-user")
+        assert ctx.user_id == UUID(service_user["id"]), "Lifecycle sub must be the native user UUID"
         ensure_caller(ctx, name)
-        print(f"PASS: {name} client-credentials sub=client UUID verified by ADS", flush=True)
+        print(f"PASS: {name} native service-account subject verified by ADS", flush=True)
+        if name == "ads-sandbox-manager":
+            prove_lifecycle_round_trip(token, service_user["id"])
 
     ads = client("ads")
     original_grants = ads.get("directAccessGrantsEnabled", False)
