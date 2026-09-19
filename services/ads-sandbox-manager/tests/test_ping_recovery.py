@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from ads_commons.sandbox import SandboxPing, decode_ping
 from ads_sandbox_manager.lifecycle import PING_REQUEST, RECOVER, Signal
+from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.session_objects import SESSION, ipc_name, session_name
 from ads_sandbox_manager.store import PingProbe, SandboxSession, SessionPVC, advance
@@ -482,6 +483,53 @@ async def test_topic_deletion_must_be_observed_before_kube_cleanup(life):
     assert (await row_for(h, h.row.session_id)).status == "creating"
 
 
+async def test_legacy_recovery_cannot_override_retained_workspace(life):
+    h = life
+    work = await idle(h)
+    # Emulate an old manager's committed idle-to-recovery conversion, including
+    # its rotated identity and cleared mapping. The retained target is still authority.
+    async with h.sessions.begin() as db:
+        row = await db.get(SandboxSession, h.row.session_id)
+        row.status = "recovering"
+        row.sandbox_id = uuid4()
+        row.pvc_id = row.pvc_uid = None
+        stored = await db.get(CleanupWork, work.work_id)
+        stored.kind = "recovery"
+    before = deepcopy(h.kube.objects)
+    current = await row_for(h, h.row.session_id)
+    await recovery(h).execute(h.row.session_id)
+    await condemn(h, current.sandbox_id)
+    assert h.kube.objects == before and not h.cleanup.deleted
+    assert any(t.get("retain") for w in await works(h) for t in w.targets)
+    assert await disk(h) is not None
+    assert (await row_for(h, h.row.session_id)).sandbox_id == current.sandbox_id
+    assert not any(call[0] == "delete-topics" for call in h.kube.calls)
+
+
+async def test_recovery_requests_all_compute_deletions_before_waiting(life):
+    h = life
+    await condemn(h)
+    original = h.cleanup.delete
+    requested = []
+
+    async def deleting(obj):
+        requested.append(obj["name"])
+        if obj["name"] != ipc_name(h.row.sandbox_id):
+            await original(obj)
+
+    h.cleanup.delete = deleting
+    h.cleanup.released = AsyncMock(return_value=False)
+    await recovery(h).execute(h.row.session_id)
+    assert requested == [ipc_name(h.row.sandbox_id), session_name(h.row.sandbox_id)]
+    h.cleanup.released.assert_not_awaited()
+    assert (await row_for(h, h.row.session_id)).status == "recovering"
+    assert await disk(h) is not None
+    h.cleanup.delete = original
+    h.cleanup.released.return_value = True
+    await recovery(h).execute(h.row.session_id)
+    assert (await row_for(h, h.row.session_id)).status == "creating"
+
+
 @pytest.mark.parametrize("status", ["pending", "creating", "shutting_down", "failed", "recovering"])
 async def test_watchdog_signals_stalled_sandboxes_even_without_pvc(life, status):
     h = life
@@ -491,7 +539,10 @@ async def test_watchdog_signals_stalled_sandboxes_even_without_pvc(life, status)
         row.status_changed_at -= timedelta(hours=1)
         row.pvc_id = row.pvc_uid = None
     await h.lifecycle.scan("watchdog")
-    assert any(c.args[0] == RECOVER for c in h.publisher.send.call_args_list)
+    if status == "shutting_down":
+        h.publisher.send.assert_not_awaited()
+    else:
+        assert any(c.args[0] == RECOVER for c in h.publisher.send.call_args_list)
     assert (await row_for(h, h.row.session_id)).status == status
 
 

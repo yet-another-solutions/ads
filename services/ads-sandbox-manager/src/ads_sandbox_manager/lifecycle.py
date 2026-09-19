@@ -403,7 +403,7 @@ class LifecycleService:
                     rows = await db.scalars(
                         select(SessionPVC)
                         .where(
-                            SessionPVC.state.in_(("attaching", "detaching", "destroying")),
+                            SessionPVC.state.in_(("attaching", "destroying")),
                             SessionPVC.last_state_change
                             <= now - timedelta(seconds=s.pvc_timeout_seconds),
                         )
@@ -436,13 +436,6 @@ class LifecycleService:
                                     & (
                                         SandboxSession.status_changed_at
                                         <= now - timedelta(seconds=create_seconds)
-                                    )
-                                ),
-                                (
-                                    (SandboxSession.status == "shutting_down")
-                                    & (
-                                        SandboxSession.status_changed_at
-                                        <= now - timedelta(seconds=s.cleanup_seconds)
                                     )
                                 ),
                                 (
@@ -480,7 +473,18 @@ class LifecycleService:
             if work is None or work.kind == "recovery" or not await self.repository.owns(db, work):
                 return
         if datetime.now(UTC) >= work.deadline:
-            if work.session_id:
+            if work.kind == "idle":
+                async with self.sessions.begin() as db:
+                    if not await self.repository.owns(db, work):
+                        return
+                    stored = await db.get(CleanupWork, work_id)
+                    if stored is None:
+                        return
+                    stored.deadline = datetime.now(UTC) + timedelta(
+                        seconds=self.settings.cleanup_seconds
+                    )
+                log.warning("idle cleanup overdue; retaining workspace and retrying: %s", work_id)
+            elif work.session_id:
                 await self.emit(RECOVER, Signal(work.session_id, work.sandbox_id))
                 return
             # True orphans never recreate anything. Keep exact targets/evidence and retry.
@@ -504,7 +508,11 @@ class LifecycleService:
                 targets.append(obj if obj.get("captured") else await self.kube.capture(obj))
             if not await self._save_targets(work, targets):
                 return
-            for obj in targets:
+            # Also order persisted intents created by older manager versions.
+            compute_pending = False
+            for obj in sorted(targets, key=lambda t: t["kind"] != "Deployment"):
+                if obj["kind"] != "Deployment" and compute_pending:
+                    return
                 async with self.sessions.begin() as db:
                     if not await self.repository.owns(db, work):
                         return
@@ -526,7 +534,7 @@ class LifecycleService:
                     await self.kube.delete(obj)
                     observed = await self.kube.observe(obj)
                     if observed is not None and observed["metadata"]["uid"] == obj["uid"]:
-                        return
+                        compute_pending = True
                 else:
                     if obj.get("retain") and (
                         observed is None or observed["metadata"]["uid"] != obj["uid"]
@@ -543,10 +551,14 @@ class LifecycleService:
                             "ads-sandbox-ipc-"
                         ) and not await self.kube.reclaimed(obj):
                             return
+            if compute_pending:
+                return
             async with self.sessions.begin() as db:
                 await self.repository.complete(db, work, datetime.now(UTC))
         except Exception:
-            if work.session_id:
+            if work.kind == "idle":
+                log.warning("idle cleanup unavailable; workspace and intent retained: %s", work_id)
+            elif work.session_id:
                 await self.emit(RECOVER, Signal(work.session_id, work.sandbox_id))
             else:
                 log.warning("orphan cleanup unavailable; exact target retained")

@@ -143,8 +143,8 @@ async def test_failed_provisioning_records_failure_time_not_claim_time(life):
 
 async def test_recovery_handoff_contract_rebuilds_only_with_fresh_identities(life):
     h = life
-    work = await idle(h)
     await h.lifecycle.admit(RECOVER, Signal(h.row.session_id, h.row.sandbox_id))
+    work = (await works(h))[0]
     boundary = await row_for(h, h.row.session_id)
     # Fake the unbuilt slice-12 executor only: delete captured old resources,
     # confirm completion, remove the old disk record, and open provisioning.
@@ -236,6 +236,7 @@ async def test_idle_waits_for_exact_drain_ack_and_storage_release(life):
     h.cleanup.release = False
     await h.lifecycle.execute(work.work_id)
     assert h.cleanup.deleted[0][1] == ipc_name(h.row.sandbox_id)
+    assert [kind for kind, _, _ in h.cleanup.deleted] == ["Deployment", "Deployment"]
     assert (await disk(h)).state == "detaching"
     h.cleanup.release = True
     await h.lifecycle.execute(work.work_id)
@@ -245,8 +246,8 @@ async def test_idle_waits_for_exact_drain_ack_and_storage_release(life):
     assert list(h.kube.objects) == [("PersistentVolumeClaim", session_name(h.row.pvc_id))]
     assert [kind for kind, _, _ in h.cleanup.deleted] == [
         "Deployment",
-        "PersistentVolumeClaim",
         "Deployment",
+        "PersistentVolumeClaim",
     ]
 
 
@@ -407,7 +408,7 @@ async def test_published_failure_wins_over_late_success_and_duplicate_is_ignored
     assert (await works(h))[0].targets == targets
 
 
-async def test_watchdog_signals_only_and_unpublished_observation_has_no_verdict(life):
+async def test_idle_watchdog_never_converts_slow_detach_into_recovery(life):
     h = life
     work = await idle(h)
     async with h.sessions.begin() as db:
@@ -415,11 +416,106 @@ async def test_watchdog_signals_only_and_unpublished_observation_has_no_verdict(
         pvc.last_state_change -= timedelta(hours=1)
         stored = await db.get(CleanupWork, work.work_id)
         stored.pvc_changed = pvc.last_state_change
+        row = await db.get(SandboxSession, h.row.session_id)
+        row.status_changed_at -= timedelta(hours=1)
+        stored.state_changed = row.status_changed_at
+        work.state_changed = row.status_changed_at
     await h.lifecycle.scan("watchdog")
-    assert h.publisher.send.call_args.args[0] == RECOVER
+    h.publisher.send.assert_not_awaited()
     assert (await row_for(h, h.row.session_id)).status == "shutting_down"
-    # Deliberately do not consume the observation: successful cleanup is still allowed.
+    # Slow storage release is not a failure verdict; cleanup can still complete.
     await h.lifecycle.shutdown_ack(h.row.sandbox_id, work.state_changed)
+    await h.lifecycle.execute(work.work_id)
+    assert (await row_for(h, h.row.session_id)).status == "stopped"
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+async def test_overdue_idle_survives_restart_and_delayed_recovery_without_losing_disk(
+    life, acknowledged
+):
+    h = life
+    work = await idle(h)
+    async with h.sessions.begin() as db:
+        stored = await db.get(CleanupWork, work.work_id)
+        stored.deadline = datetime.now(UTC) - timedelta(seconds=1)
+    if acknowledged:
+        await h.lifecycle.shutdown_ack(h.row.sandbox_id, work.state_changed)
+    h.cleanup.release = False
+    restarted = LifecycleService(
+        h.lifecycle.settings,
+        h.sessions,
+        h.lifecycle_repository,
+        h.cleanup,
+        h.publisher,
+        h.lifecycle.credentials,
+        h.lifecycle.tokens,
+    )
+    await restarted.execute(work.work_id)
+    await restarted.admit(RECOVER, Signal(h.row.session_id, h.row.sandbox_id))
+    row = await row_for(h, h.row.session_id)
+    assert row.status == "shutting_down" and row.sandbox_id == h.row.sandbox_id
+    assert (row.pvc_id, row.pvc_uid) == (h.row.pvc_id, h.row.pvc_uid)
+    stored = (await works(h))[0]
+    assert stored.kind == "idle" and stored.deadline > datetime.now(UTC)
+    assert stored.state_changed == work.state_changed and stored.pvc_changed == work.pvc_changed
+    assert any(t.get("retain") and t["uid"] == h.row.pvc_uid for t in stored.targets)
+    assert all(c.args[0] != RECOVER for c in h.publisher.send.call_args_list)
+    if not acknowledged:
+        assert not h.cleanup.deleted
+    else:
+        assert len(h.cleanup.deleted) == 2
+    await restarted.shutdown_ack(h.row.sandbox_id, work.state_changed)
+    h.cleanup.release = True
+    await restarted.execute(work.work_id)
+    await restarted.admit(RECOVER, Signal(h.row.session_id, h.row.sandbox_id))
+    assert (await row_for(h, h.row.session_id)).status == "stopped"
+    assert (await disk(h)).state == "detached"
+    assert not await works(h)
+    resumed = await h.service.provision(h.row.session_id)
+    assert (resumed.pvc_id, resumed.pvc_uid) == (h.row.pvc_id, h.row.pvc_uid)
+
+
+@pytest.mark.parametrize("failure", ["shutdown", "capture", "delete", "released"])
+async def test_idle_api_and_publication_errors_preserve_retention(life, failure):
+    h = life
+    work = await idle(h)
+    if failure == "shutdown":
+        h.publisher.send.side_effect = RuntimeError("broker unavailable")
+    else:
+        await h.lifecycle.shutdown_ack(h.row.sandbox_id, work.state_changed)
+        setattr(h.cleanup, failure, AsyncMock(side_effect=RuntimeError("API unavailable")))
+    await h.lifecycle.execute(work.work_id)
+    assert (await row_for(h, h.row.session_id)).status == "shutting_down"
+    assert (await disk(h)).state == "detaching"
+    assert (await works(h))[0].kind == "idle"
+    assert all(c.args[0] != RECOVER for c in h.publisher.send.call_args_list)
+    assert ("PersistentVolumeClaim", session_name(h.row.pvc_id)) in h.kube.objects
+
+
+async def test_legacy_target_order_stops_both_deployments_before_waiting_on_storage(life):
+    h = life
+    work = await idle(h)
+    async with h.sessions.begin() as db:
+        stored = await db.get(CleanupWork, work.work_id)
+        targets = stored.targets
+        stored.targets = [targets[0], targets[2], targets[1], targets[3]]
+    await h.lifecycle.shutdown_ack(h.row.sandbox_id, work.state_changed)
+    original = h.cleanup.delete
+    requested = []
+
+    async def deleting(obj):
+        requested.append(obj["name"])
+        if obj["name"] != ipc_name(h.row.sandbox_id):
+            await original(obj)
+
+    h.cleanup.delete = deleting
+    h.cleanup.released = AsyncMock(return_value=False)
+    await h.lifecycle.execute(work.work_id)
+    assert requested == [ipc_name(h.row.sandbox_id), session_name(h.row.sandbox_id)]
+    h.cleanup.released.assert_not_awaited()
+    assert (await row_for(h, h.row.session_id)).status == "shutting_down"
+    h.cleanup.delete = original
+    h.cleanup.released.return_value = True
     await h.lifecycle.execute(work.work_id)
     assert (await row_for(h, h.row.session_id)).status == "stopped"
 
