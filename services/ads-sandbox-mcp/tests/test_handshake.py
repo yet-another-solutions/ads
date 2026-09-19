@@ -289,8 +289,9 @@ async def test_result_commit_and_watchdog_cannot_overwrite_each_other(
 
 
 @pytest.mark.anyio
-async def test_expired_duplicate_ack_does_not_suppress_abort(harness: Harness) -> None:
-    h = harness
+async def test_expired_duplicate_ack_does_not_suppress_abort(long_harness: Harness) -> None:
+    # This test expires the row explicitly, not through a short setup deadline.
+    h = long_harness
     h.publisher.mode = "ack"
     task = start(h)
     request = await wait_for_message(h, SandboxRequest)

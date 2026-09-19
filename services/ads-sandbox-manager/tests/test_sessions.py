@@ -349,6 +349,8 @@ async def test_replacement_after_bind_is_rechecked_before_compute(sessions_harne
 @pytest.mark.parametrize("foreign", [False, True])
 async def test_create_conflict_is_reread_not_blindly_adopted(sessions_harness, foreign):
     h, sid = sessions_harness, uuid4()
+    # Ownership rejection is independent of database cleanup latency.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def race(body):
         if body["kind"] == "PersistentVolumeClaim" and body["spec"].get("volumeMode") == "Block":
@@ -369,6 +371,8 @@ async def test_create_conflict_is_reread_not_blindly_adopted(sessions_harness, f
 @pytest.mark.parametrize("fault", ["label", "claim", "replicas", "network", "ipc-source"])
 async def test_existing_compute_or_ipc_disk_cannot_cross_bind(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
+    # Preserve the ownership assertions without a 100 ms database race.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def race(body):
         is_ipc = body["kind"] == "PersistentVolumeClaim" and "ipc" in body["metadata"]["name"]
