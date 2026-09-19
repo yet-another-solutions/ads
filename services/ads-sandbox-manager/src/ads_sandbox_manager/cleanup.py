@@ -5,7 +5,7 @@ from typing import Protocol
 
 from kubernetes.client.exceptions import ApiException
 
-from ads_sandbox_manager.kube import KubeClient, timestamp
+from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.session_objects import SANDBOX, SESSION
 
@@ -157,23 +157,11 @@ class CleanupAdapter:
             for a in attachments
         ):
             return False
-        now = datetime.now(UTC)
-        observed = timestamp(target.get("observed_at"))
         for name in target["nodes"]:
             node = await k._call(k.core.read_node, name)
             status = node.get("status", {})
-            ready: Object = next(
-                (c for c in status.get("conditions", []) if c.get("type") == "Ready"), {}
-            )
-            heartbeat = timestamp(ready.get("lastHeartbeatTime"))
-            if (
-                ready.get("status") != "True"
-                or heartbeat is None
-                or observed is None
-                or heartbeat < observed
-                or not 0 <= (now - heartbeat).total_seconds() <= k.settings.node_fresh_seconds
-            ):
-                return False
+            # Node health/heartbeat is not workload or volume-release evidence.
+            # Keep volume-specific negative observations as conservative blockers.
             key = target.get("volume_key")
             if key and (
                 key in status.get("volumesInUse", [])

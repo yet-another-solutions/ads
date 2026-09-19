@@ -122,7 +122,6 @@ class Settings:
     poll_seconds: float = 10
     control_seconds: float = 10
     bake_seconds: int = 1800
-    node_fresh_seconds: float = 600
     tls_ca_bundle: Path | None = None
     bind_host: str = "0.0.0.0"
     port: int = 8080
@@ -168,7 +167,6 @@ class Settings:
         for value in (
             self.poll_seconds,
             self.control_seconds,
-            self.node_fresh_seconds,
             self.ready_seconds,
             self.barrier_seconds,
             self.idle_seconds,
@@ -268,7 +266,6 @@ def load_settings() -> Settings:
         poll_seconds=float(os.environ.get(prefix + "POLL_SECONDS", "10")),
         control_seconds=float(os.environ.get(prefix + "CONTROL_SECONDS", "10")),
         bake_seconds=int(os.environ.get(prefix + "BAKE_SECONDS", "1800")),
-        node_fresh_seconds=float(os.environ.get(prefix + "NODE_FRESH_SECONDS", "600")),
         tls_ca_bundle=optional_path("TLS_CA_BUNDLE"),
         bind_host=os.environ.get(prefix + "BIND_HOST", "0.0.0.0"),
         port=int(os.environ.get(prefix + "PORT", "8080")),
