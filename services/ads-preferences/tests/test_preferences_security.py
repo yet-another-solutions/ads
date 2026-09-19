@@ -15,7 +15,7 @@ MODEL_BODY = {
     "type": "openai-stream",
     "url": "https://example.invalid/v1",
     "authentication": {"openai-bearer": {"token": "sk-secret"}},
-    "options": {"model-name": "gpt-4o"},
+    "options": {"model-name": "glm-5.3"},
 }
 
 

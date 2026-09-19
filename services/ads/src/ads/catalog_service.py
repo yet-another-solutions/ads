@@ -7,6 +7,7 @@ import uuid
 from ads.exceptions import InvalidInput, NotFound
 from ads.views import ModelOption, ModelView
 from ads_commons.engine import OpenAiBearerToken, OpenAiStreamAuthentication, OpenAiStreamOptions
+from ads_commons.model_catalog import ModelTypeInfo
 from ads_commons.preferences import (
     ModelInfo,
     ModelPatch,
@@ -37,11 +38,18 @@ def _require_text(value: str, field: str) -> str:
     return value.strip()
 
 
-def _require_known_type(value: str, allowed: list[str]) -> OpenAiStreamType:
+def _require_known_type(value: str, allowed: list[ModelTypeInfo]) -> OpenAiStreamType:
     text = _require_text(value, "Type")
-    if text not in allowed or text != OPENAI_STREAM:
+    if not any(item.type == text for item in allowed) or text != OPENAI_STREAM:
         raise InvalidInput("unsupported model type")
     return OPENAI_STREAM
+
+
+def _options(model_name: str) -> OpenAiStreamOptions:
+    try:
+        return OpenAiStreamOptions(model_name=model_name)
+    except ValueError as exc:
+        raise InvalidInput(str(exc)) from exc
 
 
 class CatalogService:
@@ -51,7 +59,7 @@ class CatalogService:
         self._preferences = preferences
 
     @require_role("user")
-    async def list_model_types(self) -> list[str]:
+    async def list_model_types(self) -> list[ModelTypeInfo]:
         listing = await self._preferences.list_model_types()
         return list(listing.types)
 
@@ -93,9 +101,7 @@ class CatalogService:
                 authentication=OpenAiStreamAuthentication(
                     openai_bearer=OpenAiBearerToken(token=_require_text(bearer, "Bearer token")),
                 ),
-                options=OpenAiStreamOptions(
-                    model_name=_require_text(model_name, "Model name"),
-                ),
+                options=_options(model_name),
             )
         )
         return _view(info)
@@ -119,7 +125,7 @@ class CatalogService:
             )
         options = None
         if model_name is not None:
-            options = OpenAiStreamOptions(model_name=model_name.strip())
+            options = _options(model_name)
         patch_type = None
         if model_type is not None and model_type.strip():
             allowed = await self.list_model_types()

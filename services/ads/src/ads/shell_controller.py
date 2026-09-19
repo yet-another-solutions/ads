@@ -18,6 +18,7 @@ from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.session_service import SessionService
 from ads.views import ModelOption, ModelView, ProjectView, TranscriptView
+from ads_commons.model_catalog import ModelTypeInfo
 from ads_commons.security import AccessDenied, AuthenticationRequired
 
 log = structlog.get_logger("ads.shell")
@@ -179,7 +180,7 @@ async def _catalog_views(catalog: CatalogService) -> list[ModelView]:
         return []
 
 
-async def _model_types(catalog: CatalogService) -> list[str]:
+async def _model_types(catalog: CatalogService) -> list[ModelTypeInfo]:
     try:
         return await catalog.list_model_types()
     except (AuthenticationRequired, AccessDenied):

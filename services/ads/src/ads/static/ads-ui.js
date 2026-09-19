@@ -108,9 +108,35 @@
     });
   }
 
+  function bindModelNames() {
+    var form = byId("model-form");
+    if (!form || form.dataset.modelNamesBound) {
+      return;
+    }
+    var type = form.querySelector('select[name="type"]');
+    var names = form.querySelector('select[name="model-name"]');
+    if (!type || !names) {
+      return;
+    }
+    form.dataset.modelNamesBound = "1";
+    function syncNames() {
+      Array.from(names.options).forEach(function (option) {
+        var unsupported = option.value !== "" && option.dataset.modelType !== type.value;
+        option.hidden = unsupported;
+        option.disabled = unsupported;
+      });
+      if (!names.selectedOptions.length || names.selectedOptions[0].disabled) {
+        names.value = "";
+      }
+    }
+    type.addEventListener("change", syncNames);
+    syncNames();
+  }
+
   function bindAll() {
     bindComposer();
     bindMobileMenu();
+    bindModelNames();
     openDialogs();
   }
 

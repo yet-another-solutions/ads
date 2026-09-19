@@ -161,7 +161,8 @@ def sdk_harness(settings, monkeypatch):
     )
 
 
-def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
+@pytest.mark.parametrize("model_name", ["glm-5.3", "glm-5.2"])
+def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness, model_name):
     h = sdk_harness
     FakeModel.scripts = [
         [native()],
@@ -171,7 +172,9 @@ def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
 
     async def scenario():
         async with h.sdk.session_manager.run():
-            output = [delta async for delta in h.streamer.stream(make_request())]
+            output = [
+                delta async for delta in h.streamer.stream(make_request(model_name=model_name))
+            ]
         assert [d.kind for d in output] == [
             "tool_call",
             "tool_result",
@@ -193,6 +196,7 @@ def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
         assert output[5].text == "done"
 
     asyncio.run(scenario())
+    assert FakeModel.options[0]["model"] == model_name
     assert [e[0] for e in h.executions] == ["exec_shell", "exec_python"]
     assert h.executions[0][1] == {"command": "printf hi"}
     assert h.executions[1][1] == {"code": "print(1)"}
@@ -264,14 +268,18 @@ def test_text_and_thinker_suggestions_are_never_dispatched(sdk_harness, response
     assert h.executions == []
 
 
-def test_tool_free_thinker_has_no_callable_tools_or_mcp(sdk_harness, monkeypatch):
+@pytest.mark.parametrize("model_name", ["glm-5.3", "glm-5.2"])
+def test_tool_free_thinker_has_no_callable_tools_or_mcp(sdk_harness, monkeypatch, model_name):
     h = sdk_harness
     monkeypatch.setattr("ads_engine.chat.AdsChatOpenAI", FakeModel)
     FakeModel.scripts = [[native(), AIMessageChunk(content="proposal")]]
-    output = asyncio.run(_collect(LangChainChatStreamer().stream(make_request())))
+    output = asyncio.run(
+        _collect(LangChainChatStreamer().stream(make_request(model_name=model_name)))
+    )
     assert [d.text for d in output] == ["proposal"]
     assert FakeModel.bindings == [] and h.requests == [] and h.credentials.opens == []
     assert "tools" not in FakeModel.options[0] and "authorization" not in str(FakeModel.calls)
+    assert FakeModel.options[0]["model"] == model_name
 
 
 @pytest.mark.parametrize("invalid", ["missing", "extra_argument", "duplicates"])
