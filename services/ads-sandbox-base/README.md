@@ -53,7 +53,11 @@ Kata container cgroup (CRI-owned, finite CPU/memory limits)
 ```
 
 Only delegated directories and files listed in `/sys/kernel/cgroup/delegate`
-are handed to UID 1000. Ancestor budget controls remain guest-root-owned.
+are handed to UID 1000. The kernel list must contain `cgroup.procs`,
+`cgroup.threads`, and `cgroup.subtree_control`; it may also contain
+`memory.oom.group` and `memory.reclaim`. Only listed, present files are
+delegated, and unknown names fail before mutation. Ancestor budget controls
+remain guest-root-owned.
 The exec helper joins PID 1's cgroup namespace, moves itself into `launcher`,
 then executes Podman through `runuser`. Caller arguments never become a
 guest-root shell command. Shell/Python stdin, exit status and IPC PID tracking

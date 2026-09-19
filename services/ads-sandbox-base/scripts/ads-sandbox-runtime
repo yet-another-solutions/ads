@@ -12,6 +12,8 @@ from pathlib import Path
 CG = Path("/sys/fs/cgroup")
 PROC = Path("/proc")
 CONTROLLERS = {"cpu", "memory", "pids"}
+DELEGATE_REQUIRED = {"cgroup.procs", "cgroup.threads", "cgroup.subtree_control"}
+DELEGATE_OPTIONAL = {"memory.oom.group", "memory.reclaim"}
 PROC_MASKS = {
     "/proc/interrupts": ("tmpfs", "/null"),
     "/proc/keys": ("tmpfs", "/null"),
@@ -136,9 +138,10 @@ def prepare() -> None:
     check_cgroup_mount()
     budget_limits = limits()
     delegate_files = (Path("/sys/kernel/cgroup/delegate")).read_text().split()
+    # Kernel versions differ in optional memory delegation controls. Keep a
+    # reviewed allowlist; never hand resource limits or arbitrary paths over.
     require(
-        bool(delegate_files)
-        and set(delegate_files) <= {"cgroup.procs", "cgroup.threads", "cgroup.subtree_control"},
+        DELEGATE_REQUIRED <= set(delegate_files) <= DELEGATE_REQUIRED | DELEGATE_OPTIONAL,
         "unexpected kernel delegation file list",
     )
     require(not (CG / "ads-budget").exists(), "budget already exists; refuse partial bootstrap")

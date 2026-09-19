@@ -170,7 +170,11 @@ def test_namespace_or_identity_mismatch_fails(monkeypatch, root, same):
         runtime.check_namespaces()
 
 
-def test_delegation_keeps_budget_controls_root_owned(tree, monkeypatch):
+@pytest.mark.parametrize(
+    "optional",
+    [(), ("memory.oom.group",), ("memory.reclaim",), ("memory.oom.group", "memory.reclaim")],
+)
+def test_delegation_keeps_budget_controls_root_owned(tree, monkeypatch, optional):
     cg, _ = tree
     monkeypatch.setattr(runtime, "check_namespaces", lambda: None)
     monkeypatch.setattr(runtime, "check_cgroup_mount", lambda: None)
@@ -183,7 +187,9 @@ def test_delegation_keeps_budget_controls_root_owned(tree, monkeypatch):
 
     def read(path, *args, **kwargs):
         if str(path) == "/sys/kernel/cgroup/delegate":
-            return "cgroup.procs\ncgroup.threads\ncgroup.subtree_control\n"
+            return "\n".join(
+                ("cgroup.procs", "cgroup.threads", "cgroup.subtree_control", *optional)
+            )
         return original_read(path, *args, **kwargs)
 
     def write(path, data, *args, **kwargs):
@@ -196,7 +202,13 @@ def test_delegation_keeps_budget_controls_root_owned(tree, monkeypatch):
         original_mkdir(path, *args, **kwargs)
         if path.is_relative_to(cg):
             original_write(path / "cgroup.controllers", "cpu memory pids")
-            for name in ("cgroup.procs", "cgroup.threads", "cgroup.subtree_control"):
+            for name in (
+                "cgroup.procs",
+                "cgroup.threads",
+                "cgroup.subtree_control",
+                "memory.oom.group",
+                "memory.reclaim",
+            ):
                 original_write(path / name, "")
 
     monkeypatch.setattr(Path, "read_text", read)
@@ -211,12 +223,61 @@ def test_delegation_keeps_budget_controls_root_owned(tree, monkeypatch):
     expected = {
         directory / name if name else directory
         for directory in (cg / "ads-budget/podman", cg / "ads-budget/podman/launcher")
-        for name in ("", "cgroup.procs", "cgroup.threads", "cgroup.subtree_control")
+        for name in ("", "cgroup.procs", "cgroup.threads", "cgroup.subtree_control", *optional)
     }
     assert {call.args[0] for call in chown.call_args_list} == expected
     assert all(call.args[1:] == (1000, 1000) for call in chown.call_args_list)
     with pytest.raises(RuntimeError, match="already exists"):
         runtime.prepare()
+
+
+@pytest.mark.parametrize(
+    "delegate_files",
+    [
+        "",
+        "cgroup.procs",
+        "cgroup.procs cgroup.threads",
+        "cgroup.procs cgroup.subtree_control",
+        "cgroup.threads cgroup.subtree_control",
+        *[
+            f"cgroup.procs cgroup.threads cgroup.subtree_control {extra}"
+            for extra in (
+                "cpu.max",
+                "memory.max",
+                "memory.swap.max",
+                "pids.max",
+                "cgroup.max.depth",
+                "cgroup.max.descendants",
+                "../cgroup.procs",
+                "/etc/passwd",
+                "future.control",
+            )
+        ],
+    ],
+)
+def test_invalid_delegate_list_rejected_before_mutation(tree, monkeypatch, delegate_files):
+    cg, _ = tree
+    monkeypatch.setattr(runtime, "check_namespaces", lambda: None)
+    monkeypatch.setattr(runtime, "check_cgroup_mount", lambda: None)
+    monkeypatch.setattr(runtime.os, "readlink", lambda path: "ns")
+    original_read = Path.read_text
+
+    def read(path, *args, **kwargs):
+        if str(path) == "/sys/kernel/cgroup/delegate":
+            return delegate_files
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    prepare_proc, chown = Mock(), Mock()
+    monkeypatch.setattr(runtime, "prepare_proc", prepare_proc)
+    monkeypatch.setattr(runtime.os, "chown", chown)
+    with pytest.raises(RuntimeError, match="kernel delegation"):
+        runtime.prepare()
+    prepare_proc.assert_not_called()
+    chown.assert_not_called()
+    assert not (cg / "ads-budget").exists()
+    assert not (cg / "init").exists()
+    assert (cg / "cgroup.procs").read_text() == "1\n"
 
 
 def test_exec_placement_precedes_privilege_drop_and_preserves_arguments(tree, monkeypatch):
