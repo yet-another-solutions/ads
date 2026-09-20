@@ -45,7 +45,14 @@ class Settings:
     context_compactor_url: str = "https://ads-context-compactor:8443/compact"
     context_trigger: int = 80
     context_target: int = 50
-    context_output_reserve: int = 1024
+    recall_reserve: int = 1024
+    recall_answer_cap: int = 1024
+    recall_completion_cap: int = 1024
+    recall_starvation_percentage: int = 10
+    top_level_recall_reserve: int = 1024
+    top_level_recall_answer_cap: int = 1024
+    top_level_recall_completion_cap: int = 1024
+    top_level_recall_starvation_percentage: int = 10
 
     def __post_init__(self) -> None:
         url = urlsplit(self.mcp_url)
@@ -72,8 +79,21 @@ class Settings:
                 raise ValueError("context service URLs must be HTTPS without credentials")
         if not 0 < self.context_target < self.context_trigger < 100:
             raise ValueError("context target must be below trigger, both percentages")
-        if self.context_output_reserve <= 0:
-            raise ValueError("context output reserve must be positive")
+        if self.recall_reserve <= 0:
+            raise ValueError("inner recall output reserve must be positive")
+        if (
+            self.recall_answer_cap <= 0
+            or self.recall_completion_cap <= 0
+            or not 0 < self.recall_starvation_percentage < 100
+            or min(
+                self.top_level_recall_reserve,
+                self.top_level_recall_answer_cap,
+                self.top_level_recall_completion_cap,
+            )
+            <= 0
+            or not 0 < self.top_level_recall_starvation_percentage < 100
+        ):
+            raise ValueError("invalid recall budgets")
 
 
 def load_settings() -> Settings:
@@ -108,5 +128,22 @@ def load_settings() -> Settings:
         ),
         context_trigger=int(_env("ADS_ENGINE_CONTEXT_TRIGGER", "80")),
         context_target=int(_env("ADS_ENGINE_CONTEXT_TARGET", "50")),
-        context_output_reserve=int(_env("ADS_ENGINE_CONTEXT_OUTPUT_RESERVE", "1024")),
+        recall_reserve=int(_env("ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS", "1024")),
+        recall_answer_cap=int(_env("ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS", "1024")),
+        recall_completion_cap=int(_env("ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS", "1024")),
+        recall_starvation_percentage=int(
+            _env("ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE", "10")
+        ),
+        top_level_recall_reserve=int(
+            _env("ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS", "1024")
+        ),
+        top_level_recall_answer_cap=int(
+            _env("ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS", "1024")
+        ),
+        top_level_recall_completion_cap=int(
+            _env("ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS", "1024")
+        ),
+        top_level_recall_starvation_percentage=int(
+            _env("ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE", "10")
+        ),
     )

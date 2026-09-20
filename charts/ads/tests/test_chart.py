@@ -727,6 +727,131 @@ class ChartTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(f"sandbox.{component}.tlsSecretName", result.stderr)
 
+    def test_context_budget_values_reach_service_settings(self):
+        from ads_context_compactor.config import load_settings as compactor_settings
+        from ads_engine.config import load_settings as engine_settings
+
+        for custom in (False, True):
+            flags = (
+                [
+                    "--set",
+                    "context.triggerPercentage=75,context.targetPercentage=40,"
+                    "engine.recall.inner.reservedOutputTokens=512,engine.recall.inner.starvationPercentage=15,"
+                    "engine.recall.inner.answerCapTokens=768,engine.recall.inner.completionCapTokens=8192,"
+                    "engine.recall.topLevel.reservedOutputTokens=128,"
+                    "engine.recall.topLevel.answerCapTokens=2048,"
+                    "engine.recall.topLevel.completionCapTokens=4096,"
+                    "engine.recall.topLevel.starvationPercentage=25,"
+                    "contextCompactor.reservedOutputTokens=256,contextCompactor.summaryCapTokens=1536,"
+                    "contextCompactor.completionCapTokens=16384,"
+                    "contextCompactor.minimumReductionPercentage=20,contextCompactor.starvationPercentage=12,"
+                    "contextCompactor.recall.reservedOutputTokens=384,"
+                    "contextCompactor.recall.answerCapTokens=640,"
+                    "contextCompactor.recall.completionCapTokens=3072,"
+                    "contextCompactor.recall.starvationPercentage=18",
+                ]
+                if custom
+                else []
+            )
+            docs = self.documents(*flags)
+            for component, loader in [
+                ("engine", engine_settings),
+                ("context-compactor", compactor_settings),
+            ]:
+                prefix = "ADS_" + component.upper().replace("-", "_") + "_"
+                env = dict(docs["ConfigMap", f"ads-{component}"]["data"])
+                env[prefix + "KEYCLOAK_CLIENT_SECRET"] = "fixture"
+                env[prefix + "DATABASE_URL"] = "postgresql+psycopg://fixture@db/fixture"
+                with (
+                    patch.dict(os.environ, env, clear=True),
+                    patch("ads_context_compactor.config.load_tls_context"),
+                ):
+                    settings = loader()
+                if component == "engine":
+                    self.assertEqual(settings.recall_starvation_percentage, 15 if custom else 10)
+                    self.assertEqual(settings.recall_answer_cap, 768 if custom else 1024)
+                    self.assertEqual(settings.recall_completion_cap, 8192 if custom else 1024)
+                    self.assertEqual(settings.context_trigger, 75 if custom else 80)
+                    self.assertEqual(settings.context_target, 40 if custom else 50)
+                    self.assertEqual(settings.recall_reserve, 512 if custom else 1024)
+                    self.assertEqual(settings.top_level_recall_reserve, 128 if custom else 1024)
+                    self.assertEqual(settings.top_level_recall_answer_cap, 2048 if custom else 1024)
+                    self.assertEqual(
+                        settings.top_level_recall_completion_cap, 4096 if custom else 1024
+                    )
+                    self.assertEqual(
+                        settings.top_level_recall_starvation_percentage, 25 if custom else 10
+                    )
+                else:
+                    self.assertEqual(settings.recall_reserve, 384 if custom else 1024)
+                    self.assertEqual(settings.recall_starvation_percentage, 18 if custom else 10)
+                    self.assertEqual(settings.recall_answer_cap, 640 if custom else 1024)
+                    self.assertEqual(settings.recall_completion_cap, 3072 if custom else 1024)
+                    self.assertEqual(settings.reserve, 256 if custom else 1024)
+                    self.assertEqual(settings.starvation_percentage, 12 if custom else 10)
+                    self.assertEqual(settings.summary_cap, 1536 if custom else 2048)
+                    self.assertEqual(settings.completion_cap, 16384 if custom else 2048)
+                    self.assertEqual(settings.minimum_reduction_percentage, 20 if custom else 10)
+
+    def test_context_budgets_reject_invalid_helm_values(self):
+        for setting in [
+            "context.triggerPercentage=100",
+            "context.targetPercentage=80",
+            "context.targetPercentage=0",
+            "engine.recall.inner.starvationPercentage=0",
+            "engine.recall.inner.starvationPercentage=100",
+            "engine.recall.inner.reservedOutputTokens=0",
+            "engine.recall.inner.answerCapTokens=-1",
+            "engine.recall.inner.completionCapTokens=0",
+            "contextCompactor.reservedOutputTokens=0",
+            "contextCompactor.summaryCapTokens=0",
+            "contextCompactor.completionCapTokens=0",
+            "contextCompactor.minimumReductionPercentage=100",
+            "engine.recall.inner.starvationPercentage=10.5",
+            "engine.recall.topLevel.reservedOutputTokens=0",
+            "engine.recall.topLevel.answerCapTokens=0",
+            "engine.recall.topLevel.completionCapTokens=0",
+            "engine.recall.topLevel.starvationPercentage=100",
+            "contextCompactor.recall.reservedOutputTokens=0",
+            "contextCompactor.recall.answerCapTokens=0",
+            "contextCompactor.recall.completionCapTokens=0",
+            "contextCompactor.recall.starvationPercentage=100",
+            "contextCompactor.starvationPercentage=0",
+            "contextCompactor.starvationPercentage=100",
+            "context.reservedOutputTokens=512",
+        ]:
+            with self.subTest(setting=setting):
+                result = self.render("--set", setting)
+                self.assertNotEqual(result.returncode, 0, setting)
+                self.assertIn(setting.split("=")[0].split(".")[-1], result.stderr)
+
+    def test_recall_configuration_groups_do_not_leak_into_each_other(self):
+        groups = {
+            "engine.recall.topLevel": ("ads-engine", "ADS_ENGINE_TOP_LEVEL_RECALL_"),
+            "engine.recall.inner": ("ads-engine", "ADS_ENGINE_INNER_RECALL_"),
+            "contextCompactor.recall": ("ads-context-compactor", "ADS_CONTEXT_COMPACTOR_RECALL_"),
+        }
+        fields = {
+            "reservedOutputTokens": ("RESERVED_OUTPUT_TOKENS", 128, 1024),
+            "answerCapTokens": ("ANSWER_CAP_TOKENS", 640, 1024),
+            "completionCapTokens": ("COMPLETION_CAP_TOKENS", 8192, 1024),
+            "starvationPercentage": ("STARVATION_PERCENTAGE", 25, 10),
+        }
+        for changed in groups:
+            with self.subTest(group=changed):
+                docs = self.documents(
+                    "--set", ",".join(f"{changed}.{k}={v[1]}" for k, v in fields.items())
+                )
+                for group, (name, prefix) in groups.items():
+                    config = docs["ConfigMap", name]["data"]
+                    for suffix, custom, default in fields.values():
+                        self.assertEqual(
+                            config[prefix + suffix], str(custom if group == changed else default)
+                        )
+                compactor = docs["ConfigMap", "ads-context-compactor"]["data"]
+                self.assertEqual(compactor["ADS_CONTEXT_COMPACTOR_RESERVED_OUTPUT_TOKENS"], "1024")
+                self.assertEqual(compactor["ADS_CONTEXT_COMPACTOR_STARVATION_PERCENTAGE"], "10")
+
     def test_manager_sasl_secret_and_ca(self):
         docs = self.documents(
             "--set",

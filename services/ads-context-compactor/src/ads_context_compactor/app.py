@@ -66,7 +66,18 @@ class AppProvider(Provider):
             "",
             ssl.create_default_context(cafile=s.tls_ca_bundle),
         )
-        return ContextCompactorService(clients, reserve=s.reserve, summary_cap=s.summary_cap)
+        return ContextCompactorService(
+            clients,
+            reserve=s.reserve,
+            summary_cap=s.summary_cap,
+            completion_cap=s.completion_cap,
+            starvation_percentage=s.starvation_percentage,
+            recall_reserve=s.recall_reserve,
+            recall_answer_cap=s.recall_answer_cap,
+            recall_completion_cap=s.recall_completion_cap,
+            recall_starvation_percentage=s.recall_starvation_percentage,
+            minimum_reduction_percentage=s.minimum_reduction_percentage,
+        )
 
 
 def failure(request: Request[Any, Any, Any], exc: Exception) -> Response[Any]:

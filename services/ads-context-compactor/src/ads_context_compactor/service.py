@@ -130,11 +130,30 @@ class ContextCompactorService:
         model: FrameModel | None = None,
         reserve: int = 1024,
         summary_cap: int = 2048,
+        completion_cap: int = 2048,
+        starvation_percentage: int = 10,
+        recall_reserve: int = 1024,
+        recall_answer_cap: int = 1024,
+        recall_completion_cap: int = 1024,
+        recall_starvation_percentage: int = 10,
+        minimum_reduction_percentage: int = 10,
     ) -> None:
         self._meter = meter
         self._model = model
         self._reserve = reserve
         self._summary_cap = summary_cap
+        self._completion_cap = completion_cap
+        self._starvation_percentage = starvation_percentage
+        self._recall_reserve = recall_reserve
+        self._recall_answer_cap = recall_answer_cap
+        self._recall_completion_cap = recall_completion_cap
+        self._recall_starvation_percentage = recall_starvation_percentage
+        if (
+            not (0 < minimum_reduction_percentage < 100 and 0 < starvation_percentage < 100)
+            or min(reserve, summary_cap, completion_cap) <= 0
+        ):
+            raise ValueError("invalid compactor budgets")
+        self._minimum_reduction_percentage = minimum_reduction_percentage
 
     @require_caller("ads-engine")
     async def compact(self, body: CompactRequest) -> Tombstone:
@@ -142,7 +161,10 @@ class ContextCompactorService:
             self._meter,
             self._model or LangChainFrameModel(body.model),
             body.model,
-            reserve=self._reserve,
+            reserve=self._recall_reserve,
+            answer_cap=self._recall_answer_cap,
+            answer_completion_cap=self._recall_completion_cap,
+            starvation_percentage=self._recall_starvation_percentage,
         )
         target = body.target_percentage * body.model.options.max_context_tokens // 100
 
@@ -171,6 +193,9 @@ class ContextCompactorService:
                     "Produce the compacted memory summary.",
                     SUMMARY_PROMPT,
                     self._summary_cap,
+                    completion_cap=self._completion_cap,
+                    reserve=self._reserve,
+                    starvation_percentage=self._starvation_percentage,
                 )
                 try:
                     answer = await runtime.run(frame)
@@ -205,7 +230,7 @@ class ContextCompactorService:
                 )
                 before = await runtime.count(prefix)
                 after = await runtime.count([replacement])
-                if after * 10 > before * 9:
+                if after * 100 > before * (100 - self._minimum_reduction_percentage):
                     raise ContextFailure("insufficient_compaction_progress")
                 break
             if replacement is None:

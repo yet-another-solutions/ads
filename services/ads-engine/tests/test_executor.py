@@ -131,6 +131,109 @@ def test_compaction_precedes_continuation_and_terminal_finish(sdk_harness, bound
         assert str(tombstone.tombstone.memory_id) in str(FakeModel.calls[0])
 
 
+@pytest.mark.parametrize("mixed", [False, True])
+def test_top_level_recall_batch_compacts_instead_of_prohibiting_calls(sdk_harness, mixed):
+    import msgspec
+
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import (
+        AssistantHistoryTurn,
+        Tombstone,
+        ToolCall,
+        ToolResult,
+        UserHistoryTurn,
+    )
+    from ads_context_runtime.frames import RecallRuntime
+    from ads_engine.context import EngineContext
+    from context_fakes import Model, memory, model_settings
+
+    h = sdk_harness
+    archived = memory([UserHistoryTurn("evidence")])
+    model = Model("a" * 80, "b" * 80, "c" * 80)
+    compacted = []
+
+    class Clients:
+        async def meter(self, body):
+            size = 0
+            for item in body.messages:
+                if isinstance(item, Tombstone):
+                    size += 100
+                elif isinstance(item, ToolCall):
+                    size += 10
+                elif isinstance(item, ToolResult):
+                    size += 10 + (len(item.content["answer"]) if item.status == "success" else 0)
+                else:
+                    size += len(item.text)
+            return MeterResponse(size)
+
+        async def compact(self, body):
+            compacted.append(list(body.messages))
+            return memory(body.messages[1:3], body.messages[3:], inner=archived)
+
+    clients = Clients()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request,
+                clients,
+                RecallRuntime(clients, model, request.model, reserve=100, top_level_reserve=100),
+            )
+
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory())
+    request = msgspec.structs.replace(
+        make_request(),
+        model=model_settings(1000),
+        history=[archived, UserHistoryTurn("x" * 300), AssistantHistoryTurn("y" * 300)],
+        user_input="x" * 50,
+    )
+    calls = [
+        {
+            "id": id_,
+            "name": "memory_recall",
+            "args": json.dumps({"memory_id": str(archived.memory_id), "question": "q"}),
+            "index": index,
+        }
+        for index, id_ in enumerate(("a", "b", "c"))
+    ]
+    if mixed:
+        calls[-1].update(name="exec_shell", args=json.dumps({"command": "must not execute"}))
+    FakeModel.scripts = [
+        [AIMessageChunk("", tool_call_chunks=calls)],
+        [AIMessageChunk("done")],
+    ]
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            if mixed:
+                with pytest.raises(ExecutionFailed):
+                    await _collect(streamer.stream(request))
+                return []
+            return await _collect(streamer.stream(request))
+
+    deltas = asyncio.run(scenario())
+    assert h.executions == []
+    if mixed:
+        assert model.calls == []
+        return
+    assert len(model.calls) == 3
+    assert [d.tool_call.id for d in deltas if d.kind == "tool_call"] == ["a", "b", "c"]
+    results = [d.tool_result for d in deltas if d.kind == "tool_result"]
+    assert [r.tool_call_id for r in results] == ["a", "b", "c"]
+    assert [r.status for r in results] == ["success", "success", "success"]
+    assert FakeModel.bindings[-1][0]
+    assert len(compacted) == 1
+    assert [i.tool_call_id for i in compacted[0] if isinstance(i, ToolResult)] == ["a", "b", "c"]
+    kinds = [d.kind for d in deltas]
+    assert kinds.index("compaction") > max(
+        i for i, kind in enumerate(kinds) if kind == "tool_result"
+    )
+    wire = FakeModel.calls[-1]
+    assert [m.tool_call_id for m in wire if isinstance(m, ToolMessage)] == ["a", "b", "c"]
+    assert len([m for m in wire if isinstance(m, AIMessage) and m.tool_calls]) == 1
+    assert [d.pressure.used_context for d in deltas if d.kind == "tool_result"] == [870, 960, 1050]
+
+
 @pytest.mark.parametrize("waiting", ["compaction", "nested_recall"])
 @pytest.mark.parametrize("ending", ["finish", "abort", "error"])
 def test_pings_continue_during_context_waits_and_late_results_cannot_revive(
