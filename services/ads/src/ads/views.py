@@ -50,6 +50,8 @@ class TurnView:
 class RunView:
     status: str
     message_id: uuid.UUID
+    total_context: int | None = None
+    used_context: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,3 +78,4 @@ class ModelView:
     type: str
     url: str
     model_name: str
+    max_context_tokens: int

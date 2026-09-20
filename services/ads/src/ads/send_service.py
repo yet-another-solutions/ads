@@ -107,7 +107,10 @@ class SendService:
                 session_row = self._load_owned(session_id)
                 if self._runs.in_flight_for_session(session_row.id) is not None:
                     raise Conflict()
-                history = history_from_entries(self._entries.walk(session_row))
+                history = history_from_entries(
+                    self._entries.walk(session_row),
+                    session_row.committed_tombstone_id,
+                )
                 user_entry = append_entry(
                     self._entries,
                     session_row,

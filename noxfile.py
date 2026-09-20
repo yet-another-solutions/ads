@@ -30,7 +30,11 @@ _SRC = (
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
     "services/ads-context-meter/src",
+    "services/ads-context-compactor/src",
+    "libraries/ads-context-runtime/src",
     "services/ads-context-meter/tests",
+    "services/ads-context-compactor/tests",
+    "libraries/ads-context-runtime/tests",
     "services/ads-sandbox-mcp/src",
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/src",
@@ -48,6 +52,8 @@ _PACKAGES = (
     "libraries/ads-commons-schema",
     "services/ads-preferences",
     "services/ads-context-meter",
+    "services/ads-context-compactor",
+    "libraries/ads-context-runtime",
     "services/ads-sandbox-mcp",
     "services/ads-sandbox-ipc",
     "services/ads-sandbox-manager",
@@ -107,6 +113,8 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads-egress-controlplane", external=True)
     session.run("uv", "build", "--package", "ads-preferences", external=True)
     session.run("uv", "build", "--package", "ads-context-meter", external=True)
+    session.run("uv", "build", "--package", "ads-context-compactor", external=True)
+    session.run("uv", "build", "--package", "ads-context-runtime", external=True)
     session.run("uv", "build", "--package", "ads-sandbox-mcp", external=True)
     session.run("uv", "build", "--package", "ads-sandbox-ipc", external=True)
     session.run("uv", "build", "--package", "ads-sandbox-manager", external=True)

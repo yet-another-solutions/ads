@@ -12,6 +12,9 @@ KIND_MESSAGE = "message"
 KIND_REASONING = "reasoning"
 KIND_TOOL_CALL = "tool_call"
 KIND_TOOL_RESULT = "tool_result"
+KIND_TOMBSTONE = "tombstone"
+KIND_COMPACTING = "compacting_context"
+KIND_COMPACTED = "compacted_context"
 
 ROLE_USER = "user"
 ROLE_ASSISTANT = "assistant"
@@ -67,6 +70,7 @@ class ChatSession(Base):
         ),
         nullable=True,
     )
+    committed_tombstone_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -134,6 +138,9 @@ class SessionRun(Base):
     last_event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     finish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    candidate_tombstone_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    total_context: Mapped[int | None] = mapped_column(Integer)
+    used_context: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -151,6 +158,8 @@ class SessionRunBuffer(Base):
     order_no: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    total_context: Mapped[int | None] = mapped_column(Integer)
+    used_context: Mapped[int | None] = mapped_column(Integer)
 
 
 class OidcRefreshToken(Base):

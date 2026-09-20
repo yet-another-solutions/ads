@@ -540,3 +540,7 @@ dialog::backdrop { background: rgb(0 0 0 / 0.62); }
 .dlg-nav button.danger { color: var(--warn); }
 .transcript .turn.live .meta .who { color: var(--accent); }
 .rail-empty-note { color: var(--faint); padding: 6px; font-size: 11px; }
+.context-pressure { display: flex; align-items: center; gap: 12px; color: #71c898; font-size: 11px; margin-bottom: 6px; }
+.context-pressure meter { flex: 1; height: 8px; accent-color: #71c898; }
+.context-pressure meter::-webkit-meter-optimum-value { background: #71c898; }
+.context-pressure meter::-moz-meter-bar { background: #71c898; }

@@ -456,15 +456,19 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
     )
     assert publisher.messages[1] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=0,
         reasoning=Reasoning(text="think"),
     )
     assert publisher.messages[2] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=1,
         message=AssistantMessage(text="answer"),
     )
-    assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
+    assert publisher.messages[3] == Finish(
+        session_id=request.session_id, last_order=1, message_id=request.message_id
+    )
     assert chat.calls == 1
     assert chat.requests[0].authorization.token == access_token
 
@@ -494,16 +498,19 @@ def test_successful_chat_emits_tool_call_and_result_partials(
     _handle_accepted(listener, publisher, request, access_token)
     assert publisher.messages[1] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=0,
         tool_call=call,
     )
     assert publisher.messages[2] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=1,
         tool_result=result,
     )
     assert publisher.messages[3] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=2,
         message=AssistantMessage(text="done"),
     )
@@ -521,7 +528,9 @@ def test_openai_retries_before_partial_then_succeeds(
     _handle_accepted(listener, publisher, request, access_token)
     assert chat.calls == 3
     finish = next(item for item in publisher.messages if isinstance(item, Finish))
-    assert finish == Finish(session_id=request.session_id, last_order=0)
+    assert finish == Finish(
+        session_id=request.session_id, last_order=0, message_id=request.message_id
+    )
 
 
 def test_openai_gives_up_after_three_failures_before_partial(
@@ -713,7 +722,9 @@ def test_duplicate_ack_response_after_start_is_ignored(
     _run(_body())
     assert chat.calls == 1
     finishes = [item for item in publisher.messages if isinstance(item, Finish)]
-    assert finishes == [Finish(session_id=request.session_id, last_order=0)]
+    assert finishes == [
+        Finish(session_id=request.session_id, last_order=0, message_id=request.message_id)
+    ]
     assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
 
 

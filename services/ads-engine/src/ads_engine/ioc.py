@@ -21,6 +21,7 @@ from ads_commons_beans import (
 )
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings
+from ads_engine.context import EngineContextFactory
 from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.kafka import SeekToEndListener
 from ads_engine.listener import EngineListener, TokenAuthenticator
@@ -70,6 +71,7 @@ class AppProvider(Provider):
 
     credentials = provide(McpCredentials, scope=Scope.APP)
     sandbox = provide(SandboxClient, scope=Scope.APP)
+    context = provide(EngineContextFactory, scope=Scope.APP)
     chat = provide(ExecutorChatStreamer, scope=Scope.APP, provides=ChatStreamer)
 
     @provide(scope=Scope.APP)

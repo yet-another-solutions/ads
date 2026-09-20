@@ -16,9 +16,14 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 
+from ads_commons.context_compactor import memory_text
 from ads_commons.engine import (
     AssistantHistoryTurn,
+    CompactionStatus,
+    ContextPressure,
     EngineRequest,
+    HistoryTurn,
+    Tombstone,
     ToolCall,
     ToolResult,
     UserHistoryTurn,
@@ -27,10 +32,13 @@ from ads_commons.engine import (
 
 @dataclass(frozen=True, slots=True)
 class StreamDelta:
-    kind: Literal["reasoning", "message", "tool_call", "tool_result"]
+    kind: Literal["reasoning", "message", "tool_call", "tool_result", "compaction", "tombstone"]
     text: str = ""
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    compaction: CompactionStatus | None = None
+    tombstone: Tombstone | None = None
+    pressure: ContextPressure | None = None
 
 
 class ChatStreamer(Protocol):
@@ -104,9 +112,16 @@ def _tool_message(result: ToolResult) -> ToolMessage:
 
 
 def _history_messages(request: EngineRequest) -> list[BaseMessage]:
+    return context_messages(
+        [*request.history, UserHistoryTurn(request.user_input)],
+        request.instructions,
+    )
+
+
+def context_messages(history: list[HistoryTurn], instructions: str) -> list[BaseMessage]:
     messages: list[BaseMessage] = []
-    if request.instructions:
-        messages.append(SystemMessage(content=request.instructions))
+    if instructions:
+        messages.append(SystemMessage(content=instructions))
     pending_text = ""
     pending_calls: list[ToolCall] = []
     pending_assistant = False
@@ -128,7 +143,10 @@ def _history_messages(request: EngineRequest) -> list[BaseMessage]:
         pending_calls = []
         pending_assistant = False
 
-    for turn in request.history:
+    for turn in history:
+        if isinstance(turn, Tombstone):
+            flush_assistant()
+            messages.append(HumanMessage(content=memory_text(turn)))
         if isinstance(turn, UserHistoryTurn):
             flush_assistant()
             messages.append(HumanMessage(content=turn.text))
@@ -143,7 +161,6 @@ def _history_messages(request: EngineRequest) -> list[BaseMessage]:
             flush_assistant()
             messages.append(_tool_message(turn))
     flush_assistant()
-    messages.append(HumanMessage(content=request.user_input))
     return messages
 
 

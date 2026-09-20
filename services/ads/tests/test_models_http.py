@@ -63,6 +63,7 @@ def test_add_model_forwards_the_typed_bearer_once(
             "name": "qwen",
             "type": "openai-stream",
             "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
         },
@@ -75,6 +76,7 @@ def test_add_model_forwards_the_typed_bearer_once(
     assert preferences.writes[0].type == "openai-stream"
     assert preferences.writes[0].name == "qwen"
     assert preferences.writes[0].options.model_name == "glm-5.3"
+    assert preferences.writes[0].options.max_context_tokens == 32768
 
 
 def test_edit_without_a_bearer_patches_without_authentication(
@@ -89,6 +91,7 @@ def test_edit_without_a_bearer_patches_without_authentication(
             "description": "Renamed",
             "name": "gpt-test",
             "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://llm.example/v1",
             "bearer": "",
         },
@@ -202,7 +205,9 @@ def test_edit_selects_supported_invoke_name(
 ) -> None:
     model = preferences.seed()
     login(client)
-    response = client.patch(f"/settings/models/{model.id}", data={"model-name": name})
+    response = client.patch(
+        f"/settings/models/{model.id}", data={"model-name": name, "max_context_tokens": 32768}
+    )
     assert response.status_code == 200
     assert preferences.models[model.id].options.model_name == name
     assert preferences.models[model.id].name == "gpt-test"
@@ -226,13 +231,17 @@ def test_model_forms_reject_unsupported_names(
             "name": "label",
             "type": "openai-stream",
             "model-name": name,
+            "max_context_tokens": "32768",
             "url": "https://llm.example/v1",
             "bearer": "sk-new",
         },
     )
     assert response.status_code == 400
     assert (
-        client.patch(f"/settings/models/{model.id}", data={"model-name": name}).status_code == 400
+        client.patch(
+            f"/settings/models/{model.id}", data={"model-name": name, "max_context_tokens": 32768}
+        ).status_code
+        == 400
     )
     assert preferences.writes == []
     assert preferences.patches == []
@@ -256,6 +265,7 @@ def test_add_model_rejects_unknown_type(
             "name": "qwen",
             "type": "not-a-type",
             "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
         },

@@ -6,7 +6,14 @@ from sqlalchemy.orm import Session
 
 from ads.domain import part_from_stored, turns_from_entries, utc_now
 from ads.exceptions import InvalidInput, NotFound, SessionForbidden
-from ads.models import KIND_MESSAGE, ROLE_ASSISTANT, STATUS_FINISHED, ChatSession, SessionEntry
+from ads.models import (
+    KIND_MESSAGE,
+    KIND_TOMBSTONE,
+    ROLE_ASSISTANT,
+    STATUS_FINISHED,
+    ChatSession,
+    SessionEntry,
+)
 from ads.repository import (
     ProjectRepository,
     SessionEntryRepository,
@@ -108,8 +115,15 @@ class SessionService:
             live: list[PartView] = []
             run_view: RunView | None = None
             if run is not None and run.status != STATUS_FINISHED:
-                run_view = RunView(status=run.status, message_id=run.message_id)
+                run_view = RunView(
+                    status=run.status,
+                    message_id=run.message_id,
+                    total_context=run.total_context,
+                    used_context=run.used_context,
+                )
                 for delta in self._buffer.list_after(run.id, run.watermark):
+                    if delta.kind == KIND_TOMBSTONE:
+                        continue
                     live.append(
                         part_from_stored(
                             delta.kind,

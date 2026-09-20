@@ -29,6 +29,7 @@ def _view(info: ModelInfo) -> ModelView:
         type=info.type,
         url=info.url,
         model_name=info.options.model_name,
+        max_context_tokens=info.options.max_context_tokens,
     )
 
 
@@ -45,9 +46,11 @@ def _require_known_type(value: str, allowed: list[ModelTypeInfo]) -> OpenAiStrea
     return OPENAI_STREAM
 
 
-def _options(model_name: str) -> OpenAiStreamOptions:
+def _options(model_name: str, max_context_tokens: str) -> OpenAiStreamOptions:
     try:
-        return OpenAiStreamOptions(model_name=model_name)
+        return OpenAiStreamOptions(
+            model_name=model_name, max_context_tokens=int(max_context_tokens)
+        )
     except ValueError as exc:
         raise InvalidInput(str(exc)) from exc
 
@@ -89,6 +92,7 @@ class CatalogService:
         bearer: str,
         model_name: str,
         model_type: str,
+        max_context_tokens: str,
     ) -> ModelView:
         """The typed bearer is forwarded once and never echoed back."""
         allowed = await self.list_model_types()
@@ -101,7 +105,7 @@ class CatalogService:
                 authentication=OpenAiStreamAuthentication(
                     openai_bearer=OpenAiBearerToken(token=_require_text(bearer, "Bearer token")),
                 ),
-                options=_options(model_name),
+                options=_options(model_name, max_context_tokens),
             )
         )
         return _view(info)
@@ -116,6 +120,7 @@ class CatalogService:
         bearer: str | None,
         model_name: str | None,
         model_type: str | None,
+        max_context_tokens: str | None,
     ) -> ModelView:
         """An omitted or blank bearer patches without ``authentication``: the stored one stays."""
         authentication = None
@@ -124,8 +129,14 @@ class CatalogService:
                 openai_bearer=OpenAiBearerToken(token=bearer.strip()),
             )
         options = None
-        if model_name is not None:
-            options = _options(model_name)
+        if model_name is not None or max_context_tokens is not None:
+            current = await self._preferences.get_model(model_id)
+            options = _options(
+                model_name if model_name is not None else current.options.model_name,
+                max_context_tokens
+                if max_context_tokens is not None
+                else str(current.options.max_context_tokens),
+            )
         patch_type = None
         if model_type is not None and model_type.strip():
             allowed = await self.list_model_types()

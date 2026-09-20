@@ -82,7 +82,7 @@ class FakePreferences:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token=bearer),
             ),
-            options=OpenAiStreamOptions(model_name="glm-5.3"),
+            options=OpenAiStreamOptions(model_name="glm-5.3", max_context_tokens=32768),
         )
         self.models[model_id] = info
         return info

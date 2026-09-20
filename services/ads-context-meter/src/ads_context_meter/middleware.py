@@ -79,7 +79,7 @@ class JwtCallerMiddleware:
             await _send_json(send, 401, "unauthorized")
             return
         try:
-            ensure_caller(context, "ads-engine")
+            ensure_caller(context, "ads-engine", "ads-context-compactor")
         except AccessDenied:
             await _send_json(send, 403, "forbidden")
             return

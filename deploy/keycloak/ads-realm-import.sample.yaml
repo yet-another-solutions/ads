@@ -16,6 +16,8 @@ spec:
       secret: {name: ads-realm-client-secrets, key: ads-preferences}
     ADS_CONTEXT_METER_CLIENT_SECRET:
       secret: {name: ads-realm-client-secrets, key: ads-context-meter}
+    ADS_CONTEXT_COMPACTOR_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-context-compactor}
     ADS_SANDBOX_MCP_CLIENT_SECRET:
       secret: {name: ads-realm-client-secrets, key: ads-sandbox-mcp}
     ADS_SANDBOX_MANAGER_CLIENT_SECRET:
@@ -384,6 +386,18 @@ spec:
               included.client.audience: ads-context-meter
               access.token.claim: "true"
               id.token.claim: "false"
+      - name: ads-engine-context-compactor
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: audience-ads-context-compactor
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-context-compactor
+              access.token.claim: "true"
+              id.token.claim: "false"
     # Built-in definitions above are explicit because this import also declares
     # a custom optional scope. No client receives offline_access.
     clients:
@@ -447,7 +461,7 @@ spec:
         # Keycloak automatically attaches service_account for enabled service
         # accounts; its session-note mappers add metadata, not roles/audiences.
         defaultClientScopes: [basic, service_account]
-        optionalClientScopes: [ads-engine-ack, ads-engine-context-meter]
+        optionalClientScopes: [ads-engine-ack, ads-engine-context-meter, ads-engine-context-compactor]
         attributes:
           standard.token.exchange.enabled: "true"
           standard.token.exchange.enableRefreshRequestedTokenType: SAME_SESSION
@@ -467,6 +481,30 @@ spec:
             protocolMapper: oidc-audience-mapper
             config:
               included.client.audience: ads-sandbox-mcp
+              access.token.claim: "true"
+              id.token.claim: "false"
+      - clientId: ads-context-compactor
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_CONTEXT_COMPACTOR_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
+          - name: audience-ads-context-meter
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-context-meter
               access.token.claim: "true"
               id.token.claim: "false"
       - clientId: ads-context-meter

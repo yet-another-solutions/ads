@@ -9,6 +9,7 @@ import msgspec
 
 from ads.models import (
     KIND_MESSAGE,
+    KIND_TOMBSTONE,
     KIND_TOOL_CALL,
     KIND_TOOL_RESULT,
     ROLE_ASSISTANT,
@@ -18,9 +19,11 @@ from ads.models import (
 )
 from ads.repository import SessionEntryRepository
 from ads.views import PartView, TurnView
+from ads_commons.context_compactor import active_context
 from ads_commons.engine import (
     AssistantHistoryTurn,
     HistoryTurn,
+    Tombstone,
     ToolCall,
     ToolResult,
     UserHistoryTurn,
@@ -159,9 +162,22 @@ def part_from_stored(kind: str, text: str, role: str | None, *, live: bool = Fal
     return PartView(kind=kind, role=role, text=text, live=live)
 
 
-def history_from_entries(entries: list[SessionEntry]) -> list[HistoryTurn]:
+def history_from_entries(
+    entries: list[SessionEntry],
+    committed_tombstone_id: uuid.UUID | None = None,
+) -> list[HistoryTurn]:
     """Committed message and tool rows. Reasoning is never history."""
     turns: list[HistoryTurn] = []
+    if committed_tombstone_id is not None:
+        position = next(
+            (i for i, item in enumerate(entries) if item.id == committed_tombstone_id),
+            None,
+        )
+        if position is None or entries[position].kind != KIND_TOMBSTONE:
+            raise RuntimeError("invalid committed memory pointer")
+        memory = msgspec.json.decode(entries[position].text, type=Tombstone)
+        turns.extend(active_context(memory))
+        entries = entries[position + 1 :]
     for entry in entries:
         if entry.kind == KIND_MESSAGE:
             if entry.role == ROLE_USER:
@@ -198,6 +214,8 @@ def turns_from_entries(
         pending_id = None
 
     for entry in entries:
+        if entry.kind == KIND_TOMBSTONE:
+            continue
         if entry.kind == KIND_MESSAGE and entry.role == ROLE_USER:
             flush()
             turns.append(

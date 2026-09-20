@@ -6,6 +6,14 @@
      data-session-id="{{ session.id if session else '' }}"
      data-inflight="{{ 'true' if inflight else 'false' }}">
   <p class="composer-warn" id="composer-warn" aria-live="polite">{{ warn or '' }}</p>
+  {% if inflight and transcript.run.total_context and transcript.run.used_context is not none %}
+  {% set pressure = 100 * transcript.run.used_context / transcript.run.total_context %}
+  <div class="context-pressure" aria-live="polite">
+    <label for="context-pressure">Context {{ "%.1f"|format(pressure) }}%</label>
+    <meter id="context-pressure" min="0" max="{{ transcript.run.total_context }}"
+           value="{{ transcript.run.used_context }}">{{ "%.1f"|format(pressure) }}%</meter>
+  </div>
+  {% endif %}
   {% if session %}
   <form class="composer" method="post"
         action="/projects/{{ session.project_id }}/sessions/{{ session.id }}/messages"

@@ -7,6 +7,6 @@ class ContextMeterService:
     def __init__(self, counter: TokenCounter) -> None:
         self._counter = counter
 
-    @require_caller("ads-engine")
+    @require_caller("ads-engine", "ads-context-compactor")
     async def meter(self, body: MeterRequest) -> MeterResponse:
         return MeterResponse(estimated_tokens=await self._counter.count(body))

@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Values.namespace }}
+  name: {{ include "ads.fullname" . }}-context-compactor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-context-compactor
+data:
+  ADS_CONTEXT_COMPACTOR_METER_URL: {{ printf "https://%s-context-meter:%v/meter" (include "ads.fullname" .) .Values.contextMeter.service.port | quote }}
+  ADS_CONTEXT_COMPACTOR_RESERVED_OUTPUT_TOKENS: {{ .Values.contextCompactor.reservedOutputTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_SUMMARY_CAP_TOKENS: {{ .Values.contextCompactor.summaryCapTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.contextCompactor.keycloak.wellKnownUrl | quote }}
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_ISSUER: {{ .Values.contextCompactor.keycloak.issuer | quote }}
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_AUDIENCE: {{ .Values.contextCompactor.keycloak.audience | quote }}
+  ADS_CONTEXT_COMPACTOR_BIND_HOST: "0.0.0.0"
+  ADS_CONTEXT_COMPACTOR_PORT: {{ .Values.contextCompactor.service.port | quote }}
+  ADS_CONTEXT_COMPACTOR_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_CONTEXT_COMPACTOR_TLS_KEY_PATH: "/certs/tls.key"
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_CONTEXT_COMPACTOR_TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}

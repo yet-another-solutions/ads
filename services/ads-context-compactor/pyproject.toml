@@ -1,0 +1,27 @@
+[project]
+name = "ads-context-compactor"
+version = "0.0.1"
+description = "Authenticated ADS context compaction"
+requires-python = ">=3.12"
+dependencies = [
+    "ads-commons",
+    "ads-commons-beans",
+    "ads-context-runtime",
+    "dishka==1.10.1",
+    "litestar==2.24.0",
+    "msgspec==0.21.1",
+    "langgraph==1.0.5",
+    "langsmith==0.12.4",
+    "uvicorn[standard]==0.52.4",
+]
+[project.scripts]
+ads-context-compactor = "ads_context_compactor.__main__:main"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[tool.hatch.build.targets.wheel]
+packages = ["src/ads_context_compactor"]
+[tool.deptry.package_module_name_map]
+ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
+ads-context-runtime = ["ads_context_runtime"]
