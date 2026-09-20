@@ -22,7 +22,7 @@ from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.mcp_client import SandboxClient, SandboxTools
 from ads_engine.mcp_credentials import ExecutionFailed, RunCredentials, TokenPair
 from ads_sandbox_mcp.http import AdsAuthentication
-from engine_fakes import make_request
+from engine_fakes import FakeContextFactory, make_request
 from sandbox_support import Keys
 
 
@@ -55,6 +55,236 @@ class FakeModel:
             if isinstance(item, Exception):
                 raise item
             yield item
+
+
+@pytest.mark.parametrize("boundary", ["admission", "tool_result", "terminal"])
+def test_compaction_precedes_continuation_and_terminal_finish(sdk_harness, boundary):
+    import msgspec
+
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import AssistantHistoryTurn, Tombstone, ToolResult, UserHistoryTurn
+    from ads_context_runtime.frames import RecallRuntime
+    from ads_engine.context import EngineContext
+    from context_fakes import Model, memory, model_settings
+
+    h = sdk_harness
+    compacted = []
+
+    class Clients:
+        async def meter(self, body):
+            has_memory = any(isinstance(m, Tombstone) for m in body.messages)
+            high = boundary == "admission"
+            high |= boundary == "tool_result" and any(
+                isinstance(m, ToolResult) for m in body.messages
+            )
+            high |= boundary == "terminal" and any(
+                isinstance(m, AssistantHistoryTurn) and m.text == "done" for m in body.messages
+            )
+            return MeterResponse(100 if has_memory or not high else 900)
+
+        async def compact(self, body):
+            compacted.append(list(body.messages))
+            return memory(body.messages[:2], body.messages[2:])
+
+    clients = Clients()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request, clients, RecallRuntime(clients, Model(), request.model, reserve=100)
+            )
+
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory(), h.settings)
+    request = msgspec.structs.replace(
+        make_request(),
+        model=model_settings(1000),
+        history=[UserHistoryTurn("old question"), AssistantHistoryTurn("old answer")],
+    )
+    FakeModel.scripts = (
+        [[native()], [AIMessageChunk(content="done")]]
+        if boundary == "tool_result"
+        else [[AIMessageChunk(content="done")]]
+    )
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(request))
+
+    deltas = asyncio.run(scenario())
+    assert len(compacted) == 1
+    positions = [i for i, d in enumerate(deltas) if d.kind in {"compaction", "tombstone"}]
+    assert len(positions) == 3 and positions == list(range(positions[0], positions[0] + 3))
+    start, end, tombstone = [deltas[i] for i in positions]
+    assert start.compaction.type == "compacting_context" and start.tombstone is None
+    assert end.compaction.type == "compacted_context" and end.tombstone is None
+    assert tombstone.tombstone is not None and tombstone.compaction is None
+    assert start.pressure.used_context == 900 and tombstone.pressure.used_context == 100
+    assert all(d.pressure is not None for d in deltas)
+    assert compacted[0].count(UserHistoryTurn(request.user_input)) == 1
+    if boundary == "terminal":
+        assert len(FakeModel.calls) == 1 and positions[-1] == len(deltas) - 1
+    elif boundary == "tool_result":
+        assert any(isinstance(m, ToolResult) for m in compacted[0])
+        assert positions[0] > next(i for i, d in enumerate(deltas) if d.kind == "tool_result")
+        assert str(tombstone.tombstone.memory_id) in str(FakeModel.calls[1])
+    else:
+        assert positions[0] == 0
+        assert str(tombstone.tombstone.memory_id) in str(FakeModel.calls[0])
+
+
+@pytest.mark.parametrize("waiting", ["compaction", "nested_recall"])
+@pytest.mark.parametrize("ending", ["finish", "abort", "error"])
+def test_pings_continue_during_context_waits_and_late_results_cannot_revive(
+    sdk_harness, store, jwt_verifier, access_token, waiting, ending
+):
+    import msgspec
+
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import (
+        Abort,
+        AckResponse,
+        AssistantHistoryTurn,
+        ErrorOutput,
+        Finish,
+        Ping,
+        Tombstone,
+        UserHistoryTurn,
+        authorization_headers,
+        encode_abort,
+        encode_ack_response,
+        encode_request,
+    )
+    from ads_context_runtime.frames import ContextFailure, RecallRuntime
+    from ads_engine.context import EngineContext
+    from ads_engine.listener import EngineListener
+    from ads_engine.service import EngineService
+    from context_fakes import Meter, memory, model_settings
+    from engine_fakes import FakeTokenExchange, RecordingPublisher
+
+    h = sdk_harness
+    entered, released, pinged, closed = (asyncio.Event() for _ in range(4))
+    inner = memory([UserHistoryTurn("original evidence")])
+    outer = memory([UserHistoryTurn("recent evidence")], inner=inner)
+
+    async def wait_for_release():
+        entered.set()
+        try:
+            await released.wait()
+            if ending == "error":
+                raise ContextFailure("context_fixture_failure")
+        finally:
+            closed.set()
+
+    class Clients(Meter):
+        async def meter(self, body):
+            if waiting == "compaction":
+                return MeterResponse(
+                    100 if any(isinstance(m, Tombstone) for m in body.messages) else 9000
+                )
+            return await super().meter(body)
+
+        async def compact(self, body):
+            await wait_for_release()
+            return memory(body.messages[:2], body.messages[2:])
+
+    class RecallModel:
+        calls = 0
+
+        async def invoke(self, messages, tools, cap):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(
+                    "",
+                    tool_calls=[
+                        {
+                            "id": "inner",
+                            "name": "memory_recall",
+                            "args": {"memory_id": str(inner.memory_id), "question": "original?"},
+                        }
+                    ],
+                )
+            if self.calls == 2:
+                await wait_for_release()
+            return AIMessage("original evidence")
+
+    clients, model = Clients(), RecallModel()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request, clients, RecallRuntime(clients, model, request.model, reserve=100)
+            )
+
+    class Publisher(RecordingPublisher):
+        async def publish(self, session_id, message, headers=None):
+            await super().publish(session_id, message, headers)
+            if isinstance(message, Ping) and entered.is_set():
+                pinged.set()
+
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory(), h.settings)
+    settings = replace(h.settings, ping_interval_seconds=0.01)
+    publisher = Publisher()
+    service = EngineService(store, publisher, streamer, FakeTokenExchange(), settings)
+    listener = EngineListener(service, publisher, jwt_verifier, settings)
+    request = msgspec.structs.replace(
+        make_request(authorization_token=access_token),
+        model=model_settings(),
+        history=[outer]
+        if waiting == "nested_recall"
+        else [UserHistoryTurn("old"), AssistantHistoryTurn("old answer")],
+    )
+    FakeModel.scripts = (
+        [
+            [
+                AIMessageChunk(
+                    "",
+                    tool_call_chunks=[
+                        {
+                            "id": "outer",
+                            "name": "memory_recall",
+                            "index": 0,
+                            "args": json.dumps(
+                                {"memory_id": str(outer.memory_id), "question": "old?"}
+                            ),
+                        }
+                    ],
+                )
+            ],
+            [AIMessageChunk(content="done")],
+        ]
+        if waiting == "nested_recall"
+        else [[AIMessageChunk(content="done")]]
+    )
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            task = asyncio.create_task(listener.on_message(encode_request(request)))
+            await asyncio.wait_for(publisher.acknowledged.wait(), 2)
+            await listener.on_message(
+                encode_ack_response(AckResponse(request.session_id, request.message_id)),
+                headers=authorization_headers(access_token),
+            )
+            await asyncio.wait_for(entered.wait(), 2)
+            await asyncio.wait_for(pinged.wait(), 2)
+            assert not any(isinstance(x, Finish) for x in publisher.messages)
+            if ending == "abort":
+                await listener.on_message(
+                    encode_abort(Abort(request.session_id, request.message_id)),
+                    headers=authorization_headers(access_token),
+                )
+            else:
+                released.set()
+            await asyncio.wait_for(task, 3)
+            assert closed.is_set()
+            snapshot = list(publisher.messages)
+            released.set()
+            await asyncio.sleep(0.03)
+            assert publisher.messages == snapshot
+
+    asyncio.run(scenario())
+    assert sum(isinstance(x, Finish) for x in publisher.messages) == (ending == "finish")
+    assert sum(isinstance(x, ErrorOutput) for x in publisher.messages) == (ending == "error")
+    assert not h.executions and h.run._pair is None
 
 
 class FakeCredentials:
@@ -173,11 +403,14 @@ def sdk_harness(settings, monkeypatch):
         cancelled=cancelled,
         behavior=behavior,
         schemas=schemas,
-        streamer=ExecutorChatStreamer(credentials, SandboxClient(settings), settings),
+        streamer=ExecutorChatStreamer(
+            credentials, SandboxClient(settings), FakeContextFactory(), settings
+        ),
     )
 
 
-def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
+@pytest.mark.parametrize("model_name", ["glm-5.3", "glm-5.2"])
+def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness, model_name):
     h = sdk_harness
     FakeModel.scripts = [
         [native()],
@@ -187,7 +420,9 @@ def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
 
     async def scenario():
         async with h.sdk.session_manager.run():
-            output = [delta async for delta in h.streamer.stream(make_request())]
+            output = [
+                delta async for delta in h.streamer.stream(make_request(model_name=model_name))
+            ]
         assert [d.kind for d in output] == [
             "tool_call",
             "tool_result",
@@ -209,6 +444,7 @@ def test_real_sdk_sequential_shell_python_streams_tool_primitives(sdk_harness):
         assert output[5].text == "done"
 
     asyncio.run(scenario())
+    assert FakeModel.options[0]["model"] == model_name
     assert [e[0] for e in h.executions] == ["exec_shell", "exec_python"]
     assert h.executions[0][1] == {"command": "printf hi"}
     assert h.executions[1][1] == {"code": "print(1)"}
@@ -280,14 +516,18 @@ def test_text_and_thinker_suggestions_are_never_dispatched(sdk_harness, response
     assert h.executions == []
 
 
-def test_tool_free_thinker_has_no_callable_tools_or_mcp(sdk_harness, monkeypatch):
+@pytest.mark.parametrize("model_name", ["glm-5.3", "glm-5.2"])
+def test_tool_free_thinker_has_no_callable_tools_or_mcp(sdk_harness, monkeypatch, model_name):
     h = sdk_harness
     monkeypatch.setattr("ads_engine.chat.AdsChatOpenAI", FakeModel)
     FakeModel.scripts = [[native(), AIMessageChunk(content="proposal")]]
-    output = asyncio.run(_collect(LangChainChatStreamer().stream(make_request())))
+    output = asyncio.run(
+        _collect(LangChainChatStreamer().stream(make_request(model_name=model_name)))
+    )
     assert [d.text for d in output] == ["proposal"]
     assert FakeModel.bindings == [] and h.requests == [] and h.credentials.opens == []
     assert "tools" not in FakeModel.options[0] and "authorization" not in str(FakeModel.calls)
+    assert FakeModel.options[0]["model"] == model_name
 
 
 @pytest.mark.parametrize("invalid", ["missing", "extra_argument", "duplicates"])
@@ -328,8 +568,13 @@ def test_sdk_timeout_does_not_replay_tool(sdk_harness):
     h = sdk_harness
     h.behavior.block = True
     FakeModel.scripts = [[native()]]
-    impatient = replace(h.settings, mcp_timeout_seconds=0.05)
-    streamer = ExecutorChatStreamer(h.credentials, SandboxClient(impatient), impatient)
+    impatient = replace(h.settings, mcp_timeout_seconds=0.5)
+    streamer = ExecutorChatStreamer(
+        h.credentials,
+        SandboxClient(impatient),
+        FakeContextFactory(),
+        impatient,
+    )
 
     async def scenario():
         async with h.sdk.session_manager.run():
@@ -563,7 +808,9 @@ def _guarded(settings):
 
 def _streamer_through_guardrail(h, runs):
     guarded = _guarded(h.settings)
-    return ExecutorChatStreamer(h.credentials, SandboxClient(guarded), guarded, runs)
+    return ExecutorChatStreamer(
+        h.credentials, SandboxClient(guarded), FakeContextFactory(), guarded, runs
+    )
 
 
 def test_every_sandbox_request_names_the_conversation_run(sdk_harness):

@@ -87,6 +87,11 @@ class Settings:
     mcp_url: str = "https://ads-sandbox-mcp:8443/mcp"
     mcp_timeout_seconds: float = 120
     max_tool_calls: int = 32
+    context_meter_url: str = "https://ads-context-meter:8443/meter"
+    context_compactor_url: str = "https://ads-context-compactor:8443/compact"
+    context_trigger: int = 80
+    context_target: int = 50
+    context_output_reserve: int = 1024
 
     def __post_init__(self) -> None:
         url = urlsplit(self.mcp_url)
@@ -102,6 +107,19 @@ class Settings:
             raise ValueError("ADS_ENGINE_MCP_TIMEOUT_SECONDS must be positive and finite")
         if self.max_tool_calls < 1:
             raise ValueError("ADS_ENGINE_MAX_TOOL_CALLS must be positive")
+        for endpoint in (self.context_meter_url, self.context_compactor_url):
+            parsed = urlsplit(endpoint)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError("context service URLs must be HTTPS without credentials")
+        if not 0 < self.context_target < self.context_trigger < 100:
+            raise ValueError("context target must be below trigger, both percentages")
+        if self.context_output_reserve <= 0:
+            raise ValueError("context output reserve must be positive")
 
 
 def _guardrail_settings() -> GuardrailSettings | None:
@@ -174,4 +192,13 @@ def load_settings() -> Settings:
         mcp_url=_env("ADS_ENGINE_MCP_URL", "https://ads-sandbox-mcp:8443/mcp"),
         mcp_timeout_seconds=float(_env("ADS_ENGINE_MCP_TIMEOUT_SECONDS", "120")),
         max_tool_calls=int(_env("ADS_ENGINE_MAX_TOOL_CALLS", "32")),
+        context_meter_url=_env(
+            "ADS_ENGINE_CONTEXT_METER_URL", "https://ads-context-meter:8443/meter"
+        ),
+        context_compactor_url=_env(
+            "ADS_ENGINE_CONTEXT_COMPACTOR_URL", "https://ads-context-compactor:8443/compact"
+        ),
+        context_trigger=int(_env("ADS_ENGINE_CONTEXT_TRIGGER", "80")),
+        context_target=int(_env("ADS_ENGINE_CONTEXT_TARGET", "50")),
+        context_output_reserve=int(_env("ADS_ENGINE_CONTEXT_OUTPUT_RESERVE", "1024")),
     )

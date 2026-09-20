@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 import msgspec
 
+from ads_commons.model_catalog import require_supported_model_name
+
 AUTHORIZATION_HEADER = "authorization"
 
 
@@ -21,6 +23,12 @@ class OpenAiStreamAuthentication(msgspec.Struct, frozen=True):
 
 class OpenAiStreamOptions(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     model_name: str = msgspec.field(name="model-name")
+    max_context_tokens: int
+
+    def __post_init__(self) -> None:
+        require_supported_model_name("openai-stream", self.model_name)
+        if type(self.max_context_tokens) is not int or self.max_context_tokens <= 0:
+            raise ValueError("max_context_tokens must be a positive integer")
 
 
 class OpenAiStreamModel(msgspec.Struct, frozen=True, tag="openai-stream", tag_field="type"):
@@ -48,6 +56,11 @@ class ToolCall(msgspec.Struct, frozen=True, omit_defaults=True, tag="tool_call",
     metadata: dict[str, Any] = {}
 
 
+class TaskTransition(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    task_id: str
+    state: Literal["created", "succeeded", "failed", "cancelled"]
+
+
 class ToolResult(
     msgspec.Struct, frozen=True, omit_defaults=True, tag="tool_result", tag_field="type"
 ):
@@ -56,9 +69,37 @@ class ToolResult(
     status: Literal["success", "error"]
     content: Any
     metadata: dict[str, Any] = {}
+    task_transitions: list[TaskTransition] = []
 
 
-HistoryTurn = UserHistoryTurn | AssistantHistoryTurn | ToolCall | ToolResult
+class Tombstone(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag="tombstone", tag_field="type"
+):
+    memory_id: uuid.UUID
+    summarization: str
+    messages: list[UserHistoryTurn | AssistantHistoryTurn | ToolCall | ToolResult]
+    remaining_messages: list[UserHistoryTurn | AssistantHistoryTurn | ToolCall | ToolResult]
+    inner_tombstone: Tombstone | None = None
+
+    def __post_init__(self) -> None:
+        if not self.summarization.strip():
+            raise ValueError("summarization must be nonempty")
+
+
+HistoryTurn = UserHistoryTurn | AssistantHistoryTurn | ToolCall | ToolResult | Tombstone
+
+
+class ContextPressure(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    total_context: int
+    used_context: int
+
+    def __post_init__(self) -> None:
+        if self.total_context <= 0 or self.used_context < 0:
+            raise ValueError("invalid context pressure")
+
+
+class CompactionStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    type: Literal["compacting_context", "compacted_context"]
 
 
 class EngineRequest(msgspec.Struct, frozen=True, tag="request", tag_field="type"):
@@ -121,6 +162,10 @@ class PartialResponse(
     notice: Notice | None = None
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None
+    compaction: CompactionStatus | None = None
+    tombstone: Tombstone | None = None
+    pressure: ContextPressure | None = None
+    message_id: uuid.UUID | None = None
 
 
 class Ping(msgspec.Struct, frozen=True, tag="ping", tag_field="type"):
@@ -130,6 +175,7 @@ class Ping(msgspec.Struct, frozen=True, tag="ping", tag_field="type"):
 class Finish(msgspec.Struct, frozen=True, tag="finish", tag_field="type"):
     session_id: uuid.UUID
     last_order: int
+    message_id: uuid.UUID | None = None
 
 
 class ErrorOutput(msgspec.Struct, frozen=True, tag="error", tag_field="type"):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from litestar.testing import TestClient
 
@@ -11,7 +12,7 @@ MODEL_BODY = {
     "type": "openai-stream",
     "url": "https://example.invalid/v1",
     "authentication": {"openai-bearer": {"token": "sk-secret"}},
-    "options": {"model-name": "gpt-4o"},
+    "options": {"model-name": "glm-5.3", "max_context_tokens": 32768},
 }
 
 
@@ -78,7 +79,7 @@ def test_info_returns_invoke_fields_and_bearer(client: TestClient, user_token: s
     assert payload["type"] == "openai-stream"
     assert payload["url"] == "https://example.invalid/v1"
     assert payload["authentication"] == {"openai-bearer": {"token": "sk-secret"}}
-    assert payload["options"] == {"model-name": "gpt-4o"}
+    assert payload["options"] == {"model-name": "glm-5.3", "max_context_tokens": 32768}
 
 
 def test_post_rejects_id_user_id_and_wrong_type(client: TestClient, user_token: str) -> None:
@@ -98,7 +99,7 @@ def test_post_rejects_empty_fields(client: TestClient, user_token: str) -> None:
         **MODEL_BODY,
         "authentication": {"openai-bearer": {"token": ""}},
     }
-    empty_model_name = {**MODEL_BODY, "options": {"model-name": "  "}}
+    empty_model_name = {**MODEL_BODY, "options": {"model-name": "  ", "max_context_tokens": 32768}}
     headers = _auth(user_token)
     assert client.post("/v1/models", json=empty_name, headers=headers).status_code == 400
     assert client.post("/v1/models", json=empty_token, headers=headers).status_code == 400
@@ -127,7 +128,7 @@ def test_patch_label_keeps_bearer_and_auth_replaces(client: TestClient, user_tok
     assert rotated.status_code == 200
     assert rotated.json()["url"] == "https://example.invalid/v2"
     assert rotated.json()["authentication"]["openai-bearer"]["token"] == "sk-new"
-    assert rotated.json()["options"] == {"model-name": "gpt-4o"}
+    assert rotated.json()["options"] == {"model-name": "glm-5.3", "max_context_tokens": 32768}
 
 
 def test_patch_options_replaces_model_name(client: TestClient, user_token: str) -> None:
@@ -135,11 +136,11 @@ def test_patch_options_replaces_model_name(client: TestClient, user_token: str) 
     model_id = created.json()["id"]
     patched = client.patch(
         f"/v1/models/{model_id}",
-        json={"options": {"model-name": "gpt-4o-mini"}},
+        json={"options": {"model-name": "glm-5.2", "max_context_tokens": 32768}},
         headers=_auth(user_token),
     )
     assert patched.status_code == 200
-    assert patched.json()["options"] == {"model-name": "gpt-4o-mini"}
+    assert patched.json()["options"] == {"model-name": "glm-5.2", "max_context_tokens": 32768}
     assert patched.json()["name"] == "gpt-4o"
     assert patched.json()["authentication"]["openai-bearer"]["token"] == "sk-secret"
 
@@ -194,7 +195,30 @@ def test_list_and_logs_omit_bearer(client: TestClient, user_token: str, capsys: 
 def test_model_types_is_openai_stream(client: TestClient, user_token: str) -> None:
     response = client.get("/v1/model-types", headers=_auth(user_token))
     assert response.status_code == 200
-    assert response.json() == {"types": ["openai-stream"]}
+    assert response.json() == {
+        "types": [{"type": "openai-stream", "names": ["glm-5.3", "glm-5.2"]}]
+    }
+
+
+@pytest.mark.parametrize("name", ["unknown", "", "GLM-5.3", " glm-5.3 "])
+def test_unsupported_names_cannot_be_created_or_patched(
+    client: TestClient, user_token: str, name: str
+) -> None:
+    headers = _auth(user_token)
+    unsupported = {**MODEL_BODY, "options": {"model-name": name, "max_context_tokens": 32768}}
+    assert client.post("/v1/models", json=unsupported, headers=headers).status_code == 400
+    assert client.get("/v1/models", headers=headers).json() == {"models": []}
+    created = client.post("/v1/models", json=MODEL_BODY, headers=headers)
+    model_id = created.json()["id"]
+    assert (
+        client.patch(
+            f"/v1/models/{model_id}",
+            json={"options": {"model-name": name, "max_context_tokens": 32768}},
+            headers=headers,
+        ).status_code
+        == 400
+    )
+    assert client.get(f"/v1/models/{model_id}", headers=headers).json() == created.json()
 
 
 def test_model_types_without_bearer_is_401(client: TestClient) -> None:

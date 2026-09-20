@@ -17,6 +17,9 @@ dependencies = [
     "ads-mcp-probe",
     "ads-policy",
     "ads-preferences",
+    "ads-context-meter",
+    "ads-context-compactor",
+    "ads-context-runtime",
     "ads-sandbox-mcp",
     "ads-sandbox-ipc",
     "ads-sandbox-manager",
@@ -27,7 +30,6 @@ package = false
 add-bounds = "exact"
 constraint-dependencies = []
 override-dependencies = []
-exclude-dependencies = []
 
 [tool.uv.workspace]
 members = [
@@ -43,6 +45,9 @@ members = [
     "services/ads-mcp-probe",
     "services/ads-policy",
     "services/ads-preferences",
+    "services/ads-context-meter",
+    "services/ads-context-compactor",
+    "libraries/ads-context-runtime",
     "services/ads-sandbox-mcp",
     "services/ads-sandbox-ipc",
     "services/ads-sandbox-manager",
@@ -61,6 +66,9 @@ ads-injection-scanner = { workspace = true }
 ads-mcp-probe = { workspace = true }
 ads-policy = { workspace = true }
 ads-preferences = { workspace = true }
+ads-context-meter = { workspace = true }
+ads-context-compactor = { workspace = true }
+ads-context-runtime = { workspace = true }
 ads-sandbox-mcp = { workspace = true }
 ads-sandbox-ipc = { workspace = true }
 ads-sandbox-manager = { workspace = true }
@@ -115,6 +123,12 @@ src = [
     "services/ads-policy/tests",
     "services/ads-preferences/src",
     "services/ads-preferences/tests",
+    "services/ads-context-meter/src",
+    "services/ads-context-compactor/src",
+    "libraries/ads-context-runtime/src",
+    "services/ads-context-meter/tests",
+    "services/ads-context-compactor/tests",
+    "libraries/ads-context-runtime/tests",
     "services/ads-sandbox-mcp/src",
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/src",
@@ -131,7 +145,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-mcp-probe/src:services/ads-policy/src:services/ads-preferences/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-mcp-probe/src:services/ads-policy/src:services/ads-preferences/src:services/ads-context-meter/src:services/ads-context-compactor/src:libraries/ads-context-runtime/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
 packages = [
     "ads_commons",
     "ads_commons_beans",
@@ -145,6 +159,9 @@ packages = [
     "ads_mcp_probe",
     "ads_policy",
     "ads_preferences",
+    "ads_context_meter",
+    "ads_context_compactor",
+    "ads_context_runtime",
     "ads_sandbox_mcp",
     "ads_sandbox_ipc",
     "ads_sandbox_manager",
@@ -175,6 +192,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = [
+    "libraries/ads-context-runtime/tests",
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/tests",
 ]
@@ -193,6 +211,9 @@ testpaths = [
     "services/ads-mcp-probe/tests",
     "services/ads-policy/tests",
     "services/ads-preferences/tests",
+    "services/ads-context-meter/tests",
+    "services/ads-context-compactor/tests",
+    "libraries/ads-context-runtime/tests",
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/tests",
     "services/ads-sandbox-manager/tests",
@@ -210,6 +231,9 @@ known_first_party = [
   "ads_commons",
   "ads_commons_beans",
   "ads_commons_schema",
+  "ads_context_compactor",
+  "ads_context_meter",
+  "ads_context_runtime",
   "ads_egress_controlplane",
   "ads_engine",
   "ads_guardrail",

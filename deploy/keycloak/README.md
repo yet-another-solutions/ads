@@ -21,7 +21,7 @@ slice plan, reconcile an existing realm, deploy ADS, or contain lab secrets.
    The published UUIDs are examples, not live IDs. Do not reuse them for multiple
    realms on one Keycloak instance.
 4. Provision Secret `ads-realm-client-secrets` in the **Keycloak namespace**, with
-   keys `ads`, `ads-engine`, `ads-preferences`, `ads-sandbox-mcp`,
+   keys `ads`, `ads-engine`, `ads-preferences`, `ads-context-meter`, `ads-context-compactor`, `ads-sandbox-mcp`,
    `ads-sandbox-manager`, and `ads-sandbox-ipc`. Supply independently generated
    confidential-client secrets using your approved secret-management process.
    There is intentionally no Secret manifest with example passwords.
@@ -52,13 +52,19 @@ replacement can expose the import Job's environment variables.
 | Client | Browser code flow | STE V2 | Access-token audiences |
 | --- | --- | --- | --- |
 | `ads` | Yes | Yes | `ads`, `ads-engine`, `ads-preferences` |
-| `ads-engine` | No | Yes | Default: `ads-sandbox-mcp`; optional `ads-engine-ack` scope: `ads` |
+| `ads-engine` | No | Yes | Default: `ads-sandbox-mcp`; optional `ads-engine-ack`: `ads`; optional `ads-engine-context-meter`: `ads-context-meter`; optional `ads-engine-context-compactor`: `ads-context-compactor` |
 | `ads-preferences` | No | No | `ads-preferences` |
+| `ads-context-meter` | No | No | None; inbound resource server only |
+| `ads-context-compactor` | No | Yes | `ads-context-meter`; caller-only internal REST |
 | `ads-sandbox-mcp` | No | Yes | `ads-sandbox-manager` |
 | `ads-sandbox-manager` | No | Yes | `ads-sandbox-manager`, `ads-sandbox-ipc`, `ads-sandbox-mcp` |
 | `ads-sandbox-ipc` | No | Yes | `ads-sandbox-manager` |
 
-All six clients are confidential with service accounts. Direct/password and
+All eight clients are confidential; only `ads-context-meter` has no service account.
+The meter has no role scope mappings and requires `azp=ads-engine` or
+`azp=ads-context-compactor` after
+normal JWT validation for `aud=ads-context-meter`. It does not need its client
+secret in the running service. Direct/password and
 implicit grants are disabled. Access tokens have a 300-second lifespan, preserving
 the sandbox's greater-than-120-second requirement. The browser gets normal
 session-bound refresh tokens; no client is assigned `offline_access`.
@@ -106,7 +112,11 @@ direct realm-role mapper, `fullScopeAllowed=false`, and explicit `user` role
 scope mapping. It has no default `roles`, audience-resolve, service-account role,
 offline, or broad client-role mapper. The separate `ads-engine-ack` optional
 scope adds only `ads`; engine ACK STE explicitly requests it, while MCP STE never
-does. Do not attach that scope as default or request it for the MCP refresh pair.
+does. The additional `ads-engine-context-meter` optional scope adds only
+`ads-context-meter` and is requested only by fresh access-only meter STE calls.
+The `ads-engine-context-compactor` optional scope similarly adds only
+`ads-context-compactor` for the engine's fresh compactor REST hop.
+Do not attach any of these scopes as default or request them for the MCP refresh pair.
 Because declaring custom scopes suppresses automatic built-in scope creation on
 realm import, the sample also includes explicit Keycloak 26.7.2 definitions for
 `basic`, `roles`, `profile`, `email`, and `service_account`, exported without IDs
@@ -123,7 +133,8 @@ resources from `spec.realm` in the sample:
    match. On that client, `PUT /clients/{id}` the existing representation with
    `fullScopeAllowed=false` and the sample engine attributes merged into
    `attributes`. Preserve its live secret, UUID and other unrelated fields.
-2. `GET /client-scopes`: upsert the `ads-engine-ack` scope with exactly the sample
+2. `GET /client-scopes`: upsert both `ads-engine-ack` and `ads-engine-context-meter`
+   optional scopes with exactly each sample
    scope's mapper/config via `POST /client-scopes` or `PUT /client-scopes/{id}`;
    reconcile its `/protocol-mappers/models` explicitly as well. This shared
    scope must have no additional mappers or role mappings.
@@ -132,6 +143,7 @@ resources from `spec.realm` in the sample:
    `PUT .../{scope-id}`. Inspect both scopes for unexpected custom role or
    audience mappers before proceeding; do not silently modify a shared scope.
 4. Reconcile `/clients/{id}/optional-client-scopes` to only `ads-engine-ack`
+   and `ads-engine-context-meter`
    using the same GET/DELETE/PUT membership endpoints.
 5. Reconcile `/clients/{id}/protocol-mappers/models` to the two engine mappers
    in the sample: `audience-ads-sandbox-mcp` and `scoped-user-role`. Delete superseded
@@ -146,7 +158,10 @@ resources from `spec.realm` in the sample:
    unchanged UUID subject, `azp=ads-engine`, singleton `ads-sandbox-mcp` audience,
    only `user` realm role, no `resource_access`, and usable expiry. Separately
    verify ACK STE with `scope=ads-engine-ack` targets `ads` and still supports the
-   return ADS→engine exchange. Fail deployment on any extra authority.
+   return ADS→engine exchange. Provision the `ads-context-meter` resource client
+   from the sample and separately verify access-only meter STE with
+   `scope=ads-engine-context-meter`, `audience=ads-context-meter` and `azp=ads-engine`.
+   No user role is required at the meter. Fail deployment on any extra authority.
 
 All paths after the first step are relative to `/admin/realms/{realm}`.
 Review deletions against the protected export before approval; never print

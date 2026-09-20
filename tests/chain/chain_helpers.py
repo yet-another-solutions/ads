@@ -103,7 +103,7 @@ def engine_request(
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test")
             ),
-            options=OpenAiStreamOptions(model_name="scripted"),
+            options=OpenAiStreamOptions(model_name="glm-5.3", max_context_tokens=32768),
         ),
         authorization=Authorization(token=user_token),
     )

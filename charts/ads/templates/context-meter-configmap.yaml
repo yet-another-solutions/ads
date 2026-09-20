@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Values.namespace }}
+  name: {{ include "ads.fullname" . }}-context-meter
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-context-meter
+data:
+  ADS_CONTEXT_METER_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.contextMeter.keycloak.wellKnownUrl | quote }}
+  ADS_CONTEXT_METER_KEYCLOAK_ISSUER: {{ .Values.contextMeter.keycloak.issuer | quote }}
+  ADS_CONTEXT_METER_KEYCLOAK_AUDIENCE: {{ .Values.contextMeter.keycloak.audience | quote }}
+  ADS_CONTEXT_METER_BIND_HOST: "0.0.0.0"
+  ADS_CONTEXT_METER_PORT: {{ .Values.contextMeter.service.port | quote }}
+  ADS_CONTEXT_METER_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_CONTEXT_METER_TLS_KEY_PATH: "/certs/tls.key"
+  {{- if .Values.tls.caBundle.secretName }}
+  ADS_CONTEXT_METER_TLS_CA_BUNDLE: "/ca/ca.crt"
+  {{- end }}

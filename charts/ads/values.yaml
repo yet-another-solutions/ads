@@ -237,6 +237,45 @@ preferences:
   tls:
     serviceSecretName: ""
 
+contextMeter:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-context-meter
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-context-meter
+  tls:
+    serviceSecretName: ""
+
+contextCompactor:
+  replicaCount: 1
+  image:
+    repository: ghcr.io/yet-another-solutions/ads-context-compactor
+    tag: "0.0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 8080
+  keycloak:
+    wellKnownUrl: https://keycloak.interlab/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.interlab/realms/ads
+    audience: ads-context-compactor
+    existingSecret: ads-context-compactor-keycloak
+    secretKey: client-secret
+  tls:
+    serviceSecretName: ""
+  reservedOutputTokens: 1024
+  summaryCapTokens: 2048
+
+context:
+  triggerPercentage: 80
+  targetPercentage: 50
+  reservedOutputTokens: 1024
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -394,7 +433,6 @@ sandbox:
     pollSeconds: 10
     controlSeconds: 10
     bakeSeconds: 1800
-    nodeFreshSeconds: 600
     createSeconds: 120
     readySeconds: 120
     barrierSeconds: 3

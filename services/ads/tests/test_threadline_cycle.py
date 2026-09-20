@@ -79,7 +79,7 @@ def test_golden_cycle_then_next_send(
     assert request.instructions == ""
     assert request.authorization.token == "ste-ads-engine"
     assert request.model.authentication.openai_bearer.token == STORED_BEARER
-    assert request.model.options.model_name == "gpt-test"
+    assert request.model.options.model_name == "glm-5.3"
     assert request.model.url == "https://llm.example/v1"
 
     run = run_of(db_engine, session_id)
@@ -399,7 +399,16 @@ def test_finish_without_last_order_breaks_immediately(
     project, session_id, model_id = opened
     send(client, project, session_id, "hi", model_id)
     emit(app, PartialResponse(session_id=session_id, order=0, message=AssistantMessage(text="a")))
-    emit_raw(app, b'{"type": "finish", "session_id": "' + str(session_id).encode() + b'"}')
+    emit_raw(
+        app,
+        msgspec.json.encode(
+            {
+                "type": "finish",
+                "session_id": session_id,
+                "message_id": kafka.requests[-1].message_id,
+            }
+        ),
+    )
     assert runs_of(db_engine, session_id) == []
     assert kafka.aborts == []
 

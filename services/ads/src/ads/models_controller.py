@@ -46,6 +46,7 @@ class ModelsController(AuthenticatedController):
             data.get("bearer", ""),
             data.get("model-name", ""),
             data.get("type", ""),
+            data.get("max_context_tokens", ""),
         )
         return await _dialog(self.catalog, created)
 
@@ -63,6 +64,7 @@ class ModelsController(AuthenticatedController):
             data.get("bearer"),
             data.get("model-name"),
             data.get("type"),
+            data.get("max_context_tokens"),
         )
         return await _dialog(self.catalog, edited)
 

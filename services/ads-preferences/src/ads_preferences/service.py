@@ -9,6 +9,7 @@ import msgspec
 from sqlalchemy.orm import Session
 
 from ads_commons.engine import OpenAiStreamAuthentication, OpenAiStreamOptions
+from ads_commons.model_catalog import SUPPORTED_MODEL_TYPES
 from ads_commons.preferences import (
     ModelInfo,
     ModelList,
@@ -45,7 +46,14 @@ def _authentication_from_row(payload: dict[str, Any]) -> OpenAiStreamAuthenticat
 
 def _options_payload(options: OpenAiStreamOptions) -> dict[str, Any]:
     model_name = _require_text(options.model_name, "options.model-name")
-    payload = json.loads(msgspec.json.encode(OpenAiStreamOptions(model_name=model_name)))
+    payload = json.loads(
+        msgspec.json.encode(
+            OpenAiStreamOptions(
+                model_name=model_name,
+                max_context_tokens=options.max_context_tokens,
+            )
+        )
+    )
     if not isinstance(payload, dict):
         raise InvalidModel("options is invalid")
     return payload
@@ -75,7 +83,7 @@ class PreferencesService:
 
     @require_role("user")
     async def list_model_types(self) -> ModelTypeList:
-        return ModelTypeList(types=["openai-stream"])
+        return ModelTypeList(types=list(SUPPORTED_MODEL_TYPES))
 
     @require_role("user")
     async def list_models(self) -> ModelList:

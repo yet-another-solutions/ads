@@ -46,7 +46,6 @@ def test_invalid_or_overflow_size_fails(value):
         ("database_url", "sqlite:///:memory:"),
         ("poll_seconds", 0),
         ("control_seconds", float("inf")),
-        ("node_fresh_seconds", float("nan")),
         ("ready_seconds", 0),
         ("barrier_seconds", float("nan")),
         ("idle_seconds", 0),

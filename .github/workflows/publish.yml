@@ -121,6 +121,16 @@ jobs:
             context: .
             platforms: linux/amd64,linux/arm64
             pack: "false"
+          - image: ads-context-meter
+            file: services/ads-context-meter/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
+          - image: ads-context-compactor
+            file: services/ads-context-compactor/Containerfile
+            context: .
+            platforms: linux/amd64,linux/arm64
+            pack: "false"
           - image: ads-sandbox-golden
             file: services/ads-sandbox-golden/Containerfile
             context: services/ads-sandbox-golden

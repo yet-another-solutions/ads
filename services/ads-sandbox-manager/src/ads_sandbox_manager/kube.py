@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Protocol, cast
 
 from kubernetes import client, config
@@ -195,7 +195,7 @@ class KubeClient:
                     for pod in consumers
                 )
             )
-        nodes: dict[str, datetime] = {}
+        nodes: set[str] = set()
         owned = False
         for pod in consumers:
             status = pod.get("status", {})
@@ -216,8 +216,7 @@ class KubeClient:
             node = pod.get("spec", {}).get("nodeName")
             if not node or not ended or any(t is None for t in ended):
                 return False
-            finished = max(t for t in ended if t is not None)
-            nodes[node] = max(nodes.get(node, finished), finished)
+            nodes.add(node)
             if (
                 job is not None
                 and any(
@@ -249,21 +248,10 @@ class KubeClient:
         ):
             return False
         unique = f"kubernetes.io/csi/{csi['driver']}^{csi['volumeHandle']}"
-        now = datetime.now(UTC)
-        for node_name, finished in nodes.items():
+        for node_name in nodes:
             node = await self._call(self.core.read_node, node_name)
             status = node.get("status", {})
-            ready: Object = next(
-                (c for c in status.get("conditions", []) if c.get("type") == "Ready"), {}
-            )
-            heartbeat = timestamp(ready.get("lastHeartbeatTime"))
-            if (
-                ready.get("status") != "True"
-                or heartbeat is None
-                or heartbeat < finished
-                or not 0 <= (now - heartbeat).total_seconds() <= self.settings.node_fresh_seconds
-            ):
-                return False
+            # Node Ready and heartbeat freshness are not storage-release signals.
             if unique in status.get("volumesInUse", []) or any(
                 v.get("name") == unique for v in status.get("volumesAttached", [])
             ):

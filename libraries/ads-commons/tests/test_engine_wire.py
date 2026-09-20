@@ -4,6 +4,7 @@ import json
 import uuid
 
 import msgspec
+import pytest
 
 from ads_commons.engine import (
     AUTHORIZATION_HEADER,
@@ -58,7 +59,7 @@ def test_request_round_trip() -> None:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="gpt-test"),
+            options=OpenAiStreamOptions(model_name="glm-5.3", max_context_tokens=32768),
         ),
         authorization=Authorization(token="jwt-token"),
     )
@@ -67,7 +68,7 @@ def test_request_round_trip() -> None:
     assert payload["type"] == "request"
     assert payload["model"]["type"] == "openai-stream"
     assert payload["model"]["authentication"]["openai-bearer"] == {"token": "sk-test"}
-    assert payload["model"]["options"] == {"model-name": "gpt-test"}
+    assert payload["model"]["options"] == {"model-name": "glm-5.3", "max_context_tokens": 32768}
     assert "name" not in payload["model"]
     assert payload["history"][0] == {"type": "user", "text": "hi"}
     decoded = decode_request(raw)
@@ -110,6 +111,7 @@ def test_output_tags() -> None:
         "type": "finish",
         "session_id": str(SESSION),
         "last_order": 1,
+        "message_id": None,
     }
     partial = json.loads(
         encode_output(
@@ -157,6 +159,17 @@ def test_a_notice_travels_as_its_own_part() -> None:
     assert isinstance(decoded, PartialResponse)
     assert decoded.notice is not None
     assert decoded.notice.kind == "prompt-injection"
+
+
+@pytest.mark.parametrize("capacity", [0, -1, True, "32768", 2.5, None])
+def test_capacity_is_required_positive_integer(capacity):
+    with pytest.raises((ValueError, TypeError, msgspec.ValidationError)):
+        msgspec.json.decode(
+            msgspec.json.encode({"model-name": "glm-5.3", "max_context_tokens": capacity}),
+            type=OpenAiStreamOptions,
+        )
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(b'{"model-name":"glm-5.3"}', type=OpenAiStreamOptions)
 
 
 def test_peek_request_ids_ignores_incomplete_payloads() -> None:
@@ -228,7 +241,7 @@ def test_tool_primitives_round_trip_in_partial_and_history() -> None:
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="gpt-test"),
+            options=OpenAiStreamOptions(model_name="glm-5.3", max_context_tokens=32768),
         ),
         authorization=Authorization(token="jwt-token"),
     )

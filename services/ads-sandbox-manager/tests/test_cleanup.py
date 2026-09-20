@@ -1,6 +1,5 @@
 # ruff: noqa: F811
 from copy import deepcopy
-from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -37,9 +36,6 @@ def cleanup(api):
 
 def release(api):
     api.core.list_namespaced_pod.return_value["items"] = []
-    api.core.read_node.return_value["status"]["conditions"][0]["lastHeartbeatTime"] = datetime.now(
-        UTC
-    ).isoformat()
 
 
 async def test_capture_persistable_positive_release_and_reclaim_contract(api, cleanup):
@@ -58,16 +54,28 @@ async def test_capture_persistable_positive_release_and_reclaim_contract(api, cl
 
 
 @pytest.mark.parametrize("csi", [False, True])
-async def test_slow_node_report_waits_without_weakening_release_evidence(api, cleanup, csi):
+@pytest.mark.parametrize(
+    "conditions",
+    [
+        [],
+        [{"type": "Ready", "status": "False"}],
+        [{"type": "Ready", "status": "Unknown"}],
+        [{"type": "Ready", "status": "True"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2000-01-01T00:00:00Z"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2999-01-01T00:00:00Z"}],
+        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "invalid"}],
+    ],
+)
+async def test_node_health_does_not_gate_resource_release(api, cleanup, csi, conditions):
     adapter, original = cleanup
     if not csi:
         del api.core.read_persistent_volume.return_value["spec"]["csi"]
     captured = await adapter.capture(original)
-    api.core.list_namespaced_pod.return_value["items"] = []
-    # Ready is true and recent, but its report predates capture. No lease or
-    # elapsed cleanup deadline can substitute for a subsequent node observation.
+    api.core.read_node.return_value["status"]["conditions"] = conditions
+    # A live consumer still blocks, regardless of Node health.
     assert not await adapter.released(captured)
     release(api)
+    # No later Ready heartbeat is needed, including for persisted old targets.
     assert await adapter.released(captured)
     if csi:
         api.core.read_node.return_value["status"]["volumesInUse"] = [captured["volume_key"]]
@@ -76,20 +84,14 @@ async def test_slow_node_report_waits_without_weakening_release_evidence(api, cl
 
 @pytest.mark.parametrize(
     "broken",
-    ["node", "heartbeat", "inuse", "attached", "attachment", "missing-nodes", "not-captured"],
+    ["inuse", "attached", "attachment", "missing-nodes", "not-captured"],
 )
 async def test_release_fails_closed_for_incomplete_or_negative_evidence(api, cleanup, broken):
     adapter, original = cleanup
     captured = await adapter.capture(original)
     release(api)
     status = api.core.read_node.return_value["status"]
-    if broken == "node":
-        status["conditions"][0]["status"] = "Unknown"
-    elif broken == "heartbeat":
-        status["conditions"][0]["lastHeartbeatTime"] = (
-            datetime.now(UTC) - timedelta(hours=1)
-        ).isoformat()
-    elif broken == "inuse":
+    if broken == "inuse":
         status["volumesInUse"] = [captured["volume_key"]]
     elif broken == "attached":
         status["volumesAttached"] = [{"name": captured["volume_key"]}]

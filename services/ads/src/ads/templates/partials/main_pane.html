@@ -25,6 +25,8 @@
       <p class="notice" role="status">{{ part.text }}</p>
       {% elif part.kind == 'tool_call' or part.kind == 'tool_result' %}
       {% include 'partials/tool_part.html' %}
+      {% elif part.kind == 'compacting_context' or part.kind == 'compacted_context' %}
+      <p class="context-status" role="status">{{ part.text }}</p>
       {% elif part.role == 'user' %}
       <p class="user">{{ part.text }}</p>
       {% else %}

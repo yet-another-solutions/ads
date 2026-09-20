@@ -18,6 +18,7 @@ from ads.live import LiveHub
 from ads.models import (
     KIND_MESSAGE,
     KIND_REASONING,
+    KIND_TOMBSTONE,
     ROLE_ASSISTANT,
     STATUS_FINISHED,
     STATUS_FINISHING,
@@ -34,7 +35,7 @@ from ads.repository import (
     SessionRunRepository,
 )
 from ads.tokens import TokenAuthenticator, TokenMinter
-from ads_commons.engine import Abort, AckResponse
+from ads_commons.engine import Abort, AckResponse, ContextPressure
 from ads_commons.security import (
     AccessDenied,
     InvalidAccessToken,
@@ -122,13 +123,15 @@ class EngineOutputService:
         order: int,
         kind: str,
         text: str,
+        pressure: ContextPressure | None = None,
+        message_id: uuid.UUID | None = None,
     ) -> None:
         session = self._session_factory()
         notify = False
         try:
             with session.begin():
                 run = _in_flight(session, session_id)
-                if run is None:
+                if run is None or (message_id is not None and run.message_id != message_id):
                     return
                 if order < 0:
                     return
@@ -142,7 +145,16 @@ class EngineOutputService:
                         order=order,
                     )
                     return
-                buffer.insert(SessionRunBuffer(run_id=run.id, order_no=order, kind=kind, text=text))
+                buffer.insert(
+                    SessionRunBuffer(
+                        run_id=run.id,
+                        order_no=order,
+                        kind=kind,
+                        text=text,
+                        total_context=pressure.total_context if pressure else None,
+                        used_context=pressure.used_context if pressure else None,
+                    )
+                )
                 now = utc_now()
                 run.last_event_at = now
                 run.updated_at = now
@@ -167,14 +179,19 @@ class EngineOutputService:
         finally:
             session.close()
 
-    async def finish(self, session_id: uuid.UUID, last_order: int | None) -> None:
+    async def finish(
+        self,
+        session_id: uuid.UUID,
+        last_order: int | None,
+        message_id: uuid.UUID | None = None,
+    ) -> None:
         session = self._session_factory()
         broken = False
         notify = False
         try:
             with session.begin():
                 run = _in_flight(session, session_id)
-                if run is None:
+                if run is None or (message_id is not None and run.message_id != message_id):
                     return
                 now = utc_now()
                 run.last_event_at = now
@@ -193,8 +210,7 @@ class EngineOutputService:
                     if run.last_order is None:
                         run.last_order = last_order
                     if run.watermark >= run.last_order:
-                        run.status = STATUS_FINISHED
-                        run.finish_at = None
+                        self._finish_run(session, run)
                     elif run.status != STATUS_FINISHING:
                         run.status = STATUS_FINISHING
                         run.finish_at = now
@@ -210,7 +226,7 @@ class EngineOutputService:
         try:
             with session.begin():
                 run = _in_flight(session, session_id)
-                if run is None:
+                if run is None or run.status == STATUS_FINISHED:
                     return
                 if run.message_id != message_id:
                     # Duplicate / rejected request id. The active run keeps going.
@@ -233,7 +249,7 @@ class EngineOutputService:
         try:
             with session.begin():
                 run = SessionRunRepository(session=session).get_run(run_id)
-                if run is None:
+                if run is None or run.status == STATUS_FINISHED:
                     return
                 session_id = run.session_id
                 message_id = run.message_id
@@ -301,11 +317,23 @@ class EngineOutputService:
             if delta is None:  # pragma: no cover - orders came from the same table
                 continue
             self._append_delta(entries, chat, run, delta, now)
+            if delta.total_context is not None and delta.used_context is not None:
+                run.total_context = delta.total_context
+                run.used_context = delta.used_context
         run.watermark = watermark
         run.updated_at = now
         if run.last_order is not None and run.watermark >= run.last_order:
-            run.status = STATUS_FINISHED
-            run.finish_at = None
+            self._finish_run(session, run)
+
+    def _finish_run(self, session: Session, run: SessionRun) -> None:
+        chat = SessionRepository(session=session).get_any(run.session_id)
+        if chat is not None and run.candidate_tombstone_id is not None:
+            chat.committed_tombstone_id = run.candidate_tombstone_id
+        run.status = STATUS_FINISHED
+        run.finish_at = None
+        run.total_context = None
+        run.used_context = None
+        self._subjects.forget(run.session_id)
 
     def _append_delta(
         self,
@@ -335,7 +363,7 @@ class EngineOutputService:
                 now=now,
             )
             return
-        append_entry(
+        entry = append_entry(
             entries,
             chat,
             kind=kind,
@@ -344,9 +372,13 @@ class EngineOutputService:
             run_id=run.id,
             now=now,
         )
+        if kind == KIND_TOMBSTONE:
+            run.candidate_tombstone_id = entry.id
 
     def _break_run(self, session: Session, run: SessionRun) -> None:
         """FK order with no ON DELETE: unlink, buffer, run, entries."""
+        if run.status == STATUS_FINISHED:
+            return
         entries = SessionEntryRepository(session=session)
         buffer = SessionRunBufferRepository(session=session)
         runs = SessionRunRepository(session=session)

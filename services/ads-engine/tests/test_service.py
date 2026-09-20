@@ -254,6 +254,27 @@ def test_garbage_authorization_is_error_without_ack(
     assert not any(isinstance(item, Acknowledge) for item in publisher.messages)
 
 
+def test_unsupported_model_name_is_error_before_ack_or_start(
+    store: ActiveSessionStore,
+    jwt_verifier: Any,
+    access_token: str,
+) -> None:
+    publisher = RecordingPublisher()
+    chat = ScriptedChat()
+    listener = _listener(store, publisher, jwt_verifier, chat=chat)
+    request = make_request(authorization_token=access_token)
+    payload = json.loads(encode_request(request))
+    payload["model"]["options"]["model-name"] = "unsupported"
+    _run(listener.on_message(json.dumps(payload).encode()))
+    assert len(publisher.messages) == 1
+    error = publisher.messages[0]
+    assert isinstance(error, ErrorOutput)
+    assert error.session_id == request.session_id
+    assert error.message_id == request.message_id
+    assert "unsupported model type/name" in error.text
+    assert chat.calls == 0
+
+
 def test_disallowed_azp_is_error_without_ack(
     store: ActiveSessionStore,
     jwt_verifier: Any,
@@ -436,15 +457,19 @@ def test_successful_chat_emits_ack_delta_partials_and_finish(
     )
     assert publisher.messages[1] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=0,
         reasoning=Reasoning(text="think"),
     )
     assert publisher.messages[2] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=1,
         message=AssistantMessage(text="answer"),
     )
-    assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
+    assert publisher.messages[3] == Finish(
+        session_id=request.session_id, last_order=1, message_id=request.message_id
+    )
     assert chat.calls == 1
     assert chat.requests[0].authorization.token == access_token
 
@@ -466,9 +491,14 @@ def test_a_notice_is_published_as_its_own_partial(
     request = make_request(authorization_token=access_token)
     _handle_accepted(listener, publisher, request, access_token)
     assert publisher.messages[1] == PartialResponse(
-        session_id=request.session_id, order=0, notice=notice
+        session_id=request.session_id,
+        order=0,
+        notice=notice,
+        message_id=request.message_id,
     )
-    assert publisher.messages[3] == Finish(session_id=request.session_id, last_order=1)
+    assert publisher.messages[3] == Finish(
+        session_id=request.session_id, last_order=1, message_id=request.message_id
+    )
 
 
 def test_successful_chat_emits_tool_call_and_result_partials(
@@ -496,16 +526,19 @@ def test_successful_chat_emits_tool_call_and_result_partials(
     _handle_accepted(listener, publisher, request, access_token)
     assert publisher.messages[1] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=0,
         tool_call=call,
     )
     assert publisher.messages[2] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=1,
         tool_result=result,
     )
     assert publisher.messages[3] == PartialResponse(
         session_id=request.session_id,
+        message_id=request.message_id,
         order=2,
         message=AssistantMessage(text="done"),
     )
@@ -523,7 +556,9 @@ def test_openai_retries_before_partial_then_succeeds(
     _handle_accepted(listener, publisher, request, access_token)
     assert chat.calls == 3
     finish = next(item for item in publisher.messages if isinstance(item, Finish))
-    assert finish == Finish(session_id=request.session_id, last_order=0)
+    assert finish == Finish(
+        session_id=request.session_id, last_order=0, message_id=request.message_id
+    )
 
 
 def test_openai_gives_up_after_three_failures_before_partial(
@@ -738,7 +773,9 @@ def test_duplicate_ack_response_after_start_is_ignored(
     _run(_body())
     assert chat.calls == 1
     finishes = [item for item in publisher.messages if isinstance(item, Finish)]
-    assert finishes == [Finish(session_id=request.session_id, last_order=0)]
+    assert finishes == [
+        Finish(session_id=request.session_id, last_order=0, message_id=request.message_id)
+    ]
     assert not any(isinstance(item, ErrorOutput) for item in publisher.messages)
 
 

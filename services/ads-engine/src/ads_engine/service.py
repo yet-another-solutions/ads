@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from contextlib import aclosing
 from typing import Any, Protocol
 
+import msgspec
 import structlog
 
 from ads_commons.engine import (
@@ -136,7 +137,11 @@ class EngineService:
                 await _cancel(ping_task)
                 await self._publisher.publish(
                     request.session_id,
-                    Finish(session_id=request.session_id, last_order=last_order),
+                    Finish(
+                        session_id=request.session_id,
+                        last_order=last_order,
+                        message_id=request.message_id,
+                    ),
                 )
                 log.info(
                     "finish_published",
@@ -207,7 +212,11 @@ class EngineService:
                         emitted_partial = True
                         await self._publisher.publish(
                             request.session_id,
-                            _partial(request.session_id, order, delta),
+                            msgspec.structs.replace(
+                                _partial(request.session_id, order, delta),
+                                pressure=delta.pressure,
+                                message_id=request.message_id,
+                            ),
                         )
                         order += 1
                 break
@@ -249,6 +258,10 @@ async def _cancel(task: asyncio.Task[None]) -> None:
 def _partial(session_id: uuid.UUID, order: int, delta: StreamDelta) -> PartialResponse:
     if delta.notice is not None:
         return PartialResponse(session_id=session_id, order=order, notice=delta.notice)
+    if delta.kind == "compaction":
+        return PartialResponse(session_id=session_id, order=order, compaction=delta.compaction)
+    if delta.kind == "tombstone":
+        return PartialResponse(session_id=session_id, order=order, tombstone=delta.tombstone)
     if delta.kind == "reasoning":
         return PartialResponse(
             session_id=session_id,

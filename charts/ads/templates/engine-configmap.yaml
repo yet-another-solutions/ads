@@ -7,6 +7,11 @@ metadata:
     {{- include "ads.labels" . | nindent 4 }}
     app.kubernetes.io/component: ads-engine
 data:
+  ADS_ENGINE_CONTEXT_METER_URL: {{ printf "https://%s-context-meter:%v/meter" (include "ads.fullname" .) .Values.contextMeter.service.port | quote }}
+  ADS_ENGINE_CONTEXT_COMPACTOR_URL: {{ printf "https://%s-context-compactor:%v/compact" (include "ads.fullname" .) .Values.contextCompactor.service.port | quote }}
+  ADS_ENGINE_CONTEXT_TRIGGER: {{ .Values.context.triggerPercentage | quote }}
+  ADS_ENGINE_CONTEXT_TARGET: {{ .Values.context.targetPercentage | quote }}
+  ADS_ENGINE_CONTEXT_OUTPUT_RESERVE: {{ .Values.context.reservedOutputTokens | quote }}
   ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.engine.kafka.bootstrapServers | quote }}
   ADS_ENGINE_REQUEST_TOPIC: {{ .Values.engine.kafka.requestTopic | quote }}
   ADS_ENGINE_OUTPUT_TOPIC: {{ .Values.engine.kafka.outputTopic | quote }}

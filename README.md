@@ -83,6 +83,31 @@ The governance services are HTTPS APIs behind a bearer token, reachable only fro
 
 All three take the same `ADS_TLS_*` and `ADS_BIND_HOST`/`ADS_PORT` as the ADS process.
 
+## Supported model names
+
+`ads_commons.model_catalog.SUPPORTED_MODEL_TYPES` is the system-owned catalog,
+not a user preference. Currently `openai-stream` supports `glm-5.3` and `glm-5.2`.
+Other services can import this catalog without importing an application module.
+
+Both authenticated discovery routes (`ads-preferences` `/v1/model-types` and
+`ads` `/settings/model-types`) return:
+
+```json
+{"types": [{"type": "openai-stream", "names": ["glm-5.3", "glm-5.2"]}]}
+```
+
+This replaces the former list of type strings. Settings renders type/name
+dropdowns from that response. The separate `name` field remains a user-defined
+catalog label; `options.model-name` is the exact provider invoke id. Shared
+`OpenAiStreamOptions` validates it on construction and wire decoding, so
+preferences writes and engine Kafka requests cannot introduce arbitrary names.
+Both engine paths pass the selected id unchanged to LangChain.
+
+Deploy commons consumers (`ads`, `ads-preferences`, and `ads-engine`) together
+for this contract change. Existing supported values need no data migration;
+unsupported stored invoke names are not silently remapped to another model and
+must be corrected explicitly before rollout.
+
 ## Tests
 
 The workspace declares public PyPI as its single default Python package index.

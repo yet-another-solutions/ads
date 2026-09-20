@@ -22,6 +22,7 @@ from ads_commons_beans import (
 )
 from ads_engine.chat import ChatStreamer
 from ads_engine.config import Settings
+from ads_engine.context import EngineContextFactory
 from ads_engine.executor import ExecutorChatStreamer
 from ads_engine.guardrail import ConversationRuns, GuardrailRuns
 from ads_engine.kafka import SeekToEndListener
@@ -81,6 +82,7 @@ class AppProvider(Provider):
 
     credentials = provide(McpCredentials, scope=Scope.APP)
     sandbox = provide(SandboxClient, scope=Scope.APP)
+    context = provide(EngineContextFactory, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def conversation_runs(

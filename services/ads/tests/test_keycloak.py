@@ -395,7 +395,14 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 jwt.PyJWKClient(jwks, ssl_context=verify),
             )
 
-        def exchange(caller: str, audience: str, subject: str, *, allowed: bool = True):
+        def exchange(
+            caller: str,
+            audience: str,
+            subject: str,
+            *,
+            allowed: bool = True,
+            has_user_role: bool = True,
+        ):
             result = token(
                 {
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -408,6 +415,10 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                     **(
                         {"scope": "ads-engine-ack"}
                         if caller == "ads-engine" and audience == "ads"
+                        else {"scope": "ads-engine-context-meter"}
+                        if caller == "ads-engine" and audience == "ads-context-meter"
+                        else {"scope": "ads-engine-context-compactor"}
+                        if caller == "ads-engine" and audience == "ads-context-compactor"
                         else {}
                     ),
                 },
@@ -423,7 +434,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
             assert context.user_id == UUID(user_id)
             ensure_caller(context, caller)
             assert claims["aud"] == audience or claims["aud"] == [audience]
-            assert "user" in claims["realm_access"]["roles"]
+            assert ("user" in claims.get("realm_access", {}).get("roles", [])) is has_user_role
             assert claims["exp"] - claims["iat"] > 120
             with pytest.raises(AccessDenied):
                 ensure_caller(context, "not-an-authorized-caller")
@@ -442,7 +453,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 for c in admin("GET", admin_path + "/clients")
                 if c["clientId"] in secrets
             }
-            assert len(clients) == 6
+            assert len(clients) == 8
             for name, client in clients.items():
                 assert client["directAccessGrantsEnabled"] is False
                 assert client["standardFlowEnabled"] == (name == "ads")
@@ -534,6 +545,8 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 current = exchange(caller, audience, current)
             exchange("ads-sandbox-ipc", "ads-sandbox-mcp", initial, allowed=False)
             exchange("ads-preferences", "ads", initial, allowed=False)
+            exchange("ads", "ads-context-meter", initial, allowed=False)
+            exchange("ads", "ads-context-compactor", initial, allowed=False)
             pair = token(
                 {
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -554,6 +567,8 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 assert set(claims["realm_access"]["roles"]) == {"user"}
                 assert not claims.get("resource_access")
                 assert "ads-engine-ack" not in claims.get("scope", "").split()
+                assert "ads-engine-context-meter" not in claims.get("scope", "").split()
+                assert "ads-engine-context-compactor" not in claims.get("scope", "").split()
                 assert claims["exp"] - claims["iat"] > 240
                 pair = token(
                     {
@@ -575,6 +590,37 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
             )
             claims = verifier("ads-sandbox-mcp").verified_claims(revoked["access_token"])
             assert "user" not in claims.get("realm_access", {}).get("roles", [])
+            roleless_engine = exchange("ads", "ads-engine", initial, has_user_role=False)
+            meter = exchange(
+                "ads-engine",
+                "ads-context-meter",
+                roleless_engine,
+                has_user_role=False,
+            )
+            meter_claims = verifier("ads-context-meter").verified_claims(meter)
+            assert "ads-engine-context-meter" in meter_claims.get("scope", "").split()
+            assert not meter_claims.get("resource_access")
+            compactor = exchange(
+                "ads-engine",
+                "ads-context-compactor",
+                roleless_engine,
+                has_user_role=False,
+            )
+            compactor_claims = verifier("ads-context-compactor").verified_claims(compactor)
+            assert "ads-engine-context-compactor" in compactor_claims.get("scope", "").split()
+            assert not compactor_claims.get("resource_access")
+            compactor_meter = exchange(
+                "ads-context-compactor",
+                "ads-context-meter",
+                compactor,
+                has_user_role=False,
+            )
+            assert (
+                not verifier("ads-context-meter")
+                .verified_claims(compactor_meter)
+                .get("resource_access")
+            )
+            exchange("ads-context-compactor", "ads-sandbox-mcp", compactor, allowed=False)
             token(
                 {
                     "grant_type": "password",

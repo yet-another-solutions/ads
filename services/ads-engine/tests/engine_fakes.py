@@ -31,12 +31,30 @@ ENGINE_SUBJECT = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 EXCHANGED_TOKEN = "exchanged-token"
 
 
+class FakeContextFactory:
+    """Deterministic low-pressure context; never contact a meter or provider."""
+
+    def open(self, request):
+        from ads_commons.context_meter import MeterResponse
+        from ads_context_runtime.frames import RecallRuntime
+        from ads_engine.context import EngineContext
+
+        class Meter:
+            async def meter(self, body):
+                return MeterResponse(len(body.messages) * 10)
+
+        meter = Meter()
+        recall = RecallRuntime(meter, None, request.model)
+        return EngineContext(request, meter, recall)
+
+
 def make_request(
     *,
     session_id: uuid.UUID | None = None,
     message_id: uuid.UUID | None = None,
     user_input: str = "hello",
     authorization_token: str = "jwt-not-verified",
+    model_name: str = "glm-5.3",
 ) -> EngineRequest:
     return EngineRequest(
         session_id=session_id or uuid.UUID("11111111-1111-1111-1111-111111111111"),
@@ -49,7 +67,7 @@ def make_request(
             authentication=OpenAiStreamAuthentication(
                 openai_bearer=OpenAiBearerToken(token="sk-test"),
             ),
-            options=OpenAiStreamOptions(model_name="test-model"),
+            options=OpenAiStreamOptions(model_name=model_name, max_context_tokens=32768),
         ),
         authorization=Authorization(token=authorization_token),
     )

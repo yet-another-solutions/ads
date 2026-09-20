@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from litestar.testing import TestClient
 
-from tests.threadline_fakes import STORED_BEARER, FakePreferences, login
+from tests.threadline_fakes import STORED_BEARER, FakePreferences, RecordingKafka, login
+from tests.threadline_flows import create_project, create_session, send
 
 
 def test_settings_dialog_never_renders_a_stored_bearer(
@@ -30,7 +32,12 @@ def test_settings_dialog_never_renders_a_stored_bearer(
     assert "+ Add model" not in selected.text
     assert "dlg-tabs" in selected.text
     assert ">Models</button>" in selected.text
-    assert 'name="model-name"' in selected.text
+    assert '<select name="model-name" required>' in selected.text
+    assert '<input name="model-name"' not in selected.text
+    assert 'value="glm-5.3" data-model-type="openai-stream" selected' in selected.text
+    assert 'value="glm-5.2" data-model-type="openai-stream"' in selected.text
+    assert '<select name="model-name" required>' in dialog.text
+    assert '<input name="model-name"' not in dialog.text
 
 
 def test_composer_options_never_contain_a_bearer(
@@ -55,7 +62,8 @@ def test_add_model_forwards_the_typed_bearer_once(
             "description": "Lab vLLM",
             "name": "qwen",
             "type": "openai-stream",
-            "model-name": "qwen-api",
+            "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
         },
@@ -67,7 +75,8 @@ def test_add_model_forwards_the_typed_bearer_once(
     assert preferences.writes[0].authentication.openai_bearer.token == "sk-typed-now"
     assert preferences.writes[0].type == "openai-stream"
     assert preferences.writes[0].name == "qwen"
-    assert preferences.writes[0].options.model_name == "qwen-api"
+    assert preferences.writes[0].options.model_name == "glm-5.3"
+    assert preferences.writes[0].options.max_context_tokens == 32768
 
 
 def test_edit_without_a_bearer_patches_without_authentication(
@@ -81,7 +90,8 @@ def test_edit_without_a_bearer_patches_without_authentication(
         data={
             "description": "Renamed",
             "name": "gpt-test",
-            "model-name": "gpt-test",
+            "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://llm.example/v1",
             "bearer": "",
         },
@@ -184,7 +194,58 @@ def test_model_types_endpoint_is_role_guarded(client: TestClient) -> None:
     login(client)
     response = client.get("/settings/model-types")
     assert response.status_code == 200
-    assert response.json() == {"types": ["openai-stream"]}
+    assert response.json() == {
+        "types": [{"type": "openai-stream", "names": ["glm-5.3", "glm-5.2"]}]
+    }
+
+
+@pytest.mark.parametrize("name", ["glm-5.3", "glm-5.2"])
+def test_edit_selects_supported_invoke_name(
+    client: TestClient, preferences: FakePreferences, kafka: RecordingKafka, name: str
+) -> None:
+    model = preferences.seed()
+    login(client)
+    response = client.patch(
+        f"/settings/models/{model.id}", data={"model-name": name, "max_context_tokens": 32768}
+    )
+    assert response.status_code == 200
+    assert preferences.models[model.id].options.model_name == name
+    assert preferences.models[model.id].name == "gpt-test"
+    assert f'value="{name}" data-model-type="openai-stream" selected' in response.text
+    project = create_project(client)
+    session = create_session(client, project)
+    assert send(client, project, session, "hello", model.id).status_code in (200, 201)
+    assert kafka.requests[0].model.options.model_name == name
+
+
+@pytest.mark.parametrize("name", ["not-supported", "", "GLM-5.3", " glm-5.3 "])
+def test_model_forms_reject_unsupported_names(
+    client: TestClient, preferences: FakePreferences, name: str
+) -> None:
+    model = preferences.seed()
+    login(client)
+    response = client.post(
+        "/settings/models",
+        data={
+            "description": "Work",
+            "name": "label",
+            "type": "openai-stream",
+            "model-name": name,
+            "max_context_tokens": "32768",
+            "url": "https://llm.example/v1",
+            "bearer": "sk-new",
+        },
+    )
+    assert response.status_code == 400
+    assert (
+        client.patch(
+            f"/settings/models/{model.id}", data={"model-name": name, "max_context_tokens": 32768}
+        ).status_code
+        == 400
+    )
+    assert preferences.writes == []
+    assert preferences.patches == []
+    assert preferences.models[model.id] == model
 
 
 def test_settings_list_requires_the_user_role(client: TestClient) -> None:
@@ -203,7 +264,8 @@ def test_add_model_rejects_unknown_type(
             "description": "Lab vLLM",
             "name": "qwen",
             "type": "not-a-type",
-            "model-name": "qwen-api",
+            "model-name": "glm-5.3",
+            "max_context_tokens": "32768",
             "url": "https://lab.example/v1",
             "bearer": "sk-typed-now",
         },
