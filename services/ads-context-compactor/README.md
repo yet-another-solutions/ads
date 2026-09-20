@@ -19,7 +19,8 @@ The model emits only
 `<ads-compaction-result>{"summary":"..."}</ads-compaction-result>`.
 The runtime parses the strict envelope, performs at most one tool-free format
 repair, verifies the summary cap, and builds the UUID, archive, inner memory and
-untouched remainder itself. A replacement must save at least 10% of its selected
+untouched remainder itself. A replacement must save at least the configured
+minimum reduction (10% by default) of its selected
 prefix, including visible memory metadata. Each accepted round resets to 50%.
 The target is a fixed percentage of model `max_context_tokens`, not a percentage
 of each successive working list. There is no whole-context final pass. An
@@ -38,10 +39,27 @@ state, archives, or persistent traces; tracing is disabled on these graphs.
 The existing meter counts ADS message lists only. System prompts, tool schemas
 and provider wrappers remain outside the estimate in v1. The runtime reserves
 output space, checks parent and child admission separately, retains frame
-exchanges, and disables both recall tools below 10% remaining capacity (exactly
-10% is allowed). Results are metered with their call/result metadata before
+exchanges, and disables both recall tools below the configured remaining-capacity
+floor (10% by default; equality is allowed). Results are metered with their call/result metadata before
 parent insertion. Numeric metadata can affect its own count; reported remaining
 capacity uses a conservative non-overstated fixed point.
+
+Provider-emitted batches in compactor/recursive frames are processed sequentially. All call envelopes and a
+prohibition result for every outstanding ID are budgeted before any child starts.
+Each accepted answer replaces its reserved result and is charged before dispatch
+of the next call. Once starvation is reached, all remaining IDs receive error
+results without execution, and subsequent finalization has no tools. If required
+error closures cannot fit, the invocation fails rather than truncating evidence.
+Only engine top-level calls/results are streamed into the session and UI.
+Nested frame exchanges remain local. Mixed top-level recall/MCP batches fail closed.
+
+Top-level engine recall does not use parent starvation admission. Its separately
+configured evidence worker returns a bounded result; the complete provider batch
+is preserved and context compaction runs at the next safe boundary before the
+engine model continues. A worker can prohibit its own nested tools without
+prohibiting the engine's top-level recall call. Worker source overflow remains a
+hard failure; an answer violating its visible-size limit twice returns
+`recall_answer_limit_exceeded`. Safe-split limitations remain unchanged.
 
 An oversized answer receives one shorter-answer retry outside parent context.
 If it still cannot fit, the runtime inserts a small prohibition result and forces
@@ -82,7 +100,14 @@ Engine settings:
 | `ADS_ENGINE_CONTEXT_COMPACTOR_URL` | `https://ads-context-compactor:8443/compact` |
 | `ADS_ENGINE_CONTEXT_TRIGGER` | `80` |
 | `ADS_ENGINE_CONTEXT_TARGET` | `50` |
-| `ADS_ENGINE_CONTEXT_OUTPUT_RESERVE` | `1024` |
+| `ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS` | `1024` |
+| `ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE` | `10` |
+| `ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS` | `1024` |
+| `ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE` | `10` |
 
 Compactor requires `ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL`,
 `ADS_CONTEXT_COMPACTOR_KEYCLOAK_ISSUER`,
@@ -92,6 +117,20 @@ Optional `ADS_CONTEXT_COMPACTOR_TLS_CA_BUNDLE` applies to outgoing HTTPS.
 `ADS_CONTEXT_COMPACTOR_METER_URL` defaults to
 `https://ads-context-meter:8443/meter`; `RESERVED_OUTPUT_TOKENS` and
 `SUMMARY_CAP_TOKENS` with the same prefix default to 1024 and 2048.
+Additional settings with that prefix are `COMPLETION_CAP_TOKENS` (2048),
+`STARVATION_PERCENTAGE` (10), `RECALL_RESERVED_OUTPUT_TOKENS` (1024),
+`RECALL_ANSWER_CAP_TOKENS` (1024), `RECALL_COMPLETION_CAP_TOKENS` (1024),
+`RECALL_STARVATION_PERCENTAGE` (10), and `MINIMUM_REDUCTION_PERCENTAGE` (10).
+Summary/repair frames use the compactor's own reserve and starvation floor;
+their recall workers use the separate `RECALL_*` values at every recursive depth.
+Engine top-level and engine inner recall have independent configurations and
+never supply defaults to compactor recall.
+Provider completion allowances include any provider-counted reasoning and are
+distinct from metered final-answer limits. They are clipped to metered available
+frame capacity including the output reserve. The one shorter-answer retry halves
+both its visible answer cap and provider allowance.
+See [Helm context budget settings](../../charts/ads/README.md#context-budget-settings)
+for the complete values mapping and validation.
 The model adapter has a 120-second invocation timeout and the REST client a
 300-second timeout, with no automatic model retry inside recall/compaction.
 

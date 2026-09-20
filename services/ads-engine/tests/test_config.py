@@ -35,6 +35,16 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setenv("ADS_ENGINE_MCP_URL", "https://sandbox.test/mcp")
     monkeypatch.setenv("ADS_ENGINE_MCP_TIMEOUT_SECONDS", "90")
     monkeypatch.setenv("ADS_ENGINE_MAX_TOOL_CALLS", "12")
+    monkeypatch.setenv("ADS_ENGINE_CONTEXT_TRIGGER", "75")
+    monkeypatch.setenv("ADS_ENGINE_CONTEXT_TARGET", "40")
+    monkeypatch.setenv("ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS", "512")
+    monkeypatch.setenv("ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS", "768")
+    monkeypatch.setenv("ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS", "8192")
+    monkeypatch.setenv("ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE", "15")
+    monkeypatch.setenv("ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS", "256")
+    monkeypatch.setenv("ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS", "1536")
+    monkeypatch.setenv("ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS", "4096")
+    monkeypatch.setenv("ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE", "20")
 
     settings = load_settings()
 
@@ -49,6 +59,26 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert settings.mcp_url == "https://sandbox.test/mcp"
     assert settings.mcp_timeout_seconds == 90
     assert settings.max_tool_calls == 12
+    assert settings.context_trigger == 75
+    assert settings.context_target == 40
+    assert settings.recall_reserve == 512
+    assert settings.recall_answer_cap == 768
+    assert settings.recall_completion_cap == 8192
+    assert settings.recall_starvation_percentage == 15
+
+    from ads_engine.context import EngineContextFactory
+    from engine_fakes import make_request
+
+    context = EngineContextFactory(replace(settings, tls_ca_bundle=None), None).open(make_request())
+    assert context.trigger == 75 and context.target == 40
+    assert context.recall.reserve == 512
+    assert context.recall.answer_cap == 768
+    assert context.recall.answer_completion_cap == 8192
+    assert context.recall.starvation_percentage == 15
+    assert context.recall.top_level_reserve == 256
+    assert context.recall.top_level_answer_cap == 1536
+    assert context.recall.top_level_completion_cap == 4096
+    assert context.recall.top_level_starvation_percentage == 20
 
 
 @pytest.mark.parametrize(
@@ -62,6 +92,18 @@ def test_load_settings_reads_environment(monkeypatch: pytest.MonkeyPatch, tmp_pa
         {"mcp_timeout_seconds": float("nan")},
         {"mcp_timeout_seconds": float("inf")},
         {"max_tool_calls": 0},
+        {"context_target": 80},
+        {"context_trigger": 100},
+        {"recall_reserve": 0},
+        {"recall_answer_cap": 0},
+        {"recall_completion_cap": -1},
+        {"recall_starvation_percentage": 0},
+        {"recall_starvation_percentage": 100},
+        {"top_level_recall_reserve": 0},
+        {"top_level_recall_answer_cap": 0},
+        {"top_level_recall_completion_cap": 0},
+        {"top_level_recall_starvation_percentage": 0},
+        {"top_level_recall_starvation_percentage": 100},
     ],
 )
 def test_mcp_settings_fail_closed(settings, changes):

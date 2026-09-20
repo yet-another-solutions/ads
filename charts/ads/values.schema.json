@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "definitions": {
+    "tokens": {"type": "integer", "minimum": 1},
+    "percentage": {"type": "integer", "minimum": 1, "maximum": 99},
+    "recall": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reservedOutputTokens": {"$ref": "#/definitions/tokens"},
+        "answerCapTokens": {"$ref": "#/definitions/tokens"},
+        "completionCapTokens": {"$ref": "#/definitions/tokens"},
+        "starvationPercentage": {"$ref": "#/definitions/percentage"}
+      }
+    }
+  },
+  "properties": {
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "triggerPercentage": {"$ref": "#/definitions/percentage"},
+        "targetPercentage": {"$ref": "#/definitions/percentage"}
+      }
+    },
+    "engine": {
+      "type": "object",
+      "properties": {
+        "recall": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "topLevel": {"$ref": "#/definitions/recall"},
+            "inner": {"$ref": "#/definitions/recall"}
+          }
+        }
+      }
+    },
+    "contextCompactor": {
+      "type": "object",
+      "properties": {
+        "reservedOutputTokens": {"$ref": "#/definitions/tokens"},
+        "summaryCapTokens": {"$ref": "#/definitions/tokens"},
+        "completionCapTokens": {"$ref": "#/definitions/tokens"},
+        "minimumReductionPercentage": {"$ref": "#/definitions/percentage"},
+        "starvationPercentage": {"$ref": "#/definitions/percentage"},
+        "recall": {"$ref": "#/definitions/recall"}
+      }
+    }
+  }
+}

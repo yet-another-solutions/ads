@@ -10,6 +10,13 @@ data:
   ADS_CONTEXT_COMPACTOR_METER_URL: {{ printf "https://%s-context-meter:%v/meter" (include "ads.fullname" .) .Values.contextMeter.service.port | quote }}
   ADS_CONTEXT_COMPACTOR_RESERVED_OUTPUT_TOKENS: {{ .Values.contextCompactor.reservedOutputTokens | quote }}
   ADS_CONTEXT_COMPACTOR_SUMMARY_CAP_TOKENS: {{ .Values.contextCompactor.summaryCapTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_COMPLETION_CAP_TOKENS: {{ .Values.contextCompactor.completionCapTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_MINIMUM_REDUCTION_PERCENTAGE: {{ .Values.contextCompactor.minimumReductionPercentage | quote }}
+  ADS_CONTEXT_COMPACTOR_STARVATION_PERCENTAGE: {{ .Values.contextCompactor.starvationPercentage | quote }}
+  ADS_CONTEXT_COMPACTOR_RECALL_RESERVED_OUTPUT_TOKENS: {{ .Values.contextCompactor.recall.reservedOutputTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_RECALL_STARVATION_PERCENTAGE: {{ .Values.contextCompactor.recall.starvationPercentage | quote }}
+  ADS_CONTEXT_COMPACTOR_RECALL_ANSWER_CAP_TOKENS: {{ .Values.contextCompactor.recall.answerCapTokens | quote }}
+  ADS_CONTEXT_COMPACTOR_RECALL_COMPLETION_CAP_TOKENS: {{ .Values.contextCompactor.recall.completionCapTokens | quote }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.contextCompactor.keycloak.wellKnownUrl | quote }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_ISSUER: {{ .Values.contextCompactor.keycloak.issuer | quote }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_AUDIENCE: {{ .Values.contextCompactor.keycloak.audience | quote }}

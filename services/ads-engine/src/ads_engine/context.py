@@ -32,7 +32,14 @@ class EngineContextFactory:
             clients,
             LangChainFrameModel(request.model),
             request.model,
-            reserve=s.context_output_reserve,
+            reserve=s.recall_reserve,
+            answer_cap=s.recall_answer_cap,
+            answer_completion_cap=s.recall_completion_cap,
+            starvation_percentage=s.recall_starvation_percentage,
+            top_level_reserve=s.top_level_recall_reserve,
+            top_level_answer_cap=s.top_level_recall_answer_cap,
+            top_level_completion_cap=s.top_level_recall_completion_cap,
+            top_level_starvation_percentage=s.top_level_recall_starvation_percentage,
         )
         return EngineContext(request, clients, runtime, s.context_trigger, s.context_target)
 

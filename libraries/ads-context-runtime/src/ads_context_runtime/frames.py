@@ -121,10 +121,30 @@ class Frame:
     cap: int
     exchanges: list[HistoryTurn] = field(default_factory=list)
     finalization_only: bool = False
+    completion_cap: int | None = None
+    pending_results: list[ToolResult] = field(default_factory=list)
+    reserve: int | None = None
+    starvation_percentage: int | None = None
 
     @property
     def charged(self) -> list[HistoryTurn]:
-        return [*self.source, UserHistoryTurn(self.question), *self.exchanges]
+        return [
+            *self.source,
+            UserHistoryTurn(self.question),
+            *self.exchanges,
+            *self.pending_results,
+        ]
+
+    def with_result(self, call: ToolCall, result: ToolResult) -> list[HistoryTurn]:
+        """Replace a reserved result, without charging an admitted call twice."""
+        if any(p.tool_call_id == call.id for p in self.pending_results):
+            return [
+                *self.source,
+                UserHistoryTurn(self.question),
+                *self.exchanges,
+                *(result if p.tool_call_id == call.id else p for p in self.pending_results),
+            ]
+        return [*self.charged, call, result]
 
     def provider_messages(self) -> list[BaseMessage]:
         evidence: list[dict[str, Any]] = []
@@ -146,18 +166,18 @@ class Frame:
         ]
         for item in self.exchanges:
             if isinstance(item, ToolCall):
-                messages.append(
-                    AIMessage(
-                        "",
-                        tool_calls=[
-                            {
-                                "id": item.id,
-                                "name": item.name,
-                                "args": item.arguments,
-                                "type": "tool_call",
-                            }
-                        ],
-                    )
+                # One provider assistant message owns the complete emitted batch.
+                previous = messages[-1]
+                if not isinstance(previous, AIMessage):
+                    previous = AIMessage("")
+                    messages.append(previous)
+                previous.tool_calls.append(
+                    {
+                        "id": item.id,
+                        "name": item.name,
+                        "args": item.arguments,
+                        "type": "tool_call",
+                    }
                 )
             elif isinstance(item, ToolResult):
                 messages.append(
@@ -188,12 +208,33 @@ class RecallRuntime:
         *,
         reserve: int = 1024,
         answer_cap: int = 1024,
+        answer_completion_cap: int = 1024,
+        starvation_percentage: int = 10,
+        top_level_reserve: int = 1024,
+        top_level_answer_cap: int = 1024,
+        top_level_completion_cap: int = 1024,
+        top_level_starvation_percentage: int = 10,
     ) -> None:
+        if (
+            reserve <= 0
+            or answer_cap <= 0
+            or answer_completion_cap <= 0
+            or not 0 < starvation_percentage < 100
+            or min(top_level_reserve, top_level_answer_cap, top_level_completion_cap) <= 0
+            or not 0 < top_level_starvation_percentage < 100
+        ):
+            raise ValueError("invalid recall budgets")
         self.meter = meter
         self.model = model
         self.settings = settings
         self.reserve = reserve
         self.answer_cap = answer_cap
+        self.answer_completion_cap = answer_completion_cap
+        self.starvation_percentage = starvation_percentage
+        self.top_level_reserve = top_level_reserve
+        self.top_level_answer_cap = top_level_answer_cap
+        self.top_level_completion_cap = top_level_completion_cap
+        self.top_level_starvation_percentage = top_level_starvation_percentage
 
     async def count(self, messages: list[HistoryTurn]) -> int:
         try:
@@ -209,17 +250,25 @@ class RecallRuntime:
             raise ContextFailure("invalid_meter_result")
         return result.estimated_tokens
 
-    async def remaining(self, messages: list[HistoryTurn]) -> dict[str, Any]:
+    async def remaining(
+        self, messages: list[HistoryTurn], frame: Frame | None = None
+    ) -> dict[str, Any]:
         total = self.settings.options.max_context_tokens
-        remaining = total - await self.count(messages) - self.reserve
+        reserve = frame.reserve if frame and frame.reserve is not None else self.reserve
+        threshold = (
+            frame.starvation_percentage
+            if frame and frame.starvation_percentage is not None
+            else self.starvation_percentage
+        )
+        remaining = total - await self.count(messages) - reserve
         return {
             "remaining_tokens": remaining,
             "remaining_percentage": 100 * remaining / total,
-            "recall_permitted": remaining * 10 >= total,
+            "recall_permitted": remaining * 100 >= total * threshold,
         }
 
     async def guard(self, frame: Frame) -> dict[str, Any]:
-        report = await self.remaining(frame.charged)
+        report = await self.remaining(frame.charged, frame)
         if report["remaining_tokens"] < 0:
             raise ContextOverflow("frame_source_overflow")
         if not report["recall_permitted"]:
@@ -244,7 +293,7 @@ class RecallRuntime:
                     **report,
                 },
             )
-            measured = await self.remaining([*frame.charged, call, result])
+            measured = await self.remaining(frame.with_result(call, result), frame)
             if measured["remaining_tokens"] < 0:
                 return None
             if report and measured["remaining_tokens"] >= report["remaining_tokens"]:
@@ -256,6 +305,51 @@ class RecallRuntime:
             report = measured
         raise ContextFailure("unstable_meter_result")
 
+    def visible_memory(self, context: list[HistoryTurn], call: ToolCall) -> tuple[Tombstone, str]:
+        memories = {str(m.memory_id): m for m in context if isinstance(m, Tombstone)}
+        memory = memories.get(str(call.arguments.get("memory_id")))
+        question = call.arguments.get("question")
+        if memory is None or not isinstance(question, str) or not question.strip():
+            raise ContextFailure("unauthorized_memory")
+        return memory, question
+
+    async def child_answer(
+        self, memory: Tombstone, question: str, cap: int, attempt: int, *, top_level: bool = False
+    ) -> str | None:
+        prompt = RECALL_PROMPT
+        if attempt:
+            prompt += f" Compact-result retry: answer within {cap} tokens."
+        child = Frame(
+            recall_source(memory),
+            question,
+            prompt,
+            cap,
+            completion_cap=max(
+                1,
+                (self.top_level_completion_cap if top_level else self.answer_completion_cap)
+                // (2 if attempt else 1),
+            ),
+            reserve=self.top_level_reserve if top_level else None,
+            starvation_percentage=self.top_level_starvation_percentage if top_level else None,
+        )
+        # Source overflow remains a hard failure in an isolated evidence frame.
+        await self.guard(child)
+        answer = await self.run(child)
+        return answer if await self.count([AssistantHistoryTurn(answer)]) <= cap else None
+
+    async def recall_top_level(self, context: list[HistoryTurn], call: ToolCall) -> ToolResult:
+        """Engine parent compacts at its next safe boundary instead of denying recall."""
+        if call.name != "memory_recall":
+            raise ContextFailure("unknown_recall_tool")
+        memory, question = self.visible_memory(context, call)
+        for attempt in range(2):
+            cap = max(1, self.top_level_answer_cap // (2 if attempt else 1))
+            answer = await self.child_answer(memory, question, cap, attempt, top_level=True)
+            if answer is not None:
+                return ToolResult(call.id, call.name, "success", {"answer": answer})
+        # This is an output-contract violation, not parent context starvation.
+        return ToolResult(call.id, call.name, "error", "recall_answer_limit_exceeded")
+
     async def dispatch(self, frame: Frame, call: ToolCall) -> ToolResult:
         report = await self.guard(frame)
         if frame.finalization_only:
@@ -263,11 +357,7 @@ class RecallRuntime:
         if call.name == "remaining_context":
             result = await self.resolved_result(frame, call, "current frame capacity")
         elif call.name == "memory_recall":
-            memories = {str(m.memory_id): m for m in frame.source if isinstance(m, Tombstone)}
-            memory = memories.get(str(call.arguments.get("memory_id")))
-            question = call.arguments.get("question")
-            if memory is None or not isinstance(question, str) or not question.strip():
-                raise ContextFailure("unauthorized_memory")
+            memory, question = self.visible_memory(frame.source, call)
             # Check parent tool envelope admission independently from child source admission.
             if await self.resolved_result(frame, call, "") is None:
                 result = None
@@ -275,14 +365,11 @@ class RecallRuntime:
                 result = None
                 for attempt in range(2):
                     cap = min(self.answer_cap, max(1, int(report["remaining_tokens"]) // 2))
-                    prompt = RECALL_PROMPT
                     if attempt:
                         cap = max(1, cap // 2)
-                        prompt += f" Compact-result retry: answer within {cap} tokens."
-                    child = Frame(recall_source(memory), question, prompt, cap)
-                    # Source overflow is a hard failure, not an answer retry.
-                    await self.guard(child)
-                    answer = await self.run(child)
+                    answer = await self.child_answer(memory, question, cap, attempt)
+                    if answer is None:
+                        continue
                     result = await self.resolved_result(frame, call, answer)
                     if result is not None:
                         break
@@ -291,35 +378,74 @@ class RecallRuntime:
         if result is None:
             frame.finalization_only = True
             result = ToolResult(call.id, call.name, "error", STARVATION)
-            if (await self.remaining([*frame.charged, call, result]))["remaining_tokens"] < 0:
+            if (await self.remaining(frame.with_result(call, result), frame))[
+                "remaining_tokens"
+            ] < 0:
                 raise ContextOverflow("recall_prohibition_does_not_fit")
-        frame.exchanges.extend([call, result])
+        if any(p.tool_call_id == call.id for p in frame.pending_results):
+            frame.pending_results = [p for p in frame.pending_results if p.tool_call_id != call.id]
+        else:
+            frame.exchanges.append(call)
+        frame.exchanges.append(result)
         await self.guard(frame)
         return result
+
+    async def dispatch_batch(self, frame: Frame, calls: list[ToolCall]) -> None:
+        """Admit all call envelopes and reserve closure before executing any child."""
+        seen = {item.id for item in [*frame.source, *frame.exchanges] if isinstance(item, ToolCall)}
+        for call in calls:
+            if not call.id or call.id in seen:
+                raise ContextFailure("invalid_recall_call_id")
+            seen.add(call.id)
+        prohibited = [ToolResult(call.id, call.name, "error", STARVATION) for call in calls]
+        if (await self.remaining([*frame.charged, *calls, *prohibited], frame))[
+            "remaining_tokens"
+        ] < 0:
+            raise ContextOverflow("recall_batch_closure_does_not_fit")
+        frame.exchanges.extend(calls)
+        frame.pending_results.extend(prohibited)
+        for call in calls:
+            await self.guard(frame)
+            if frame.finalization_only:
+                # These results were budgeted before the first call. Never dispatch
+                # further tools, including remaining_context, after starvation.
+                result = next(p for p in frame.pending_results if p.tool_call_id == call.id)
+                frame.pending_results.remove(result)
+                frame.exchanges.append(result)
+            else:
+                result = await self.dispatch(frame, call)
+        await self.guard(frame)
 
     async def run(self, frame: Frame) -> str:
         async def step(state: FrameState) -> FrameState:
             current = state["frame"]
-            await self.guard(current)
+            report = await self.guard(current)
             schemas = [] if current.finalization_only else LOCAL_TOOLS[:1]
             if not current.finalization_only and any(
                 isinstance(m, Tombstone) for m in current.source
             ):
                 schemas = LOCAL_TOOLS
-            response = await self.model.invoke(current.provider_messages(), schemas, current.cap)
+            # Provider completion allowance is distinct from final visible answer
+            # size, and cannot exceed this frame's metered remaining capacity.
+            completion_cap = min(
+                current.completion_cap or current.cap,
+                int(report["remaining_tokens"])
+                + (current.reserve if current.reserve is not None else self.reserve),
+            )
+            response = await self.model.invoke(current.provider_messages(), schemas, completion_cap)
+            if response.invalid_tool_calls:
+                raise ContextFailure("invalid_recall_tool_calls")
             if response.tool_calls:
-                if current.finalization_only or len(response.tool_calls) != 1:
+                if current.finalization_only:
                     raise ContextFailure("recall_tools_prohibited")
                 if isinstance(response.content, str) and response.content:
                     current.exchanges.append(AssistantHistoryTurn(response.content))
-                native = response.tool_calls[0]
-                await self.dispatch(
+                await self.dispatch_batch(
                     current,
-                    ToolCall(
-                        str(native["id"]),
-                        native["name"],
-                        native["args"],
-                    ),
+                    [
+                        ToolCall(str(native["id"] or ""), native["name"], native["args"])
+                        for native in response.tool_calls
+                    ],
                 )
                 return {"frame": current, "answer": None}
             if not isinstance(response.content, str) or not response.content.strip():

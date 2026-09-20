@@ -24,6 +24,16 @@ def settings(**extra):
     [
         {"reserve": 0},
         {"summary_cap": -1},
+        {"completion_cap": 0},
+        {"starvation_percentage": 0},
+        {"starvation_percentage": 100},
+        {"recall_reserve": 0},
+        {"recall_answer_cap": 0},
+        {"recall_completion_cap": -1},
+        {"recall_starvation_percentage": 0},
+        {"recall_starvation_percentage": 100},
+        {"minimum_reduction_percentage": 0},
+        {"minimum_reduction_percentage": 100},
         {"port": 65536},
         {"meter_url": "http://meter.test/meter"},
         {"meter_url": "https://user:secret@meter.test/meter"},
@@ -43,6 +53,15 @@ def test_client_identity_is_independent_of_resource_audience(monkeypatch):
         "KEYCLOAK_AUDIENCE": "compactor-resource",
         "TLS_CERT_PATH": "unused",
         "TLS_KEY_PATH": "unused",
+        "RESERVED_OUTPUT_TOKENS": "512",
+        "SUMMARY_CAP_TOKENS": "1536",
+        "COMPLETION_CAP_TOKENS": "16384",
+        "STARVATION_PERCENTAGE": "25",
+        "RECALL_RESERVED_OUTPUT_TOKENS": "256",
+        "RECALL_ANSWER_CAP_TOKENS": "768",
+        "RECALL_COMPLETION_CAP_TOKENS": "8192",
+        "RECALL_STARVATION_PERCENTAGE": "15",
+        "MINIMUM_REDUCTION_PERCENTAGE": "20",
     }
     for key, value in values.items():
         monkeypatch.setenv("ADS_CONTEXT_COMPACTOR_" + key, value)
@@ -50,6 +69,28 @@ def test_client_identity_is_independent_of_resource_audience(monkeypatch):
     loaded = load_settings()
     assert loaded.keycloak_client_id == "compactor-client"
     assert loaded.keycloak_audience == "compactor-resource"
+    assert loaded.reserve == 512
+    assert loaded.summary_cap == 1536
+    assert loaded.completion_cap == 16384
+    assert loaded.starvation_percentage == 25
+    assert loaded.recall_reserve == 256
+    assert loaded.recall_answer_cap == 768
+    assert loaded.recall_completion_cap == 8192
+    assert loaded.recall_starvation_percentage == 15
+    assert loaded.minimum_reduction_percentage == 20
+
+    from ads_context_compactor.app import AppProvider
+
+    service = AppProvider(loaded).service(None)
+    assert service._reserve == 512
+    assert service._summary_cap == 1536
+    assert service._completion_cap == 16384
+    assert service._starvation_percentage == 25
+    assert service._recall_reserve == 256
+    assert service._recall_answer_cap == 768
+    assert service._recall_completion_cap == 8192
+    assert service._recall_starvation_percentage == 15
+    assert service._minimum_reduction_percentage == 20
 
 
 def test_missing_tls_fails_before_server_start(tmp_path):
