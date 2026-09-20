@@ -364,7 +364,16 @@ def test_finish_without_last_order_breaks_immediately(
     project, session_id, model_id = opened
     send(client, project, session_id, "hi", model_id)
     emit(app, PartialResponse(session_id=session_id, order=0, message=AssistantMessage(text="a")))
-    emit_raw(app, b'{"type": "finish", "session_id": "' + str(session_id).encode() + b'"}')
+    emit_raw(
+        app,
+        msgspec.json.encode(
+            {
+                "type": "finish",
+                "session_id": session_id,
+                "message_id": kafka.requests[-1].message_id,
+            }
+        ),
+    )
     assert runs_of(db_engine, session_id) == []
     assert kafka.aborts == []
 

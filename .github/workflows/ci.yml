@@ -40,6 +40,7 @@ jobs:
           - services/ads-engine/Containerfile
           - services/ads-preferences/Containerfile
           - services/ads-context-meter/Containerfile
+          - services/ads-context-compactor/Containerfile
           - services/ads-sandbox-mcp/Containerfile
           - services/ads-sandbox-ipc/Containerfile
           - services/ads-sandbox-manager/Containerfile
@@ -86,6 +87,11 @@ jobs:
             file: services/ads-context-meter/Containerfile
             context: .
             smoke: "import ads_context_meter; print(ads_context_meter.__version__)"
+            pack: "false"
+          - image: ads-context-compactor
+            file: services/ads-context-compactor/Containerfile
+            context: .
+            smoke: "import ads_context_compactor; print(ads_context_compactor.__version__)"
             pack: "false"
           - image: ads-sandbox-golden
             file: services/ads-sandbox-golden/Containerfile
@@ -198,9 +204,9 @@ jobs:
         run: |
           helm lint charts/ads
           helm template ads charts/ads >/tmp/ads-cm.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 7
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 8
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 6
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 7
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
@@ -252,6 +258,7 @@ jobs:
             --set tls.serviceSecretName=byo-service \
             --set preferences.tls.serviceSecretName=byo-preferences \
             --set contextMeter.tls.serviceSecretName=byo-context-meter \
+            --set contextCompactor.tls.serviceSecretName=byo-context-compactor \
             --set sandbox.mcp.tlsSecretName=byo-mcp \
             --set sandbox.manager.tlsSecretName=byo-manager \
             --set sandbox.ipc.tlsSecretName=byo-ipc \

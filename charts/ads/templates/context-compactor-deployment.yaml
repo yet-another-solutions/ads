@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Values.namespace }}
+  name: {{ include "ads.fullname" . }}-context-compactor
+  labels:
+    {{- include "ads.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ads-context-compactor
+spec:
+  replicas: {{ .Values.contextCompactor.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ads.contextCompactorSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.contextCompactorSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "ads.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ads-context-compactor
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.contextCompactor.image.repository }}:{{ .Values.contextCompactor.image.tag }}"
+          imagePullPolicy: {{ .Values.contextCompactor.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.contextCompactor.service.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "ads.fullname" . }}-context-compactor
+          env:
+            - name: ADS_CONTEXT_COMPACTOR_KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.contextCompactor.keycloak.existingSecret }}
+                  key: {{ .Values.contextCompactor.keycloak.secretKey }}
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            {{- if .Values.tls.caBundle.secretName }}
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "ads.contextCompactorServiceSecretName" . }}
+        {{- if .Values.tls.caBundle.secretName }}
+        - name: ca
+          secret:
+            secretName: {{ .Values.tls.caBundle.secretName }}
+            items:
+              - key: {{ .Values.tls.caBundle.key | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
+      nodeSelector:
+        {{- include "ads.applicationNodeSelector" . | nindent 8 }}
+        {{- with .Values.nodeSelector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

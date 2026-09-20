@@ -3,9 +3,17 @@
 `ads-context-meter` is an internal-only HTTPS Deployment/ClusterIP Service,
 configured under `contextMeter`. It has no public route, database or Kafka.
 It requires its own certificate (`contextMeter.tls.serviceSecretName` for BYO)
-and verifies the `ads-context-meter` audience with caller `ads-engine` only,
+and verifies the `ads-context-meter` audience with callers `ads-engine` and `ads-context-compactor`,
 without a role check. Tokenizers are baked by CI, not downloaded by the pod.
 See [the service contract](../../services/ads-context-meter/README.md).
+
+`ads-context-compactor` is a second internal-only HTTPS service configured under
+`contextCompactor`. It has no database, Kafka or public route. Supply its
+Keycloak client secret through `contextCompactor.keycloak.existingSecret` and
+`secretKey`, and its own BYO TLS secret when cert-manager is disabled.
+Engine trigger/target percentages and output reserve live under `context`.
+The chart renders the matching internal meter/compactor URLs automatically.
+See [the compaction contract](../../services/ads-context-compactor/README.md).
 
 ## Install
 

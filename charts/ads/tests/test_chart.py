@@ -96,6 +96,33 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_context_compactor_is_internal_tls_with_scoped_secret_and_engine_urls(self):
+        docs = self.documents()
+        name = "ads-context-compactor"
+        pod = docs["Deployment", name]["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        self.assertEqual(container["name"], name)
+        self.assertEqual(container["readinessProbe"]["httpGet"]["scheme"], "HTTPS")
+        self.assertEqual(docs["Service", name]["spec"]["type"], "ClusterIP")
+        self.assertEqual(
+            container["env"][0]["valueFrom"]["secretKeyRef"],
+            {"name": "ads-context-compactor-keycloak", "key": "client-secret"},
+        )
+        config = docs["ConfigMap", name]["data"]
+        self.assertEqual(
+            config["ADS_CONTEXT_COMPACTOR_METER_URL"], "https://ads-context-meter:8080/meter"
+        )
+        self.assertFalse(any("DATABASE" in k or "KAFKA" in k for k in config))
+        engine = docs["ConfigMap", "ads-engine"]["data"]
+        self.assertEqual(
+            engine["ADS_ENGINE_CONTEXT_COMPACTOR_URL"], "https://ads-context-compactor:8080/compact"
+        )
+        self.assertEqual(engine["ADS_ENGINE_CONTEXT_TRIGGER"], "80")
+        self.assertEqual(engine["ADS_ENGINE_CONTEXT_TARGET"], "50")
+        for (kind, _), obj in docs.items():
+            if kind in {"HTTPRoute", "Ingress"}:
+                self.assertNotIn(name, json.dumps(obj))
+
     def test_context_meter_is_one_internal_tls_deployment(self):
         docs = self.documents()
         name = "ads-context-meter"
@@ -532,7 +559,7 @@ class ChartTests(unittest.TestCase):
             "KeycloakRealmImport",
         }
         self.assertFalse({kind for kind, _ in docs} & forbidden)
-        self.assertEqual(sum(kind == "Deployment" for kind, _ in docs), 7)
+        self.assertEqual(sum(kind == "Deployment" for kind, _ in docs), 8)
         self.assertNotIn(("Deployment", "ads-sandbox-ipc"), docs)
         for component in ["mcp", "manager"]:
             deployment = docs["Deployment", f"ads-sandbox-{component}"]
@@ -665,6 +692,8 @@ class ChartTests(unittest.TestCase):
             "preferences.tls.serviceSecretName=preferences-tls",
             "--set",
             "contextMeter.tls.serviceSecretName=context-meter-tls",
+            "--set",
+            "contextCompactor.tls.serviceSecretName=context-compactor-tls",
         ]
         for component in ["mcp", "manager", "ipc"]:
             flags += ["--set", f"sandbox.{component}.tlsSecretName={component}-tls"]

@@ -50,19 +50,22 @@ deltas must be assembled by the caller first.
 GLM provider chat templates, grouping of assistant/tool messages, provider
 reasoning retention, and tool-definition schemas may differ. Tool-definition
 schemas and multimodal assets are not part of v1. URLs inside content remain
-text and are never fetched. The engine's orchestration is not changed to call
-this endpoint automatically in this change.
+text and are never fetched. The engine and compactor now call this endpoint for
+active-list accounting. Tombstones count only their visible memory ID, summary
+and recall instruction, never embedded archives or remainders. The caller submits
+the top-level remainder separately exactly once.
 
 ## Security and offline assets
 
 The REST process verifies the normal RS256 JWT (`iss`, `aud`, expiry, signature,
 UUID subject) and binds the standard security holder. Both middleware and the
-service enforce `ads-engine`; the service uses `@require_caller("ads-engine")`.
+service enforce callers `ads-engine` and `ads-context-compactor`.
 No role is required. Missing/invalid authorization is 401; a different/missing
 caller is 403. Only `/health/live` and `/health/ready` are public.
 
-Callers use fresh Standard Token Exchange V2 with audience `ads-context-meter`
-and optional scope `ads-engine-context-meter`. The standalone Keycloak sample
+Callers use fresh Standard Token Exchange V2 with audience `ads-context-meter`.
+Engine requests optional scope `ads-engine-context-meter`; compactor has a direct
+meter audience mapper and uses its own confidential client. The standalone Keycloak sample
 adds this scope only to the engine's optional scopes; it must never be requested
 for the MCP access/refresh pair or made a default scope. The meter itself is a
 resource server and needs no client secret at runtime.

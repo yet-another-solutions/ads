@@ -417,6 +417,8 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                         if caller == "ads-engine" and audience == "ads"
                         else {"scope": "ads-engine-context-meter"}
                         if caller == "ads-engine" and audience == "ads-context-meter"
+                        else {"scope": "ads-engine-context-compactor"}
+                        if caller == "ads-engine" and audience == "ads-context-compactor"
                         else {}
                     ),
                 },
@@ -451,7 +453,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 for c in admin("GET", admin_path + "/clients")
                 if c["clientId"] in secrets
             }
-            assert len(clients) == 7
+            assert len(clients) == 8
             for name, client in clients.items():
                 assert client["directAccessGrantsEnabled"] is False
                 assert client["standardFlowEnabled"] == (name == "ads")
@@ -544,6 +546,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
             exchange("ads-sandbox-ipc", "ads-sandbox-mcp", initial, allowed=False)
             exchange("ads-preferences", "ads", initial, allowed=False)
             exchange("ads", "ads-context-meter", initial, allowed=False)
+            exchange("ads", "ads-context-compactor", initial, allowed=False)
             pair = token(
                 {
                     "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -565,6 +568,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 assert not claims.get("resource_access")
                 assert "ads-engine-ack" not in claims.get("scope", "").split()
                 assert "ads-engine-context-meter" not in claims.get("scope", "").split()
+                assert "ads-engine-context-compactor" not in claims.get("scope", "").split()
                 assert claims["exp"] - claims["iat"] > 240
                 pair = token(
                     {
@@ -596,6 +600,27 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
             meter_claims = verifier("ads-context-meter").verified_claims(meter)
             assert "ads-engine-context-meter" in meter_claims.get("scope", "").split()
             assert not meter_claims.get("resource_access")
+            compactor = exchange(
+                "ads-engine",
+                "ads-context-compactor",
+                roleless_engine,
+                has_user_role=False,
+            )
+            compactor_claims = verifier("ads-context-compactor").verified_claims(compactor)
+            assert "ads-engine-context-compactor" in compactor_claims.get("scope", "").split()
+            assert not compactor_claims.get("resource_access")
+            compactor_meter = exchange(
+                "ads-context-compactor",
+                "ads-context-meter",
+                compactor,
+                has_user_role=False,
+            )
+            assert (
+                not verifier("ads-context-meter")
+                .verified_claims(compactor_meter)
+                .get("resource_access")
+            )
+            exchange("ads-context-compactor", "ads-sandbox-mcp", compactor, allowed=False)
             token(
                 {
                     "grant_type": "password",

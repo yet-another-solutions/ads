@@ -9,7 +9,13 @@ import msgspec
 import structlog
 
 from ads.engine_output_service import EngineOutputService
-from ads.models import KIND_MESSAGE, KIND_REASONING, KIND_TOOL_CALL, KIND_TOOL_RESULT
+from ads.models import (
+    KIND_MESSAGE,
+    KIND_REASONING,
+    KIND_TOMBSTONE,
+    KIND_TOOL_CALL,
+    KIND_TOOL_RESULT,
+)
 from ads_commons.engine import (
     Acknowledge,
     EngineOutput,
@@ -29,6 +35,7 @@ class _FinishPeek(msgspec.Struct):
     type: str | None = None
     session_id: str | None = None
     last_order: int | None = None
+    message_id: uuid.UUID | None = None
 
 
 class EngineOutputController:
@@ -46,6 +53,8 @@ class EngineOutputController:
             output: EngineOutput = msgspec.json.decode(raw, type=EngineOutput)
         except (msgspec.DecodeError, msgspec.ValidationError):
             await self._maybe_invalid_finish(raw)
+            return
+        if isinstance(output, (PartialResponse, Finish)) and output.message_id is None:
             return
         await self.dispatch(output, headers)
 
@@ -66,13 +75,20 @@ class EngineOutputController:
             if kind is None:
                 log.info("partial_without_primitive", session_id=str(output.session_id))
                 return
-            await self._service.partial_response(output.session_id, output.order, kind, text)
+            await self._service.partial_response(
+                output.session_id,
+                output.order,
+                kind,
+                text,
+                output.pressure,
+                output.message_id,
+            )
             return
         if isinstance(output, Ping):
             await self._service.ping(output.session_id)
             return
         if isinstance(output, Finish):
-            await self._service.finish(output.session_id, output.last_order)
+            await self._service.finish(output.session_id, output.last_order, output.message_id)
             return
         if isinstance(output, ErrorOutput):
             await self._service.error(output.session_id, output.message_id, output.text)
@@ -83,16 +99,31 @@ class EngineOutputController:
             peek = msgspec.json.decode(raw, type=_FinishPeek)
         except (msgspec.DecodeError, msgspec.ValidationError):
             return
-        if peek.type != "finish" or peek.session_id is None:
+        if peek.type != "finish" or peek.session_id is None or peek.message_id is None:
             return
         try:
             session_id = uuid.UUID(peek.session_id)
         except ValueError:
             return
-        await self._service.finish(session_id, peek.last_order)
+        await self._service.finish(session_id, peek.last_order, peek.message_id)
 
 
 def _delta(output: PartialResponse) -> tuple[str | None, str]:
+    primitives = [
+        output.reasoning,
+        output.message,
+        output.tool_call,
+        output.tool_result,
+        output.compaction,
+        output.tombstone,
+    ]
+    if sum(item is not None for item in primitives) != 1:
+        return None, ""
+    if output.compaction is not None:
+        kind = output.compaction.type
+        return kind, "Compacting context" if kind == "compacting_context" else "Context compacted"
+    if output.tombstone is not None:
+        return KIND_TOMBSTONE, msgspec.json.encode(output.tombstone).decode()
     if output.reasoning is not None:
         return KIND_REASONING, output.reasoning.text
     if output.message is not None:

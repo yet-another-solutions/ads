@@ -42,6 +42,9 @@
       <label>URL
         <input name="url" type="url" value="{{ selected.url }}" placeholder="https://" autocomplete="off">
       </label>
+      <label>Maximum context tokens
+        <input name="max_context_tokens" type="number" min="1" required value="{{ selected.max_context_tokens }}">
+      </label>
       <label>Bearer token
         <input name="bearer" type="password" autocomplete="off"
                placeholder="Write only. Leave blank to keep.">
@@ -70,6 +73,9 @@
       </label>
       <label>URL
         <input name="url" type="url" required placeholder="https://" autocomplete="off">
+      </label>
+      <label>Maximum context tokens
+        <input name="max_context_tokens" type="number" min="1" required>
       </label>
       <label>Bearer token
         <input name="bearer" type="password" required autocomplete="off"

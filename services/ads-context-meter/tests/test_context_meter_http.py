@@ -94,6 +94,13 @@ def test_allowed_engine_without_roles(setup, model):
     assert SecurityContextHolder.get() is None
 
 
+def test_allowed_compactor_without_roles(setup):
+    client, token, counter, _ = setup
+    result = client.post("/meter", json=BODY, headers=auth(token(azp="ads-context-compactor")))
+    assert result.status_code == 200
+    assert counter.calls[-1][1].authorized_party == "ads-context-compactor"
+
+
 @pytest.mark.parametrize("header", [None, "Bearer ", "Basic bad", "Bearer garbage"])
 def test_missing_or_invalid_bearer_never_counts(setup, header):
     client, _, counter, _ = setup

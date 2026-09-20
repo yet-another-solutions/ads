@@ -8,8 +8,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ads_commons.context_compactor import memory_text
 from ads_commons.context_meter import MeterRequest, ReasoningMessage, SystemMessage
-from ads_commons.engine import AssistantHistoryTurn, ToolCall, ToolResult, UserHistoryTurn
+from ads_commons.engine import (
+    AssistantHistoryTurn,
+    Tombstone,
+    ToolCall,
+    ToolResult,
+    UserHistoryTurn,
+)
 from ads_commons.model_catalog import SUPPORTED_MODEL_TYPES, require_supported_model_name
 from ads_context_meter.assets import TOKENIZERS, read_tokenizer
 from ads_context_meter.isolation import deny_network
@@ -58,7 +65,9 @@ def counting_messages(body: MeterRequest) -> list[dict[str, str]]:
     """
     messages: list[dict[str, str]] = []
     for item in body.messages:
-        if isinstance(item, UserHistoryTurn):
+        if isinstance(item, Tombstone):
+            messages.append({"role": "user", "content": memory_text(item)})
+        elif isinstance(item, UserHistoryTurn):
             messages.append({"role": "user", "content": item.text})
         elif isinstance(item, AssistantHistoryTurn):
             messages.append({"role": "assistant", "content": item.text})

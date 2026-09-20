@@ -82,6 +82,19 @@ app.kubernetes.io/component: ads-context-meter
 {{- end }}
 {{- end }}
 
+{{- define "ads.contextCompactorSelectorLabels" -}}
+{{ include "ads.selectorLabels" . }}
+app.kubernetes.io/component: ads-context-compactor
+{{- end }}
+
+{{- define "ads.contextCompactorServiceSecretName" -}}
+{{- if .Values.tls.certManager.enabled -}}
+{{ include "ads.fullname" . }}-context-compactor-service-tls
+{{- else -}}
+{{ required "contextCompactor.tls.serviceSecretName is required when tls.certManager.enabled is false" .Values.contextCompactor.tls.serviceSecretName }}
+{{- end -}}
+{{- end }}
+
 {{- define "ads.publicBaseUrl" -}}
 https://{{ .Values.httpRoute.hostname }}
 {{- end }}
