@@ -7,20 +7,72 @@
 #
 #   { echo "policy:"; echo "  document:"; sed 's/^/    /' charts/ads/policy.example.yaml; } \
 #     > /tmp/policy-values.yaml
-#   helm template ads charts/ads -n ads -f charts/ads/values-local.yaml \
+#   helm template ads charts/ads -n default -f charts/ads/values-local.yaml \
 #     -f /tmp/policy-values.yaml > deploy/local/rendered.yaml
 #
 # and put this header back. `helm template` cannot look at the cluster, so the
 # chart's prerequisite checks are skipped and ADS_SANDBOX_AVAILABLE is "true"; the
 # policy service still places runs at `container`, because kind has no Kata.
 #
-# There is no helm release behind this. Change something and apply the file again;
-# remove it all with `kubectl delete -n ads -f deploy/local/rendered.yaml`.
+# There is no helm release behind this. Every object names its own namespace, so it
+# is applied and removed without one: `kubectl delete -f deploy/local/rendered.yaml`.
+---
+# Source: ads/templates/namespaces.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "ads"
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: ads/templates/namespaces.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "ads-sandbox"
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken: true
 ---
 # Source: ads/templates/serviceaccount.yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  namespace: ads
   name: ads
   labels:
     helm.sh/chart: ads-0.0.2
@@ -33,6 +85,7 @@ metadata:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-audit
   labels:
     helm.sh/chart: ads-0.0.2
@@ -51,6 +104,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-engine
   labels:
     helm.sh/chart: ads-0.0.2
@@ -69,6 +123,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-guardrail
   labels:
     helm.sh/chart: ads-0.0.2
@@ -79,6 +134,7 @@ metadata:
 type: Opaque
 stringData:
   ADS_GUARDRAIL_API_TOKEN: "local-guardrail-token-32-bytes"
+  ADS_KEYCLOAK_CLIENT_SECRET: "local-guardrail-client-secret"
   ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
   ADS_INJECTION_SCANNER_API_TOKEN: "local-scanner-token-32-bytes"
   ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
@@ -87,6 +143,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-injection-scanner
   labels:
     helm.sh/chart: ads-0.0.2
@@ -103,6 +160,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-policy
   labels:
     helm.sh/chart: ads-0.0.2
@@ -120,6 +178,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads-preferences
   labels:
     helm.sh/chart: ads-0.0.2
@@ -132,10 +191,64 @@ type: Opaque
 stringData:
   ADS_PREFERENCES_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres:5432/ads_preferences"
 ---
+# Source: ads/templates/sandbox-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-ipc
+type: Opaque
+stringData:
+  ADS_SANDBOX_IPC_KEYCLOAK_CLIENT_SECRET: "local-sandbox-ipc-client-secret"
+---
+# Source: ads/templates/sandbox-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-manager
+type: Opaque
+stringData:
+  ADS_SANDBOX_MANAGER_KEYCLOAK_CLIENT_SECRET: "local-sandbox-manager-client-secret"
+  ADS_SANDBOX_MANAGER_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres.ads.svc.cluster.local:5432/ads_sandbox_manager"
+---
+# Source: ads/templates/sandbox-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ads-sandbox-mcp
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-mcp
+type: Opaque
+stringData:
+  ADS_SANDBOX_MCP_KEYCLOAK_CLIENT_SECRET: "local-sandbox-mcp-client-secret"
+  ADS_SANDBOX_MCP_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres.ads.svc.cluster.local:5432/ads_sandbox_mcp"
+---
 # Source: ads/templates/secret.yaml
 apiVersion: v1
 kind: Secret
 metadata:
+  namespace: ads
   name: ads
   labels:
     helm.sh/chart: ads-0.0.2
@@ -156,6 +269,7 @@ stringData:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-audit
   labels:
     helm.sh/chart: ads-0.0.2
@@ -179,6 +293,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads
   labels:
     helm.sh/chart: ads-0.0.2
@@ -214,6 +329,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-engine
   labels:
     helm.sh/chart: ads-0.0.2
@@ -229,6 +345,10 @@ data:
   ADS_ENGINE_CONSUMER_GROUP: "ads-engine"
   ADS_ENGINE_PING_INTERVAL_SECONDS: "10"
   ADS_ENGINE_ACK_TIMEOUT_SECONDS: "10"
+  # Through the guardrail: every exec is decided, inspected and journalled on the way.
+  ADS_ENGINE_MCP_URL: "https://ads-guardrail:8083/mcp/sandbox"
+  ADS_ENGINE_MCP_TIMEOUT_SECONDS: "120"
+  ADS_ENGINE_MAX_TOOL_CALLS: "32"
   ADS_ENGINE_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
   ADS_ENGINE_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
   ADS_ENGINE_KEYCLOAK_AUDIENCE: "ads-engine"
@@ -236,13 +356,13 @@ data:
   ADS_ENGINE_ALLOWED_CALLERS: "ads"
   ADS_ENGINE_ACK_AUDIENCE: "ads"
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
-  ADS_ENGINE_MCP_SERVERS: "probe-container"
   ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"
-  ADS_ENGINE_MCP_AUDIENCE: "ads-mcp"
   ADS_ENGINE_WORKSPACE_PROJECT: "ads"
   ADS_ENGINE_WORKSPACE_REPO: "yet-another-solutions/ads"
   ADS_ENGINE_WORKSPACE_ENV: "local"
   ADS_ENGINE_WORKSPACE_WORKDIR: "/workspace"
+  ADS_ENGINE_MCP_SERVERS: "probe-container"
+  ADS_ENGINE_MCP_AUDIENCE: "ads-mcp"
   ADS_ENGINE_MAX_MODEL_ROUNDS: "8"
   ADS_ENGINE_TOOL_CALL_ATTEMPTS: "3"
 ---
@@ -250,6 +370,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-guardrail
   labels:
     helm.sh/chart: ads-0.0.2
@@ -268,14 +389,16 @@ data:
   ADS_MCP_AUDIENCE: "ads-mcp"
   ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
   ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_KEYCLOAK_CLIENT_ID: "ads-guardrail"
   ADS_INJECTION_SCANNER_URL: "https://ads-injection-scanner:8085"
-  ADS_MCP_SERVERS: "[{\"name\":\"probe-container\",\"site\":{\"node_labels\":{\"ads.io/application-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":null},\"url\":\"https://ads-mcp-probe-container:8084/mcp\"}]"
+  ADS_MCP_SERVERS: "[{\"audience\":\"ads-sandbox-mcp\",\"name\":\"sandbox\",\"site\":{\"node_labels\":{\"ads.io/sandbox-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":\"kata-qemu-ads\"},\"url\":\"https://ads-sandbox-mcp:8080/mcp\"},{\"name\":\"probe-container\",\"site\":{\"node_labels\":{\"ads.io/application-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":null},\"url\":\"https://ads-mcp-probe-container:8084/mcp\"}]"
   ADS_APPLICATIONS: "[]"
 ---
 # Source: ads/templates/injection-scanner-configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-injection-scanner
   labels:
     helm.sh/chart: ads-0.0.2
@@ -295,6 +418,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-mcp-probe
   labels:
     helm.sh/chart: ads-0.0.2
@@ -313,6 +437,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-policy
   labels:
     helm.sh/chart: ads-0.0.2
@@ -340,6 +465,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-policy-document
   labels:
     helm.sh/chart: ads-0.0.2
@@ -387,6 +513,14 @@ data:
       source: opencode
       tool: websearch
       value: search-proxy.interlab
+    - argument: command
+      capability: process.exec
+      source: mcp:sandbox
+      tool: exec_shell
+    - argument: code
+      capability: process.exec
+      source: mcp:sandbox
+      tool: exec_python
     - capability: fs.read
       source: mcp:probe-vm
       tool: echo
@@ -597,6 +731,7 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  namespace: ads
   name: ads-preferences
   labels:
     helm.sh/chart: ads-0.0.2
@@ -617,10 +752,236 @@ data:
   ADS_PREFERENCES_TLS_KEY_PATH: "/certs/tls.key"
   ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"
 ---
+# Source: ads/templates/sandbox-configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-ipc
+data:
+  ADS_SANDBOX_IPC_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_SANDBOX_IPC_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_SANDBOX_IPC_KAFKA_BOOTSTRAP_SERVERS: "ads-kafka:9092"
+  ADS_SANDBOX_IPC_KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+  ADS_SANDBOX_IPC_KAFKA_SASL_MECHANISM: "PLAIN"
+  ADS_SANDBOX_IPC_ACK_SECONDS: "10"
+  ADS_SANDBOX_IPC_CONTROL_SECONDS: "10"
+  ADS_SANDBOX_IPC_INPUT_BYTES: "262144"
+  ADS_SANDBOX_IPC_POLL_SECONDS: "0.1"
+  ADS_SANDBOX_IPC_STARTUP_SECONDS: "120"
+  ADS_SANDBOX_IPC_STDERR_BYTES: "65536"
+  ADS_SANDBOX_IPC_STDOUT_BYTES: "65536"
+  ADS_SANDBOX_IPC_TIMEOUT_SECONDS: "120"
+---
+# Source: ads/templates/sandbox-configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-manager
+data:
+  ADS_SANDBOX_MANAGER_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_SANDBOX_MANAGER_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_SANDBOX_MANAGER_KAFKA_BOOTSTRAP_SERVERS: "ads-kafka:9092"
+  ADS_SANDBOX_MANAGER_KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+  ADS_SANDBOX_MANAGER_KAFKA_SASL_MECHANISM: "SCRAM-SHA-512"
+  ADS_SANDBOX_MANAGER_PORT: "8080"
+  ADS_SANDBOX_MANAGER_TLS_CERT_PATH: "/tls/tls.crt"
+  ADS_SANDBOX_MANAGER_TLS_KEY_PATH: "/tls/tls.key"
+  ADS_SANDBOX_MANAGER_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_SESSION_SIZE: "20Gi"
+  ADS_SANDBOX_MANAGER_GOLDEN_VERSION: "v0.0.1"
+  ADS_SANDBOX_MANAGER_GOLDEN_IMAGE: "ghcr.io/yet-another-solutions/ads-sandbox-golden:0.0.1"
+  ADS_SANDBOX_MANAGER_GOLDEN_SLACK: "2Gi"
+  ADS_SANDBOX_MANAGER_NAMESPACE: "ads-sandbox"
+  ADS_SANDBOX_MANAGER_NODE_SELECTOR: "{\"ads.io/sandbox-node\":\"true\"}"
+  ADS_SANDBOX_MANAGER_TOLERATIONS: "[]"
+  ADS_SANDBOX_MANAGER_RESOURCES: "{}"
+  ADS_SANDBOX_MANAGER_IMAGE_PULL_SECRETS: ""
+  ADS_SANDBOX_MANAGER_SESSION_OBJECTS: "{\"create_seconds\":120,\"guest_budget\":{\"CPU_MILLIS\":750,\"MAX_DEPTH\":8,\"MAX_DESCENDANTS\":32,\"MEMORY_BYTES\":805306368,\"PIDS\":256},\"guest_image\":\"ghcr.io/yet-another-solutions/ads-sandbox-base:0.0.1\",\"guest_resources\":{\"limits\":{\"cpu\":\"1\",\"memory\":\"1536Mi\"},\"requests\":{\"cpu\":\"1\",\"memory\":\"1536Mi\"}},\"guest_runtime_class\":\"kata-qemu-ads\",\"ipc_config_map\":\"ads-sandbox-ipc\",\"ipc_image\":\"localhost/ads-sandbox-ipc:local\",\"ipc_node_selector\":{\"ads.io/application-node\":\"true\"},\"ipc_resources\":{},\"ipc_secret\":\"ads-sandbox-ipc\",\"ipc_service_account\":\"ads-sandbox-ipc\",\"ipc_size\":\"1Gi\",\"ipc_storage_class\":\"local-path\",\"ipc_tls_secret\":\"ads-sandbox-ipc-tls\",\"ipc_tolerations\":[]}"
+  ADS_SANDBOX_MANAGER_BAKE_SECONDS: "1800"
+  ADS_SANDBOX_MANAGER_BARRIER_SECONDS: "3"
+  ADS_SANDBOX_MANAGER_CLEANUP_SECONDS: "120"
+  ADS_SANDBOX_MANAGER_CONTROL_SECONDS: "10"
+  ADS_SANDBOX_MANAGER_DETACHED_SECONDS: "7200"
+  ADS_SANDBOX_MANAGER_IDLE_SECONDS: "1800"
+  ADS_SANDBOX_MANAGER_LIFECYCLE_BATCH: "50"
+  ADS_SANDBOX_MANAGER_NODE_FRESH_SECONDS: "600"
+  ADS_SANDBOX_MANAGER_PING_INTERVAL_SECONDS: "10"
+  ADS_SANDBOX_MANAGER_PING_TIMEOUT_SECONDS: "30"
+  ADS_SANDBOX_MANAGER_POLL_SECONDS: "10"
+  ADS_SANDBOX_MANAGER_PVC_TIMEOUT_SECONDS: "120"
+  ADS_SANDBOX_MANAGER_READY_SECONDS: "120"
+  ADS_SANDBOX_MANAGER_RECOVERY_SECONDS: "600"
+  ADS_SANDBOX_MANAGER_TOPIC_REPLICATION_FACTOR: "1"
+---
+# Source: ads/templates/sandbox-configmaps.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ads-sandbox-mcp
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-mcp
+data:
+  ADS_SANDBOX_MCP_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_SANDBOX_MCP_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_SANDBOX_MCP_KAFKA_BOOTSTRAP_SERVERS: "ads-kafka:9092"
+  ADS_SANDBOX_MCP_KAFKA_SECURITY_PROTOCOL: "PLAINTEXT"
+  ADS_SANDBOX_MCP_KAFKA_SASL_MECHANISM: "PLAIN"
+  ADS_SANDBOX_MCP_PORT: "8080"
+  ADS_SANDBOX_MCP_TLS_CERT_PATH: "/tls/tls.crt"
+  ADS_SANDBOX_MCP_TLS_KEY_PATH: "/tls/tls.key"
+  ADS_SANDBOX_MCP_TLS_CA_BUNDLE: "/ca/ca.crt"
+  # Only through the guardrail: a token the engine holds is refused here.
+  ADS_SANDBOX_MCP_ALLOWED_CALLERS: "ads-guardrail"
+  ADS_SANDBOX_MCP_ALLOWED_HOSTS: "ads-sandbox-mcp,ads-sandbox-mcp:*,ads-sandbox-mcp.ads,ads-sandbox-mcp.ads:*,ads-sandbox-mcp.ads.svc,ads-sandbox-mcp.ads.svc:*,ads-sandbox-mcp.ads.svc.cluster.local,ads-sandbox-mcp.ads.svc.cluster.local:*"
+  ADS_SANDBOX_MCP_INPUT_BYTES: "262144"
+  ADS_SANDBOX_MCP_STDERR_BYTES: "65536"
+  ADS_SANDBOX_MCP_STDOUT_BYTES: "65536"
+  ADS_SANDBOX_MCP_TIMEOUT_SECONDS: "120"
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ads-ads-sandbox-manager-observe
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes, nodes]
+    verbs: [get]
+  - apiGroups: [storage.k8s.io]
+    resources: [volumeattachments]
+    verbs: [list]
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ads-ads-sandbox-manager-observe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ads-ads-sandbox-manager-observe
+subjects:
+  - kind: ServiceAccount
+    name: ads-sandbox-manager
+    namespace: ads
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads-sandbox
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, delete, get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, delete, get, list, watch]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create, delete, get, list, watch]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, delete]
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [get, create]
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ads-sandbox-admission
+  namespace: ads-sandbox
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ads-sandbox-manager
+subjects:
+  - kind: ServiceAccount
+    name: ads-sandbox-manager
+    namespace: ads
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ads-sandbox-ipc
+subjects:
+  - kind: ServiceAccount
+    name: ads-sandbox-ipc
+    namespace: ads-sandbox
+---
+# Source: ads/templates/sandbox-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ads-sandbox-admission
+  namespace: ads-sandbox
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ads-sandbox-admission
+subjects:
+  - kind: ServiceAccount
+    name: kyverno-admission-controller
+    namespace: kyverno
+---
 # Source: ads/templates/audit-service.yaml
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-audit
   labels:
     helm.sh/chart: ads-0.0.2
@@ -644,6 +1005,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-guardrail
   labels:
     helm.sh/chart: ads-0.0.2
@@ -667,6 +1029,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-injection-scanner
   labels:
     helm.sh/chart: ads-0.0.2
@@ -691,6 +1054,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-mcp-probe-container
   labels:
     helm.sh/chart: ads-0.0.2
@@ -716,6 +1080,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-policy
   labels:
     helm.sh/chart: ads-0.0.2
@@ -739,6 +1104,7 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads-preferences
   labels:
     helm.sh/chart: ads-0.0.2
@@ -759,10 +1125,35 @@ spec:
     app.kubernetes.io/instance: ads
     app.kubernetes.io/component: ads-preferences
 ---
+# Source: ads/templates/sandbox-mcp-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ads-sandbox-mcp
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-mcp
+spec:
+  type: ClusterIP
+  ports:
+    - name: https
+      port: 8080
+      targetPort: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-sandbox-mcp
+---
 # Source: ads/templates/service.yaml
 apiVersion: v1
 kind: Service
 metadata:
+  namespace: ads
   name: ads
   labels:
     helm.sh/chart: ads-0.0.2
@@ -786,6 +1177,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-audit
   labels:
     helm.sh/chart: ads-0.0.2
@@ -871,6 +1263,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads
   labels:
     helm.sh/chart: ads-0.0.2
@@ -956,6 +1349,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-egress-controlplane
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1001,6 +1395,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-engine
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1062,6 +1457,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-guardrail
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1147,6 +1543,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-injection-scanner
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1230,6 +1627,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-mcp-probe-container
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1303,6 +1701,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-policy
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1395,6 +1794,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  namespace: ads
   name: ads-preferences
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1476,10 +1876,179 @@ spec:
       nodeSelector:
         ads.io/application-node: "true"
 ---
+# Source: ads/templates/sandbox-deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-sandbox-manager
+  template:
+    metadata:
+      annotations:
+        checksum/sandbox-config: d21e72329484ae603016e51ca52e2ea42b346b33e82d6df9a5d1ca1733f33b54
+        checksum/sandbox-secrets: bac0a62afd0987afd50359e237d2eb79f894cce4a71de16dd3900a9da67ed7f0
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-sandbox-manager
+    spec:
+      serviceAccountName: ads-sandbox-manager
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-sandbox-manager
+          image: "localhost/ads-sandbox-manager:local"
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: https
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: ads-sandbox-manager
+            - secretRef:
+                name: ads-sandbox-manager
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+          resources:
+            {}
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-sandbox-manager-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/sandbox-deployments.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ads-sandbox-mcp
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-sandbox-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-sandbox-mcp
+  template:
+    metadata:
+      annotations:
+        checksum/sandbox-config: d21e72329484ae603016e51ca52e2ea42b346b33e82d6df9a5d1ca1733f33b54
+        checksum/sandbox-secrets: bac0a62afd0987afd50359e237d2eb79f894cce4a71de16dd3900a9da67ed7f0
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-sandbox-mcp
+    spec:
+      serviceAccountName: ads
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-sandbox-mcp
+          image: "localhost/ads-sandbox-mcp:local"
+          imagePullPolicy: Never
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: https
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: ads-sandbox-mcp
+            - secretRef:
+                name: ads-sandbox-mcp
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+          resources:
+            {}
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-sandbox-mcp-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
 # Source: ads/templates/audit-service.yaml
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-audit
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1503,6 +2072,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-guardrail
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1526,6 +2096,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-service
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1550,6 +2121,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-injection-scanner
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1573,6 +2145,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-mcp-probe-container
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1596,6 +2169,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-policy
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1619,6 +2193,7 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
+  namespace: ads
   name: ads-preferences
   labels:
     helm.sh/chart: ads-0.0.2
@@ -1638,3 +2213,176 @@ spec:
     - "ads-preferences.ads"
     - "ads-preferences.ads.svc"
     - "ads-preferences.ads.svc.cluster.local"
+---
+# Source: ads/templates/sandbox-certificates.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-sandbox-ipc
+  namespace: ads-sandbox
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-sandbox-ipc-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: testlab-ca
+  dnsNames:
+    - "ads-sandbox-ipc"
+    - "ads-sandbox-ipc.ads-sandbox"
+    - "ads-sandbox-ipc.ads-sandbox.svc"
+    - "ads-sandbox-ipc.ads-sandbox.svc.cluster.local"
+---
+# Source: ads/templates/sandbox-certificates.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-sandbox-manager
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-sandbox-manager-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: testlab-ca
+  dnsNames:
+    - "ads-sandbox-manager"
+    - "ads-sandbox-manager.ads"
+    - "ads-sandbox-manager.ads.svc"
+    - "ads-sandbox-manager.ads.svc.cluster.local"
+---
+# Source: ads/templates/sandbox-certificates.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-sandbox-mcp
+  namespace: ads
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  secretName: ads-sandbox-mcp-tls
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: testlab-ca
+  dnsNames:
+    - "ads-sandbox-mcp"
+    - "ads-sandbox-mcp.ads"
+    - "ads-sandbox-mcp.ads.svc"
+    - "ads-sandbox-mcp.ads.svc.cluster.local"
+---
+# Source: ads/templates/sandbox-exec-policy.yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  annotations:
+    pod-policies.kyverno.io/autogen-controllers: none
+  labels:
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/version: 0.0.1
+    helm.sh/chart: ads-0.0.2
+  name: ads-sandbox-ipc-exec
+spec:
+  admission: true
+  background: false
+  failurePolicy: Fail
+  rules:
+  - match:
+      any:
+      - resources:
+          kinds:
+          - Pod/exec
+          namespaces:
+          - ads-sandbox
+          operations:
+          - CONNECT
+        subjects:
+        - kind: ServiceAccount
+          name: ads-sandbox-ipc
+          namespace: ads-sandbox
+    name: require-bound-pod-identity
+    validate:
+      deny:
+        conditions:
+          any:
+          - key: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-name"[0]
+              || `""` }}'
+            operator: Equals
+            value: ""
+          - key: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-uid"[0]
+              || `""` }}'
+            operator: Equals
+            value: ""
+          - key: '{{ request.object.container || `""` }}'
+            operator: NotEquals
+            value: sandbox
+      message: IPC exec requires a pod-bound identity and the sandbox container.
+  - context:
+    - apiCall:
+        urlPath: /api/v1/namespaces/ads-sandbox/pods/{{ request.userInfo.extra."authentication.kubernetes.io/pod-name"[0]
+          || `"missing-bound-pod"` }}
+      name: caller
+    - apiCall:
+        urlPath: /api/v1/namespaces/{{ request.namespace }}/pods/{{ request.name }}
+      name: target
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod/exec
+          namespaces:
+          - ads-sandbox
+          operations:
+          - CONNECT
+        subjects:
+        - kind: ServiceAccount
+          name: ads-sandbox-ipc
+          namespace: ads-sandbox
+    name: same-sandbox-only
+    validate:
+      deny:
+        conditions:
+          any:
+          - key: '{{ caller.metadata.uid }}'
+            operator: NotEquals
+            value: '{{ request.userInfo.extra."authentication.kubernetes.io/pod-uid"[0]
+              || `""` }}'
+          - key: '{{ caller.spec.serviceAccountName }}'
+            operator: NotEquals
+            value: ads-sandbox-ipc
+          - key: '{{ caller.metadata.labels."ads.io/sandbox-id" || `""` }}'
+            operator: Equals
+            value: ""
+          - key: '{{ target.metadata.labels."ads.io/sandbox-id" || `""` }}'
+            operator: NotEquals
+            value: '{{ caller.metadata.labels."ads.io/sandbox-id" || `""` }}'
+          - key: '{{ target.metadata.uid }}'
+            operator: Equals
+            value: '{{ caller.metadata.uid }}'
+          - key: '{{ target.spec.serviceAccountName || `"default"` }}'
+            operator: Equals
+            value: ads-sandbox-ipc
+          - key: '{{ target.spec.containers[].name }}'
+            operator: AllNotIn
+            value:
+            - sandbox
+      message: 'IPC exec denied: caller and guest must have the same nonempty sandbox-id.'
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 10

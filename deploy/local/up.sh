@@ -13,10 +13,15 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 CLUSTER="${ADS_KIND_CLUSTER:-ads}"
+# Workloads live in ads and ads-sandbox, both created and owned by the chart; the
+# release record itself goes to default, which the chart refuses to share with them.
 NAMESPACE=ads
+RELEASE_NAMESPACE=default
+KYVERNO_VERSION="${ADS_KYVERNO_VERSION:-v1.13.2}"
 IMAGES=(
   ads ads-policy ads-audit ads-engine ads-egress-controlplane ads-preferences
   ads-guardrail ads-injection-scanner ads-mcp-probe
+  ads-sandbox-mcp ads-sandbox-ipc ads-sandbox-manager
 )
 if [ -z "${ADS_CONTAINER_ENGINE:-}" ]; then
   if command -v podman >/dev/null; then ADS_CONTAINER_ENGINE=podman; else ADS_CONTAINER_ENGINE=docker; fi
@@ -63,7 +68,56 @@ until kubectl apply -f deploy/local/cert-manager-issuer.yaml; do
 done
 kubectl -n cert-manager wait --for=condition=Ready certificate/ads-local-ca --timeout=120s
 
-kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+step "Kyverno, which the chart's exec policy needs (it ships the policy, not the engine)"
+kubectl apply -f "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/install.yaml"
+kubectl -n kyverno rollout status deploy/kyverno-admission-controller --timeout=300s
+
+step "sandbox prerequisites kind does not have: StorageClasses and a stub RuntimeClass"
+# No Kata here. The stub only satisfies the chart's install check; without a node
+# carrying the sandbox label nothing is ever assigned isolation level vm, and the
+# policy service is told so.
+kubectl apply -f - <<'PREREQ'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-path
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: sandbox-block
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: kata-qemu-ads
+  annotations:
+    ads.io/runtime-contract: nested-v1
+handler: runc
+PREREQ
+
+step "namespace ${NAMESPACE}, handed to the chart"
+# The dependencies must exist before the chart is installed — its prerequisite check
+# looks them up — but the chart owns the namespace they live in. Create it with the
+# release's ownership metadata so helm adopts it instead of refusing.
+kubectl apply -f - <<NS
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: ads
+    meta.helm.sh/release-namespace: ${RELEASE_NAMESPACE}
+NS
+
 CA_FILE="${TMPDIR:-/tmp}/ads-local-ca.crt"
 kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' | base64 --decode > "$CA_FILE"
 kubectl -n "$NAMESPACE" create secret generic ads-ca --from-file=ca.crt="$CA_FILE" \
@@ -96,12 +150,13 @@ if command -v helm >/dev/null; then
     echo "  document:"
     sed 's/^/    /' charts/ads/policy.example.yaml
   } > "$WORK/policy-values.yaml"
-  helm upgrade --install ads charts/ads -n "$NAMESPACE" \
+  helm upgrade --install ads charts/ads -n "$RELEASE_NAMESPACE" \
     -f charts/ads/values-local.yaml -f "$WORK/policy-values.yaml" \
     --wait --timeout 15m
 else
   step "ads chart, already rendered (no helm here)"
-  kubectl apply -n "$NAMESPACE" -f deploy/local/rendered.yaml
+  # Every object names its own namespace, so this is applied without one.
+  kubectl apply -f deploy/local/rendered.yaml
   kubectl -n "$NAMESPACE" wait --for=condition=Available deploy --all --timeout=900s
 fi
 

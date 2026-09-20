@@ -2,8 +2,10 @@
 # browser to the MCP probe. See deploy/local/README.md; deploy/local/up.sh does it all
 # in order, and applies deploy/local/rendered.yaml where there is no helm.
 #
-#   helm upgrade --install ads charts/ads -n ads -f charts/ads/values-local.yaml \
+#   helm upgrade --install ads charts/ads -n default -f charts/ads/values-local.yaml \
 #     -f <policy.example.yaml wrapped under policy.document>
+#
+# The release lives in `default`; the chart creates and owns `ads` and `ads-sandbox`.
 #
 # After changing this file or the chart, render deploy/local/rendered.yaml again (see
 # its header).
@@ -33,7 +35,9 @@ policy:
     tag: local
     pullPolicy: Never
   # deploy/local/dependencies.yaml runs Redis without TLS.
+  # The dependencies live in the workload namespace, not beside the release record.
   redis:
+    namespace: ads
     url: redis://ads-redis:6379/0
   # Short enough to watch a run expire without waiting an hour.
   runTtlSeconds: 300
@@ -44,8 +48,10 @@ audit:
     tag: local
     pullPolicy: Never
   rabbitmq:
+    namespace: ads
     url: amqp://guest:guest@ads-rabbitmq:5672/
   postgres:
+    namespace: ads
     url: postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit
   # Low, so a few refused calls are enough to see a chat lose its tools.
   conversationBudgetLimit: 12
@@ -142,6 +148,38 @@ httpRoute:
 # cert-manager signs everything with the local CA from
 # deploy/local/cert-manager-issuer.yaml. The same CA is mounted into the pods so they
 # verify each other and Keycloak.
+# The sandbox workloads come up, but no session ever starts here: kind has no Kata,
+# so nothing reaches isolation level `vm` and `process.exec` is refused by policy.
+# up.sh creates a stub RuntimeClass so the chart's install check passes, and the
+# StorageClasses the chart requires. The guest and golden images are never pulled.
+sandbox:
+  keycloak:
+    wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.ads.local:8444/realms/ads
+  kafka:
+    bootstrapServers: ads-kafka:9092
+  mcp:
+    image:
+      repository: localhost/ads-sandbox-mcp
+      tag: local
+      pullPolicy: Never
+    databaseUrl: postgresql+psycopg://ads:ads@ads-postgres.ads.svc.cluster.local:5432/ads_sandbox_mcp
+    keycloakClientSecret: local-sandbox-mcp-client-secret
+  manager:
+    image:
+      repository: localhost/ads-sandbox-manager
+      tag: local
+      pullPolicy: Never
+    databaseUrl: postgresql+psycopg://ads:ads@ads-postgres.ads.svc.cluster.local:5432/ads_sandbox_manager
+    keycloakClientSecret: local-sandbox-manager-client-secret
+    topicReplicationFactor: 1
+  ipc:
+    image:
+      repository: localhost/ads-sandbox-ipc
+      tag: local
+    storageClass: local-path
+    keycloakClientSecret: local-sandbox-ipc-client-secret
+
 tls:
   certManager:
     enabled: true
@@ -161,6 +199,7 @@ secrets:
   policyApiToken: local-policy-token-32-bytes
   auditApiToken: local-audit-token-32-bytes
   guardrailApiToken: local-guardrail-token-32-bytes
+  guardrailKeycloakClientSecret: local-guardrail-client-secret
   injectionScannerApiToken: local-scanner-token-32-bytes
 
 resources:

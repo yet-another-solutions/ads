@@ -21,28 +21,45 @@ left to do by hand: `/etc/hosts`, two port-forwards, the LLM, and where to log i
 
 What it does, in order:
 
-1. **kind cluster** `ads` (`ADS_KIND_CLUSTER` to change), and the nine images built
+1. **kind cluster** `ads` (`ADS_KIND_CLUSTER` to change), and the twelve images built
    as `localhost/<name>:local` and loaded into it — `values-local.yaml` sets
-   `pullPolicy: Never`.
+   `pullPolicy: Never`. The guest and golden images are not built: no session ever
+   starts here, so nothing pulls them.
 2. **Node label** `ads.io/application-node=true`. There is no Kata and no sandbox
    node, so the policy service is told there is no sandbox: nothing reaches level
-   `vm`, and `process.exec` is refused. The MCP probe runs at the one site this
-   cluster has, `probe-container`.
+   `vm`, and `process.exec` is refused — including the sandbox's own `exec_shell` and
+   `exec_python`. The MCP probe runs at the one site this cluster has,
+   `probe-container`.
 3. **cert-manager** and a local CA (`cert-manager-issuer.yaml`). The CA is copied into
    the namespace as `ads-ca`; every pod mounts it and trusts the others and Keycloak.
-4. **Redis, RabbitMQ, PostgreSQL, Kafka** (`dependencies.yaml`). PostgreSQL creates
-   `ads`, `ads_audit`, `ads_engine` and `ads_preferences`.
-5. **Keycloak** (`keycloak.yaml`): realm `ads`, user `alice` / `alice`, and the clients
+4. **Kyverno** (`ADS_KYVERNO_VERSION`, v1.13.2 by default). The chart ships the exec
+   policy and its RBAC and refuses to install without an admission controller to
+   enforce them.
+5. **Sandbox prerequisites kind has none of**: StorageClasses `local-path` and
+   `sandbox-block` over kind's local-path provisioner, and a stub RuntimeClass
+   `kata-qemu-ads` carrying `ads.io/runtime-contract=nested-v1`. The stub only gets
+   the install past the chart's check — it is `runc`, and no node is labelled as a
+   sandbox node, so no run is ever placed in a VM.
+6. **Namespace `ads`**, created with the release's ownership metadata so the chart
+   adopts it. The dependencies live there and the chart looks them up before it
+   installs, but the chart owns the namespace; this is how both can be true.
+7. **Redis, RabbitMQ, PostgreSQL, Kafka** (`dependencies.yaml`). PostgreSQL creates
+   `ads`, `ads_audit`, `ads_engine`, `ads_preferences`, `ads_sandbox_mcp` and
+   `ads_sandbox_manager`.
+8. **Keycloak** (`keycloak.yaml`): realm `ads`, user `alice` / `alice`, and the clients
    the chain exchanges tokens between — `ads` → `ads-engine`, `ads-preferences`;
-   `ads-engine` → `ads`, `ads-mcp`.
-6. **CoreDNS** rewrites `keycloak.ads.local` to the Keycloak Service. Browsers and pods
+   `ads-engine` → `ads`, `ads-mcp`; `ads-guardrail` → `ads-sandbox-mcp`, which is how
+   the guardrail reaches the sandbox as the person without carrying their own token
+   upstream.
+9. **CoreDNS** rewrites `keycloak.ads.local` to the Keycloak Service. Browsers and pods
    then use the same address, `https://keycloak.ads.local:8444`, and the issuer in a
    token is the same wherever it is checked.
-7. **The chart** with `values-local.yaml` and `policy.example.yaml` as
-   `policy.document` — the built-in rules plus the probe's bindings; through helm, or
-   as `rendered.yaml` when there is no helm. Guardrail,
-   scanner, probe and engine tools are on. The audit budget is 12, so a few refusals
-   are enough to see a chat lose its tools.
+10. **The chart** with `values-local.yaml` and `policy.example.yaml` as
+    `policy.document` — the built-in rules plus the probe's bindings; through helm, or
+    as `rendered.yaml` when there is no helm. The release record goes to `default`;
+    the chart creates and owns `ads` and `ads-sandbox`. Guardrail, scanner, probe and
+    engine tools are on, and the engine reaches the sandbox through the guardrail. The
+    audit budget is 12, so a few refusals are enough to see a chat lose its tools.
 
 ## Use it
 
@@ -63,7 +80,16 @@ Things to try in one chat:
 | call `env_config` | the key comes back as `[redacted:aws-access-token]` |
 | call `release_notes` | passes; the journal has `payload.injection` with weight 0 |
 | call `echo` with an `AKIA…` key in the text | a notice: refused, `payload.leak` |
+| ask it to run anything in the sandbox (`exec_shell`) | a notice: refused — the call went through the guardrail, which decided it at `mcp:sandbox`, and without Kata that site is not a VM |
 | a few refusals more | the chat is blocked; its tools are refused from now on, other chats keep theirs |
+
+The sandbox row is the whole governed path in one line: engine → guardrail → policy →
+journal, with the sandbox never reached. A successful `exec_shell` needs Kata, which
+this cluster cannot have; to watch the refusal being made rather than inferred:
+
+```sh
+kubectl -n ads logs deploy/ads-guardrail | grep 'tool call refused'
+```
 
 The journal:
 

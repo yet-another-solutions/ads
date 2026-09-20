@@ -118,6 +118,8 @@ data:
     CREATE DATABASE ads OWNER ads;
     CREATE DATABASE ads_engine OWNER ads;
     CREATE DATABASE ads_preferences OWNER ads;
+    CREATE DATABASE ads_sandbox_mcp OWNER ads;
+    CREATE DATABASE ads_sandbox_manager OWNER ads;
 ---
 apiVersion: apps/v1
 kind: Deployment

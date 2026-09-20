@@ -112,6 +112,49 @@ data:
           "secret": "local-mcp-client-secret",
           "standardFlowEnabled": false,
           "directAccessGrantsEnabled": false
+        },
+        {
+          "clientId": "ads-guardrail",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "local-guardrail-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "attributes": {"standard.token.exchange.enabled": "true"},
+          "protocolMappers": [
+            {
+              "name": "audience-ads-sandbox-mcp", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-sandbox-mcp", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            }
+          ]
+        },
+        {
+          "clientId": "ads-sandbox-mcp",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "local-sandbox-mcp-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false
+        },
+        {
+          "clientId": "ads-sandbox-manager",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "local-sandbox-manager-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false
+        },
+        {
+          "clientId": "ads-sandbox-ipc",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "local-sandbox-ipc-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false
         }
       ],
       "users": [
