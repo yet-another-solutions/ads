@@ -308,6 +308,9 @@ a { color: inherit; }
 .runbar .eta { margin-left: auto; color: var(--faint); }
 
 .transcript {
+  grid-row: 2;
+  min-height: 0;
+  overflow-anchor: none;
   overflow: auto;
   padding: 12px 18px 24px;
 }

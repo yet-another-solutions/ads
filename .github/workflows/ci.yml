@@ -28,6 +28,7 @@ jobs:
       - name: Nox
         run: |
           uv sync --group dev --group lint --group deps --group typecheck --group test
+          uv run --group test playwright install --with-deps chromium
           uv run --group dev nox -s lint deps typecheck test package
 
   lint-image:

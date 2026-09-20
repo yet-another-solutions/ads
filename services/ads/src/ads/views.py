@@ -60,6 +60,7 @@ class TranscriptView:
     project_name: str
     turns: list[TurnView]
     run: RunView | None
+    selected_model_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
