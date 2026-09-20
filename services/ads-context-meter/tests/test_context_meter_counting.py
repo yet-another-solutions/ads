@@ -130,6 +130,7 @@ def test_real_litellm_cold_import_with_tiny_fixture_and_no_network(tmp_path):
     for name in TOKENIZERS:
         (tmp_path / f"{name}.json").write_text(json.dumps(tokenizer))
     script = """
+import os
 import sys
 from dataclasses import replace
 from hashlib import sha256
@@ -155,6 +156,16 @@ for name in TOKENIZERS:
     assert more == 10
     assert reasoning > base
     assert tool > reasoning
+unlisted = [UserHistoryTurn("hello")]
+try:
+    count(MeterRequest("qwen2.5:7b", unlisted))
+except ValueError:
+    pass
+else:
+    raise AssertionError("an unlisted name counted without the stand flag")
+os.environ["ADS_ALLOW_UNLISTED_MODELS"] = "1"
+# No baked tokenizer for it, so litellm's default encoding answers instead of KeyError.
+assert count(MeterRequest("qwen2.5:7b", unlisted)) > 0
 print("offline counts passed")
 """
     env = {

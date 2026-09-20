@@ -39,6 +39,7 @@ from ads_commons.engine import (
     encode_request,
     peek_request_ids,
 )
+from ads_commons.model_catalog import UNLISTED_MODELS_VARIABLE
 
 SESSION = uuid.UUID("11111111-1111-1111-1111-111111111111")
 MESSAGE = uuid.UUID("22222222-2222-2222-2222-222222222222")
@@ -170,6 +171,22 @@ def test_capacity_is_required_positive_integer(capacity):
         )
     with pytest.raises(msgspec.ValidationError):
         msgspec.json.decode(b'{"model-name":"glm-5.3"}', type=OpenAiStreamOptions)
+
+
+def test_an_unlisted_model_name_is_refused_unless_a_stand_allows_it(monkeypatch) -> None:
+    payload = msgspec.json.encode({"model-name": "qwen2.5:7b", "max_context_tokens": 32768})
+    monkeypatch.delenv(UNLISTED_MODELS_VARIABLE, raising=False)
+    with pytest.raises(ValueError):
+        msgspec.json.decode(payload, type=OpenAiStreamOptions)
+
+    monkeypatch.setenv(UNLISTED_MODELS_VARIABLE, "1")
+    assert msgspec.json.decode(payload, type=OpenAiStreamOptions).model_name == "qwen2.5:7b"
+    # An empty invoke id names no model on any stand.
+    with pytest.raises(ValueError):
+        msgspec.json.decode(
+            msgspec.json.encode({"model-name": "", "max_context_tokens": 32768}),
+            type=OpenAiStreamOptions,
+        )
 
 
 def test_peek_request_ids_ignores_incomplete_payloads() -> None:

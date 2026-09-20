@@ -19,3 +19,4 @@ data:
   {{- if .Values.tls.caBundle.secretName }}
   ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"
   {{- end }}
+  {{- include "ads.unlistedModels" . }}

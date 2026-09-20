@@ -72,3 +72,4 @@ data:
   ADS_ENGINE_TOOL_CALL_ATTEMPTS: {{ .callAttempts | quote }}
   {{- end }}
   {{- end }}
+  {{- include "ads.unlistedModels" . }}

@@ -1,4 +1,16 @@
 {% set current_type = selected.type if selected else (types[0].type if types else '') %}
+{% if unlisted %}
+<input name="model-name" list="model-name-options" required autocomplete="off"
+       value="{{ selected.model_name if selected else '' }}"
+       placeholder="Choose a catalog name or type your own">
+<datalist id="model-name-options">
+  {% for type in types %}
+  {% for name in type.names %}
+  <option value="{{ name }}" data-model-type="{{ type.type }}"></option>
+  {% endfor %}
+  {% endfor %}
+</datalist>
+{% else %}
 <select name="model-name" required>
   <option value="">Choose model name</option>
   {% for type in types %}
@@ -7,3 +19,4 @@
   {% endfor %}
   {% endfor %}
 </select>
+{% endif %}

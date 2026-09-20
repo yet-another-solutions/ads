@@ -113,7 +113,10 @@ def count(body: MeterRequest) -> int:
     import litellm
 
     require_supported_model_name("openai-stream", body.model_name)
-    tokenizer = _tokenizers[body.model_name]  # Mandatory, never select/fallback by model name.
+    # Mandatory for a catalog name, never selected or substituted by model name. Absent
+    # only for an unlisted name on a development stand, where litellm's default encoding
+    # gives an estimate instead.
+    tokenizer = _tokenizers.get(body.model_name)
     result: int = litellm.token_counter(
         model=body.model_name,
         messages=counting_messages(body),

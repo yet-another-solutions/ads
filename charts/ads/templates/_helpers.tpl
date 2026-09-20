@@ -113,6 +113,18 @@ Empty means the system trust store, which will not contain a private CA.
 {{- end -}}
 {{- end }}
 
+{{/*
+Development stands only: lets a model outside ads_commons.model_catalog be stored and
+run. Its context has no baked tokenizer, so the meter estimates and the pressure that
+drives compaction is approximate. Every service that decodes the shared model DTO needs
+the same answer, so they all read this one variable.
+*/}}
+{{- define "ads.unlistedModels" -}}
+{{- if .Values.allowUnlistedModels }}
+  ADS_ALLOW_UNLISTED_MODELS: "1"
+{{- end }}
+{{- end }}
+
 {{- define "ads.policyUrl" -}}
 https://{{ include "ads.fullname" . }}-policy:{{ .Values.policy.service.port }}
 {{- end }}

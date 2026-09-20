@@ -10,6 +10,10 @@
 # After changing this file or the chart, render deploy/local/rendered.yaml again (see
 # its header).
 
+# A local stand runs whatever model is at hand, ollama included, so model names outside
+# the catalog are accepted here. Their context is estimated, not counted exactly.
+allowUnlistedModels: true
+
 # Images are built locally and loaded into the node, never pulled. The localhost/
 # prefix is what podman gives a local image; up.sh tags docker builds the same way.
 image:
