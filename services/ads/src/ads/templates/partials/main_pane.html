@@ -1,4 +1,4 @@
-<div id="main-pane" class="main-pane">
+<div id="main-pane" class="main-pane" data-session-id="{{ transcript.session.id if transcript else '' }}">
   {% if transcript and transcript.run %}
   <div class="runbar">
     <i class="pulse" aria-hidden="true"></i>

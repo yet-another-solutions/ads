@@ -46,6 +46,95 @@ def test_strict_summary(text):
         parse_summary(text)
 
 
+@pytest.mark.parametrize("length,accepted", [(700, True), (701, False)])
+def test_configured_reduction_floor_and_independent_completion_allowance(length, accepted):
+    model = Model(
+        '<ads-compaction-result>{"summary":"' + "x" * length + '"}</ads-compaction-result>'
+    )
+    service = ContextCompactorService(
+        Meter(),
+        model=model,
+        reserve=100,
+        summary_cap=1000,
+        completion_cap=8192,
+        minimum_reduction_percentage=20,
+    )
+    body = CompactRequest([U("a" * 1000), U("b" * 900)], model_settings(), 50)
+    with SecurityContextHolder.bound(IDENTITY):
+        if accepted:
+            assert len(asyncio.run(service.compact(body)).summarization) == length
+        else:
+            with pytest.raises(ContextFailure, match="insufficient_compaction_progress"):
+                asyncio.run(service.compact(body))
+    assert model.calls[0][2] == 8192
+
+
+def test_large_completion_allowance_does_not_relax_summary_size_limit():
+    service = ContextCompactorService(
+        Meter(),
+        model=Model(SUMMARY),
+        reserve=100,
+        summary_cap=6,
+        completion_cap=8192,
+    )
+    with (
+        SecurityContextHolder.bound(IDENTITY),
+        pytest.raises(ContextFailure, match="summary_output_limit"),
+    ):
+        asyncio.run(
+            service.compact(CompactRequest([U("a" * 1000), U("b" * 900)], model_settings(), 50))
+        )
+
+
+def test_summary_and_compactor_recall_frames_have_independent_budgets(monkeypatch):
+    from ads_context_runtime.frames import RecallRuntime
+    from context_fakes import native
+
+    archived = memory([U("evidence")])
+    model = Model(
+        native("memory_recall", {"memory_id": str(archived.memory_id), "question": "q"}),
+        "answer",
+        SUMMARY,
+    )
+    frames = []
+    original = RecallRuntime.run
+
+    async def record(self, frame):
+        frames.append(
+            (
+                frame.reserve if frame.reserve is not None else self.reserve,
+                frame.starvation_percentage
+                if frame.starvation_percentage is not None
+                else self.starvation_percentage,
+                frame.cap,
+                frame.completion_cap,
+            )
+        )
+        return await original(self, frame)
+
+    monkeypatch.setattr(RecallRuntime, "run", record)
+    service = ContextCompactorService(
+        Meter(),
+        model=model,
+        reserve=111,
+        summary_cap=1234,
+        completion_cap=2048,
+        starvation_percentage=5,
+        recall_reserve=777,
+        recall_answer_cap=500,
+        recall_completion_cap=4096,
+        recall_starvation_percentage=30,
+    )
+    body = CompactRequest(
+        [archived, U("a" * 3000), A("b" * 3000), U("current")],
+        model_settings(),
+        50,
+    )
+    with SecurityContextHolder.bound(IDENTITY):
+        assert asyncio.run(service.compact(body)).summarization == "concise"
+    assert frames == [(111, 5, 1234, 2048), (777, 30, 500, 4096)]
+
+
 def test_first_and_repeated_compaction_preserve_originals_and_current_user_once():
     source = [U("a" * 2008), A("b" * 2000), U("c" * 2000), A("d" * 2000), U("current")]
     model = Model(SUMMARY, SUMMARY, SUMMARY)

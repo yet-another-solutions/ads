@@ -89,6 +89,7 @@ typecheck = [
     "mypy==2.3.1",
 ]
 test = [
+    "playwright==1.59.0",
     "PyYAML==6.0.3",
     "fakeredis==2.38.0",
     "pytest==9.1.1",

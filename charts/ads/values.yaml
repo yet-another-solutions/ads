@@ -207,6 +207,17 @@ engine:
     mcpAudience: ads-mcp
     maxModelRounds: 8
     callAttempts: 3
+  recall:
+    topLevel:
+      reservedOutputTokens: 1024
+      answerCapTokens: 1024
+      completionCapTokens: 1024
+      starvationPercentage: 10
+    inner:
+      reservedOutputTokens: 1024
+      answerCapTokens: 1024
+      completionCapTokens: 1024
+      starvationPercentage: 10
 
 # ads consumes ads.engine.output and produces ads.engine.request.
 kafka:
@@ -270,11 +281,18 @@ contextCompactor:
     serviceSecretName: ""
   reservedOutputTokens: 1024
   summaryCapTokens: 2048
+  completionCapTokens: 2048
+  minimumReductionPercentage: 10
+  starvationPercentage: 10
+  recall:
+    reservedOutputTokens: 1024
+    answerCapTokens: 1024
+    completionCapTokens: 1024
+    starvationPercentage: 10
 
 context:
   triggerPercentage: 80
   targetPercentage: 50
-  reservedOutputTokens: 1024
 
 imagePullSecrets: []
 nameOverride: ""

@@ -116,6 +116,7 @@ def typecheck(session: nox.Session) -> None:
 @nox.session
 def test(session: nox.Session) -> None:
     session.run("uv", "sync", "--group", "test", external=True)
+    _uv_run(session, "--group", "test", "playwright", "install", "chromium")
     _uv_run(session, "--group", "test", "pytest", *session.posargs)
 
 

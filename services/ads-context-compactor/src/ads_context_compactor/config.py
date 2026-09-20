@@ -22,9 +22,30 @@ class Settings:
     port: int = 8080
     reserve: int = 1024
     summary_cap: int = 2048
+    completion_cap: int = 2048
+    starvation_percentage: int = 10
+    recall_reserve: int = 1024
+    recall_answer_cap: int = 1024
+    recall_completion_cap: int = 1024
+    recall_starvation_percentage: int = 10
+    minimum_reduction_percentage: int = 10
 
     def __post_init__(self) -> None:
-        if self.reserve <= 0 or self.summary_cap <= 0 or not 0 < self.port <= 65535:
+        if (
+            min(
+                self.reserve,
+                self.summary_cap,
+                self.completion_cap,
+                self.recall_reserve,
+                self.recall_answer_cap,
+                self.recall_completion_cap,
+            )
+            <= 0
+            or not 0 < self.recall_starvation_percentage < 100
+            or not 0 < self.starvation_percentage < 100
+            or not 0 < self.minimum_reduction_percentage < 100
+            or not 0 < self.port <= 65535
+        ):
             raise ValueError("invalid compactor budgets or port")
         for endpoint in (self.meter_url, self.keycloak_well_known_url, self.keycloak_issuer):
             url = urlsplit(endpoint)
@@ -69,6 +90,13 @@ def load_settings() -> Settings:
         port=int(env("PORT", "8080")),
         reserve=int(env("RESERVED_OUTPUT_TOKENS", "1024")),
         summary_cap=int(env("SUMMARY_CAP_TOKENS", "2048")),
+        completion_cap=int(env("COMPLETION_CAP_TOKENS", "2048")),
+        starvation_percentage=int(env("STARVATION_PERCENTAGE", "10")),
+        recall_reserve=int(env("RECALL_RESERVED_OUTPUT_TOKENS", "1024")),
+        recall_answer_cap=int(env("RECALL_ANSWER_CAP_TOKENS", "1024")),
+        recall_completion_cap=int(env("RECALL_COMPLETION_CAP_TOKENS", "1024")),
+        recall_starvation_percentage=int(env("RECALL_STARVATION_PERCENTAGE", "10")),
+        minimum_reduction_percentage=int(env("MINIMUM_REDUCTION_PERCENTAGE", "10")),
     )
     load_tls_context(settings)
     return settings

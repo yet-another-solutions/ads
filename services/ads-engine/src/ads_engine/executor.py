@@ -18,9 +18,10 @@ from ads_commons.engine import (
     HistoryTurn,
     Notice,
     Tombstone,
+    ToolCall,
     UserHistoryTurn,
 )
-from ads_context_runtime.frames import LOCAL_TOOLS, RECALL_PROMPT, Frame
+from ads_context_runtime.frames import LOCAL_TOOLS
 from ads_engine.chat import (
     AdsChatOpenAI,
     StreamDelta,
@@ -39,7 +40,6 @@ from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
 class ExecutionState(TypedDict):
     active: list[HistoryTurn]
     done: bool
-    finalization_only: bool
 
 
 class ExecutorChatStreamer:
@@ -89,22 +89,15 @@ class ExecutorChatStreamer:
                             writer = get_stream_writer()
                             active = state["active"]
                             memory_visible = any(isinstance(item, Tombstone) for item in active)
-                            finalization = state["finalization_only"]
-                            bound = (
-                                base_model.bind(max_completion_tokens=context.recall.answer_cap)
-                                if finalization
-                                else base_model.bind_tools(
-                                    [*schemas, *([LOCAL_TOOLS[1]] if memory_visible else [])],
-                                    parallel_tool_calls=False,
-                                )
+                            bound = base_model.bind_tools(
+                                [*schemas, *([LOCAL_TOOLS[1]] if memory_visible else [])],
+                                parallel_tool_calls=False,
                             )
                             instructions = request.instructions
                             if memory_visible:
                                 instructions += (
                                     "\nVisible memory can be queried with memory_recall."
                                 )
-                            if finalization:
-                                instructions += "\nContext starvation: finalize without tools."
                             messages = context_messages(active, instructions)
                             response: AIMessageChunk | None = None
                             text = ""
@@ -138,8 +131,6 @@ class ExecutorChatStreamer:
                                     response = None
                             if response is None or response.invalid_tool_calls:
                                 raise ExecutionFailed("invalid model response")
-                            if finalization and response.tool_calls:
-                                raise ExecutionFailed("tools prohibited during finalization")
                             if text:
                                 active.append(AssistantHistoryTurn(text))
                             local = [
@@ -148,12 +139,39 @@ class ExecutorChatStreamer:
                                 if call["name"] == "memory_recall"
                             ]
                             if local:
-                                if not memory_visible or len(response.tool_calls) != 1:
+                                if not memory_visible or len(local) != len(response.tool_calls):
                                     raise ExecutionFailed("invalid local recall batch")
+                                calls = [tool_call_from_native(native) for native in local]
+                                seen = {item.id for item in active if isinstance(item, ToolCall)}
+                                for call in calls:
+                                    if not call.id or call.id in seen:
+                                        raise ExecutionFailed("invalid local recall call id")
+                                    seen.add(call.id)
+                                    context.recall.visible_memory(active, call)
+                                for call in calls:
+                                    active.append(call)
+                                    writer(
+                                        StreamDelta(
+                                            "tool_call",
+                                            tool_call=call,
+                                            pressure=await context.measure(active),
+                                        )
+                                    )
+                                    emitted = True
+                                for call in calls:
+                                    result = await context.recall.recall_top_level(active, call)
+                                    active.append(result)
+                                    writer(
+                                        StreamDelta(
+                                            "tool_result",
+                                            tool_result=result,
+                                            pressure=await context.measure(active),
+                                        )
+                                    )
                             else:
                                 # Original provider-native object and IDs reach the MCP gate.
                                 tools.admit(tools.executor_run_id, response)
-                            for native in response.tool_calls:
+                            for native in [] if local else response.tool_calls:
                                 call = tool_call_from_native(native)
                                 writer(
                                     StreamDelta(
@@ -163,31 +181,24 @@ class ExecutorChatStreamer:
                                     )
                                 )
                                 emitted = True
-                                if local:
-                                    frame = Frame(
-                                        list(active), "", RECALL_PROMPT, context.recall.answer_cap
-                                    )
-                                    result = await context.recall.dispatch(frame, call)
-                                    finalization = frame.finalization_only
-                                else:
-                                    # Mark before send: an ambiguous failure must never
-                                    # replay a possibly executed shell/Python side effect.
-                                    dispatched = True
-                                    refused_notice: Notice | None = None
-                                    try:
-                                        message = await tools.call(tools.executor_run_id, native)
-                                    except ToolCallRefused as refused:
-                                        message = _refusal_message(refused)
-                                        refused_notice = refused.refusal.notice(refused.tool, "")
-                                    result = tool_result_from_message(message)
-                                    if refused_notice is not None:
-                                        writer(
-                                            StreamDelta(
-                                                "notice",
-                                                text=refused_notice.text,
-                                                notice=refused_notice,
-                                            )
+                                # Mark before send: an ambiguous failure must never
+                                # replay a possibly executed shell/Python side effect.
+                                dispatched = True
+                                refused_notice: Notice | None = None
+                                try:
+                                    message = await tools.call(tools.executor_run_id, native)
+                                except ToolCallRefused as refused:
+                                    message = _refusal_message(refused)
+                                    refused_notice = refused.refusal.notice(refused.tool, "")
+                                result = tool_result_from_message(message)
+                                if refused_notice is not None:
+                                    writer(
+                                        StreamDelta(
+                                            "notice",
+                                            text=refused_notice.text,
+                                            notice=refused_notice,
                                         )
+                                    )
                                 active.extend([call, result])
                                 writer(
                                     StreamDelta(
@@ -199,7 +210,6 @@ class ExecutorChatStreamer:
                             return {
                                 "active": active,
                                 "done": not response.tool_calls,
-                                "finalization_only": finalization,
                             }
 
                         graph = StateGraph(ExecutionState)
@@ -214,7 +224,6 @@ class ExecutorChatStreamer:
                         state: ExecutionState = {
                             "active": [*request.history, UserHistoryTurn(request.user_input)],
                             "done": False,
-                            "finalization_only": False,
                         }
                         while not state["done"]:
                             async with aclosing(
