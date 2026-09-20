@@ -84,6 +84,19 @@ for this contract change. Existing supported values need no data migration;
 unsupported stored invoke names are not silently remapped to another model and
 must be corrected explicitly before rollout.
 
+## Session view continuity
+
+Live updates follow the transcript tail when the reader is within 24 pixels of
+the bottom. Otherwise they preserve the visible message's screen position,
+including when the run bar disappears. Same-session refreshes also retain
+expanded reasoning, the composer draft/caret, and the current model choice.
+Notifications are coalesced, and responses targeting a replaced pane are ignored.
+
+Each session restores the model from its latest persisted run, including an
+active run, on navigation and reload. No schema change is needed. An unsent model
+choice survives live updates but is not persisted until a turn is sent; a deleted
+or unavailable model leaves the selector blank rather than choosing a substitute.
+
 ## Tests
 
 The workspace declares public PyPI as its single default Python package index.
@@ -92,12 +105,20 @@ they do not depend on lab DNS, a private package proxy, or index credentials.
 
 ```sh
 uv sync --group test
+uv run --group test playwright install --with-deps chromium
 uv run --group test pytest
 # Full lifecycle:
 uv run --group dev nox -s lint deps typecheck test package
 ```
 
 Litestar `TestClient` talks to the ASGI app in-process. Live uvicorn coverage is HTTPS. Keycloak testcontainers tests run when Docker is available (`quay.io/keycloak/keycloak:26.7.2`). GitHub CI has Docker; this sandbox does not.
+
+Chromium regressions exercise the shipped HTMX, templates, CSS and JavaScript
+against the in-process application with a fake engine and SQLite. They cover
+desktop/mobile tail-following, reader position, delayed updates/navigation,
+drafts, and session model selection without provider calls or lab access.
+Nox installs Chromium; Linux system dependencies must be installed separately
+with the Playwright command above (GitHub Actions does this automatically).
 
 ads-engine tests mock Kafka and the LLM. They do not start a broker.
 

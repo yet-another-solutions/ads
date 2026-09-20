@@ -153,6 +153,16 @@ class SessionRunRepository(SQLAlchemySyncRepository[SessionRun]):
         )
         return self.session.scalars(statement).first()
 
+    def last_model_for_session(self, session_id: uuid.UUID) -> uuid.UUID | None:
+        """Use the durable run selection, including a currently running turn."""
+        statement = (
+            select(SessionRun.model_id)
+            .where(SessionRun.session_id == session_id)
+            .order_by(SessionRun.created_at.desc(), SessionRun.id.desc())
+            .limit(1)
+        )
+        return self.session.scalars(statement).first()
+
     def in_flight_sessions(self, session_ids: list[uuid.UUID]) -> set[uuid.UUID]:
         if not session_ids:
             return set()

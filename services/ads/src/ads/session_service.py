@@ -143,4 +143,5 @@ class SessionService:
                 project_name=project.name if project is not None else "",
                 turns=turns_from_entries(committed, live),
                 run=run_view,
+                selected_model_id=self._runs.last_model_for_session(row.id),
             )

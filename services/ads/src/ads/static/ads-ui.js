@@ -140,6 +140,131 @@
     openDialogs();
   }
 
+  /* Snapshot at swap time, not request time: the reader may scroll while GET waits. */
+  var paneStates = new WeakMap();
+  var TAIL_SLOP = 24;
+
+  function capturePane(detail) {
+    var pane = byId("main-pane");
+    var transcript = byId("transcript");
+    if (!pane || !transcript) {
+      return;
+    }
+    var wrap = composer();
+    var input = wrap && wrap.querySelector('textarea[name="user_input"]');
+    var select = wrap && wrap.querySelector('select[name="model_id"]');
+    var config = detail.requestConfig || {};
+    var sending = String(config.verb).toLowerCase() === "post" &&
+      (config.path || "").endsWith("/messages");
+    var state = {
+      session: pane.dataset.sessionId,
+      top: transcript.scrollTop,
+      left: transcript.scrollLeft,
+      tail: transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop <= TAIL_SLOP,
+      details: [],
+      anchor: null,
+      draft: input ? input.value : "",
+      model: select ? select.value : "",
+      focus: input === document.activeElement,
+      start: input ? input.selectionStart : 0,
+      end: input ? input.selectionEnd : 0,
+    };
+    // Clear only the submitted draft, not text typed while the POST was in flight.
+    if (sending && config.parameters && state.draft === config.parameters.user_input) {
+      state.draft = "";
+      state.start = state.end = 0;
+    }
+    var bounds = transcript.getBoundingClientRect();
+    transcript.querySelectorAll(".turn").forEach(function (turn, turnIndex) {
+      turn.querySelectorAll("details").forEach(function (item, index) {
+        state.details.push({ id: turn.id, turn: turnIndex, index: index, open: item.open });
+      });
+      Array.from(turn.children).forEach(function (part, index) {
+        var rect = part.getBoundingClientRect();
+        if (!state.anchor && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+          state.anchor = { id: turn.id, turn: turnIndex, index: index, top: rect.top };
+        }
+      });
+    });
+    paneStates.set(detail.xhr, state);
+  }
+
+  function restorePane(event) {
+    var detail = event.detail;
+    var state = detail && paneStates.get(detail.xhr);
+    if (!state || !detail.target || detail.target.id !== "main-pane") {
+      return;
+    }
+    paneStates.delete(detail.xhr);
+    var pane = byId("main-pane");
+    var transcript = byId("transcript");
+    if (!pane || !transcript || !state.session || pane.dataset.sessionId !== state.session) {
+      return; // Navigation must not inherit another session's position or draft.
+    }
+    var turns = transcript.querySelectorAll(".turn");
+    function turnFor(item) {
+      return item.id ? byId(item.id) : turns[item.turn];
+    }
+    state.details.forEach(function (item) {
+      var turn = turnFor(item);
+      var node = turn && turn.querySelectorAll("details")[item.index];
+      if (node) {
+        node.open = item.open;
+      }
+    });
+    var wrap = composer();
+    var input = wrap && wrap.querySelector('textarea[name="user_input"]');
+    var select = wrap && wrap.querySelector('select[name="model_id"]');
+    if (select && Array.from(select.options).some(function (option) {
+      return option.value === state.model;
+    })) {
+      select.value = state.model;
+    }
+    if (input) {
+      input.value = state.draft;
+      fitTextarea(input);
+      if (state.focus) {
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(state.start, state.end);
+      }
+    }
+    transcript.scrollLeft = state.left;
+    if (state.tail) {
+      transcript.scrollTop = transcript.scrollHeight;
+    } else {
+      transcript.scrollTop = state.top;
+      if (state.anchor) {
+        var turn = turnFor(state.anchor);
+        var anchor = turn && turn.children[state.anchor.index];
+        if (anchor) {
+          transcript.scrollTop += anchor.getBoundingClientRect().top - state.anchor.top;
+        }
+      }
+    }
+  }
+
+  // beforeOnLoad bubbles from the request source even if its old target was removed.
+  // Guard here so a stale response cannot apply out-of-band composer/rail fragments.
+  document.addEventListener("htmx:beforeOnLoad", function (event) {
+    var detail = event.detail;
+    var headers = ((detail && detail.requestConfig) || {}).headers || {};
+    var liveSession = headers["X-ADS-Live-Session"];
+    if (liveSession && (liveSession !== currentSession() || detail.target !== byId("main-pane"))) {
+      event.preventDefault();
+    }
+  });
+
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var detail = event.detail;
+    if (!detail || !detail.target || detail.target.id !== "main-pane") {
+      return;
+    }
+    if (detail.shouldSwap && detail.xhr.status >= 200 && detail.xhr.status < 300) {
+      capturePane(detail);
+    }
+  });
+  document.addEventListener("htmx:afterSwap", restorePane);
+
   /* HTMX ignores 400 by default. Only the message POST warning may swap. */
   document.addEventListener("htmx:beforeSwap", function (event) {
     var detail = event.detail;
@@ -167,6 +292,8 @@
   /* Live channel: GET the session, then subscribe. Reconnect with backoff. */
   var socket = null;
   var retry = 500;
+  var refreshing = false;
+  var refreshQueued = false;
 
   function currentSession() {
     var wrap = composer();
@@ -175,13 +302,27 @@
 
   function refresh() {
     var pane = byId("main-pane");
-    if (!pane || !window.htmx) {
+    var sessionId = currentSession();
+    if (!pane || !window.htmx || !sessionId) {
       return;
+    }
+    if (refreshing) {
+      refreshQueued = true;
+      return;
+    }
+    refreshing = true;
+    function finished() {
+      refreshing = false;
+      if (refreshQueued) {
+        refreshQueued = false;
+        refresh();
+      }
     }
     window.htmx.ajax("GET", window.location.pathname, {
       target: "#main-pane",
       swap: "outerHTML",
-    });
+      headers: { "X-ADS-Live-Session": sessionId },
+    }).then(finished, finished);
   }
 
   function connect() {

@@ -77,7 +77,7 @@ class ShellController(FrontendController):
             "active_project_id": project.id if project is not None else None,
             "models": await model_options(self.catalog, identity),
             "warn": None,
-            "selected_model_id": None,
+            "selected_model_id": transcript.selected_model_id if transcript else None,
         }
 
     @get("/")
