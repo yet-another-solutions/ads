@@ -94,6 +94,18 @@ data:
               "protocolMapper": "oidc-audience-mapper",
               "config": {"included.client.audience": "ads-mcp", "access.token.claim": "true",
                          "id.token.claim": "false", "introspection.token.claim": "true"}
+            },
+            {
+              "name": "audience-ads-context-meter", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-context-meter", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            },
+            {
+              "name": "audience-ads-context-compactor", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-context-compactor", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
             }
           ]
         },
@@ -128,6 +140,33 @@ data:
               "name": "audience-ads-sandbox-mcp", "protocol": "openid-connect",
               "protocolMapper": "oidc-audience-mapper",
               "config": {"included.client.audience": "ads-sandbox-mcp", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            }
+          ]
+        },
+        {
+          "clientId": "ads-context-meter",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "local-context-meter-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false
+        },
+        {
+          "clientId": "ads-context-compactor",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "local-context-compactor-client-secret",
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "attributes": {"standard.token.exchange.enabled": "true"},
+          "protocolMappers": [
+            {
+              "name": "audience-ads-context-meter", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-context-meter", "access.token.claim": "true",
                          "id.token.claim": "false", "introspection.token.claim": "true"}
             }
           ]

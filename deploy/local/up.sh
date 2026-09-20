@@ -21,6 +21,7 @@ KYVERNO_VERSION="${ADS_KYVERNO_VERSION:-v1.13.2}"
 IMAGES=(
   ads ads-policy ads-audit ads-engine ads-egress-controlplane ads-preferences
   ads-guardrail ads-injection-scanner ads-mcp-probe
+  ads-context-meter ads-context-compactor
   ads-sandbox-mcp ads-sandbox-ipc ads-sandbox-manager
 )
 if [ -z "${ADS_CONTAINER_ENGINE:-}" ]; then
@@ -123,6 +124,12 @@ NS
 CA_FILE="${TMPDIR:-/tmp}/ads-local-ca.crt"
 kubectl -n cert-manager get secret ads-local-ca -o jsonpath='{.data.ca\.crt}' | base64 --decode > "$CA_FILE"
 kubectl -n "$NAMESPACE" create secret generic ads-ca --from-file=ca.crt="$CA_FILE" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# The chart reads the compactor's client secret from a Secret it does not own
+# (contextCompactor.keycloak.existingSecret). Must match deploy/local/keycloak.yaml.
+kubectl -n "$NAMESPACE" create secret generic ads-context-compactor-keycloak \
+  --from-literal=client-secret=local-context-compactor-client-secret \
   --dry-run=client -o yaml | kubectl apply -f -
 
 step "Redis, RabbitMQ, PostgreSQL, Kafka, Keycloak"

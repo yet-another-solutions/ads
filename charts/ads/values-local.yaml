@@ -103,6 +103,29 @@ preferences:
   database:
     url: postgresql+psycopg://ads:ads@ads-postgres:5432/ads_preferences
 
+# The engine measures context against the meter, and the compactor measures its own
+# summary against it too, so both must be reachable for any chat to run.
+contextMeter:
+  image:
+    repository: localhost/ads-context-meter
+    tag: local
+    pullPolicy: Never
+  keycloak:
+    wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.ads.local:8444/realms/ads
+
+contextCompactor:
+  image:
+    repository: localhost/ads-context-compactor
+    tag: local
+    pullPolicy: Never
+  keycloak:
+    wellKnownUrl: https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration
+    issuer: https://keycloak.ads.local:8444/realms/ads
+    # deploy/local/up.sh creates this Secret; the chart only reads it.
+    existingSecret: ads-context-compactor-keycloak
+    secretKey: client-secret
+
 guardrail:
   enabled: true
   image:
