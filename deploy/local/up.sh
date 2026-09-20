@@ -69,7 +69,9 @@ done
 kubectl -n cert-manager wait --for=condition=Ready certificate/ads-local-ca --timeout=120s
 
 step "Kyverno, which the chart's exec policy needs (it ships the policy, not the engine)"
-kubectl apply -f "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/install.yaml"
+# Server-side: the CRDs are far past the 262144-byte annotation a client-side apply writes.
+kubectl apply --server-side --force-conflicts \
+  -f "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/install.yaml"
 kubectl -n kyverno rollout status deploy/kyverno-admission-controller --timeout=300s
 
 step "sandbox prerequisites kind does not have: StorageClasses and a stub RuntimeClass"
