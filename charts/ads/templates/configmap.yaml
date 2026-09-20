@@ -30,3 +30,4 @@ data:
   {{- with include "ads.caBundlePath" . }}
   ADS_TLS_CA_BUNDLE: {{ . | quote }}
   {{- end }}
+  {{- include "ads.unlistedModels" . }}

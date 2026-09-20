@@ -40,6 +40,24 @@ def test_settings_dialog_never_renders_a_stored_bearer(
     assert '<input name="model-name"' not in dialog.text
 
 
+def test_a_stand_that_allows_unlisted_models_offers_the_catalog_and_free_text(
+    client: TestClient,
+    preferences: FakePreferences,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADS_ALLOW_UNLISTED_MODELS", "1")
+    model = preferences.seed(description="Work chat")
+    login(client)
+    pages = (client.get("/settings"), client.get("/settings", params={"model_id": str(model.id)}))
+    for page in pages:
+        assert page.status_code == 200
+        assert '<input name="model-name" list="model-name-options"' in page.text
+        assert '<select name="model-name"' not in page.text
+        # The catalog stays, as suggestions rather than the only choices.
+        assert '<option value="glm-5.3"' in page.text
+        assert '<option value="glm-5.2"' in page.text
+
+
 def test_composer_options_never_contain_a_bearer(
     client: TestClient,
     preferences: FakePreferences,

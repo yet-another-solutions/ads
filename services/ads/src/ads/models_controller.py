@@ -15,6 +15,7 @@ from ads.authenticated import AuthenticatedController
 from ads.catalog_service import CatalogService
 from ads.inject import inject
 from ads.views import ModelView
+from ads_commons.model_catalog import unlisted_models_allowed
 from ads_commons.preferences import ModelTypeList
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
@@ -28,7 +29,12 @@ async def _dialog(catalog: CatalogService, selected: ModelView | None) -> Templa
         keep = next((row for row in models if row.id == selected.id), None)
     return Template(
         template_name="partials/settings.html",
-        context={"models": models, "selected": keep, "types": types},
+        context={
+            "models": models,
+            "selected": keep,
+            "types": types,
+            "unlisted": unlisted_models_allowed(),
+        },
     )
 
 

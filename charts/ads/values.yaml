@@ -1,6 +1,9 @@
 # Workloads live here; store the Helm release in the existing default namespace.
 namespace: ads
 replicaCount: 1
+# Development stands only. Accepts a model name outside ads_commons.model_catalog, which
+# has no baked tokenizer: its context is estimated and compaction fires on that estimate.
+allowUnlistedModels: false
 database:
   url: postgresql+psycopg://ads:change-me@postgres.ads-postgres.svc.cluster.local:5432/ads
 

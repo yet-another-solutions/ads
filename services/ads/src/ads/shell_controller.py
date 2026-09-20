@@ -18,7 +18,7 @@ from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.session_service import SessionService
 from ads.views import ModelOption, ModelView, ProjectView, TranscriptView
-from ads_commons.model_catalog import ModelTypeInfo
+from ads_commons.model_catalog import ModelTypeInfo, unlisted_models_allowed
 from ads_commons.security import AccessDenied, AuthenticationRequired
 
 log = structlog.get_logger("ads.shell")
@@ -166,7 +166,12 @@ class ShellController(FrontendController):
         selected = _selected(models, model_id)
         return Template(
             template_name="partials/settings.html",
-            context={"models": models, "selected": selected, "types": types},
+            context={
+                "models": models,
+                "selected": selected,
+                "types": types,
+                "unlisted": unlisted_models_allowed(),
+            },
         )
 
 
