@@ -10,6 +10,7 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ads_commons.egress import SessionProjectsApi
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.kube import SessionKubernetes
@@ -83,6 +84,7 @@ class SessionProvisioner:
         sessions: async_sessionmaker[AsyncSession],
         repository: SessionRepository,
         topics: TopicPreparation,
+        projects: SessionProjectsApi,
     ) -> None:
         self.settings = settings
         self.kube = kube
@@ -90,6 +92,7 @@ class SessionProvisioner:
         self.sessions = sessions
         self.repository = repository
         self.topics = topics
+        self.projects = projects
 
     async def provision(self, session_id: UUID) -> SandboxSession:
         if not isinstance(session_id, UUID):
@@ -98,6 +101,12 @@ class SessionProvisioner:
         if config is None:
             raise RuntimeError("session object configuration is required")
         owner = uuid4()
+        # Resolve the ADS-owned association before creating any row or object.
+        # Model/guest input and the delegated execution request cannot choose it.
+        async with asyncio.timeout(self.settings.control_seconds):
+            binding = await self.projects.session_project(session_id)
+        if binding.session_id != session_id:
+            raise SessionBindError("session project response mismatch")
         async with asyncio.timeout(config.create_seconds), self.sessions.begin() as db:
             inserted = await self.repository.insert_pending(
                 db,
@@ -105,9 +114,12 @@ class SessionProvisioner:
                 uuid4(),
                 self.settings.golden_version,
                 datetime.now(UTC),
+                binding.project_id,
             )
             row = await self.repository.get(db, session_id)
             assert row is not None
+            if row.project_id != binding.project_id:
+                raise SessionBindError("persisted session project changed")
             if not inserted and row.status != "stopped":
                 return row
             resuming = row.status == "stopped" and row.pvc_id is not None

@@ -4,7 +4,7 @@
         action="/projects/{{ project.id }}/egress-settings"
         hx-post="/projects/{{ project.id }}/egress-settings"
         hx-target="#dialog-host" hx-swap="innerHTML">
-    <p class="note">Revision {{ snapshot.revision }}{% if saved %}. Settings saved.{% endif %}
+    <p class="note">Revision {{ snapshot.revision }}{% if saved %}. Settings saved{% if publication_failed %}, but update publication failed. Sandboxes may still have earlier settings{% else %} and update published{% endif %}.{% endif %}
       Rules are evaluated in order. Whitelist with no rules denies all.</p>
     <label>Mode
       <select name="mode" aria-label="Mode">
@@ -16,8 +16,8 @@
     <button type="button" class="ghost" data-egress-add>Add rule</button>
     <input type="hidden" name="settings">
     <script type="application/json" data-egress-initial>{{ settings_json | tojson }}</script>
-    <p class="note">A wildcard domain suffix matches one label. Upgrade targets require their
-      own matching rule; the editor never adds or changes rules automatically.</p>
+    <p class="note">A wildcard domain suffix matches one label. Upgrade targets are permitted
+      in whitelist mode and prohibited in blacklist mode. No extra target-rule gate is added.</p>
     <p data-egress-error role="alert" class="composer-warn"></p>
   </form>
   <div class="dlg-foot">

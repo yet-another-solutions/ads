@@ -49,6 +49,9 @@ def _base_env(
             "ADS_DATABASE_URL": f"sqlite:///{tmp_path / 'ads.db'}",
             "ADS_KAFKA_BOOTSTRAP_SERVERS": "",
             "ADS_PREFERENCES_BASE_URL": "https://ads-preferences.invalid",
+            "ADS_SANDBOX_MANAGER_BASE_URL": "https://manager.invalid",
+            "ADS_MANAGER_SERVICE_SUBJECT": "11111111-1111-4111-8111-111111111111",
+            "ADS_IPC_SERVICE_SUBJECT": "22222222-2222-4222-8222-222222222222",
         }
     )
     if ca is None:
@@ -165,6 +168,12 @@ def test_uvicorn_serves_https_health_then_exits(
                     timeout=0.3,
                 )
                 if response.status_code == 200:
+                    readiness = httpx2.get(
+                        f"https://127.0.0.1:{port}/health/ready",
+                        verify=ssl.create_default_context(cafile=str(ca_crt)),
+                        timeout=0.3,
+                    )
+                    assert readiness.status_code == 503  # No configuration broker configured.
                     break
             except httpx2.HTTPError:
                 time.sleep(0.1)

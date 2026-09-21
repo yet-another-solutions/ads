@@ -20,6 +20,20 @@ from tests.threadline_fakes import FakePreferences, login
 from tests.threadline_flows import create_project, create_session, send
 
 
+def test_egress_editor_distinguishes_saved_from_published(
+    chat: Chat, preferences: FakePreferences
+) -> None:
+    page = chat.page
+    chat.app.state.egress_updates.failed = True
+    page.get_by_role("button", name="Egress settings for").click()
+    dialog = page.locator("#egress-settings")
+    dialog.get_by_role("button", name="Save settings", exact=True).click()
+    expect(dialog).to_contain_text("Revision 2")
+    expect(dialog).to_contain_text("Settings saved, but update publication failed")
+    expect(dialog).not_to_contain_text("Settings could not be saved")
+    assert next(iter(preferences.egress.values())).revision == 2
+
+
 def test_egress_editor_preserves_omitted_mode_dependent_case_default(
     chat: Chat, preferences: FakePreferences
 ) -> None:

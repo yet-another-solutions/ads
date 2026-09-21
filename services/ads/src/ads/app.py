@@ -16,6 +16,9 @@ from sqlalchemy import Engine
 from ads.auth import AuthController
 from ads.config import Settings
 from ads.db import Base, create_db_engine
+from ads.egress import EgressUpdates
+from ads.egress_controller import EgressRequestController, SessionProjectController
+from ads.egress_kafka import EgressKafka
 from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService
 from ads.exceptions import EXCEPTION_HANDLERS
@@ -93,6 +96,7 @@ def create_app(
     engine: Engine | None = None,
     preferences: PreferencesApi | None = None,
     egress_preferences: ProjectEgressApi | None = None,
+    egress_updates: EgressUpdates | None = None,
     kafka: EngineRequests | None = None,
     hub: LiveHub | None = None,
     tokens: TokenMinter | None = None,
@@ -116,6 +120,7 @@ def create_app(
             engine=db_engine,
             preferences=preferences,
             egress_preferences=egress_preferences,
+            egress_updates=egress_updates,
             kafka=kafka,
             hub=hub,
         ),
@@ -138,9 +143,19 @@ def create_app(
         else None
     )
     session_config = build_session_config(settings)
+    updates: EgressUpdates | None = None
 
-    async def _startup() -> None:
-        nonlocal requests, engine_output, watchdog, output_controller, consumer
+    async def _startup_services() -> None:
+        nonlocal requests, engine_output, watchdog, output_controller, consumer, updates
+        updates = await container.get(EgressUpdates)
+        assert updates is not None
+        if isinstance(updates, EgressKafka):
+            updates.controller = await container.get(EgressRequestController)
+        # Match the existing offline liveness mode. This never enables publication:
+        # an unstarted real broker gateway rejects saves as publication failures.
+        if settings.kafka_bootstrap_servers.strip() or not isinstance(updates, EgressKafka):
+            await updates.start()
+        app.state.egress_updates = updates
         if not eager_kafka:
             requests = await container.get(EngineRequests)
             engine_output = await container.get(EngineOutputService)
@@ -158,16 +173,26 @@ def create_app(
             await consumer.start()
 
     async def _shutdown() -> None:
+        if updates is not None:
+            await updates.stop()
         if consumer is not None:
             await consumer.stop()
         if watchdog is not None:
             await watchdog.stop()
         await container.close()
 
+    async def _startup() -> None:
+        try:
+            await _startup_services()
+        except BaseException:
+            await _shutdown()
+            raise
+
     app = Litestar(
         route_handlers=[
             ShellController,
             ProjectController,
+            SessionProjectController,
             SessionController,
             ModelsController,
             ModelTypesController,

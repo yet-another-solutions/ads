@@ -28,6 +28,7 @@ class SandboxSession(Base):
 
     session_id: Mapped[UUID] = mapped_column(primary_key=True)
     sandbox_id: Mapped[UUID] = mapped_column(unique=True)
+    project_id: Mapped[UUID]
     status: Mapped[str]
     golden_version: Mapped[str]
     pvc_uid: Mapped[str | None]
@@ -169,12 +170,14 @@ class SessionRepository:
         sandbox_id: UUID,
         version: str,
         now: datetime,
+        project_id: UUID,
     ) -> bool:
         result = await db.scalar(
             insert(SandboxSession)
             .values(
                 session_id=session_id,
                 sandbox_id=sandbox_id,
+                project_id=project_id,
                 status="pending",
                 golden_version=version,
                 created_at=now,

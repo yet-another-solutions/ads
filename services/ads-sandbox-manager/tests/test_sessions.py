@@ -16,6 +16,7 @@ from sqlalchemy import create_engine, inspect, text, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from ads_commons.egress import SessionProjectBinding
 from ads_commons_schema import mapped_tables, prepare_schema
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import VERSION
@@ -26,6 +27,14 @@ from session_support import FakeSessionKube, FakeTopics
 from test_session_objects import object_settings  # noqa: F401
 
 pytestmark = pytest.mark.anyio
+
+
+class FakeProjects:
+    def __init__(self):
+        self.project = uuid4()
+
+    async def session_project(self, session_id):
+        return SessionProjectBinding(session_id, self.project)
 
 
 @pytest.fixture
@@ -54,6 +63,7 @@ async def sessions_harness(baked, object_settings, manager_database_url):  # noq
         kube=kube,
         topics=topics,
         golden=baked.golden,
+        projects=FakeProjects(),
     )
     h.service = SessionProvisioner(
         h.settings,
@@ -62,6 +72,7 @@ async def sessions_harness(baked, object_settings, manager_database_url):  # noq
         sessions,
         repository,
         topics,
+        h.projects,
     )
     yield h
     await engine.dispose()
@@ -92,6 +103,7 @@ async def seed(h, session_id, status="stopped", pvc_uid=None):
             sandbox_id,
             disk["metadata"]["labels"][VERSION] if disk else h.settings.golden_version,
             now,
+            h.projects.project,
         )
         await db.execute(
             update(SandboxSession)
@@ -154,6 +166,7 @@ async def test_first_create_four_objects_bind_persisted_before_topics(sessions_h
         h.sessions,
         h.repository,
         h.topics,
+        h.projects,
     )
     assert (await fresh_service.provision(sid)).status == "creating"
     assert h.kube.calls == before
@@ -192,6 +205,7 @@ async def test_database_claim_wait_is_bounded(sessions_harness):
             uuid4(),
             h.settings.golden_version,
             datetime.now(UTC),
+            h.projects.project,
         )
         with pytest.raises(TimeoutError):
             await asyncio.wait_for(h.service.provision(sid), timeout=2)

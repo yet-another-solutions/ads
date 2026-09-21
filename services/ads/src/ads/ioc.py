@@ -10,6 +10,15 @@ from sqlalchemy.orm import Session
 from ads.abort_subjects import AbortSubjects
 from ads.catalog_service import CatalogService
 from ads.config import Settings
+from ads.egress import (
+    EgressRequestService,
+    EgressUpdates,
+    ManagerBindings,
+    SessionProjectService,
+    StartupPreferences,
+)
+from ads.egress_controller import EgressRequestController
+from ads.egress_kafka import EgressKafka
 from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService, SessionFactory
 from ads.kafka import (
@@ -34,7 +43,7 @@ from ads.session_binder import SessionBinder
 from ads.session_service import SessionService
 from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
 from ads.watchdog import Watchdog
-from ads_commons.egress import ProjectEgressApi
+from ads_commons.egress import ProjectEgressApi, SandboxBindingsApi
 from ads_commons.preferences import PreferencesApi
 from ads_commons.security import (
     jwks_uri_from_well_known,
@@ -94,6 +103,7 @@ class AppProvider(Provider):
         kafka: EngineRequests | None = None,
         hub: LiveHub | None = None,
         egress_preferences: ProjectEgressApi | None = None,
+        egress_updates: EgressUpdates | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -102,6 +112,7 @@ class AppProvider(Provider):
         self._kafka = kafka
         self._hub = hub
         self._egress_preferences = egress_preferences
+        self._egress_updates = egress_updates
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -126,12 +137,37 @@ class AppProvider(Provider):
         return PreferencesClient(settings, tokens)
 
     @provide(scope=Scope.APP)
+    def startup_preferences(self, settings: Settings, tokens: TokenMinter) -> StartupPreferences:
+        return PreferencesClient(settings, tokens)
+
+    @provide(scope=Scope.APP)
+    def sandbox_bindings(self, settings: Settings, tokens: TokenMinter) -> SandboxBindingsApi:
+        return ManagerBindings(settings, tokens)
+
+    @provide(scope=Scope.APP)
+    def egress_updates(self, settings: Settings, tokens: TokenMinter) -> EgressUpdates:
+        return (
+            self._egress_updates
+            if self._egress_updates is not None
+            else EgressKafka(settings, tokens)
+        )
+
+    session_projects = provide(SessionProjectService, scope=Scope.APP)
+    egress_requests = provide(EgressRequestService, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def egress_controller(
+        self, authenticator: TokenAuthenticator, service: EgressRequestService
+    ) -> EgressRequestController:
+        return EgressRequestController(authenticator, service)
+
+    @provide(scope=Scope.APP)
     def kafka(self, settings: Settings) -> EngineRequests:
         if self._kafka is not None:
             return self._kafka
         return AiokafkaEngineRequests(
             settings,
-            AIOKafkaProducer(bootstrap_servers=settings.kafka_bootstrap_servers),
+            AIOKafkaProducer(**settings.kafka_options()),
         )
 
     @provide(scope=Scope.APP)
@@ -177,7 +213,7 @@ class AppProvider(Provider):
         controller: EngineOutputController,
     ) -> EngineOutputConsumer:
         consumer = AIOKafkaConsumer(
-            bootstrap_servers=settings.kafka_bootstrap_servers,
+            **settings.kafka_options(),
             group_id=settings.engine_consumer_group,
             enable_auto_commit=False,
             auto_offset_reset="latest",

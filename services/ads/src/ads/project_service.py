@@ -7,6 +7,7 @@ import msgspec
 from sqlalchemy.orm import Session
 
 from ads.domain import utc_now
+from ads.egress import EgressPublicationFailed, EgressUpdates
 from ads.exceptions import InvalidInput, NotFound
 from ads.models import Project
 from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
@@ -31,12 +32,14 @@ class ProjectService:
         sessions: SessionRepository,
         runs: SessionRunRepository,
         egress: ProjectEgressApi,
+        updates: EgressUpdates,
     ) -> None:
         self._session = session
         self._projects = projects
         self._sessions = sessions
         self._runs = runs
         self._egress = egress
+        self._updates = updates
 
     @require_role("user")
     async def create(self, name: str, description: str) -> ProjectView:
@@ -82,7 +85,12 @@ class ProjectService:
     ) -> ProjectEgressSnapshot:
         await self.get(project_id)
         settings = msgspec.json.decode(msgspec.json.encode(settings), type=ProjectEgressSettings)
-        return await self._egress.save_egress(project_id, settings)
+        snapshot = await self._egress.save_egress(project_id, settings)
+        try:
+            await self._updates.publish(project_id, snapshot)
+        except Exception as exc:
+            raise EgressPublicationFailed(snapshot) from exc
+        return snapshot
 
     async def list_tree(self, q: str | None = None) -> list[ProjectView]:
         """Full tree for empty ``q``. Otherwise projects with no session match are omitted."""

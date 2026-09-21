@@ -41,6 +41,7 @@ from tests.threadline_fakes import (
     FakeOidcVerifier,
     FakePreferences,
     FakeTokens,
+    RecordingEgress,
     RecordingKafka,
     headers,
     login,
@@ -530,6 +531,7 @@ def test_produce_failure_leaves_the_run_pending_until_the_timeout(
         preferences=preferences,
         egress_preferences=preferences,
         kafka=broken,
+        egress_updates=RecordingEgress(),
         tokens=tokens,
         jwt_verifier=authenticator,  # type: ignore[arg-type]
         oidc_verifier=FakeOidcVerifier(),
@@ -690,6 +692,7 @@ def test_abort_produce_failure_still_unwinds_locally(
         egress_preferences=preferences,
         kafka=kafka,
         tokens=FakeTokens(),
+        egress_updates=RecordingEgress(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]
         oidc_verifier=FakeOidcVerifier(),
     )
@@ -729,6 +732,7 @@ def test_token_exchange_failure_on_abort_still_unwinds(
         egress_preferences=preferences,
         kafka=kafka,
         tokens=_OnlySendWorks(),
+        egress_updates=RecordingEgress(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]
         oidc_verifier=FakeOidcVerifier(),
     )

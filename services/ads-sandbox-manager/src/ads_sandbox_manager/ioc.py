@@ -12,10 +12,12 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from ads_commons.egress import SessionProjectsApi
 from ads_commons.security import jwks_uri_from_well_known, token_endpoint_from_well_known
 from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeSettings
 from ads_sandbox_manager.auth import MANAGER, ClientCredentials, TokenMinter
 from ads_sandbox_manager.barrier import CoordinationPort, ManagerBarrier
+from ads_sandbox_manager.binding import AdsSessionProjects, BindingService
 from ads_sandbox_manager.cleanup import CleanupAdapter, CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.controller import KafkaController
@@ -82,6 +84,7 @@ class AppProvider(Provider):
     golden = provide(GoldenEnsure, scope=Scope.APP)
     runtime = provide(ManagerRuntime, scope=Scope.APP)
     repository = provide(SessionRepository, scope=Scope.APP)
+    bindings = provide(BindingService, scope=Scope.APP)
     provisioner = provide(SessionProvisioner, scope=Scope.APP)
     client_credentials = provide(ClientCredentials, scope=Scope.APP)
     transport = provide(KafkaTransport, scope=Scope.APP)
@@ -94,6 +97,10 @@ class AppProvider(Provider):
     lifecycle_repository = provide(LifecycleRepository, scope=Scope.APP)
     lifecycle = provide(LifecycleService, scope=Scope.APP)
     recovery = provide(RecoveryService, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def projects(self, settings: Settings, exchange: TokenExchange) -> SessionProjectsApi:
+        return AdsSessionProjects(settings, exchange, self._ssl(settings))
 
     @provide(scope=Scope.APP)
     def maintenance(self, lifecycle: LifecycleService) -> Maintenance:
