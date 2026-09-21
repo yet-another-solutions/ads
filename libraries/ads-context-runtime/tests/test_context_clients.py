@@ -107,3 +107,35 @@ def test_langchain_frame_model_never_binds_tools_in_finalization(monkeypatch):
 
     monkeypatch.setattr("ads_context_runtime.frames.ChatOpenAI", Chat)
     assert asyncio.run(LangChainFrameModel(model_settings()).invoke([], [], 100)).content == "final"
+
+
+@pytest.mark.parametrize("reason", ["no_safe_fitting_prefix", "provider secret payload"])
+def test_compaction_failure_reason_is_typed_and_allowlisted(monkeypatch, reason):
+    class Exchange:
+        def exchange(self, *args, **kwargs):
+            return "exchanged-secret"
+
+    original = httpx2.AsyncClient
+    monkeypatch.setattr(
+        "ads_context_runtime.http.httpx2.AsyncClient",
+        lambda **kwargs: original(
+            transport=httpx2.MockTransport(
+                lambda request: httpx2.Response(
+                    422, json={"detail": "context request failed", "reason": reason}
+                )
+            ),
+            **kwargs,
+        ),
+    )
+    client = ContextClients(
+        Exchange(),
+        "https://meter.test/meter",
+        "https://compactor.test/compact",
+        ssl.create_default_context(),
+        "inbound-secret",
+    )
+    with pytest.raises(ContextFailure) as failure:
+        asyncio.run(client.compact(CompactRequest([], model_settings(), 50)))
+    assert str(failure.value) == (
+        "no_safe_fitting_prefix" if reason == "no_safe_fitting_prefix" else "context_service_failed"
+    )

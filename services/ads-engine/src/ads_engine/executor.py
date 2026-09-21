@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from dataclasses import replace
 from typing import Any, TypedDict, cast
 
+import structlog
 from langchain_core.messages import AIMessageChunk
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langsmith import tracing_context
 
+from ads_commons.context_compactor import CompactionBoundary
 from ads_commons.engine import (
     AssistantHistoryTurn,
     EngineRequest,
@@ -29,14 +32,27 @@ from ads_engine.chat import (
     tool_call_from_native,
     tool_result_from_message,
 )
-from ads_engine.context import EngineContextFactory
+from ads_engine.context import CompactionFailed, EngineContextFactory
 from ads_engine.mcp_client import SandboxClient
 from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
+
+log = structlog.get_logger("ads_engine")
+COMPLETE_ONLY_PROMPT = (
+    "\nContext compaction failed. Complete the answer now using the evidence already available. "
+    "No further tools are available or permitted, including memory_recall. "
+    "State any limitations; do not claim unperformed work or invent tool results."
+)
+EMPTY_COMPLETION = (
+    "I cannot continue tool-based work in this turn because context compaction could not "
+    "complete. No further tools were executed."
+)
 
 
 class ExecutionState(TypedDict):
     active: list[HistoryTurn]
     done: bool
+    started: bool
+    complete_only: bool
 
 
 class ExecutorChatStreamer:
@@ -51,6 +67,7 @@ class ExecutorChatStreamer:
         self._context = context
 
     async def stream(self, request: EngineRequest) -> AsyncGenerator[StreamDelta, None]:
+        admission_failure: CompactionFailed | None = None
         with tracing_context(enabled=False):
             try:
                 context = self._context.open(request)
@@ -67,13 +84,59 @@ class ExecutorChatStreamer:
                         )
                         emitted = False
                         dispatched = False
+                        publications: dict[int, asyncio.Event] = {}
+
+                        async def publish_call(delta: StreamDelta) -> None:
+                            nonlocal emitted
+                            accepted = asyncio.Event()
+                            publications[id(delta)] = accepted
+                            try:
+                                emitted = True
+                                get_stream_writer()(delta)
+                                # Resuming our outer generator means its consumer accepted
+                                # this part. Closing after a Kafka failure never releases it.
+                                await accepted.wait()
+                            finally:
+                                publications.pop(id(delta), None)
 
                         async def boundary(state: ExecutionState) -> ExecutionState:
-                            nonlocal emitted
+                            nonlocal emitted, admission_failure
+                            if state["complete_only"]:
+                                return state
                             writer = get_stream_writer()
-                            async for delta in context.boundary(state["active"]):
-                                emitted = True
-                                writer(delta)
+                            phase: CompactionBoundary = (
+                                "admission"
+                                if not state["started"]
+                                else ("finish" if state["done"] else "continuation")
+                            )
+                            try:
+                                async for delta in context.boundary(state["active"], phase):
+                                    emitted = True
+                                    writer(delta)
+                            except CompactionFailed as exc:
+                                if not state["started"]:
+                                    admission_failure = exc
+                                    log.warning(
+                                        "context_compaction_admission_failed",
+                                        session_id=str(request.session_id),
+                                        message_id=str(request.message_id),
+                                        reason=str(exc),
+                                    )
+                                    raise
+                                state = {**state, "complete_only": True}
+                                log.warning(
+                                    "context_compaction_complete_only",
+                                    session_id=str(request.session_id),
+                                    message_id=str(request.message_id),
+                                    boundary=phase,
+                                    reason=str(exc),
+                                    total_context=context.pressure.total_context
+                                    if context.pressure
+                                    else None,
+                                    used_context=context.pressure.used_context
+                                    if context.pressure
+                                    else None,
+                                )
                             return state
 
                         async def model_step(state: ExecutionState) -> ExecutionState:
@@ -81,15 +144,30 @@ class ExecutorChatStreamer:
                             writer = get_stream_writer()
                             active = state["active"]
                             memory_visible = any(isinstance(item, Tombstone) for item in active)
-                            bound = base_model.bind_tools(
-                                [*schemas, *([LOCAL_TOOLS[1]] if memory_visible else [])],
-                                parallel_tool_calls=False,
+                            complete_only = state["complete_only"]
+                            bound = (
+                                base_model
+                                if complete_only
+                                else base_model.bind_tools(
+                                    [*schemas, *([LOCAL_TOOLS[1]] if memory_visible else [])],
+                                    parallel_tool_calls=False,
+                                )
                             )
                             instructions = request.instructions
-                            if memory_visible:
+                            if memory_visible and not complete_only:
                                 instructions += (
                                     "\nVisible memory can be queried with memory_recall."
                                 )
+                            pressure = await context.measure(active)
+                            instructions += (
+                                "\nADS context budget (estimated model-visible messages; excludes "
+                                "system instructions, tool schemas and provider overhead): "
+                                f"total_context_tokens={pressure.total_context}; "
+                                "remaining_context_tokens="
+                                f"{max(0, pressure.total_context - pressure.used_context)}."
+                            )
+                            if complete_only:
+                                instructions += COMPLETE_ONLY_PROMPT
                             messages = context_messages(active, instructions)
                             response: AIMessageChunk | None = None
                             text = ""
@@ -121,7 +199,32 @@ class ExecutorChatStreamer:
                                     if emitted or dispatched or attempt == 2:
                                         raise
                                     response = None
-                            if response is None or response.invalid_tool_calls:
+                            if response is None:
+                                raise ExecutionFailed("invalid model response")
+                            if complete_only:
+                                # This gate precedes every MCP admission and local recall path.
+                                # Even a provider ignoring the absent tools cannot dispatch.
+                                if response.tool_calls or response.invalid_tool_calls:
+                                    log.warning(
+                                        "complete_only_tool_calls_ignored",
+                                        session_id=str(request.session_id),
+                                        message_id=str(request.message_id),
+                                    )
+                                if not text:
+                                    text = EMPTY_COMPLETION
+                                    writer(
+                                        StreamDelta(
+                                            "message",
+                                            text=text,
+                                            pressure=await context.measure(
+                                                [*active, AssistantHistoryTurn(text)]
+                                            ),
+                                        )
+                                    )
+                                    emitted = True
+                                active.append(AssistantHistoryTurn(text))
+                                return {**state, "active": active, "started": True, "done": True}
+                            if response.invalid_tool_calls:
                                 raise ExecutionFailed("invalid model response")
                             if text:
                                 active.append(AssistantHistoryTurn(text))
@@ -142,7 +245,7 @@ class ExecutorChatStreamer:
                                     context.recall.visible_memory(active, call)
                                 for call in calls:
                                     active.append(call)
-                                    writer(
+                                    await publish_call(
                                         StreamDelta(
                                             "tool_call",
                                             tool_call=call,
@@ -165,7 +268,7 @@ class ExecutorChatStreamer:
                                 tools.admit(tools.executor_run_id, response)
                             for native in [] if local else response.tool_calls:
                                 call = tool_call_from_native(native)
-                                writer(
+                                await publish_call(
                                     StreamDelta(
                                         "tool_call",
                                         tool_call=call,
@@ -186,7 +289,9 @@ class ExecutorChatStreamer:
                                     )
                                 )
                             return {
+                                **state,
                                 "active": active,
+                                "started": True,
                                 "done": not response.tool_calls,
                             }
 
@@ -202,6 +307,8 @@ class ExecutorChatStreamer:
                         state: ExecutionState = {
                             "active": [*request.history, UserHistoryTurn(request.user_input)],
                             "done": False,
+                            "started": False,
+                            "complete_only": False,
                         }
                         while not state["done"]:
                             async with aclosing(
@@ -221,5 +328,13 @@ class ExecutorChatStreamer:
                                             yield value
                                         except GeneratorExit:
                                             return
+                                        accepted = publications.get(id(value))
+                                        if accepted is not None:
+                                            accepted.set()
             except Exception:
+                # MCP teardown may wrap the original failure in an ExceptionGroup.
+                if admission_failure is not None:
+                    raise ExecutionFailed(
+                        f"context compaction failed: {admission_failure}"
+                    ) from None
                 raise ExecutionFailed("sandbox executor failed") from None

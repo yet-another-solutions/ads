@@ -56,6 +56,250 @@ class FakeModel:
             yield item
 
 
+@pytest.mark.parametrize("boundary", ["admission", "continuation", "finish"])
+def test_compaction_failure_is_hard_only_before_first_model_turn(
+    sdk_harness, store, jwt_verifier, access_token, boundary
+):
+    import msgspec
+
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import (
+        AckResponse,
+        AssistantHistoryTurn,
+        ErrorOutput,
+        Finish,
+        PartialResponse,
+        ToolResult,
+        authorization_headers,
+        encode_ack_response,
+        encode_request,
+    )
+    from ads_context_runtime.frames import ContextFailure, RecallRuntime
+    from ads_engine.context import EngineContext
+    from ads_engine.listener import EngineListener
+    from ads_engine.service import EngineService
+    from context_fakes import Model, model_settings
+    from engine_fakes import FakeTokenExchange, RecordingPublisher
+
+    h = sdk_harness
+    attempts = []
+
+    class Clients:
+        async def meter(self, body):
+            high = boundary == "admission"
+            high |= boundary == "continuation" and any(
+                isinstance(m, ToolResult) for m in body.messages
+            )
+            high |= boundary == "finish" and any(
+                isinstance(m, AssistantHistoryTurn) for m in body.messages
+            )
+            return MeterResponse(900 if high else 100)
+
+        async def compact(self, body):
+            attempts.append(body)
+            raise ContextFailure("no_safe_fitting_prefix")
+
+    clients = Clients()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request, clients, RecallRuntime(clients, Model(), request.model, reserve=100)
+            )
+
+    request = msgspec.structs.replace(
+        make_request(authorization_token=access_token), model=model_settings(1000)
+    )
+    FakeModel.scripts = (
+        [[native()], [AIMessageChunk(content="final from existing evidence")]]
+        if boundary == "continuation"
+        else [[AIMessageChunk(content="already complete")]]
+    )
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory())
+    publisher = RecordingPublisher()
+    service = EngineService(store, publisher, streamer, FakeTokenExchange(), h.settings)
+    listener = EngineListener(service, publisher, jwt_verifier, h.settings)
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            task = asyncio.create_task(listener.on_message(encode_request(request)))
+            await asyncio.wait_for(publisher.acknowledged.wait(), 2)
+            await listener.on_message(
+                encode_ack_response(AckResponse(request.session_id, request.message_id)),
+                headers=authorization_headers(access_token),
+            )
+            await asyncio.wait_for(task, 3)
+
+    asyncio.run(scenario())
+    assert len(attempts) == 1
+    assert attempts[0].session_id == request.session_id
+    assert attempts[0].message_id == request.message_id
+    assert attempts[0].compaction_id is not None
+    assert attempts[0].boundary == boundary
+    errors = [m for m in publisher.messages if isinstance(m, ErrorOutput)]
+    finishes = [m for m in publisher.messages if isinstance(m, Finish)]
+    parts = [m for m in publisher.messages if isinstance(m, PartialResponse)]
+    assert [m.order for m in parts] == list(range(len(parts)))
+    if boundary == "admission":
+        assert len(errors) == 1 and "no_safe_fitting_prefix" in errors[0].text
+        assert not finishes and not FakeModel.calls and not h.executions
+    else:
+        assert not errors and len(finishes) == 1
+        assert finishes[0].last_order == parts[-1].order
+        assert not any(p.tombstone for p in parts)
+        assert len(FakeModel.bindings) == 1  # Never bind even [] tools in complete-only.
+        assert len(FakeModel.calls) == (2 if boundary == "continuation" else 1)
+        if boundary == "continuation":
+            prompt = FakeModel.calls[-1][0].content
+            assert "Complete the answer now" in prompt
+            assert "total_context_tokens=1000" in prompt
+            assert "remaining_context_tokens=100" in prompt
+            assert len(h.executions) == 1
+        else:
+            assert not h.executions
+
+
+@pytest.mark.parametrize("forbidden", ["exec_shell", "memory_recall"])
+@pytest.mark.parametrize("with_text", [False, True])
+def test_complete_only_cannot_dispatch_provider_tool_calls(sdk_harness, forbidden, with_text):
+    import msgspec
+
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import ToolResult, UserHistoryTurn
+    from ads_context_runtime.frames import ContextFailure, RecallRuntime
+    from ads_engine.context import EngineContext
+    from context_fakes import Model, memory, model_settings
+
+    h = sdk_harness
+    attempts = []
+
+    class Clients:
+        async def meter(self, body):
+            return MeterResponse(
+                900 if any(isinstance(m, ToolResult) for m in body.messages) else 100
+            )
+
+        async def compact(self, body):
+            attempts.append(body)
+            raise ContextFailure("no_safe_fitting_prefix")
+
+    clients, recall_model = Clients(), Model()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request, clients, RecallRuntime(clients, recall_model, request.model, reserve=100)
+            )
+
+    archived = memory([UserHistoryTurn("evidence")])
+    request = msgspec.structs.replace(
+        make_request(), model=model_settings(1000), history=[archived]
+    )
+    forbidden_call = native(forbidden, "command", "must-not-run", "forbidden")
+    FakeModel.scripts = [
+        [native()],
+        ([AIMessageChunk(content="bounded answer")] if with_text else []) + [forbidden_call],
+    ]
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory())
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(request))
+
+    deltas = asyncio.run(scenario())
+    assert len(attempts) == 1 and len(FakeModel.calls) == 2
+    assert len(FakeModel.bindings) == 1
+    assert len(h.executions) == 1 and recall_model.calls == []
+    assert [d.tool_call.id for d in deltas if d.kind == "tool_call"] == ["call-1"]
+    assert "Visible memory can be queried" not in FakeModel.calls[-1][0].content
+    assert deltas[-1].kind == "message"
+    assert (
+        deltas[-1].text == "bounded answer" if with_text else "No further tools" in deltas[-1].text
+    )
+
+
+def test_each_model_turn_gets_fresh_context_budget(sdk_harness):
+    h = sdk_harness
+    FakeModel.scripts = [[native()], [AIMessageChunk(content="done")]]
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(h.streamer.stream(make_request()))
+
+    asyncio.run(scenario())
+    first, second = [messages[0].content for messages in FakeModel.calls]
+    assert "total_context_tokens=32768" in first
+    assert "remaining_context_tokens=32758" in first
+    assert "total_context_tokens=32768" in second
+    assert "remaining_context_tokens=32738" in second
+    assert "excludes system instructions" in second
+
+
+def test_failed_second_compaction_keeps_first_memory_and_completes(sdk_harness):
+    import msgspec
+
+    from ads_commons.context_compactor import active_context
+    from ads_commons.context_meter import MeterResponse
+    from ads_commons.engine import AssistantHistoryTurn, Tombstone, ToolResult, UserHistoryTurn
+    from ads_context_runtime.frames import ContextFailure, RecallRuntime
+    from ads_engine.context import EngineContext
+    from context_fakes import Model, memory, model_settings
+
+    h = sdk_harness
+    attempts = []
+    memories = []
+
+    class Clients:
+        async def meter(self, body):
+            results = sum(isinstance(m, ToolResult) for m in body.messages)
+            has_memory = any(isinstance(m, Tombstone) for m in body.messages)
+            return MeterResponse(900 if (results >= 1 and not has_memory) or results >= 2 else 100)
+
+        async def compact(self, body):
+            attempts.append(body)
+            if len(attempts) == 1:
+                result = memory(body.messages[:2], body.messages[2:])
+                memories.append(result)
+                return result
+            raise ContextFailure("no_safe_fitting_prefix")
+
+    clients = Clients()
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(
+                request, clients, RecallRuntime(clients, Model(), request.model, reserve=100)
+            )
+
+    request = msgspec.structs.replace(
+        make_request(),
+        model=model_settings(1000),
+        history=[UserHistoryTurn("old"), AssistantHistoryTurn("old answer")],
+    )
+    FakeModel.scripts = [
+        [native()],
+        [native(call_id="call-2")],
+        [AIMessageChunk(content="final answer without more tools")],
+    ]
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory())
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(request))
+
+    deltas = asyncio.run(scenario())
+    assert len(attempts) == 2 and len(h.executions) == 2
+    assert [d.tombstone for d in deltas if d.kind == "tombstone"] == memories
+    assert attempts[1].messages[: len(active_context(memories[0]))] == active_context(memories[0])
+    assert attempts[0].compaction_id != attempts[1].compaction_id
+    assert attempts[0].boundary == attempts[1].boundary == "continuation"
+    assert len(FakeModel.bindings) == 2 and len(FakeModel.calls) == 3
+    assert "remaining_context_tokens=900" in FakeModel.calls[1][0].content
+    assert "remaining_context_tokens=100" in FakeModel.calls[2][0].content
+    assert str(memories[0].memory_id) in str(FakeModel.calls[2])
+    assert deltas[-1].text == "final answer without more tools"
+
+
 @pytest.mark.parametrize("boundary", ["admission", "tool_result", "terminal"])
 def test_compaction_precedes_continuation_and_terminal_finish(sdk_harness, boundary):
     import msgspec
@@ -126,6 +370,7 @@ def test_compaction_precedes_continuation_and_terminal_finish(sdk_harness, bound
         assert any(isinstance(m, ToolResult) for m in compacted[0])
         assert positions[0] > next(i for i, d in enumerate(deltas) if d.kind == "tool_result")
         assert str(tombstone.tombstone.memory_id) in str(FakeModel.calls[1])
+        assert "remaining_context_tokens=900" in FakeModel.calls[1][0].content
     else:
         assert positions[0] == 0
         assert str(tombstone.tombstone.memory_id) in str(FakeModel.calls[0])

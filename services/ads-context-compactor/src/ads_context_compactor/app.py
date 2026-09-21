@@ -7,6 +7,7 @@ from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar, Request, Response
 
+from ads_commons.context_compactor import CompactFailure
 from ads_commons.security import (
     AccessDenied,
     AuthenticationRequired,
@@ -25,6 +26,7 @@ from ads_context_compactor.controller import CompactorController
 from ads_context_compactor.health import live, ready
 from ads_context_compactor.middleware import jwt_caller_middleware
 from ads_context_compactor.service import ContextCompactorService
+from ads_context_runtime.failures import failure_reason
 from ads_context_runtime.frames import ContextFailure
 from ads_context_runtime.http import ContextClients
 
@@ -86,6 +88,8 @@ def failure(request: Request[Any, Any, Any], exc: Exception) -> Response[Any]:
         if isinstance(exc, AuthenticationRequired)
         else (403 if isinstance(exc, AccessDenied) else 422)
     )
+    if isinstance(exc, ContextFailure):
+        return Response(CompactFailure(failure_reason(exc)), status_code=status)
     return Response({"detail": "context request failed"}, status_code=status)
 
 

@@ -110,3 +110,21 @@ def test_missing_auth_bad_request_and_model_failure_are_non_success(setup):
     response = client.post("/compact", json=body, headers=auth)
     assert response.status_code == 422 and "private-provider" not in response.text
     assert SecurityContextHolder.get() is None
+
+
+def test_compactor_http_exposes_only_allowlisted_failure_code(setup):
+    client, token, model, body = setup
+    body["session_id"], body["message_id"], body["compaction_id"] = (
+        str(uuid4()),
+        str(uuid4()),
+        str(uuid4()),
+    )
+    body["boundary"] = "continuation"
+    body["messages"] = [{"type": "user", "text": "one protected turn"}]
+    response = client.post("/compact", json=body, headers={"Authorization": "Bearer " + token()})
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "context request failed",
+        "reason": "no_safe_fitting_prefix",
+    }
+    assert not model.calls

@@ -198,3 +198,36 @@ def test_pressure_follows_contiguous_part_order_not_arrival(
         ),
     )
     assert run_of(db_engine, sid).used_context == 600
+
+
+def test_complete_only_finish_preserves_turn_and_last_successful_candidate(
+    client, app, db_engine, kafka, context_session
+):
+    project, sid, mid = context_session
+    send(client, project, sid, "current", mid)
+    req = kafka.requests[-1]
+    candidate = memory([UserHistoryTurn("old")], [UserHistoryTurn("current")])
+    payloads = [
+        {"compaction": CompactionStatus("compacting_context")},
+        {"compaction": CompactionStatus("compacted_context")},
+        {"tombstone": candidate},
+        {"message": AssistantMessage("work before fallback")},
+        {"compaction": CompactionStatus("compacting_context")},
+        {"message": AssistantMessage("complete-only final answer")},
+    ]
+    for order, payload in enumerate(payloads):
+        emit(app, PartialResponse(sid, order, message_id=req.message_id, **payload))
+    emit(app, Finish(sid, len(payloads) - 1, req.message_id))
+    rows = entries_of(db_engine, sid)
+    assert run_of(db_engine, sid) is None
+    assert rows[0].text == "current" and rows[-1].text == "complete-only final answer"
+    assert chat_of(db_engine, sid).committed_tombstone_id == next(
+        row.id for row in rows if row.kind == "tombstone"
+    )
+    send(client, project, sid, "next", mid)
+    assert kafka.requests[-1].history == [
+        candidate,
+        UserHistoryTurn("current"),
+        AssistantHistoryTurn("work before fallback"),
+        AssistantHistoryTurn("complete-only final answer"),
+    ]
