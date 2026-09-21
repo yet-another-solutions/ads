@@ -83,6 +83,13 @@ class JwtCallerMiddleware:
         except AccessDenied:
             await _send_json(send, 403, "forbidden")
             return
+        if context.user_id == self._settings.ads_service_subject and not (
+            scope.get("method") == "GET"
+            and path.startswith("/v1/projects/")
+            and path.endswith("/egress-settings")
+        ):
+            await _send_json(send, 403, "forbidden")
+            return
         bound = SecurityContextHolder.set(context)
         try:
             await self.app(scope, receive, send)

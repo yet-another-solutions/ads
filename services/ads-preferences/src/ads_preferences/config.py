@@ -4,6 +4,7 @@ import os
 import ssl
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import UUID
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -33,6 +34,7 @@ class Settings:
     tls_ca_bundle: Path | None
     bind_host: str
     port: int
+    ads_service_subject: UUID | None = None
 
 
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
@@ -76,6 +78,11 @@ def load_settings() -> Settings:
         tls_ca_bundle=ca_bundle,
         bind_host=_env("ADS_PREFERENCES_BIND_HOST", "0.0.0.0"),
         port=int(_env("ADS_PREFERENCES_PORT", "8080")),
+        ads_service_subject=(
+            UUID(raw_subject)
+            if (raw_subject := os.environ.get("ADS_PREFERENCES_ADS_SERVICE_SUBJECT", "").strip())
+            else None
+        ),
     )
     load_tls_context(settings)
     return settings

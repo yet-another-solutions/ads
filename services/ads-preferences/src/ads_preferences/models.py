@@ -4,12 +4,23 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Index, Text, Uuid
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
 
 from ads_preferences.db import Base
+
+
+class ProjectEgress(Base):
+    __tablename__ = "project_egress"
+    __table_args__ = (CheckConstraint("revision >= 1", name="project_egress_revision_positive"),)
+
+    project_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"), nullable=False
+    )
 
 
 class UserModel(Base):
