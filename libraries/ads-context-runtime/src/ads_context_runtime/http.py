@@ -7,9 +7,10 @@ from typing import Protocol
 import httpx2
 import msgspec
 
-from ads_commons.context_compactor import CompactRequest
+from ads_commons.context_compactor import CompactFailure, CompactRequest
 from ads_commons.context_meter import MeterRequest, MeterResponse
 from ads_commons.engine import Tombstone
+from ads_context_runtime.failures import SAFE_REASONS
 from ads_context_runtime.frames import ContextFailure
 
 
@@ -64,8 +65,14 @@ class ContextClients:
                         "Content-Type": "application/json",
                     },
                 )
+                if audience == "ads-context-compactor" and response.status_code == 422:
+                    failure = msgspec.json.decode(response.content, type=CompactFailure)
+                    if failure.reason in SAFE_REASONS:
+                        raise ContextFailure(failure.reason)
                 response.raise_for_status()
                 return response.content
+        except ContextFailure:
+            raise
         except Exception:
             raise ContextFailure("context_service_failed") from None
 

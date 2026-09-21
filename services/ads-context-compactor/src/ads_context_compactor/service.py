@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
+import time
 import uuid
 from typing import TypedDict, cast
 
@@ -22,6 +25,7 @@ from ads_commons.engine import (
     UserHistoryTurn,
 )
 from ads_commons.security import require_caller
+from ads_context_runtime.failures import failure_reason
 from ads_context_runtime.frames import (
     ContextFailure,
     ContextOverflow,
@@ -157,6 +161,38 @@ class ContextCompactorService:
 
     @require_caller("ads-engine")
     async def compact(self, body: CompactRequest) -> Tombstone:
+        started = time.monotonic()
+        diagnostics: dict[str, object] = {
+            "session_id": str(body.session_id) if body.session_id else None,
+            "message_id": str(body.message_id) if body.message_id else None,
+            "compaction_id": str(body.compaction_id or uuid.uuid4()),
+            "boundary": body.boundary,
+            "model_name": body.model.options.model_name,
+            "total_context_tokens": body.model.options.max_context_tokens,
+            "target_percentage": body.target_percentage,
+            "target_tokens": body.target_percentage * body.model.options.max_context_tokens // 100,
+            "source_messages": len(body.messages),
+            "round": 0,
+        }
+
+        def log_event(event: str, level: int = logging.INFO, **fields: object) -> None:
+            # Render fields into the message itself: default Litestar logging drops `extra`.
+            # Only explicitly selected scalar/count metadata enters here, never source objects.
+            logging.getLogger(__name__).log(
+                level,
+                "%s %s",
+                event,
+                json.dumps(
+                    {
+                        **diagnostics,
+                        **fields,
+                        "duration_ms": round((time.monotonic() - started) * 1000),
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+
+        log_event("context_compaction_started")
         runtime = RecallRuntime(
             self._meter,
             self._model or LangChainFrameModel(body.model),
@@ -170,11 +206,23 @@ class ContextCompactorService:
 
         async def round_(state: Working) -> Working:
             source = state["source"]
+            diagnostics["round"] = int(cast(int, diagnostics["round"])) + 1
             size = await runtime.count(source)
+            diagnostics["source_tokens"] = size
+            diagnostics["source_messages"] = len(source)
             if state["memory"] is not None and size <= target:
                 return {**state, "done": True}
             boundaries = safe_boundaries(source)
             positions = [(index, await runtime.count(source[:index])) for index in boundaries]
+            diagnostics["safe_boundary_count"] = len(boundaries)
+            log_event(
+                "context_compaction_split_candidates",
+                # Bound log size even for histories with many user turns.
+                candidates=[
+                    {"index": index, "prefix_tokens": tokens} for index, tokens in positions[:20]
+                ],
+                candidates_truncated=len(positions) > 20,
+            )
             seen: set[int] = set()
             replacement: Tombstone | None = None
             for ratio in (50, 40, 30, 20, 10):
@@ -182,12 +230,25 @@ class ContextCompactorService:
                     (index for index, tokens in positions if tokens >= size * ratio / 100), None
                 )
                 if split is None or split in seen:
+                    log_event(
+                        "context_compaction_split_skipped",
+                        ratio=ratio,
+                        reason="no_candidate" if split is None else "duplicate_boundary",
+                        split_index=split,
+                    )
                     continue
                 seen.add(split)
                 prefix, remainder = source[:split], source[split:]
                 # A retained suffix over target cannot be repaired by summarizing memory alone.
                 if len(prefix) == 1 and isinstance(prefix[0], Tombstone):
+                    log_event(
+                        "context_compaction_split_skipped",
+                        ratio=ratio,
+                        reason="memory_only_prefix",
+                        split_index=split,
+                    )
                     continue
+                log_event("context_compaction_split_selected", ratio=ratio, split_index=split)
                 frame = Frame(
                     prefix,
                     "Produce the compacted memory summary.",
@@ -199,18 +260,21 @@ class ContextCompactorService:
                 )
                 try:
                     answer = await runtime.run(frame)
-                except ContextOverflow:
+                except ContextOverflow as exc:
+                    log_event("context_compaction_prefix_overflow", reason=failure_reason(exc))
                     continue
                 try:
                     summary = parse_summary(answer)
-                except ContextFailure:
+                except ContextFailure as exc:
+                    log_event("context_compaction_summary_repair", reason=failure_reason(exc))
                     # One bounded repair, tool-free, retaining the frame exchanges.
                     frame.exchanges.append(AssistantHistoryTurn(answer))
                     frame.finalization_only = True
                     frame.prompt += " FORMAT REPAIR: correct the final envelope once; no tools."
                     try:
                         answer = await runtime.run(frame)
-                    except ContextOverflow:
+                    except ContextOverflow as exc:
+                        log_event("context_compaction_prefix_overflow", reason=failure_reason(exc))
                         continue
                     summary = parse_summary(answer)
                 if await runtime.count([AssistantHistoryTurn(summary)]) > self._summary_cap:
@@ -230,6 +294,12 @@ class ContextCompactorService:
                 )
                 before = await runtime.count(prefix)
                 after = await runtime.count([replacement])
+                log_event(
+                    "context_compaction_replacement",
+                    prefix_tokens=before,
+                    summary_tokens=after,
+                    retained_messages=len(remainder),
+                )
                 if after * 100 > before * (100 - self._minimum_reduction_percentage):
                     raise ContextFailure("insufficient_compaction_progress")
                 break
@@ -250,7 +320,19 @@ class ContextCompactorService:
             result = state["memory"]
             if result is None:
                 raise ContextFailure("no_compaction_result")
+            log_event("context_compaction_succeeded")
             return result
-        except Exception:
-            logging.getLogger(__name__).error("context_compaction_failed")
+        except asyncio.CancelledError:
+            log_event("context_compaction_cancelled", logging.WARNING)
             raise
+        except Exception as exc:
+            log_event(
+                "context_compaction_failed",
+                logging.ERROR,
+                reason=failure_reason(exc),
+                exception_type=type(exc).__name__,
+            )
+            if isinstance(exc, ContextFailure):
+                raise
+            # The HTTP framework must not log a traceback containing raw provider payloads.
+            raise ContextFailure("internal_error") from None

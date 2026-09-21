@@ -24,7 +24,8 @@ minimum reduction (10% by default) of its selected
 prefix, including visible memory metadata. Each accepted round resets to 50%.
 The target is a fixed percentage of model `max_context_tokens`, not a percentage
 of each successive working list. There is no whole-context final pass. An
-unreachable target fails the invocation.
+unreachable target fails the compaction request. Engine handling depends on
+whether the user turn has started, as described below.
 
 The only active projection is the new memory plus its top-level remainder once.
 Recall unwraps inner memory plus archived originals, never a prior remainder.
@@ -77,6 +78,30 @@ originating request message ID. Existing part numbering and finish last-order
 completeness govern promotion; pings continue independently through REST and
 recursive recall waits.
 
+Before the first model invocation for a new user turn, required compaction failure
+is a hard error to ADS. After a model/tool step, compaction failure instead latches
+complete-only mode for the rest of that turn: preserve the unchanged active
+context, supply no tools (including local recall), and ask the model for its final
+answer using existing evidence. Runtime dispatch rejects any further tool use,
+even if a provider emits tool calls without schemas; such calls are not executed
+or added as unresolved tool records. No further compaction is attempted in that
+turn. If the assistant already finished without tools, retain that answer and
+finish without an extra model call. The compaction failure itself produces no
+Kafka error/abort, so normal successful finish preserves the turn and commits the
+latest earlier successful compaction candidate, if any. A failed compaction never
+produces a `compacted_context` or candidate tombstone.
+
+This does not suppress cancellation, unrelated tool/meter failures, or failure of
+the final model call itself. In particular, v1 token estimates cannot guarantee
+that an uncompacted input will fit the provider's actual context window.
+
+Every executor model turn receives refreshed `total_context_tokens` and
+`remaining_context_tokens` in its system instructions, including after successful
+compaction and during complete-only fallback. Remaining tokens are
+`max(0, total - measured active context)`. The prompt labels this as an estimate
+excluding instructions, schemas and provider overhead; it grants no permission
+and does not replace runtime enforcement.
+
 ADS appends a hidden tombstone at its actual entry-list position and records a
 run-local candidate pointer. Only a complete successful finish commits the latest
 candidate to the session. Next-run history starts with that memory and its
@@ -85,6 +110,26 @@ turn, parts, buffers and candidates, preserving the previous committed pointer.
 Mismatched request IDs cannot finish or append to a later run. Full session
 rerender rewinds the UI; the green pressure meter appears above the composer only
 while active and uses the latest contiguous part.
+
+## Content-free operational diagnostics
+
+Engine supplies optional `session_id`, `message_id`, per-attempt `compaction_id`
+and `boundary` (`admission`, `continuation`, `finish`) on `CompactRequest`. These
+are diagnostic metadata only, never authentication or source context.
+
+Compactor lifecycle logs render structured JSON fields in the actual log message,
+so the standard service formatter does not discard them. Events cover start,
+measured split candidates (bounded to 20), selected/skipped splits, prefix overflow,
+format repair, replacement reduction, success, cancellation and failure. They
+include correlation IDs, boundary, model name, total/target/source token counts,
+message counts, round and elapsed milliseconds. Failure reasons are allowlisted
+codes such as `no_safe_fitting_prefix`; unknown exceptions report `internal_error`.
+No messages, summaries, tool arguments/results, request objects, provider response
+bodies, credentials or exception tracebacks are logged.
+
+HTTP 422 responses include the same safe reason in the shared `CompactFailure`
+DTO. Engine logs the reason and IDs when entering complete-only or rejecting
+admission. Failure-code propagation does not trust arbitrary response text.
 
 ## Configuration and installation
 

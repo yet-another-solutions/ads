@@ -1,4 +1,7 @@
 import asyncio
+import json
+import logging
+from uuid import uuid4
 
 import pytest
 
@@ -222,6 +225,63 @@ def test_safe_boundaries_preserve_calls_and_async_lifetimes():
         safe_boundaries([ToolResult("orphan", "exec_shell", "success", "")])
     with pytest.raises(ContextFailure, match="memory_must_be_first"):
         safe_boundaries([U("x"), memory()])
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "no_safe_fitting_prefix", "private-provider-message", "unexpected"]
+)
+def test_rendered_logs_correlate_requests_and_never_include_content(caplog, failure):
+    caplog.set_level(logging.INFO, logger="ads_context_compactor.service")
+    sid, mid, cid = uuid4(), uuid4(), uuid4()
+    source = [U("private-source" * 200), U("private-current")]
+    model = Model(SUMMARY)
+    if failure == "no_safe_fitting_prefix":
+        source = [memory(summary="private-memory"), U("private-current" * 600)]
+    elif failure == "unexpected":
+        model = Model(RuntimeError("private-provider-message"))
+    elif failure:
+        model = Model(ContextFailure(failure))
+    body = CompactRequest(
+        source,
+        model_settings(),
+        50,
+        session_id=sid,
+        message_id=mid,
+        compaction_id=cid,
+        boundary="continuation",
+    )
+    with SecurityContextHolder.bound(IDENTITY):
+        if failure:
+            with pytest.raises(ContextFailure):
+                asyncio.run(
+                    ContextCompactorService(Meter(), model=model, reserve=100).compact(body)
+                )
+        else:
+            asyncio.run(ContextCompactorService(Meter(), model=model, reserve=100).compact(body))
+    records = [r.getMessage() for r in caplog.records if r.name == "ads_context_compactor.service"]
+    rendered = "\n".join(records)
+    for secret in (
+        "private-source",
+        "private-current",
+        "private-memory",
+        "model-secret",
+        "private-provider-message",
+    ):
+        assert secret not in rendered
+    assert records[0].startswith("context_compaction_started ")
+    event, raw = records[-1].split(" ", 1)
+    fields = json.loads(raw)
+    assert fields["session_id"] == str(sid) and fields["message_id"] == str(mid)
+    assert fields["compaction_id"] == str(cid) and fields["boundary"] == "continuation"
+    assert fields["target_tokens"] == 5000 and fields["total_context_tokens"] == 10000
+    assert fields["duration_ms"] >= 0 and fields["source_tokens"] > 0
+    if failure:
+        assert event == "context_compaction_failed"
+        assert fields["reason"] == (
+            "no_safe_fitting_prefix" if failure == "no_safe_fitting_prefix" else "internal_error"
+        )
+    else:
+        assert event == "context_compaction_succeeded"
 
 
 def test_service_caller_guard():
