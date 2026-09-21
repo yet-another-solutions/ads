@@ -170,9 +170,25 @@ async def test_shutdown_drops_waiter(ipc) -> None:
         assert isinstance(ipc.publisher.messages[-1], SandboxShutdownAck)
 
 
-async def test_output_caps_drain_until_exit_and_timeout_kills_only_tree(tmp_path) -> None:
+@pytest.mark.parametrize("producer_delay", [0, 0.3])
+async def test_output_caps_drain_until_exit_and_timeout_kills_only_tree(
+    tmp_path, monkeypatch, producer_delay
+) -> None:
     ipc = Harness(tmp_path, stdout_bytes=5, stderr_bytes=3, timeout_seconds=0.15)
     async with ipc.running():
+        # Keep the real asyncio cancellation/TimeoutError path, but control when
+        # its deadline expires. Output draining is not a 150 ms CPU benchmark.
+        real_timeout = asyncio.timeout
+        execution_deadlines = []
+
+        def controlled_timeout(delay):
+            if delay == ipc.settings.timeout_seconds:
+                deadline = real_timeout(None)
+                execution_deadlines.append(deadline)
+                return deadline
+            return real_timeout(delay)
+
+        monkeypatch.setattr("ads_sandbox_ipc.guest.asyncio.timeout", controlled_timeout)
         request = ipc.request()
         await ipc.send(request)
         await ipc.send(
@@ -180,11 +196,17 @@ async def test_output_caps_drain_until_exit_and_timeout_kills_only_tree(tmp_path
         )
         await eventually(lambda: bool(ipc.store.entries()))
         process = ipc.kube.processes[-1]
+        # A producer slower than the old deadline must not race the drain checks.
+        await asyncio.sleep(producer_delay)
         for _ in range(40):
             process.frames.put_nowait(Frame(stdout=b"abcdef", stderr=b"12345"))
         await eventually(lambda: process.reads == 40)
         assert not ipc.kube.killed and ipc.service.last_result is None
+        assert len(execution_deadlines) == 1
+        assert execution_deadlines[0].when() is None
+        execution_deadlines[0].reschedule(asyncio.get_running_loop().time())
         await eventually(lambda: ipc.service.last_result is not None)
+        assert execution_deadlines[0].expired()
         result = ipc.service.last_result
         assert (result.stdout, result.stderr, result.truncated, result.is_error) == (
             "abcde",
