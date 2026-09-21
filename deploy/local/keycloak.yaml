@@ -212,6 +212,8 @@ data:
           "standardFlowEnabled": false,
           "directAccessGrantsEnabled": false,
           "serviceAccountsEnabled": false,
+          "fullScopeAllowed": false,
+          "defaultClientScopes": ["basic"],
           "attributes": {"standard.token.exchange.enabled": "true"},
           "protocolMappers": [
             {
