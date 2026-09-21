@@ -16,8 +16,11 @@ is installed (`ADS_CONTAINER_ENGINE=docker` to override), with kind's podman
 provider. helm is optional: without it the script applies `rendered.yaml`, the same
 chart rendered in advance — render it again after changing the chart or
 `values-local.yaml` (the command is in its header). `ADS_SKIP_BUILD=1` skips
-building and loading the images on a rerun. At the end the script prints what is
-left to do by hand: `/etc/hosts`, two port-forwards, the LLM, and where to log in.
+building and loading the images on a rerun. A rerun restarts every workload the chart
+runs, so the images just built and any changed settings are what serves, and restarts
+Keycloak when its realm changed, since Keycloak imports the realm only when it starts;
+the other dependencies keep their data. At the end the script prints what is left to
+do by hand: `/etc/hosts`, three port-forwards, the LLM, and where to log in.
 
 What it does, in order:
 
@@ -45,7 +48,9 @@ What it does, in order:
 7. **Redis, RabbitMQ, PostgreSQL, Kafka** (`dependencies.yaml`). PostgreSQL creates
    `ads`, `ads_audit`, `ads_engine`, `ads_preferences`, `ads_sandbox_mcp` and
    `ads_sandbox_manager`.
-8. **Keycloak** (`keycloak.yaml`): realm `ads`, user `alice` / `alice`, and the clients
+8. **Keycloak** (`keycloak.yaml`): realm `ads`, user `alice` / `alice`, auditor
+   `audrey` / `audrey` (role `auditor`, the `ads-audit` client, and the `ads-audit-ads`
+   scope through which the auditor's pages read a chat in ads), and the clients
    the chain exchanges tokens between — `ads` → `ads-engine`, `ads-preferences`;
    `ads-engine` → `ads`, the context services and `ads-guardrail`, each by its own
    client scope; `ads-guardrail` → `ads-sandbox-mcp`, which is how the guardrail

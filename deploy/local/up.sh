@@ -134,7 +134,17 @@ kubectl -n "$NAMESPACE" create secret generic ads-context-compactor-keycloak \
 
 step "Redis, RabbitMQ, PostgreSQL, Kafka, Keycloak"
 kubectl apply -n "$NAMESPACE" -f deploy/local/dependencies.yaml
+realm_version() {
+  kubectl -n "$NAMESPACE" get configmap keycloak-realm \
+    -o jsonpath='{.metadata.resourceVersion}' 2>/dev/null || true
+}
+REALM_BEFORE="$(realm_version)"
 kubectl apply -n "$NAMESPACE" -f deploy/local/keycloak.yaml
+# Keycloak imports the realm only when it starts, and a changed ConfigMap does not
+# restart it: on a rerun a new client, role or user would otherwise never appear.
+if [ -n "$REALM_BEFORE" ] && [ "$REALM_BEFORE" != "$(realm_version)" ]; then
+  kubectl -n "$NAMESPACE" rollout restart deploy/keycloak
+fi
 kubectl -n "$NAMESPACE" rollout status deploy/ads-redis deploy/ads-rabbitmq \
   deploy/ads-postgres deploy/ads-kafka --timeout=300s
 kubectl -n "$NAMESPACE" rollout status deploy/keycloak --timeout=600s
@@ -173,6 +183,12 @@ fi
 # rather than built, so a stand that cannot reach ghcr leaves the manager at 503 forever.
 # Nothing else waits on it, and no session starts here anyway: kind has no Kata.
 step "workloads (all but the sandbox manager)"
+# An image rebuilt under the same :local tag, or a changed ConfigMap or Secret, leaves
+# the pod spec as it was, so helm upgrade replaces nothing. Restart what the chart runs
+# so a rerun serves the code and settings just built; the dependencies are not touched.
+CHART_WORKLOADS='app.kubernetes.io/managed-by=Helm,app.kubernetes.io/component!=ads-sandbox-manager'
+kubectl -n "$NAMESPACE" rollout restart deploy -l "$CHART_WORKLOADS"
+kubectl -n "$NAMESPACE" rollout status deploy -l "$CHART_WORKLOADS" --timeout=900s
 kubectl -n "$NAMESPACE" wait --for=condition=Available deploy --timeout=900s \
   -l 'app.kubernetes.io/component!=ads-sandbox-manager'
 
@@ -197,12 +213,13 @@ cat <<EOF
 1. Once, in /etc/hosts:
      127.0.0.1 ads.local keycloak.ads.local audit.ads.local
 
-2. In two terminals:
+2. In three terminals:
      kubectl -n ${NAMESPACE} port-forward svc/ads 8443:8080
      kubectl -n ${NAMESPACE} port-forward svc/keycloak 8444:8444
+     kubectl -n ${NAMESPACE} port-forward svc/ads-audit 8445:8082
 
    The certificates are signed by the local CA in ${CA_FILE}. Import it into the
-   browser, or accept the warning for both addresses.
+   browser, or accept the warning for each address.
 
 3. A model that can call tools, on this machine, listening beyond localhost:
      OLLAMA_HOST=0.0.0.0 ollama serve
@@ -224,12 +241,18 @@ cat <<EOF
    notice, the model is told, and the decision lands in the journal below.
    A few refusals in one chat and the chat loses its tools (budget 12).
 
-6. The journal, as an auditor:
-     kubectl -n ${NAMESPACE} port-forward svc/ads-audit 8445:8082
-   https://audit.ads.local:8445 — log in as audrey / audrey. Journal, Blocks, Sources.
-   Or as JSON:
+6. The journal, as an auditor: https://audit.ads.local:8445 — log in as audrey / audrey.
+   Journal, Blocks, Sources; a chat opens from an event or a block. Or as JSON:
      curl -sk -H 'authorization: Bearer local-audit-token-32-bytes' \\
        https://127.0.0.1:8445/audit/events | python3 -m json.tool
+
+7. To stop checking the sandbox and still journal every call, in
+   charts/ads/policy.example.yaml set
+     sources: {"mcp:sandbox": {checks: "off"}}
+   and run again with ADS_SKIP_BUILD=1 (helm needed: rendered.yaml carries the old
+   policy). In a new chat the policy then lets exec through and the journal records it
+   as unchecked, and Sources shows mcp:sandbox as off. The sandbox itself still cannot
+   run it here: kind has no Kata.
 
 Tear down: ${KIND_EXPERIMENTAL_PROVIDER:+KIND_EXPERIMENTAL_PROVIDER=podman }kind delete cluster --name ${CLUSTER}
 EOF
