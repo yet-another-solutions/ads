@@ -1,5 +1,30 @@
 # Project egress settings
 
+## ADS lifecycle and editor
+
+ADS creates a UUID and persists an empty whitelist at revision 1 before committing
+the owner-scoped project row. Preferences errors, ambiguous/lost PUT responses,
+invalid initial snapshots and local database failures all trigger idempotent
+preferences DELETE. No project is usable if initialization or cleanup fails.
+A process crash can leave an orphan preferences row, but never a usable project
+without its persisted initial settings; UUIDs are never reused.
+
+The authenticated project editor lives at `/dialogs/project-egress/{project_id}`;
+its mutation endpoint is `/projects/{project_id}/egress-settings`. Bound user role
+and ADS ownership checks run before any settings access. Reads do not synthesize
+missing settings. Writes validate the complete DTO and display the returned
+persisted revision, not an optimistic browser revision.
+
+The server-rendered dialog edits ordered rules, explicit method/upgrade selectors,
+optional paths and case matching. Reordering/removal is explicit; no upgrade-target
+rule is generated and no semantic lint rewrites settings. HTTPS calls to preferences
+exchange a fresh delegated token per request, including compensation.
+
+This lifecycle/UI component does not yet publish snapshots to IPC. The next
+authenticated-delivery component must add canonical persisted-snapshot publication
+and saved-but-not-published reporting before an integrated deployment. Saving here
+is not evidence that any running sandbox has applied the policy.
+
 This component implements settings contracts and preferences persistence, not packet enforcement
 or live egress acceptance. Project ownership is checked by ads before invoking preferences.
 

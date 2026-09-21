@@ -137,7 +137,130 @@
     bindComposer();
     bindMobileMenu();
     bindModelNames();
+    bindEgress();
     openDialogs();
+  }
+
+  function bindEgress() {
+    var form = byId("egress-form");
+    if (!form || form.dataset.bound) { return; }
+    form.dataset.bound = "1";
+    var initial = JSON.parse(form.querySelector("[data-egress-initial]").textContent);
+    var rules = form.querySelector("[data-egress-rules]");
+    form.elements.mode.value = initial.mode || "whitelist";
+    function field(parent, text, kind, value, options) {
+      var label = document.createElement("label");
+      label.appendChild(document.createTextNode(text));
+      var input = document.createElement(kind === "select" ? "select" : "input");
+      input.setAttribute("aria-label", text);
+      if (kind !== "select") { input.type = kind; }
+      (options || []).forEach(function (value) {
+        var option = document.createElement("option");
+        option.value = option.textContent = value;
+        input.appendChild(option);
+      });
+      if (kind === "checkbox") { input.checked = !!value; }
+      else { input.value = value; }
+      label.appendChild(input);
+      parent.appendChild(label);
+      return input;
+    }
+    function button(parent, label, action) {
+      var node = document.createElement("button");
+      node.type = "button";
+      node.className = "ghost";
+      node.textContent = label;
+      node.addEventListener("click", action);
+      parent.appendChild(node);
+    }
+    function addRule(rule) {
+      var box = document.createElement("fieldset");
+      var legend = document.createElement("legend");
+      legend.textContent = "Egress rule";
+      box.appendChild(legend);
+      var domain = field(box, "Domain", "text", rule.domain);
+      domain.required = true;
+      var port = field(box, "Port", "number", rule.port);
+      port.required = true; port.min = "1"; port.max = "65535";
+      var protocol = field(box, "Protocol", "select", rule.protocol, ["http", "https"]);
+      var sub = field(box, "Sub-protocol", "select", rule.sub_protocol || "any",
+        ["any", "http/1.1", "http/2", "websocket"]);
+      var settings = rule.protocol_settings;
+      var method = field(box, "Method", "select", settings.method,
+        ["any", "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"]);
+      var upgrades = field(box, "Upgrades", "select",
+        Array.isArray(settings.upgrades) ? "selected" : settings.upgrades,
+        ["any", "none", "selected"]);
+      var targets = document.createElement("div");
+      box.appendChild(targets);
+      var targetInputs = ["http/2", "websocket"].map(function (target) {
+        return field(targets, target, "checkbox",
+          Array.isArray(settings.upgrades) && settings.upgrades.indexOf(target) !== -1);
+      });
+      function syncTargets() { targets.hidden = upgrades.value !== "selected"; }
+      upgrades.addEventListener("change", syncTargets); syncTargets();
+      var paths = document.createElement("div");
+      box.appendChild(paths);
+      function addPath(path) {
+        var row = document.createElement("div");
+        var pattern = field(row, "Path pattern", "text", path.pattern);
+        pattern.required = true;
+        var insensitive = field(row, "Case insensitive", "checkbox", path.case_insensitive);
+        row.egressValue = function () {
+          return { pattern: pattern.value, case_insensitive: insensitive.checked };
+        };
+        button(row, "Remove path", function () { row.remove(); });
+        paths.appendChild(row);
+      }
+      (settings.paths || []).forEach(addPath);
+      button(box, "Add path", function () { addPath({ pattern: "/" }); });
+      button(box, "Move up", function () {
+        if (box.previousElementSibling) { rules.insertBefore(box, box.previousElementSibling); }
+      });
+      button(box, "Move down", function () {
+        if (box.nextElementSibling) { rules.insertBefore(box.nextElementSibling, box); }
+      });
+      button(box, "Remove rule", function () { box.remove(); });
+      box.egressValue = function () {
+        var allowed = upgrades.value === "selected"
+          ? ["http/2", "websocket"].filter(function (_, index) { return targetInputs[index].checked; })
+          : upgrades.value;
+        if (Array.isArray(allowed) && !allowed.length) {
+          throw new Error("Select at least one upgrade target, or choose any / none.");
+        }
+        return {
+          domain: domain.value, port: Number(port.value), protocol: protocol.value,
+          sub_protocol: sub.value,
+          protocol_settings: {
+            method: method.value, upgrades: allowed,
+            paths: Array.from(paths.children).map(function (row) { return row.egressValue(); })
+          }
+        };
+      };
+      rules.appendChild(box);
+    }
+    initial.rules.forEach(addRule);
+    form.querySelector("[data-egress-add]").addEventListener("click", function () {
+      addRule({ domain: "", port: 443, protocol: "https",
+        protocol_settings: { method: "any", upgrades: "any", paths: [] } });
+    });
+    // Capture before HTMX constructs its request. Server validates the DTO independently.
+    form.addEventListener("submit", function (event) {
+      try {
+        form.elements.settings.value = JSON.stringify({
+          mode: form.elements.mode.value,
+          rules: Array.from(rules.children).map(function (box) { return box.egressValue(); })
+        });
+        form.querySelector("[data-egress-error]").textContent = "";
+      } catch (error) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        form.querySelector("[data-egress-error]").textContent = error.message;
+      }
+    }, true);
+    form.addEventListener("htmx:responseError", function () {
+      form.querySelector("[data-egress-error]").textContent =
+        "Settings could not be saved. Review the fields and try again.";
+    });
   }
 
   /* Snapshot at swap time, not request time: the reader may scroll while GET waits. */

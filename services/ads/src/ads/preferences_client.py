@@ -11,6 +11,7 @@ import msgspec
 from ads.config import Settings
 from ads.exceptions import NotFound
 from ads.tokens import TokenMinter, ssl_context_for
+from ads_commons.egress import ProjectEgressSettings, ProjectEgressSnapshot
 from ads_commons.preferences import (
     ModelInfo,
     ModelList,
@@ -95,6 +96,25 @@ class PreferencesClient:
 
     async def delete_model(self, model_id: UUID) -> None:
         await self._call("DELETE", f"/v1/models/{model_id}")
+
+    async def get_egress(self, project_id: UUID) -> ProjectEgressSnapshot:
+        return _decode(
+            await self._call("GET", f"/v1/projects/{project_id}/egress-settings"),
+            ProjectEgressSnapshot,
+        )
+
+    async def save_egress(
+        self, project_id: UUID, settings: ProjectEgressSettings
+    ) -> ProjectEgressSnapshot:
+        return _decode(
+            await self._call(
+                "PUT", f"/v1/projects/{project_id}/egress-settings", msgspec.json.encode(settings)
+            ),
+            ProjectEgressSnapshot,
+        )
+
+    async def delete_egress(self, project_id: UUID) -> None:
+        await self._call("DELETE", f"/v1/projects/{project_id}/egress-settings")
 
 
 def _decode[T](raw: bytes, expected: type[T]) -> T:

@@ -33,6 +33,9 @@
                 aria-label="New session in {{ project.name }}"
                 hx-get="/dialogs/new-session?project_id={{ project.id }}"
                 hx-target="#dialog-host" hx-swap="innerHTML">+</button>
+        <button class="gear" type="button" aria-label="Egress settings for {{ project.name }}"
+                hx-get="/dialogs/project-egress/{{ project.id }}"
+                hx-target="#dialog-host" hx-swap="innerHTML">Egress</button>
       </div>
       {% if project.sessions %}
       <div class="sessions">

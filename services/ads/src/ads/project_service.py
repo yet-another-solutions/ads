@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
+import msgspec
 from sqlalchemy.orm import Session
 
 from ads.domain import utc_now
@@ -9,6 +11,7 @@ from ads.exceptions import InvalidInput, NotFound
 from ads.models import Project
 from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
 from ads.views import ProjectView, SessionView
+from ads_commons.egress import ProjectEgressApi, ProjectEgressSettings, ProjectEgressSnapshot
 from ads_commons.security import SecurityContextHolder, require_role
 
 
@@ -27,11 +30,13 @@ class ProjectService:
         projects: ProjectRepository,
         sessions: SessionRepository,
         runs: SessionRunRepository,
+        egress: ProjectEgressApi,
     ) -> None:
         self._session = session
         self._projects = projects
         self._sessions = sessions
         self._runs = runs
+        self._egress = egress
 
     @require_role("user")
     async def create(self, name: str, description: str) -> ProjectView:
@@ -47,14 +52,37 @@ class ProjectService:
             created_at=now,
             updated_at=now,
         )
-        with self._session.begin():
-            stored = self._projects.insert(row)
-            return ProjectView(
-                id=stored.id,
-                name=stored.name,
-                description=stored.description,
-                sessions=[],
-            )
+        try:
+            # The project is not visible or usable until deny-all is persisted.
+            # Compensation also runs when the PUT committed but its response was lost.
+            snapshot = await self._egress.save_egress(row.id, ProjectEgressSettings(rules=()))
+            if snapshot.revision != 1 or snapshot.settings != ProjectEgressSettings(rules=()):
+                raise InvalidInput("initial project settings were not persisted as deny-all")
+            with self._session.begin():
+                stored = self._projects.insert(row)
+                result = ProjectView(
+                    id=stored.id,
+                    name=stored.name,
+                    description=stored.description,
+                    sessions=[],
+                )
+            return result
+        except BaseException:
+            await asyncio.shield(self._egress.delete_egress(row.id))
+            raise
+
+    @require_role("user")
+    async def get_egress(self, project_id: uuid.UUID) -> ProjectEgressSnapshot:
+        await self.get(project_id)  # ownership before any remote request
+        return await self._egress.get_egress(project_id)
+
+    @require_role("user")
+    async def save_egress(
+        self, project_id: uuid.UUID, settings: ProjectEgressSettings
+    ) -> ProjectEgressSnapshot:
+        await self.get(project_id)
+        settings = msgspec.json.decode(msgspec.json.encode(settings), type=ProjectEgressSettings)
+        return await self._egress.save_egress(project_id, settings)
 
     async def list_tree(self, q: str | None = None) -> list[ProjectView]:
         """Full tree for empty ``q``. Otherwise projects with no session match are omitted."""

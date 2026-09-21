@@ -528,6 +528,7 @@ def test_produce_failure_leaves_the_run_pending_until_the_timeout(
         settings,
         engine=db_engine,
         preferences=preferences,
+        egress_preferences=preferences,
         kafka=broken,
         tokens=tokens,
         jwt_verifier=authenticator,  # type: ignore[arg-type]
@@ -686,6 +687,7 @@ def test_abort_produce_failure_still_unwinds_locally(
         settings,
         engine=db_engine,
         preferences=preferences,
+        egress_preferences=preferences,
         kafka=kafka,
         tokens=FakeTokens(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]
@@ -724,6 +726,7 @@ def test_token_exchange_failure_on_abort_still_unwinds(
         settings,
         engine=db_engine,
         preferences=preferences,
+        egress_preferences=preferences,
         kafka=kafka,
         tokens=_OnlySendWorks(),
         jwt_verifier=authenticator,  # type: ignore[arg-type]

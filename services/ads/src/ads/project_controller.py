@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
+import msgspec
 from dishka.integrations.litestar import FromDishka
 from litestar import post
 from litestar.di import NamedDependency
@@ -12,10 +14,12 @@ from litestar.params import Body
 from litestar.response import Template
 
 from ads.authenticated import AuthenticatedController
+from ads.exceptions import InvalidInput
 from ads.identity import Identity
 from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.shell_controller import initials
+from ads_commons.egress import ProjectEgressSettings
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
 
@@ -24,6 +28,23 @@ Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED
 class ProjectController(AuthenticatedController):
     path = "/projects"
     projects: FromDishka[ProjectService]
+
+    @post("/{project_id:uuid}/egress-settings", status_code=200)
+    async def save_egress(self, project_id: UUID, data: Form) -> Template:
+        try:
+            settings = msgspec.json.decode(data.get("settings", ""), type=ProjectEgressSettings)
+        except msgspec.DecodeError as exc:
+            raise InvalidInput(str(exc)) from exc
+        snapshot = await self.projects.save_egress(project_id, settings)
+        return Template(
+            template_name="partials/egress_settings.html",
+            context={
+                "project": await self.projects.get(project_id),
+                "snapshot": snapshot,
+                "settings_json": msgspec.to_builtins(snapshot.settings),
+                "saved": True,
+            },
+        )
 
     @post("/")
     async def create_project(

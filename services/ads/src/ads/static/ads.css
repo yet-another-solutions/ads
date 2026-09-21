@@ -513,6 +513,11 @@ dialog::backdrop { background: rgb(0 0 0 / 0.62); }
   padding: 7px 8px;
 }
 .fields input[readonly] { color: var(--faint); }
+#egress-settings { width: min(680px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; }
+#egress-settings fieldset { border: 1px solid var(--line); padding: 12px; margin: 12px 0; }
+#egress-settings fieldset label { margin: 8px 0; }
+#egress-settings input[type="checkbox"] { width: auto; justify-self: start; }
+#egress-settings fieldset button { margin: 6px 6px 0 0; }
 .ghost, .primary {
   border-radius: 4px;
   padding: 7px 12px;
