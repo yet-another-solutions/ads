@@ -22,7 +22,8 @@ def live() -> dict[str, str]:
 
 @get("/health/ready", sync_to_thread=False)
 def ready(request: Request[Any, Any, Any]) -> Response[dict[str, str]]:
-    healthy = request.app.state.ipc.http_ready
+    ipc = request.app.state.ipc
+    healthy = ipc.http_ready and not ipc.failed and (ipc.egress is None or not ipc.egress.failed)
     return Response(
         {"status": "ready" if healthy else "not-ready"}, status_code=200 if healthy else 503
     )

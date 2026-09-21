@@ -20,6 +20,42 @@ EXCHANGED_SUBJECT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 TOKEN_URL = "https://kc/realms/ads/protocol/openid-connect/token"
 
 
+def test_service_exchange_is_fresh_own_token_and_ignores_user_holder(monkeypatch) -> None:
+    forms = []
+
+    def urlopen(request, **kwargs):
+        form = parse_qs(request.data.decode())
+        forms.append(form)
+        return _Response({"access_token": f"token-{len(forms)}"})
+
+    monkeypatch.setattr("ads_commons_beans.token_exchange.urlopen", urlopen)
+    exchange = _exchanger()
+    with SecurityContextHolder.bound(_bound()):
+        assert exchange.exchange_service("ads-sandbox-ipc") == "token-2"
+        assert exchange.exchange_service("ads-sandbox-ipc") == "token-4"
+    assert forms[0]["grant_type"] == forms[2]["grant_type"] == ["client_credentials"]
+    assert "subject_token" not in forms[0]
+    assert forms[1]["subject_token"] == ["token-1"]
+    assert forms[3]["subject_token"] == ["token-3"]
+    assert forms[1]["audience"] == ["ads-sandbox-ipc"]
+    assert all(form["client_id"] == ["ads"] for form in forms)
+    with pytest.raises(TokenExchangeError, match="audience"):
+        exchange.exchange_service("")
+
+
+def test_failed_service_credentials_do_not_fall_back_to_delegated_user(monkeypatch) -> None:
+    calls = []
+
+    def urlopen(request, **kwargs):
+        calls.append(request)
+        return _Response({})
+
+    monkeypatch.setattr("ads_commons_beans.token_exchange.urlopen", urlopen)
+    with SecurityContextHolder.bound(_bound()), pytest.raises(TokenExchangeError):
+        _exchanger().exchange_service("ads-sandbox-ipc")
+    assert len(calls) == 1
+
+
 class _Response:
     def __init__(self, payload: dict[str, object] | bytes) -> None:
         self._body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()

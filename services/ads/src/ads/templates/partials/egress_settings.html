@@ -7,7 +7,7 @@
     <p class="note">Revision {{ snapshot.revision }}{% if saved %}. Settings saved.{% endif %}
       Rules are evaluated in order. Whitelist with no rules denies all.</p>
     <label>Mode
-      <select name="mode">
+      <select name="mode" aria-label="Mode">
         <option value="whitelist">Whitelist</option>
         <option value="blacklist">Blacklist</option>
       </select>

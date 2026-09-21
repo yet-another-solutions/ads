@@ -25,6 +25,7 @@ from ads_commons.sandbox import (
     SandboxShutdownAck,
 )
 from ads_sandbox_ipc.config import Settings
+from ads_sandbox_ipc.egress import EgressDelivery
 from ads_sandbox_ipc.guest import GuestExecutor
 
 log = structlog.get_logger("ads_sandbox_ipc")
@@ -56,10 +57,19 @@ class Unit:
 class IpcService:
     """One current unit and one terminal slot. All credentials remain in memory."""
 
-    def __init__(self, settings: Settings, guest: GuestExecutor, publisher: Publisher) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        guest: GuestExecutor,
+        publisher: Publisher,
+        egress: EgressDelivery | None = None,
+    ) -> None:
         self.settings = settings
         self.guest = guest
         self.publisher = publisher
+        self.egress = egress
+        if settings.egress is not None and egress is None:
+            raise ValueError("paired IPC requires configuration delivery")
         self.http_ready = False
         self.kafka_ready = False
         self.failed = False
@@ -91,7 +101,12 @@ class IpcService:
                     except Exception:
                         prepared = False
                         log.warning("startup_guest_not_ready")
-                    if prepared:
+                    configured = self.egress is None or (
+                        await self.egress.healthy() and self.egress.installed is not None
+                    )
+                    if self.egress is not None and self.egress.failed:
+                        raise RuntimeError("initial egress delivery failed")
+                    if prepared and configured:
                         self.http_ready = True
                         await self.publisher.publish(SandboxReady(self.settings.sandbox_id))
                         if not self.stopping:
@@ -250,6 +265,8 @@ class IpcService:
         if self.kafka_ready and not self.stopping and task is not None:
             self._pings.add(task)
             try:
+                if self.egress is not None and not await self.egress.healthy():
+                    return
                 await self.publisher.publish(message, token)
             finally:
                 self._pings.discard(task)
@@ -258,6 +275,8 @@ class IpcService:
         # Latch before awaits, including startup cancellation and the execution lock.
         self.stopping = True
         self.kafka_ready = False
+        if self.egress is not None:
+            await self.egress.close()
         self._shutdowns.append((token, transition))
         for task in self._pings:
             task.cancel()
@@ -285,6 +304,8 @@ class IpcService:
     async def stop(self) -> None:
         self.stopping = True
         self.kafka_ready = False
+        if self.egress is not None:
+            await self.egress.close()
         if self.current and self.current.executing:
             self.current.abort.set()
         for task in (self._startup_task, self._ack_task):

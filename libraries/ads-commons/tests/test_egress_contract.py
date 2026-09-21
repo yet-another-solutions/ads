@@ -7,6 +7,45 @@ import pytest
 
 from ads_commons.egress import ProjectEgressSettings
 
+
+def test_canonical_equality_expands_mode_defaults_without_reordering_rules():
+    import msgspec
+
+    from ads_commons.egress import ProjectEgressSettings, canonical_settings
+
+    payload = {
+        "mode": "blacklist",
+        "rules": [
+            {
+                "domain": "*.EXAMPLE.COM",
+                "port": 443,
+                "protocol": "https",
+                "protocol_settings": {
+                    "method": "any",
+                    "upgrades": ["websocket", "http/2"],
+                    "paths": [{"pattern": "/API/**"}],
+                },
+            },
+            {
+                "domain": "*",
+                "port": 80,
+                "protocol": "http",
+                "protocol_settings": {"method": "GET", "upgrades": "none"},
+            },
+        ],
+    }
+    settings = msgspec.convert(payload, type=ProjectEgressSettings)
+    canonical = canonical_settings(settings)
+    assert [rule.domain for rule in canonical.rules] == ["*.example.com", "*"]
+    assert canonical.rules[0].protocol_settings.paths[0].case_insensitive is True
+    assert canonical.rules[0].protocol_settings.upgrades == ("http/2", "websocket")
+    assert canonical_settings(canonical) == canonical
+    whitelist = msgspec.structs.replace(settings, mode="whitelist")
+    assert (
+        canonical_settings(whitelist).rules[0].protocol_settings.paths[0].case_insensitive is False
+    )
+
+
 RULE = {
     "domain": "*.Example.COM",
     "port": 443,

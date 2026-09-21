@@ -205,9 +205,16 @@
         var row = document.createElement("div");
         var pattern = field(row, "Path pattern", "text", path.pattern);
         pattern.required = true;
-        var insensitive = field(row, "Case insensitive", "checkbox", path.case_insensitive);
+        var caseMode = field(row, "Case matching", "select",
+          path.case_insensitive === undefined ? "mode default" :
+            path.case_insensitive ? "case insensitive" : "case sensitive",
+          ["mode default", "case sensitive", "case insensitive"]);
         row.egressValue = function () {
-          return { pattern: pattern.value, case_insensitive: insensitive.checked };
+          var result = { pattern: pattern.value };
+          if (caseMode.value !== "mode default") {
+            result.case_insensitive = caseMode.value === "case insensitive";
+          }
+          return result;
         };
         button(row, "Remove path", function () { row.remove(); });
         paths.appendChild(row);

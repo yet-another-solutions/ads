@@ -54,7 +54,7 @@ class TokenExchange:
             subject_token = SecurityContextHolder.require().access_token
         if not subject_token or not subject_token.strip():
             raise AuthenticationRequired("access token required")
-        body = urlencode(
+        return self._request_token(
             {
                 "grant_type": GRANT_TYPE,
                 "client_id": self._client_id,
@@ -64,6 +64,22 @@ class TokenExchange:
                 "requested_token_type": REQUESTED_TOKEN_TYPE,
                 "audience": audience,
                 **({"scope": scope} if scope is not None else {}),
+            }
+        )
+
+    def exchange_service(self, audience: str) -> str:
+        """Fresh own client-credentials token, then own-token STE. Never use the holder."""
+        if not audience.strip():
+            raise TokenExchangeError("audience is required")
+        subject = self._request_token({"grant_type": "client_credentials"})
+        return self.exchange(audience, subject_token=subject)
+
+    def _request_token(self, fields: dict[str, str]) -> str:
+        body = urlencode(
+            {
+                "client_id": self._client_id,
+                "client_secret": self._client_secret,
+                **fields,
             }
         ).encode()
         request = Request(self._token_endpoint, data=body, method="POST")
