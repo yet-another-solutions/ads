@@ -324,6 +324,65 @@ data:
   ADS_TLS_KEY_PATH: "/certs/tls.key"
   ADS_POLICY_URL: "https://ads-policy:8081"
   ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_ALLOW_UNLISTED_MODELS: "1"
+---
+# Source: ads/templates/context-compactor-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: ads
+  name: ads-context-compactor
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-compactor
+data:
+  ADS_CONTEXT_COMPACTOR_METER_URL: "https://ads-context-meter:8080/meter"
+  ADS_CONTEXT_COMPACTOR_RESERVED_OUTPUT_TOKENS: "1024"
+  ADS_CONTEXT_COMPACTOR_SUMMARY_CAP_TOKENS: "2048"
+  ADS_CONTEXT_COMPACTOR_COMPLETION_CAP_TOKENS: "2048"
+  ADS_CONTEXT_COMPACTOR_MINIMUM_REDUCTION_PERCENTAGE: "10"
+  ADS_CONTEXT_COMPACTOR_STARVATION_PERCENTAGE: "10"
+  ADS_CONTEXT_COMPACTOR_RECALL_RESERVED_OUTPUT_TOKENS: "1024"
+  ADS_CONTEXT_COMPACTOR_RECALL_STARVATION_PERCENTAGE: "10"
+  ADS_CONTEXT_COMPACTOR_RECALL_ANSWER_CAP_TOKENS: "1024"
+  ADS_CONTEXT_COMPACTOR_RECALL_COMPLETION_CAP_TOKENS: "1024"
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_CONTEXT_COMPACTOR_KEYCLOAK_AUDIENCE: "ads-context-compactor"
+  ADS_CONTEXT_COMPACTOR_BIND_HOST: "0.0.0.0"
+  ADS_CONTEXT_COMPACTOR_PORT: "8080"
+  ADS_CONTEXT_COMPACTOR_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_CONTEXT_COMPACTOR_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_CONTEXT_COMPACTOR_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_ALLOW_UNLISTED_MODELS: "1"
+---
+# Source: ads/templates/context-meter-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: ads
+  name: ads-context-meter
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-meter
+data:
+  ADS_CONTEXT_METER_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_CONTEXT_METER_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_CONTEXT_METER_KEYCLOAK_AUDIENCE: "ads-context-meter"
+  ADS_CONTEXT_METER_BIND_HOST: "0.0.0.0"
+  ADS_CONTEXT_METER_PORT: "8080"
+  ADS_CONTEXT_METER_TLS_CERT_PATH: "/certs/tls.crt"
+  ADS_CONTEXT_METER_TLS_KEY_PATH: "/certs/tls.key"
+  ADS_CONTEXT_METER_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_ALLOW_UNLISTED_MODELS: "1"
 ---
 # Source: ads/templates/engine-configmap.yaml
 apiVersion: v1
@@ -339,6 +398,18 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: ads-engine
 data:
+  ADS_ENGINE_CONTEXT_METER_URL: "https://ads-context-meter:8080/meter"
+  ADS_ENGINE_CONTEXT_COMPACTOR_URL: "https://ads-context-compactor:8080/compact"
+  ADS_ENGINE_CONTEXT_TRIGGER: "80"
+  ADS_ENGINE_CONTEXT_TARGET: "50"
+  ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS: "1024"
+  ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE: "10"
+  ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS: "1024"
+  ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS: "1024"
+  ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS: "1024"
+  ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS: "1024"
+  ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS: "1024"
+  ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE: "10"
   ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: "ads-kafka:9092"
   ADS_ENGINE_REQUEST_TOPIC: "ads.engine.request"
   ADS_ENGINE_OUTPUT_TOPIC: "ads.engine.output"
@@ -365,6 +436,7 @@ data:
   ADS_ENGINE_MCP_AUDIENCE: "ads-mcp"
   ADS_ENGINE_MAX_MODEL_ROUNDS: "8"
   ADS_ENGINE_TOOL_CALL_ATTEMPTS: "3"
+  ADS_ALLOW_UNLISTED_MODELS: "1"
 ---
 # Source: ads/templates/guardrail-configmap.yaml
 apiVersion: v1
@@ -751,6 +823,7 @@ data:
   ADS_PREFERENCES_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_PREFERENCES_TLS_KEY_PATH: "/certs/tls.key"
   ADS_PREFERENCES_TLS_CA_BUNDLE: "/ca/ca.crt"
+  ADS_ALLOW_UNLISTED_MODELS: "1"
 ---
 # Source: ads/templates/sandbox-configmaps.yaml
 apiVersion: v1
@@ -820,7 +893,6 @@ data:
   ADS_SANDBOX_MANAGER_DETACHED_SECONDS: "7200"
   ADS_SANDBOX_MANAGER_IDLE_SECONDS: "1800"
   ADS_SANDBOX_MANAGER_LIFECYCLE_BATCH: "50"
-  ADS_SANDBOX_MANAGER_NODE_FRESH_SECONDS: "600"
   ADS_SANDBOX_MANAGER_PING_INTERVAL_SECONDS: "10"
   ADS_SANDBOX_MANAGER_PING_TIMEOUT_SECONDS: "30"
   ADS_SANDBOX_MANAGER_POLL_SECONDS: "10"
@@ -1000,6 +1072,56 @@ spec:
     app.kubernetes.io/name: ads
     app.kubernetes.io/instance: ads
     app.kubernetes.io/component: ads-audit
+---
+# Source: ads/templates/context-compactor-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: ads
+  name: ads-context-compactor
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-compactor
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-context-compactor
+---
+# Source: ads/templates/context-meter-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: ads
+  name: ads-context-meter
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-meter
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/component: ads-context-meter
 ---
 # Source: ads/templates/guardrail-service.yaml
 apiVersion: v1
@@ -1250,6 +1372,180 @@ spec:
         - name: tls
           secret:
             secretName: ads-audit-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/context-compactor-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: ads
+  name: ads-context-compactor
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-compactor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-context-compactor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-context-compactor
+    spec:
+      serviceAccountName: ads
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-context-compactor
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-context-compactor:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-context-compactor
+          env:
+            - name: ADS_CONTEXT_COMPACTOR_KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ads-context-compactor-keycloak
+                  key: client-secret
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-context-compactor-service-tls
+        - name: ca
+          secret:
+            secretName: ads-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+      nodeSelector:
+        ads.io/application-node: "true"
+---
+# Source: ads/templates/context-meter-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: ads
+  name: ads-context-meter
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-meter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ads
+      app.kubernetes.io/instance: ads
+      app.kubernetes.io/component: ads-context-meter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ads
+        app.kubernetes.io/instance: ads
+        app.kubernetes.io/component: ads-context-meter
+    spec:
+      serviceAccountName: ads
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: ads-context-meter
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsGroup: 1000
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: "localhost/ads-context-meter:local"
+          imagePullPolicy: Never
+          ports:
+            - name: https
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ads-context-meter
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+            - name: ca
+              mountPath: /ca
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: ads-context-meter-service-tls
         - name: ca
           secret:
             secretName: ads-ca
@@ -1899,7 +2195,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/sandbox-config: d21e72329484ae603016e51ca52e2ea42b346b33e82d6df9a5d1ca1733f33b54
+        checksum/sandbox-config: b6acf5f94ef5ce5db3c869ed4221d1e9063b6daa3d508b4e6284c1e5fe792786
         checksum/sandbox-secrets: bac0a62afd0987afd50359e237d2eb79f894cce4a71de16dd3900a9da67ed7f0
       labels:
         app.kubernetes.io/name: ads
@@ -1983,7 +2279,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/sandbox-config: d21e72329484ae603016e51ca52e2ea42b346b33e82d6df9a5d1ca1733f33b54
+        checksum/sandbox-config: b6acf5f94ef5ce5db3c869ed4221d1e9063b6daa3d508b4e6284c1e5fe792786
         checksum/sandbox-secrets: bac0a62afd0987afd50359e237d2eb79f894cce4a71de16dd3900a9da67ed7f0
       labels:
         app.kubernetes.io/name: ads
@@ -2067,6 +2363,56 @@ spec:
     - "ads-audit.ads"
     - "ads-audit.ads.svc"
     - "ads-audit.ads.svc.cluster.local"
+---
+# Source: ads/templates/context-compactor-certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: ads
+  name: ads-context-compactor
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-compactor
+spec:
+  secretName: ads-context-compactor-service-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-context-compactor"
+    - "ads-context-compactor.ads"
+    - "ads-context-compactor.ads.svc"
+    - "ads-context-compactor.ads.svc.cluster.local"
+---
+# Source: ads/templates/context-meter-certificate.yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: ads
+  name: ads-context-meter
+  labels:
+    helm.sh/chart: ads-0.0.2
+    app.kubernetes.io/name: ads
+    app.kubernetes.io/instance: ads
+    app.kubernetes.io/version: "0.0.1"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: ads-context-meter
+spec:
+  secretName: ads-context-meter-service-tls
+  issuerRef:
+    name: testlab-ca
+    kind: ClusterIssuer
+    group: cert-manager.io
+  dnsNames:
+    - "ads-context-meter"
+    - "ads-context-meter.ads"
+    - "ads-context-meter.ads.svc"
+    - "ads-context-meter.ads.svc.cluster.local"
 ---
 # Source: ads/templates/guardrail-service.yaml
 apiVersion: cert-manager.io/v1
