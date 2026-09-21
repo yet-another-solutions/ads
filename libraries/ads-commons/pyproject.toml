@@ -5,6 +5,7 @@ description = "ADS shared DTOs and common system logic"
 requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
+    "cryptography==50.0.1",
     "msgspec==0.21.1",
 ]
 

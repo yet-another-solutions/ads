@@ -105,6 +105,35 @@ cannot, and configured CA with missing runtime wiring is not ready.
 
 Local tests cover replica races, half-pair failure and release, restart recovery,
 foreign objects/attempts, immutable observation fencing, terminal-Pod cleanup,
-settings, readiness and actual rendered Helm wiring. Consumer cloning and
-guest/egress boot verification remain the next integration boundary. No CA Job
-has run in the lab and no integrated trust/read-only acceptance is claimed.
+settings, readiness and actual rendered Helm wiring.
+
+## Consumer validation and process-local issuer
+
+`ads_commons.egress_trust` is shared security/file validation, not lifecycle
+orchestration. It validates strict manifest fields, duplicate-key rejection,
+expected Job attempt, fingerprint, CA constraints and expiry. Fixed leaf reads
+are bounded, reject symlinks and nonregular files, and use nonblocking opens so
+a corrupt FIFO cannot hang bootstrap.
+
+The guest loader reads only `complete.json` and `trusted-egress-ca.pem`.
+The egress loader additionally requires a matching private manifest, matching
+key, valid parent signatures/path depth and exact intermediate expiry; it keeps
+company anchors separate from the served signing chain. Private-key objects
+are excluded from diagnostic representations.
+
+The base-owned guest helper requires kernel block read-only and mounted
+filesystem read-only state before using the public clone. Only the minted CA
+is streamed into rootless `podman exec` for trust installation before readiness,
+on both create and resume. Mutable rootfs programs never run as guest root.
+GitHub Actions builds the base from repository-root context to copy the exact
+shared verifier; the golden device checker remains unchanged.
+
+`ads_sandbox_egress.issuers.untrusted_issuer` creates an independent self-signed
+P-384 CA once per process bootstrap, with the verified intermediate's exact UTC
+expiry. It is not signed by the trusted hierarchy and has no persistence path.
+Tests prove different keys across calls and unchanged files; full egress runtime
+bootstrap will own one instance and reuse it, not mint per failed request.
+
+Manager consumer-clone ownership and guest/egress pair wiring remain the next
+integration boundary. No CA Job has run in the lab and no integrated trust,
+kernel read-only or TLS defect-mirroring acceptance is claimed here.

@@ -30,6 +30,11 @@ green2() {
 }
 
 green2
+if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
+  /usr/local/sbin/ads-sandbox-trust mount
+elif [[ -e /dev/ads-ca-public ]]; then
+  fail "CA device without trusted attempt identity"
+fi
 /usr/local/sbin/ads-session-device-check
 /usr/local/sbin/ads-sandbox-runtime prepare
 
@@ -53,6 +58,13 @@ else
   done
   podman_cmd create --name dev-sandbox --network=none --cgroupns=private --cgroup-parent=/ads-budget/podman --label ads.io/runtime-contract=nested-v1 "${unmask[@]}" --rootfs /session/rootfs /bin/sleep infinity
   podman_cmd start dev-sandbox
+fi
+
+if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
+  # Only the minted public CA, never parent/company bundles. Mutable inner
+  # software runs through rootless Podman, never chroot/exec as guest root.
+  /usr/local/sbin/ads-sandbox-trust certificate | podman_cmd exec -i dev-sandbox \
+    /bin/sh -ec 'mkdir -p /usr/local/share/ca-certificates; cat > /usr/local/share/ca-certificates/ads-egress.crt; update-ca-certificates'
 fi
 
 # Keep initialization code in the base image, never in the writable rootfs.

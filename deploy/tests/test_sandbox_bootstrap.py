@@ -78,7 +78,10 @@ def test_inner_image_uses_private_ipc_and_mapped_ranges():
 def test_initialization_code_is_packaged_only_in_base_image():
     base = (ROOT / "services/ads-sandbox-base/Containerfile").read_text()
     inner = (ROOT / "services/ads-sandbox-golden/Containerfile.inner").read_text()
-    assert "COPY scripts/ads-agent-init /usr/local/sbin/ads-agent-init" in base
+    assert (
+        "COPY services/ads-sandbox-base/scripts/ads-agent-init /usr/local/sbin/ads-agent-init"
+        in base
+    )
     assert "ads-agent-init" not in inner
     assert not (ROOT / "services/ads-sandbox-golden/scripts/ads-agent-init").exists()
     assert 'os.execv("/bin/sleep"' not in BOOT.with_name("ads-agent-init").read_text()
@@ -134,3 +137,46 @@ podman_cmd() {{
         assert calls.index("exec -i dev-sandbox python3 -") < calls.index(
             "exec dev-sandbox python3 -c"
         )
+
+
+@pytest.mark.parametrize("trust_status", [0, 1])
+def test_ca_stream_failure_prevents_init_and_readiness(tmp_path, trust_status):
+    script = BOOT.read_text()
+    startup = script[script.index("if podman_cmd container exists") : script.index("exec capsh")]
+    startup = startup.replace("/usr/local/sbin/ads-sandbox-trust certificate", "trust_certificate")
+    startup = startup.replace(
+        "/usr/local/sbin/ads-agent-init", shlex.quote(str(BOOT.with_name("ads-agent-init")))
+    )
+    harness = f"""
+set -euo pipefail
+export ADS_CA_ATTEMPT=11111111-1111-4111-8111-111111111111
+fail() {{ exit 1; }}
+chown() {{ :; }}
+sleep() {{ :; }}
+touch() {{ echo ready > ready; }}
+trust_certificate() {{ printf '%s' ONLY-MINTED-CA; return {trust_status}; }}
+podman_cmd() {{
+  printf '%s\\n' "$*" >> calls
+  case "$1" in
+    container) return 0;;
+    inspect) echo nested-v1;;
+    exec)
+      if [[ "$2" == -i && "$4" == /bin/sh ]]; then
+        cat > trusted-certificate
+      elif [[ "$2" == -i ]]; then
+        cat > initialized
+      fi
+      ;;
+  esac
+}}
+{startup}
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert (tmp_path / "trusted-certificate").read_text() == "ONLY-MINTED-CA"
+    assert (tmp_path / "ready").exists() is (trust_status == 0)
+    assert (tmp_path / "initialized").exists() is (trust_status == 0)
+    assert (result.returncode == 0) is (trust_status == 0)
+    calls = (tmp_path / "calls").read_text()
+    assert "update-ca-certificates" in calls

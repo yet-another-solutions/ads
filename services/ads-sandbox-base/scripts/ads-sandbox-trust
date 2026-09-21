@@ -1,0 +1,75 @@
+#!/usr/bin/python3
+"""Base-owned CA bootstrap. Never execute mutable rootfs code as guest root."""
+
+from __future__ import annotations
+
+import array
+import fcntl
+import os
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from uuid import UUID
+
+sys.path.insert(0, "/usr/local/lib/ads-trust")
+from ads_egress_trust import load_public  # noqa: E402
+
+DEVICE = Path("/dev/ads-ca-public")
+PUBLIC = Path("/run/ads-ca-public")
+BLKROGET = 0x125E
+
+
+def check_readonly(device: Path = DEVICE) -> None:
+    info = device.lstat()
+    if not stat.S_ISBLK(info.st_mode):
+        raise RuntimeError("public CA input must be a block device, not a file or symlink")
+    fd = os.open(device, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        value = array.array("i", [0])
+        fcntl.ioctl(fd, BLKROGET, value, True)
+        if value[0] != 1:
+            raise RuntimeError("public CA device is not kernel read-only")
+    finally:
+        os.close(fd)
+
+
+def mount(attempt: UUID) -> None:
+    check_readonly()
+    PUBLIC.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if PUBLIC.is_symlink() or os.path.ismount(PUBLIC) or any(PUBLIC.iterdir()):
+        raise RuntimeError("public CA mount target is not fresh")
+    subprocess.run(
+        ["mount", "-t", "ext4", "-o", "ro,noload,nodev,nosuid,noexec", str(DEVICE), str(PUBLIC)],
+        check=True,
+        timeout=20,
+    )
+    try:
+        if not os.statvfs(PUBLIC).f_flag & os.ST_RDONLY:
+            raise RuntimeError("public CA filesystem is not read-only")
+        load_public(PUBLIC, attempt)
+    except BaseException:
+        subprocess.run(["umount", str(PUBLIC)], check=True, timeout=20)
+        raise
+
+
+def main() -> None:
+    try:
+        attempt = UUID(os.environ["ADS_CA_ATTEMPT"])
+        if sys.argv[1:] == ["mount"]:
+            mount(attempt)
+        elif sys.argv[1:] == ["certificate"]:
+            check_readonly()
+            if not os.path.ismount(PUBLIC) or not os.statvfs(PUBLIC).f_flag & os.ST_RDONLY:
+                raise RuntimeError("public CA filesystem is not mounted read-only")
+            # This is the ONLY certificate streamed into the rootless sandbox trust.
+            sys.stdout.buffer.write(load_public(PUBLIC, attempt).pem)
+        else:
+            raise ValueError("invalid trust helper operation")
+    except Exception as error:
+        print(f"ads-sandbox-trust: failed ({type(error).__name__})", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
