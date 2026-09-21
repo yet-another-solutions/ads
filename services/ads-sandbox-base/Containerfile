@@ -3,7 +3,7 @@ FROM debian:latest AS pause-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY scripts/pause.c /src/pause.c
+COPY services/ads-sandbox-base/scripts/pause.c /src/pause.c
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
     && gcc -O2 -static -o /pause /src/pause.c \
@@ -27,6 +27,7 @@ RUN apt-get update \
         passt \
         podman \
         python3 \
+        python3-cryptography \
         slirp4netns \
         uidmap \
         util-linux \
@@ -45,14 +46,16 @@ RUN apt-get update \
         > /etc/containers/storage.conf
 
 COPY --from=pause-builder /pause /usr/local/sbin/pause
-COPY scripts/ads-sandbox-boot /usr/local/sbin/ads-sandbox-boot
-COPY scripts/ads-session-exec /usr/local/sbin/ads-session-exec
-COPY scripts/ads-session-device-check /usr/local/sbin/ads-session-device-check
-COPY scripts/ads-sandbox-runtime /usr/local/sbin/ads-sandbox-runtime
-COPY scripts/ads-agent-init /usr/local/sbin/ads-agent-init
+COPY services/ads-sandbox-base/scripts/ads-sandbox-boot /usr/local/sbin/ads-sandbox-boot
+COPY services/ads-sandbox-base/scripts/ads-session-exec /usr/local/sbin/ads-session-exec
+COPY services/ads-sandbox-base/scripts/ads-session-device-check /usr/local/sbin/ads-session-device-check
+COPY services/ads-sandbox-base/scripts/ads-sandbox-runtime /usr/local/sbin/ads-sandbox-runtime
+COPY services/ads-sandbox-base/scripts/ads-agent-init /usr/local/sbin/ads-agent-init
+COPY services/ads-sandbox-base/scripts/ads-sandbox-trust /usr/local/sbin/ads-sandbox-trust
+COPY libraries/ads-commons/src/ads_commons/egress_trust.py /usr/local/lib/ads-trust/ads_egress_trust.py
 
 RUN chmod 0644 /usr/local/sbin/ads-agent-init \
-    && chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/ads-session-device-check /usr/local/sbin/ads-sandbox-runtime /usr/local/sbin/pause \
+    && chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/ads-session-device-check /usr/local/sbin/ads-sandbox-runtime /usr/local/sbin/ads-sandbox-trust /usr/local/sbin/pause \
     && test -x /usr/local/sbin/pause
 
 ENTRYPOINT ["/usr/local/sbin/ads-sandbox-boot"]

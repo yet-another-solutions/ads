@@ -107,7 +107,7 @@ jobs:
             pack: "false"
           - image: ads-sandbox-base
             file: services/ads-sandbox-base/Containerfile
-            context: services/ads-sandbox-base
+            context: .
             smoke: ""
             pack: "false"
           - image: ads-sandbox-ipc
@@ -199,6 +199,11 @@ jobs:
           st=$?
           set -e
           test "$st" -eq 1
+      - name: Guest shared trust verifier import
+        if: matrix.image == 'ads-sandbox-base'
+        run: |
+          docker run --rm --network none --entrypoint python3 ads-sandbox-base:ci -c \
+            "import sys; sys.path.insert(0, '/usr/local/lib/ads-trust'); import ads_egress_trust; from cryptography import x509; assert hasattr(x509.Certificate, 'not_valid_after_utc'); assert hasattr(x509.Certificate, 'verify_directly_issued_by')"
       - name: CA fails closed without designated inputs and devices
         if: matrix.image == 'ads-sandbox-ca'
         run: |

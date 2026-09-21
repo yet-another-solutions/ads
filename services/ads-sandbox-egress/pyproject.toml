@@ -7,6 +7,7 @@ authors = [{ name = "yet-another-solutions" }]
 dependencies = [
     "ads-commons",
     "ads-commons-beans",
+    "cryptography==50.0.1",
     "dishka==1.10.1",
     "litestar==2.24.0",
     "msgspec==0.21.1",

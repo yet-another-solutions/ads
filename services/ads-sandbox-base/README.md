@@ -80,6 +80,28 @@ create and resume. If the agent removes or breaks required inner software,
 startup fails without readiness; it does not repair those modifications.
 No setuid helper permission restoration is introduced.
 
+## Egress CA trust input
+
+When the manager supplies `ADS_CA_ATTEMPT`, bootstrap requires the separate
+`/dev/ads-ca-public` clone. The trusted helper checks the kernel read-only flag,
+mounts ext4 with `ro,noload,nodev,nosuid,noexec`, checks filesystem read-only state,
+and validates the committed Job attempt, certificate fingerprint, CA constraints
+and exact expiry through the shared commons verifier. It mounts before the
+unchanged disk inventory check, so the declared public source is already
+kernel-claimed. A device without an attempt is rejected; absent inputs retain
+the isolated component-test path until manager clone integration.
+
+Only `trusted-egress-ca.pem` is streamed to `podman exec` for installation under
+`/usr/local/share/ca-certificates/ads-egress.crt`. Neither parent chains nor the
+egress-only company bundle are imported. Writable-rootfs software is executed
+inside the rootless container, never through guest-root chroot. Trust failure
+prevents initialization/readiness on both create and resume. The private-key
+source is never an input to this helper and must never be attached to the guest.
+
+The base image build context is now the repository root so it copies the exact
+shared verifier rather than maintaining a fork. GitHub Actions remains the only
+image builder. Unit tests do not establish kernel read-only or live trust proof.
+
 ## Existing sessions and proof gates
 
 An existing `dev-sandbox` without label `ads.io/runtime-contract=nested-v1`
