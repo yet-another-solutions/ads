@@ -49,6 +49,9 @@ class GuardrailSettings:
     url: str
     api_token: str
     workspace: Workspace
+    # The audience of a person's token the guardrail accepts. The sandbox credential is
+    # minted for it, so the guardrail can exchange it for the server behind it.
+    audience: str = "ads-guardrail"
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,9 +154,15 @@ def _guardrail_settings() -> GuardrailSettings | None:
     api_token = _env("ADS_ENGINE_GUARDRAIL_API_TOKEN").strip()
     if not api_token:
         raise RuntimeError("ADS_ENGINE_GUARDRAIL_API_TOKEN is required with a guardrail")
+    audience = _env("ADS_ENGINE_GUARDRAIL_AUDIENCE", "ads-guardrail").strip()
+    if not audience:
+        raise RuntimeError(
+            "ADS_ENGINE_GUARDRAIL_AUDIENCE must name the audience the guardrail accepts"
+        )
     return GuardrailSettings(
         url=url,
         api_token=api_token,
+        audience=audience,
         workspace=Workspace(
             project=_env("ADS_ENGINE_WORKSPACE_PROJECT").strip(),
             repo=_env("ADS_ENGINE_WORKSPACE_REPO").strip(),

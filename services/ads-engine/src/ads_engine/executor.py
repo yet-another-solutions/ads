@@ -34,7 +34,7 @@ from ads_engine.config import Settings
 from ads_engine.context import EngineContextFactory
 from ads_engine.guardrail import ConversationRuns, ToolsUnavailable
 from ads_engine.mcp_client import SandboxClient, ToolCallRefused
-from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
+from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials, RunCredentials
 
 
 class ExecutionState(TypedDict):
@@ -61,8 +61,8 @@ class ExecutorChatStreamer:
         with tracing_context(enabled=False):
             try:
                 context = self._context.open(request)
-                run_id = await self._run_of(request)
                 async with self._credentials.open(request.authorization.token) as credentials:
+                    run_id = await self._run_of(request, credentials)
                     async with self._sandbox.open(request, credentials, run_id) as tools:
                         schemas = await tools.schemas()
                         model_token = request.model.authentication.openai_bearer.token
@@ -246,13 +246,17 @@ class ExecutorChatStreamer:
             except Exception:
                 raise ExecutionFailed("sandbox executor failed") from None
 
-    async def _run_of(self, request: EngineRequest) -> str:
-        """The guardrail in front needs a run; without one configured there is no proxy."""
+    async def _run_of(self, request: EngineRequest, credentials: RunCredentials) -> str:
+        """The guardrail in front needs a run; without one configured there is no proxy.
+
+        Opened with the credential, not the person's inbound token: that one is not
+        addressed to the guardrail, which verifies every person's token by its audience.
+        """
         if self._runs is None or self._settings.guardrail is None:
             return ""
         try:
             return await self._runs.id_for(
-                request.authorization.token,
+                credentials.current().context.access_token or "",
                 self._settings.guardrail.workspace,
                 request.session_id,
             )

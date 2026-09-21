@@ -428,6 +428,9 @@ data:
   ADS_ENGINE_ACK_AUDIENCE: "ads"
   ADS_ENGINE_TLS_CA_BUNDLE: "/ca/ca.crt"
   ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"
+  # The same audience the guardrail verifies a person's token by: the sandbox credential
+  # is minted for it. Empty accepts no person, and the engine refuses to start on it.
+  ADS_ENGINE_GUARDRAIL_AUDIENCE: "ads-guardrail"
   ADS_ENGINE_WORKSPACE_PROJECT: "ads"
   ADS_ENGINE_WORKSPACE_REPO: "yet-another-solutions/ads"
   ADS_ENGINE_WORKSPACE_ENV: "local"
@@ -458,7 +461,7 @@ data:
   ADS_TLS_CA_BUNDLE: "/ca/ca.crt"
   ADS_POLICY_URL: "https://ads-policy:8081"
   ADS_ATTRIBUTES: "repo.write=true,agent=true"
-  ADS_MCP_AUDIENCE: "ads-mcp"
+  ADS_MCP_AUDIENCE: "ads-guardrail"
   ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
   ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
   ADS_KEYCLOAK_CLIENT_ID: "ads-guardrail"

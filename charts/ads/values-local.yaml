@@ -136,7 +136,7 @@ guardrail:
     repository: localhost/ads-guardrail
     tag: local
     pullPolicy: Never
-  personTokenAudience: ads-mcp
+  personTokenAudience: ads-guardrail
 
 injectionScanner:
   enabled: true

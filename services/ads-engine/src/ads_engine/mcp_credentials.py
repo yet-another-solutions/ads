@@ -73,6 +73,9 @@ class McpCredentials:
         self._settings = settings
         self._exchange = exchange
         self._verifier = verifier
+        # Behind a guardrail the credential is addressed to it: it exchanges the token for
+        # the sandbox, which Keycloak allows only to a client within the token's audience.
+        self._audience = settings.guardrail.audience if settings.guardrail else MCP_AUDIENCE
         if not exchange.token_endpoint.startswith("https://"):
             raise ValueError("MCP token endpoint must use HTTPS")
 
@@ -91,7 +94,7 @@ class McpCredentials:
                     "subject_token": inbound_token,
                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                     "requested_token_type": "urn:ietf:params:oauth:token-type:refresh_token",
-                    "audience": MCP_AUDIENCE,
+                    "audience": self._audience,
                 },
                 subject,
             )
@@ -152,9 +155,9 @@ class McpCredentials:
             raise ValueError("missing refresh token")
         expires_in = _duration(payload.get("expires_in"))
         refresh_expires_in = _duration(payload.get("refresh_expires_in"))
-        claims = self._verifier.verified_claims(access, audience=MCP_AUDIENCE)
+        claims = self._verifier.verified_claims(access, audience=self._audience)
         audience = claims["aud"]
-        if audience != MCP_AUDIENCE and audience != [MCP_AUDIENCE]:
+        if audience != self._audience and audience != [self._audience]:
             raise ValueError("MCP audience widened")
         if claims.get("sub") != subject or claims.get("azp") != ENGINE_CLIENT:
             raise ValueError("MCP identity changed")
@@ -164,7 +167,7 @@ class McpCredentials:
         if not isinstance(roles, list) or set(roles) - {"user"} or claims.get("resource_access"):
             raise ValueError("MCP roles widened")
         context = security_context_from_identity(
-            identity_from_claims(claims, MCP_AUDIENCE)
+            identity_from_claims(claims, self._audience)
         ).with_access_token(access)
         expires_at = min(float(claims["exp"]), started + expires_in)
         if expires_at - time.time() <= 2 * self._settings.mcp_timeout_seconds:

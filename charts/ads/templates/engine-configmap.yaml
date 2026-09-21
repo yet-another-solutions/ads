@@ -50,6 +50,9 @@ data:
   {{- fail "guardrail.enabled needs tls.caBundle.secretName: the engine must trust the guardrail's certificate" }}
   {{- end }}
   ADS_ENGINE_GUARDRAIL_URL: {{ include "ads.guardrailUrl" . | quote }}
+  # The same audience the guardrail verifies a person's token by: the sandbox credential
+  # is minted for it. Empty accepts no person, and the engine refuses to start on it.
+  ADS_ENGINE_GUARDRAIL_AUDIENCE: {{ .Values.guardrail.personTokenAudience | quote }}
   ADS_ENGINE_WORKSPACE_PROJECT: {{ required "engine.workspace.project is required with the guardrail" .Values.engine.workspace.project | quote }}
   ADS_ENGINE_WORKSPACE_REPO: {{ required "engine.workspace.repo is required with the guardrail" .Values.engine.workspace.repo | quote }}
   ADS_ENGINE_WORKSPACE_ENV: {{ required "engine.workspace.env is required with the guardrail" .Values.engine.workspace.env | quote }}

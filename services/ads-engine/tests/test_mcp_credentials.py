@@ -304,3 +304,52 @@ def test_concurrent_users_have_independent_pairs_and_teardown(
         assert runs[1]._pair is None
 
     asyncio.run(scenario())
+
+
+def test_behind_a_guardrail_the_credential_is_minted_for_it(
+    settings, jwt_verifier, jwt_key, monkeypatch
+):
+    # Keycloak lets the guardrail exchange only a token whose audience names it.
+    from ads_engine.config import GuardrailSettings, Workspace
+
+    guarded = replace(
+        settings,
+        guardrail=GuardrailSettings(
+            "https://guardrail.test", "guardrail-token", Workspace("ads", "r", "test", "/workspace")
+        ),
+    )
+    factory = McpCredentials(
+        guarded,
+        TokenExchangeSettings("https://identity.test/token", "ads-engine", "secret", None),
+        jwt_verifier,
+    )
+    forms = []
+    original_client = httpx2.AsyncClient
+
+    def token_endpoint(request):
+        forms.append({key: value[0] for key, value in parse_qs(request.content.decode()).items()})
+        return httpx2.Response(
+            200,
+            json=token_payload(jwt_key)
+            | {
+                "access_token": encode_access_token(
+                    jwt_key, aud="ads-guardrail", azp="ads-engine", exp=time.time() + 600
+                )
+            },
+        )
+
+    monkeypatch.setattr(
+        httpx2,
+        "AsyncClient",
+        lambda **kw: original_client(transport=httpx2.MockTransport(token_endpoint), **kw),
+    )
+
+    async def scenario():
+        with SecurityContextHolder.bound(exchanged_context()):
+            async with factory.open("inbound") as run:
+                assert run.current().context.access_token
+
+    asyncio.run(scenario())
+    assert forms[0]["audience"] == "ads-guardrail"
+    with pytest.raises((ValueError, InvalidAccessToken)):
+        factory._validate(token_payload(jwt_key), ENGINE_SUBJECT, time.time())

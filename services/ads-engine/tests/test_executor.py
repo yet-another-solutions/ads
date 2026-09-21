@@ -932,6 +932,24 @@ def test_every_sandbox_request_names_the_conversation_run(sdk_harness):
     assert runs.asked[0][1].project == "ads"
 
 
+def test_the_run_is_opened_with_the_credential_not_the_inbound_token(sdk_harness):
+    # The guardrail verifies a person's token by its own audience; only the credential
+    # minted for it carries that audience, the inbound token never does.
+    h = sdk_harness
+    FakeModel.scripts = [[AIMessageChunk(content="done")]]
+    runs = FakeRuns()
+    streamer = _streamer_through_guardrail(h, runs)
+    credential = h.run.current().context.access_token
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            return await _collect(streamer.stream(make_request()))
+
+    asyncio.run(scenario())
+    assert runs.asked[0][0] == credential
+    assert runs.asked[0][0] != make_request().authorization.token
+
+
 def test_a_refused_call_is_told_to_the_model_and_the_person_without_ending_the_run(sdk_harness):
     h = sdk_harness
     h.behavior.refuse = True

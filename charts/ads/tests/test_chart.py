@@ -510,6 +510,20 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(servers["sandbox"]["site"]["runtime_class_name"], "kata-qemu-ads")
         self.assertIn("ADS_KEYCLOAK_CLIENT_SECRET", docs["Secret", "ads-guardrail"]["stringData"])
 
+    def test_the_engine_mints_its_credential_for_the_audience_the_guardrail_accepts(self):
+        docs = self.documents(
+            "--set",
+            "guardrail.enabled=true,tls.caBundle.secretName=lab-ca",
+            "--set",
+            "engine.workspace.project=ads,engine.workspace.repo=r,engine.workspace.env=test",
+            "--set",
+            "guardrail.personTokenAudience=ads-guardrail",
+        )
+        engine = docs["ConfigMap", "ads-engine"]["data"]
+        guardrail = docs["ConfigMap", "ads-guardrail"]["data"]
+        self.assertEqual(engine["ADS_ENGINE_GUARDRAIL_AUDIENCE"], "ads-guardrail")
+        self.assertEqual(engine["ADS_ENGINE_GUARDRAIL_AUDIENCE"], guardrail["ADS_MCP_AUDIENCE"])
+
     def test_without_a_guardrail_the_engine_reaches_the_sandbox_itself(self):
         docs = self.documents()
         engine = docs["ConfigMap", "ads-engine"]["data"]

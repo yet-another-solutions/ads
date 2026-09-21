@@ -41,6 +41,7 @@ data:
       "accessTokenLifespan": 300,
       "passwordPolicy": "hashAlgorithm(pbkdf2-sha512)",
       "roles": {"realm": [{"name": "user"}]},
+      "scopeMappings": [{"client": "ads-engine", "roles": ["user"]}],
       "clientScopes": [
         {"name": "basic", "description": "OpenID Connect scope for add all basic claims to the token", "protocol": "openid-connect",
          "attributes": {"include.in.token.scope": "false", "display.on.consent.screen": "false"},
@@ -159,19 +160,22 @@ data:
           "standardFlowEnabled": false,
           "directAccessGrantsEnabled": false,
           "serviceAccountsEnabled": false,
-          "attributes": {"standard.token.exchange.enabled": "true"},
+          "fullScopeAllowed": false,
+          "attributes": {"standard.token.exchange.enabled": "true",
+                         "standard.token.exchange.enableRefreshRequestedTokenType": "SAME_SESSION"},
+          "defaultClientScopes": ["basic"],
           "optionalClientScopes": ["ads-engine-ack", "ads-engine-context-meter", "ads-engine-context-compactor"],
           "protocolMappers": [
             {
-              "name": "audience-ads", "protocol": "openid-connect",
-              "protocolMapper": "oidc-audience-mapper",
-              "config": {"included.client.audience": "ads", "access.token.claim": "true",
-                         "id.token.claim": "false", "introspection.token.claim": "true"}
+              "name": "scoped-user-role", "protocol": "openid-connect",
+              "protocolMapper": "oidc-usermodel-realm-role-mapper",
+              "config": {"claim.name": "realm_access.roles", "jsonType.label": "String", "multivalued": "true",
+                         "access.token.claim": "true", "id.token.claim": "false"}
             },
             {
-              "name": "audience-ads-mcp", "protocol": "openid-connect",
+              "name": "audience-ads-guardrail", "protocol": "openid-connect",
               "protocolMapper": "oidc-audience-mapper",
-              "config": {"included.client.audience": "ads-mcp", "access.token.claim": "true",
+              "config": {"included.client.audience": "ads-guardrail", "access.token.claim": "true",
                          "id.token.claim": "false", "introspection.token.claim": "true"}
             }
           ]
