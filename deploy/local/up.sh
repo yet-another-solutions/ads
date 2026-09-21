@@ -161,13 +161,20 @@ if command -v helm >/dev/null; then
   } > "$WORK/policy-values.yaml"
   helm upgrade --install ads charts/ads -n "$RELEASE_NAMESPACE" \
     -f charts/ads/values-local.yaml -f "$WORK/policy-values.yaml" \
-    --wait --timeout 15m
+    --timeout 15m
 else
   step "ads chart, already rendered (no helm here)"
   # Every object names its own namespace, so this is applied without one.
   kubectl apply -f deploy/local/rendered.yaml
-  kubectl -n "$NAMESPACE" wait --for=condition=Available deploy --all --timeout=900s
 fi
+
+# ads-sandbox-manager is deliberately left out. It reports ready only once the golden
+# image is baked, and golden and the guest base are the two images here that are pulled
+# rather than built, so a stand that cannot reach ghcr leaves the manager at 503 forever.
+# Nothing else waits on it, and no session starts here anyway: kind has no Kata.
+step "workloads (all but the sandbox manager)"
+kubectl -n "$NAMESPACE" wait --for=condition=Available deploy --timeout=900s \
+  -l 'app.kubernetes.io/component!=ads-sandbox-manager'
 
 if [ "$(uname -s)" = Darwin ]; then
   # The engine runs in a VM; its own name for the Mac forwards to the Mac's localhost.
