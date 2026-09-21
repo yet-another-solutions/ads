@@ -11,6 +11,7 @@ import pytest
 from litestar.testing import TestClient
 
 from ads_audit.app import create_app
+from ads_audit.chats import Chat, ChatPart, ChatSession, ChatTurn, ChatUnavailable
 from ads_audit.config import Settings
 from ads_audit.repository import InMemoryAuditRepository
 from ads_commons.security import InvalidAccessToken
@@ -81,6 +82,33 @@ class _Policy:
         return [SourceChecks("mcp:jira", Switch.OFF), SourceChecks("opencode", Switch.ENFORCE)]
 
 
+class _Chats:
+    def __init__(self) -> None:
+        self.answering = True
+        self.known = {
+            CHAT: Chat(
+                session=ChatSession(id=CHAT, name="Release notes"),
+                project_name="ads",
+                turns=(
+                    ChatTurn(who="you", parts=(ChatPart(kind="message", role="user", text="Hi"),)),
+                    ChatTurn(
+                        who="agent",
+                        parts=(
+                            ChatPart(kind="reasoning", text="thinking it over"),
+                            ChatPart(kind="tool_call", text="ls -la", name="exec_shell"),
+                            ChatPart(kind="tool_result", text="<b>total 0</b>", name="exec_shell"),
+                        ),
+                    ),
+                ),
+            )
+        }
+
+    async def transcript(self, chat: str) -> Chat | None:
+        if not self.answering:
+            raise ChatUnavailable("down")
+        return self.known.get(chat)
+
+
 def _event(
     minutes_ago: int,
     *,
@@ -122,8 +150,13 @@ def policy() -> _Policy:
 
 
 @pytest.fixture
+def chats() -> _Chats:
+    return _Chats()
+
+
+@pytest.fixture
 def ui(
-    settings: Settings, repository: InMemoryAuditRepository, policy: _Policy
+    settings: Settings, repository: InMemoryAuditRepository, policy: _Policy, chats: _Chats
 ) -> Iterator[TestClient]:
     app = create_app(
         settings,
@@ -131,6 +164,7 @@ def ui(
         SilentBroker(),  # type: ignore[arg-type]
         policy_blocker=policy,
         policy_sources=policy,
+        chats=chats,
     )
     app.state.session_binder = SessionBinder(
         _Verifier(),  # type: ignore[arg-type]
@@ -291,9 +325,45 @@ def test_sources_say_so_when_the_policy_service_is_silent(ui: TestClient, policy
     assert "did not answer" in ui.get("/sources").text
 
 
-def test_the_events_of_a_chat_link_from_its_block(
+def test_a_blocked_chat_links_to_its_transcript(
     ui: TestClient, repository: InMemoryAuditRepository
 ) -> None:
     asyncio.run(repository.block_conversation(CHAT, 31))
     _log_in(ui)
-    assert f'href="/journal?conversation={CHAT}"' in ui.get("/blocks").text
+    assert f'href="/chats/{CHAT}"' in ui.get("/blocks").text
+
+
+def test_an_event_links_to_its_chat(ui: TestClient, repository: InMemoryAuditRepository) -> None:
+    _seed(repository, _event(1))
+    _log_in(ui)
+    link = ui.get("/journal").text.split('href="/events?at=', 1)[1].split('"', 1)[0]
+    assert f'href="/chats/{CHAT}"' in ui.get(f"/events?at={link}").text
+
+
+def test_the_auditor_reads_the_whole_chat_in_the_look_ads_has(ui: TestClient) -> None:
+    _log_in(ui)
+    page = ui.get(f"/chats/{CHAT}").text
+    assert "Release notes" in page
+    assert '<p class="user">Hi</p>' in page
+    assert '<details class="reasoning">' in page
+    assert 'data-tool="exec_shell"' in page
+    assert "&lt;b&gt;total 0&lt;/b&gt;" in page
+    assert f'href="/journal?conversation={CHAT}"' in page
+
+
+def test_a_chat_ads_does_not_know_is_not_found(ui: TestClient) -> None:
+    _log_in(ui)
+    assert ui.get("/chats/unknown-chat").status_code == 404
+
+
+def test_a_chat_says_so_when_ads_is_silent(ui: TestClient, chats: _Chats) -> None:
+    chats.answering = False
+    _log_in(ui)
+    page = ui.get(f"/chats/{CHAT}")
+    assert page.status_code == 200
+    assert "ads did not answer" in page.text
+
+
+def test_reading_a_chat_needs_the_auditor_role(ui: TestClient) -> None:
+    _log_in(ui, roles="user")
+    assert ui.get(f"/chats/{CHAT}").status_code == 403

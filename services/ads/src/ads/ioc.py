@@ -10,8 +10,6 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from ads.abort_subjects import AbortSubjects
-from ads.audit_client import AuditApi, AuditClient
-from ads.auditing import AuditingService
 from ads.catalog_service import CatalogService
 from ads.config import Settings
 from ads.engine_output_controller import EngineOutputController
@@ -110,7 +108,6 @@ class AppProvider(Provider):
         kafka: EngineRequests | None = None,
         hub: LiveHub | None = None,
         journal: AuditSink | None = None,
-        audit_api: AuditApi | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -119,7 +116,6 @@ class AppProvider(Provider):
         self._kafka = kafka
         self._hub = hub
         self._journal = journal
-        self._audit_api = audit_api
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -250,11 +246,6 @@ class AppProvider(Provider):
     run_repository = provide(SessionRunRepository, scope=Scope.REQUEST)
     buffer_repository = provide(SessionRunBufferRepository, scope=Scope.REQUEST)
 
-    @provide(scope=Scope.APP)
-    def audit_api(self, settings: Settings) -> AuditApi:
-        return self._audit_api if self._audit_api is not None else AuditClient(settings)
-
-    auditing_service = provide(AuditingService, scope=Scope.REQUEST)
     project_service = provide(ProjectService, scope=Scope.REQUEST)
     session_service = provide(SessionService, scope=Scope.REQUEST)
     send_service = provide(SendService, scope=Scope.REQUEST)

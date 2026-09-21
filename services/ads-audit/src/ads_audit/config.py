@@ -33,6 +33,7 @@ class Settings:
     keycloak_auditor_role: str = "auditor"
     session_secret: str = ""
     public_base_url: str = ""
+    ads_url: str = ""
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -95,6 +96,9 @@ def load_settings() -> Settings:
     policy_api_token = _env("ADS_POLICY_API_TOKEN").strip()
     if not policy_api_token:
         raise RuntimeError("ADS_POLICY_API_TOKEN is required")
+    ads_url = _env("ADS_URL").strip().rstrip("/")
+    if not ads_url.startswith("https://"):
+        raise RuntimeError("ADS_URL must be an https URL: an auditor reads chats there")
     settings = Settings(
         api_token=api_token,
         tls_cert_path=cert_path,
@@ -118,6 +122,7 @@ def load_settings() -> Settings:
         keycloak_auditor_role=_env("ADS_KEYCLOAK_AUDITOR_ROLE", "auditor").strip(),
         session_secret=_env("ADS_SESSION_SECRET"),
         public_base_url=_env("ADS_PUBLIC_BASE_URL").strip().rstrip("/"),
+        ads_url=ads_url,
     )
     load_tls_context(settings)
     return settings

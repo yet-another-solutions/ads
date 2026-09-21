@@ -1,27 +1,46 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from dishka.integrations.litestar import FromDishka
-from litestar import delete, get
+from litestar import Controller, Request, get
 
-from ads.audit_client import ConversationBlockView
-from ads.auditing import AuditingService
-from ads_commons_web.authenticated import AuthenticatedController
+from ads.config import Settings
+from ads.session_service import SessionService
+from ads.tokens import TokenAuthenticator
+from ads.views import TranscriptView
+from ads_commons.security import AuthenticationRequired, InvalidAccessToken, ensure_caller
+from ads_commons_web.authenticated import AUTH_EXCEPTION_HANDLERS
 from ads_commons_web.inject import inject
+from ads_commons_web.security_holder import SecurityContextHolder
+
+BEARER = "Bearer "
 
 
 @inject
-class AuditorController(AuthenticatedController):
-    """Blocks are the journal's to keep; who may touch them is decided here."""
+class AuditorController(Controller):
+    """A chat read for the auditor's pages, with the auditor's own exchanged token."""
 
     path = "/auditor/sessions"
-    auditing: FromDishka[AuditingService]
+    exception_handlers = AUTH_EXCEPTION_HANDLERS
+    sessions: FromDishka[SessionService]
+    authenticator: FromDishka[TokenAuthenticator]
+    settings: FromDishka[Settings]
 
-    @get("/{session_id:uuid}/block")
-    async def block(self, session_id: uuid.UUID) -> ConversationBlockView:
-        return await self.auditing.block_of(session_id)
-
-    @delete("/{session_id:uuid}/block", status_code=200)
-    async def lift_block(self, session_id: uuid.UUID) -> ConversationBlockView:
-        return await self.auditing.lift_block(session_id)
+    @get("/{session_id:uuid}/transcript")
+    async def transcript(
+        self, request: Request[Any, Any, Any], session_id: uuid.UUID
+    ) -> TranscriptView:
+        header = request.headers.get("authorization", "")
+        if not header.startswith(BEARER):
+            raise AuthenticationRequired("bearer token required")
+        try:
+            auditor = self.authenticator.authenticate(
+                header[len(BEARER) :], audience=self.settings.keycloak_audience
+            )
+        except InvalidAccessToken as exc:
+            raise AuthenticationRequired("invalid bearer token") from exc
+        ensure_caller(auditor, self.settings.auditor_allowed_azp)
+        with SecurityContextHolder.bound(auditor):
+            return await self.sessions.transcript_for_auditor(session_id)

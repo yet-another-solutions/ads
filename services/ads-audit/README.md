@@ -96,9 +96,14 @@ to the policy service, and the copy there is deleted at once.
 
 The same service serves an auditor's pages on its own host, in the look ads has
 (`ads-commons-web`): the journal with every filter above, one event with all it carries,
-the chat blocks with a lift, and every source with whether the policy checks it and what
-went through it in the last day. Login is Keycloak through the `ads-audit` client; only
-the `auditor` role reads. A lift records the auditor's own subject as `lifted_by`.
+the chat blocks with a lift, every source with whether the policy checks it and what
+went through it in the last day, and a whole chat as ads shows it. Login is Keycloak
+through the `ads-audit` client; only the `auditor` role reads. A lift records the
+auditor's own subject as `lifted_by`.
+
+A chat stays in ads. The pages ask ads for it with the auditor's own token, exchanged for
+the `ads` audience through the `ads-audit-ads` scope, so ads journals who read it
+(`auditor.read`). If ads does not answer, the page says so.
 
 The login, the session cookie and the refresh tokens (`oidc_refresh_tokens`, by SSO
 session) apply to the pages alone. `/audit` stays on its bearer token and `/health` stays
@@ -115,6 +120,7 @@ Required:
 - `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_SECRET`
 - `ADS_SESSION_SECRET` — at least 16 bytes, seals the auditor's cookie
 - `ADS_PUBLIC_BASE_URL` — where browsers reach the pages; Keycloak redirects back here
+- `ADS_URL` (https) — where an auditor's chat reading goes
 
 Optional: `ADS_TLS_CA_BUNDLE`, `ADS_BIND_HOST` (`0.0.0.0`), `ADS_PORT` (`8080`),
 `ADS_AUDIT_PREFETCH` (`100`), `ADS_AUDIT_PARTITIONS_AHEAD` (`2`),

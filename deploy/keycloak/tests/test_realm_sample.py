@@ -29,6 +29,8 @@ ENGINE_SCOPES = [
     "ads-engine-sandbox-mcp",
     "ads-engine-guardrail",
 ]
+AUDIT_SCOPES = ["ads-audit-ads"]
+OPTIONAL_SCOPES = {"ads-engine": ENGINE_SCOPES, "ads-audit": AUDIT_SCOPES}
 AUDIENCES = {
     "ads": {"ads", "ads-engine", "ads-preferences"},
     # Every engine audience comes from a scope: a refresh would bring back a mapped one.
@@ -87,7 +89,7 @@ def test_flows_scopes_audiences_and_role_assignment():
         assert client["standardFlowEnabled"] == (name in BROWSER_LOGINS)
         assert client["directAccessGrantsEnabled"] is False
         assert client["implicitFlowEnabled"] is False
-        assert client["optionalClientScopes"] == (ENGINE_SCOPES if name == "ads-engine" else [])
+        assert client["optionalClientScopes"] == OPTIONAL_SCOPES.get(name, [])
         assert "offline_access" not in client["defaultClientScopes"]
         assert "basic" in client["defaultClientScopes"]
         if name == "ads-engine":
@@ -106,7 +108,7 @@ def test_flows_scopes_audiences_and_role_assignment():
         else:
             assert "roles" in client["defaultClientScopes"]
         assert client["attributes"]["standard.token.exchange.enabled"] == (
-            "false" if name in {"ads-preferences", "ads-context-meter", "ads-audit"} else "true"
+            "false" if name in {"ads-preferences", "ads-context-meter"} else "true"
         )
         audience_mappers = [
             m for m in client["protocolMappers"] if m["protocolMapper"] == "oidc-audience-mapper"
@@ -129,6 +131,7 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         "email",
         "service_account",
         *ENGINE_SCOPES,
+        *AUDIT_SCOPES,
     }
     for client in realm["clients"]:
         assert set(client["defaultClientScopes"] + client["optionalClientScopes"]) <= scopes.keys()
@@ -156,6 +159,18 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         "access.token.claim": "true",
         "id.token.claim": "false",
     }
+
+
+def test_the_auditors_pages_reach_ads_only_through_an_optional_scope():
+    realm = yaml.safe_load(SAMPLE.read_text())["spec"]["realm"]
+    scope = next(s for s in realm["clientScopes"] if s["name"] == "ads-audit-ads")
+    assert [m["protocolMapper"] for m in scope["protocolMappers"]] == ["oidc-audience-mapper"]
+    assert scope["protocolMappers"][0]["config"]["included.client.audience"] == "ads"
+    for client in realm["clients"]:
+        assert "ads-audit-ads" not in client["defaultClientScopes"]
+        assert ("ads-audit-ads" in client["optionalClientScopes"]) == (
+            client["clientId"] == "ads-audit"
+        )
 
 
 def test_each_way_to_the_sandbox_is_one_optional_scope_with_one_audience():

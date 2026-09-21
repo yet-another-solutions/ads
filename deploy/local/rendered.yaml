@@ -265,7 +265,6 @@ stringData:
   ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
   ADS_DATABASE_URL: "postgresql+psycopg://ads:ads@ads-postgres:5432/ads"
   ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
-  ADS_AUDIT_API_TOKEN: "local-audit-token-32-bytes"
 ---
 # Source: ads/templates/audit-configmap.yaml
 apiVersion: v1
@@ -296,6 +295,7 @@ data:
   ADS_KEYCLOAK_AUDIENCE: "ads-audit"
   ADS_KEYCLOAK_AUDITOR_ROLE: "auditor"
   ADS_PUBLIC_BASE_URL: "https://audit.ads.local:8445"
+  ADS_URL: "https://ads:8080"
 ---
 # Source: ads/templates/configmap.yaml
 apiVersion: v1
@@ -316,7 +316,7 @@ data:
   ADS_KEYCLOAK_AUDIENCE: "ads"
   ADS_KEYCLOAK_ROLE: "user"
   ADS_KEYCLOAK_AUDITOR_ROLE: "auditor"
-  ADS_AUDIT_URL: "https://ads-audit:8082"
+  ADS_AUDITOR_ALLOWED_AZP: "ads-audit"
   ADS_PUBLIC_BASE_URL: "https://ads.local:8443"
   ADS_BIND_HOST: "0.0.0.0"
   ADS_PORT: "8080"

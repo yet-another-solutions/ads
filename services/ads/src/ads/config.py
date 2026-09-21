@@ -48,15 +48,13 @@ class Settings:
     preferences_audience: str = "ads-preferences"
     engine_audience: str = "ads-engine"
     engine_allowed_azp: str = "ads-engine"
+    auditor_allowed_azp: str = "ads-audit"
     ping_death_seconds: float = 30.0
     finish_gap_seconds: float = 10.0
     watchdog_tick_seconds: float = 1.0
     # Empty means no policy service is configured, and every decision then denies.
     policy_url: str = ""
     policy_api_token: str = ""
-    # Empty means an auditor cannot read or lift a chat's block from here.
-    audit_url: str = ""
-    audit_api_token: str = ""
 
 
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
@@ -107,10 +105,9 @@ def load_settings() -> Settings:
         preferences_audience=_env("ADS_PREFERENCES_AUDIENCE", "ads-preferences"),
         engine_audience=_env("ADS_ENGINE_AUDIENCE", "ads-engine"),
         engine_allowed_azp=_env("ADS_ENGINE_ALLOWED_AZP", "ads-engine"),
+        auditor_allowed_azp=_env("ADS_AUDITOR_ALLOWED_AZP", "ads-audit"),
         policy_url=_env("ADS_POLICY_URL", "").rstrip("/"),
         policy_api_token=_env("ADS_POLICY_API_TOKEN", ""),
-        audit_url=_env("ADS_AUDIT_URL", "").rstrip("/"),
-        audit_api_token=_env("ADS_AUDIT_API_TOKEN", ""),
     )
     load_tls_context(settings)
     return settings

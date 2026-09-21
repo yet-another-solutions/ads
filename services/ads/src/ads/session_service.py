@@ -23,7 +23,7 @@ from ads.repository import (
     SessionRunRepository,
 )
 from ads.views import PartView, RunView, SessionView, TranscriptView
-from ads_commons.security import SecurityContextHolder, require_role
+from ads_commons.security import SecurityContextHolder, check_role, require_role
 from ads_policy.audit import BufferedAuditSink
 from ads_policy.contract import AuditEvent, Effect
 
@@ -97,18 +97,6 @@ class SessionService:
             raise SessionForbidden("session belongs to another user")
         return row
 
-    def _load_for_reading(self, session_id: uuid.UUID) -> ChatSession:
-        context = SecurityContextHolder.require()
-        row = self._sessions.get_any(session_id)
-        if row is None:
-            raise NotFound("no such session")
-        if row.user_id == context.user_id:
-            return row
-        if self._auditor_role and context.has_role(self._auditor_role):
-            self._journal_the_reading(context.subject, row)
-            return row
-        raise SessionForbidden("session belongs to another user")
-
     def _journal_the_reading(self, auditor: str, row: ChatSession) -> None:
         self._audit.enqueue(
             AuditEvent(
@@ -142,42 +130,53 @@ class SessionService:
             return self._entries.walk(row)
 
     async def transcript(self, session_id: uuid.UUID) -> TranscriptView:
-        """Committed entries plus buffer rows above the watermark, for a clean reconnect."""
         with self._session.begin():
-            row = self._load_for_reading(session_id)
-            project = self._projects.get_for_user(row.user_id, row.project_id)
-            committed = self._entries.walk(row)
-            run = self._runs.in_flight_for_session(row.id)
-            live: list[PartView] = []
-            run_view: RunView | None = None
-            if run is not None and run.status != STATUS_FINISHED:
-                run_view = RunView(
-                    status=run.status,
-                    message_id=run.message_id,
-                    total_context=run.total_context,
-                    used_context=run.used_context,
-                )
-                for delta in self._buffer.list_after(run.id, run.watermark):
-                    if delta.kind == KIND_TOMBSTONE:
-                        continue
-                    live.append(
-                        part_from_stored(
-                            delta.kind,
-                            delta.text,
-                            ROLE_ASSISTANT if delta.kind == KIND_MESSAGE else None,
-                            live=True,
-                        )
-                    )
-            return TranscriptView(
-                session=SessionView(
-                    id=row.id,
-                    project_id=row.project_id,
-                    name=row.name,
-                    description=row.description,
-                    running=run_view is not None,
-                ),
-                project_name=project.name if project is not None else "",
-                turns=turns_from_entries(committed, live),
-                run=run_view,
-                selected_model_id=self._runs.last_model_for_session(row.id),
+            return self._transcript_of(self._load_owned(session_id))
+
+    async def transcript_for_auditor(self, session_id: uuid.UUID) -> TranscriptView:
+        auditor = check_role(self._auditor_role).subject
+        with self._session.begin():
+            row = self._sessions.get_any(session_id)
+            if row is None:
+                raise NotFound("no such session")
+            self._journal_the_reading(auditor, row)
+            return self._transcript_of(row)
+
+    def _transcript_of(self, row: ChatSession) -> TranscriptView:
+        """Committed entries plus buffer rows above the watermark, for a clean reconnect."""
+        project = self._projects.get_for_user(row.user_id, row.project_id)
+        committed = self._entries.walk(row)
+        run = self._runs.in_flight_for_session(row.id)
+        live: list[PartView] = []
+        run_view: RunView | None = None
+        if run is not None and run.status != STATUS_FINISHED:
+            run_view = RunView(
+                status=run.status,
+                message_id=run.message_id,
+                total_context=run.total_context,
+                used_context=run.used_context,
             )
+            for delta in self._buffer.list_after(run.id, run.watermark):
+                if delta.kind == KIND_TOMBSTONE:
+                    continue
+                live.append(
+                    part_from_stored(
+                        delta.kind,
+                        delta.text,
+                        ROLE_ASSISTANT if delta.kind == KIND_MESSAGE else None,
+                        live=True,
+                    )
+                )
+        return TranscriptView(
+            session=SessionView(
+                id=row.id,
+                project_id=row.project_id,
+                name=row.name,
+                description=row.description,
+                running=run_view is not None,
+            ),
+            project_name=project.name if project is not None else "",
+            turns=turns_from_entries(committed, live),
+            run=run_view,
+            selected_model_id=self._runs.last_model_for_session(row.id),
+        )

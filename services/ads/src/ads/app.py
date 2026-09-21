@@ -15,7 +15,6 @@ from litestar.static_files import create_static_files_router
 from litestar.template.config import TemplateConfig
 from sqlalchemy import Engine
 
-from ads.audit_client import AuditApi
 from ads.auditor_controller import AuditorController
 from ads.config import Settings
 from ads.db import Base, create_db_engine
@@ -37,7 +36,7 @@ from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
 from ads_commons_beans import CommonsBeansProvider, JwtVerifier
-from ads_commons_web import STATIC_DIRECTORY
+from ads_commons_web import STATIC_DIRECTORY, TEMPLATE_DIRECTORY
 from ads_commons_web.auth import AuthController
 from ads_commons_web.frontend import LoginRequired, handle_login_required
 from ads_commons_web.security_middleware import SecurityContextMiddleware
@@ -98,7 +97,6 @@ def create_app(
     jwt_verifier: TokenAuthenticator | None = None,
     oidc_verifier: JwtVerifier | None = None,
     journal: AuditSink | None = None,
-    audit_api: AuditApi | None = None,
 ) -> Litestar:
     configure_logging()
     root = Path(__file__).resolve().parent
@@ -119,7 +117,6 @@ def create_app(
             kafka=kafka,
             hub=hub,
             journal=journal,
-            audit_api=audit_api,
         ),
         CommonsBeansProvider(),
         SecuritySettingsProvider(settings),
@@ -200,7 +197,7 @@ def create_app(
         ],
         plugins=[HTMXPlugin()],
         template_config=TemplateConfig(
-            engine=JinjaTemplateEngine(directory=root / "templates"),
+            engine=JinjaTemplateEngine(directory=[root / "templates", TEMPLATE_DIRECTORY]),
         ),
         middleware=[session_config.middleware, SecurityContextMiddleware],
         exception_handlers={

@@ -13,6 +13,7 @@ from litestar.exceptions import ClientException, NotFoundException
 from litestar.response import Redirect, Template
 
 from ads_audit.auditor import AuditorDesk
+from ads_audit.chats import ChatUnavailable
 from ads_audit.repository import Cursor, JournalFilter
 from ads_commons_web.authenticated import AuthenticatedController
 from ads_commons_web.frontend import FrontendController
@@ -177,6 +178,23 @@ class AuditorPages(FrontendController):
         if event is None:
             raise NotFoundException(detail="no such event")
         return self._page(request, identity, "event", "Event", event=event, row=event_row(event))
+
+    @get("/chats/{conversation:str}")
+    async def chat(
+        self,
+        request: Request[Any, Any, Any],
+        identity: NamedDependency[Identity],
+        conversation: str,
+    ) -> Template:
+        try:
+            chat = await self.desk.chat(conversation)
+        except ChatUnavailable:
+            return self._page(
+                request, identity, "chat", "Chat", chat=None, conversation=conversation
+            )
+        if chat is None:
+            raise NotFoundException(detail="no such chat")
+        return self._page(request, identity, "chat", "Chat", chat=chat, conversation=conversation)
 
     @get("/blocks")
     async def blocks(

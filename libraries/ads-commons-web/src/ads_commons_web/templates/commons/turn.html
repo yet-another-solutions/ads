@@ -1,0 +1,25 @@
+<article class="turn{% if turn.parts | selectattr('live') | list %} live{% endif %}"
+         {% if turn.entry_id %}id="entry-{{ turn.entry_id }}" data-entry-id="{{ turn.entry_id }}"{% endif %}>
+  <div class="meta">
+    <span class="who">{{ turn.who }}</span>
+    {% if turn.at %}<time datetime="{{ turn.at.isoformat() }}">{{ turn.at.strftime('%H:%M') }}</time>{% endif %}
+  </div>
+  {% for part in turn.parts %}
+  {% if part.kind == 'reasoning' %}
+  <details class="reasoning"{% if part.live %} open{% endif %}>
+    <summary>Reasoning</summary>
+    <p>{{ part.text }}</p>
+  </details>
+  {% elif part.kind == 'notice' %}
+  <p class="notice" role="status">{{ part.text }}</p>
+  {% elif part.kind == 'tool_call' or part.kind == 'tool_result' %}
+  {% include 'commons/tool_part.html' %}
+  {% elif part.kind == 'compacting_context' or part.kind == 'compacted_context' %}
+  <p class="context-status" role="status">{{ part.text }}</p>
+  {% elif part.role == 'user' %}
+  <p class="user">{{ part.text }}</p>
+  {% else %}
+  <p>{{ part.text }}</p>
+  {% endif %}
+  {% endfor %}
+</article>

@@ -12,7 +12,7 @@ data:
   ADS_KEYCLOAK_AUDIENCE: {{ .Values.keycloak.audience | quote }}
   ADS_KEYCLOAK_ROLE: {{ .Values.keycloak.role | quote }}
   ADS_KEYCLOAK_AUDITOR_ROLE: {{ .Values.keycloak.auditorRole | quote }}
-  ADS_AUDIT_URL: {{ printf "https://%s-audit:%d" (include "ads.fullname" .) (int .Values.audit.service.port) | quote }}
+  ADS_AUDITOR_ALLOWED_AZP: {{ .Values.audit.keycloak.clientId | quote }}
   ADS_PUBLIC_BASE_URL: {{ include "ads.publicBaseUrl" . | quote }}
   ADS_BIND_HOST: "0.0.0.0"
   ADS_PORT: {{ .Values.service.port | quote }}

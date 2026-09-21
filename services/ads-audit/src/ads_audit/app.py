@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ads_audit.api import AuditController
 from ads_audit.blocking import ConversationGuard, PolicyBlocker
+from ads_audit.chats import Chats
 from ads_audit.config import Settings
 from ads_audit.consumer import AuditConsumer
 from ads_audit.health import live, ready
-from ads_audit.ioc import AppProvider, LoginProvider
+from ads_audit.ioc import AppProvider, ChatsOverride, LoginProvider
 from ads_audit.logconfig import configure_logging
 from ads_audit.policy_sources import PolicySources
 from ads_audit.repository import (
@@ -32,7 +33,7 @@ from ads_audit.repository import (
 )
 from ads_audit.schema import ensure_schema
 from ads_audit.ui import AuditorActions, AuditorPages
-from ads_commons_web import STATIC_DIRECTORY
+from ads_commons_web import STATIC_DIRECTORY, TEMPLATE_DIRECTORY
 from ads_commons_web.auth import AuthController
 from ads_commons_web.authenticated import AUTH_EXCEPTION_HANDLERS
 from ads_commons_web.frontend import LoginRequired, handle_login_required
@@ -50,11 +51,13 @@ def create_app(
     connection: AbstractRobustConnection | None = None,
     policy_blocker: PolicyBlocker | None = None,
     policy_sources: PolicySources | None = None,
+    chats: Chats | None = None,
 ) -> Litestar:
     configure_logging()
     container = make_async_container(
         AppProvider(settings, repository, connection, policy_blocker, policy_sources),
         LoginProvider(),
+        *([] if chats is None else [ChatsOverride(chats)]),
         LitestarProvider(),
     )
 
@@ -92,7 +95,9 @@ def create_app(
             ),
         ],
         plugins=[HTMXPlugin()],
-        template_config=TemplateConfig(engine=JinjaTemplateEngine(directory=ROOT / "templates")),
+        template_config=TemplateConfig(
+            engine=JinjaTemplateEngine(directory=[ROOT / "templates", TEMPLATE_DIRECTORY])
+        ),
         state=None,
         on_startup=[_prepare],
         on_shutdown=[_stop],

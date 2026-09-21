@@ -13,7 +13,7 @@
   <dt>Run</dt>
   <dd><a href="/journal?run_id={{ event.run_id | urlencode }}">{{ event.run_id }}</a></dd>
   <dt>Chat</dt>
-  <dd>{% if event.conversation %}<a href="/journal?conversation={{ event.conversation | urlencode }}">{{ event.conversation }}</a>{% endif %}</dd>
+  <dd>{% if event.conversation %}<a href="/chats/{{ event.conversation | urlencode }}">{{ event.conversation }}</a>{% endif %}</dd>
   <dt>Policy</dt><dd>{{ event.policy_hash }}</dd>
   <dt>Decided by</dt><dd>{{ event.decided_by }}</dd>
   <dt>Event</dt><dd>{{ event.event_id }}</dd>

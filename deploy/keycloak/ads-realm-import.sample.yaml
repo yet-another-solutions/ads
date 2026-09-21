@@ -435,6 +435,20 @@ spec:
               included.client.audience: ads-guardrail
               access.token.claim: "true"
               id.token.claim: "false"
+      # The auditor's pages read a chat in ads with the auditor's own token, exchanged
+      # for ads through this scope, so ads knows who read and a login token cannot.
+      - name: ads-audit-ads
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: audience-ads
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads
+              access.token.claim: "true"
+              id.token.claim: "false"
     # Built-in definitions above are explicit because this import also declares
     # a custom optional scope. No client receives offline_access.
     clients:
@@ -499,9 +513,9 @@ spec:
         redirectUris: [https://ads-audit.example.com/auth/callback]
         webOrigins: [https://ads-audit.example.com]
         defaultClientScopes: [basic, roles, profile, email]
-        optionalClientScopes: []
+        optionalClientScopes: [ads-audit-ads]
         attributes:
-          standard.token.exchange.enabled: "false"
+          standard.token.exchange.enabled: "true"
           access.token.lifespan: "300"
           post.logout.redirect.uris: https://ads-audit.example.com/
         protocolMappers:

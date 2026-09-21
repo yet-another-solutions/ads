@@ -1,5 +1,5 @@
 <tr>
-  <td><a href="/journal?conversation={{ block.conversation | urlencode }}">{{ block.conversation }}</a></td>
+  <td><a href="/chats/{{ block.conversation | urlencode }}">{{ block.conversation }}</a></td>
   <td class="moment">{{ moment(block.blocked_at) }}</td>
   <td>{{ block.budget }}</td>
   {% if block.in_force %}

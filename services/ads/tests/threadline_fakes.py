@@ -6,8 +6,6 @@ from typing import Any
 
 from litestar.testing import TestClient
 
-from ads.audit_client import ConversationBlockView
-from ads.exceptions import NotFound
 from ads_commons.engine import (
     Abort,
     AckResponse,
@@ -38,6 +36,13 @@ USER_ACCESS_TOKEN = "user-access-token"
 OTHER_USER_ID = uuid.UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
 ENGINE_TOKEN = "engine-acknowledge-jwt"
 STORED_BEARER = "sk-stored-secret"
+AUDITOR_ID = uuid.UUID("dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+AUDITOR_TOKEN = "auditor-exchanged-jwt"
+NOT_AN_AUDITOR_TOKEN = "no-auditor-role-exchanged-jwt"
+AUDIT_TOKENS = {
+    AUDITOR_TOKEN: frozenset({"auditor"}),
+    NOT_AN_AUDITOR_TOKEN: frozenset({"user"}),
+}
 
 
 class ProduceFailed(Exception):
@@ -169,7 +174,7 @@ class FakeTokens:
 
 
 class FakeAuthenticator:
-    """Only ``ENGINE_TOKEN`` verifies, with ``azp=ads-engine`` and ``aud=ads``."""
+    """``ENGINE_TOKEN`` verifies as ``ads-engine``, the ``AUDIT_TOKENS`` as ``ads-audit``."""
 
     def __init__(self, azp: str = "ads-engine") -> None:
         self.azp = azp
@@ -177,6 +182,14 @@ class FakeAuthenticator:
 
     def authenticate(self, token: str, *, audience: str | None = None) -> SecurityContext:
         self.audiences.append(audience)
+        if token in AUDIT_TOKENS:
+            return SecurityContext(
+                subject=str(AUDITOR_ID),
+                name="Ada Auditor",
+                roles=AUDIT_TOKENS[token],
+                authorized_party="ads-audit",
+                access_token=token,
+            )
         if token != ENGINE_TOKEN:
             raise InvalidAccessToken("token is not the engine token")
         return SecurityContext(
@@ -302,37 +315,6 @@ def attach_fake_session_binder(
         "ads",
     )
     return oidc_verifier
-
-
-class FakeAudit:
-    """In-memory ads-audit. Only what an auditor asks it for."""
-
-    def __init__(self) -> None:
-        self.blocked: dict[str, int] = {}
-        self.lifted: list[tuple[str, str]] = []
-
-    def block(self, conversation: uuid.UUID, budget: int = 31) -> None:
-        self.blocked[str(conversation)] = budget
-
-    async def conversation_block(self, conversation: str) -> ConversationBlockView:
-        budget = self.blocked.get(conversation)
-        return ConversationBlockView(
-            conversation=conversation,
-            budget=budget or 0,
-            blocked_at=None if budget is None else "2026-09-19T10:00:00+00:00",
-        )
-
-    async def lift_conversation_block(self, conversation: str, by: str) -> ConversationBlockView:
-        if conversation not in self.blocked:
-            raise NotFound("this chat carries no block")
-        budget = self.blocked.pop(conversation)
-        self.lifted.append((conversation, by))
-        return ConversationBlockView(
-            conversation=conversation,
-            budget=budget,
-            lifted_at="2026-09-19T10:05:00+00:00",
-            lifted_by=by,
-        )
 
 
 def login(client: TestClient, sub: uuid.UUID = USER_ID, roles: list[str] | None = None) -> None:

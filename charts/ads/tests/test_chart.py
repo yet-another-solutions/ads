@@ -496,7 +496,12 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(config["ADS_KEYCLOAK_AUDIENCE"], "ads-audit")
         self.assertEqual(config["ADS_KEYCLOAK_AUDITOR_ROLE"], "auditor")
         self.assertEqual(config["ADS_PUBLIC_BASE_URL"], "https://ads-audit.interlab")
+        self.assertEqual(config["ADS_URL"], "https://ads:8080")
         self.assertNotIn("SECRET", json.dumps(config))
+        ads = docs["ConfigMap", "ads"]["data"]
+        self.assertEqual(ads["ADS_AUDITOR_ALLOWED_AZP"], "ads-audit")
+        self.assertNotIn("ADS_AUDIT_URL", ads)
+        self.assertNotIn("ADS_AUDIT_API_TOKEN", docs["Secret", "ads"]["stringData"])
         secret = docs["Secret", "ads-audit"]["stringData"]
         self.assertEqual(secret["ADS_KEYCLOAK_CLIENT_SECRET"], "ci-audit-client-secret")
         self.assertIn("ADS_SESSION_SECRET", secret)

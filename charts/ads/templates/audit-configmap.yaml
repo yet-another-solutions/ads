@@ -24,6 +24,7 @@ data:
   ADS_KEYCLOAK_AUDIENCE: {{ .Values.audit.keycloak.audience | quote }}
   ADS_KEYCLOAK_AUDITOR_ROLE: {{ .Values.keycloak.auditorRole | quote }}
   ADS_PUBLIC_BASE_URL: {{ include "ads.auditPublicBaseUrl" . | quote }}
+  ADS_URL: {{ printf "https://%s:%d" (include "ads.fullname" .) (int .Values.service.port) | quote }}
 ---
 apiVersion: v1
 kind: Secret

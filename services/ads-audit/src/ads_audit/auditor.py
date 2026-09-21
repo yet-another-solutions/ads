@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ads_audit.blocking import ConversationGuard
+from ads_audit.chats import Chat, Chats
 from ads_audit.policy_sources import PolicySources
 from ads_audit.repository import ConversationBlockRecord, JournalFilter, Page
 from ads_audit.service import AuditService
@@ -37,6 +38,7 @@ class AuditorDesk:
     journal: AuditService
     guard: ConversationGuard
     policy: PolicySources
+    chats: Chats
     auditor_role: str
 
     async def page(self, where: JournalFilter, cursor: str | None = None) -> Page:
@@ -46,6 +48,10 @@ class AuditorDesk:
     async def event(self, position: str) -> AuditEvent | None:
         check_role(self.auditor_role)
         return await self.journal.event_at(position)
+
+    async def chat(self, conversation: str) -> Chat | None:
+        check_role(self.auditor_role)
+        return await self.chats.transcript(conversation)
 
     async def blocks(self) -> Sequence[ConversationBlockRecord]:
         check_role(self.auditor_role)

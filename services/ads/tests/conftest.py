@@ -18,7 +18,6 @@ from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.service import PolicyService
 from tests.policy import DirectPolicyClient, policy_service
 from tests.threadline_fakes import (
-    FakeAudit,
     FakeAuthenticator,
     FakeOidcVerifier,
     FakePreferences,
@@ -109,7 +108,6 @@ def app(
     authenticator: FakeAuthenticator,
     oidc_verifier: JwtVerifier,
     journal: CollectingAuditSink,
-    audit_api: FakeAudit,
 ) -> Litestar:
     return create_app(
         settings,
@@ -120,13 +118,7 @@ def app(
         jwt_verifier=authenticator,
         oidc_verifier=oidc_verifier,
         journal=journal,
-        audit_api=audit_api,
     )
-
-
-@pytest.fixture
-def audit_api() -> FakeAudit:
-    return FakeAudit()
 
 
 @pytest.fixture

@@ -21,13 +21,19 @@ from ads_audit.blocking import (
     PolicyBlocker,
     UnconfiguredPolicyBlocker,
 )
+from ads_audit.chats import AdsChats, Chats, UnconfiguredChats
 from ads_audit.config import Settings
 from ads_audit.policy_sources import HttpPolicySources, PolicySources, UnconfiguredPolicySources
 from ads_audit.refresh_tokens import SqlRefreshTokenStore
 from ads_audit.repository import AuditRepository, SqlAuditRepository
 from ads_audit.service import AuditService
-from ads_commons.security import jwks_uri_from_well_known
-from ads_commons_beans import JwtVerifier, JwtVerifierSettings
+from ads_commons.security import jwks_uri_from_well_known, token_endpoint_from_well_known
+from ads_commons_beans import (
+    JwtVerifier,
+    JwtVerifierSettings,
+    TokenExchange,
+    TokenExchangeSettings,
+)
 from ads_commons_web.oidc import OidcClient, OidcSettings
 from ads_commons_web.session_binder import SessionBinder
 from ads_policy.client import HttpPolicyClient
@@ -119,8 +125,9 @@ class AppProvider(Provider):
         journal: AuditService,
         guard: ConversationGuard,
         policy: PolicySources,
+        chats: Chats,
     ) -> AuditorDesk:
-        return AuditorDesk(journal, guard, policy, settings.keycloak_auditor_role)
+        return AuditorDesk(journal, guard, policy, chats, settings.keycloak_auditor_role)
 
 
 class LoginProvider(Provider):
@@ -142,6 +149,28 @@ class LoginProvider(Provider):
         )
 
     @provide(scope=Scope.APP)
+    def token_exchange(self, settings: Settings, verifier: JwtVerifier) -> TokenExchange:
+        ssl_context = _ca_context(settings)
+        return TokenExchange(
+            TokenExchangeSettings(
+                token_endpoint=token_endpoint_from_well_known(
+                    settings.keycloak_well_known_url, ssl_context
+                ),
+                client_id=settings.keycloak_client_id,
+                client_secret=settings.keycloak_client_secret,
+                ssl_context=ssl_context,
+            ),
+            verifier,
+        )
+
+    @provide(scope=Scope.APP)
+    def chats(self, settings: Settings, exchange: TokenExchange) -> Chats:
+        if not settings.ads_url:
+            return UnconfiguredChats()
+        ca = _ca_context(settings)
+        return AdsChats(settings.ads_url, exchange, True if ca is None else ca)
+
+    @provide(scope=Scope.APP)
     def oidc_settings(self, settings: Settings) -> OidcSettings:
         return settings
 
@@ -158,6 +187,16 @@ class LoginProvider(Provider):
         return SessionBinder(
             verifier, oidc, SqlRefreshTokenStore(sessions), settings.keycloak_client_id
         )
+
+
+class ChatsOverride(Provider):
+    def __init__(self, chats: Chats) -> None:
+        super().__init__()
+        self._chats = chats
+
+    @provide(scope=Scope.APP, override=True)
+    def chats(self) -> Chats:
+        return self._chats
 
 
 def _ca_context(settings: Settings) -> ssl.SSLContext | None:

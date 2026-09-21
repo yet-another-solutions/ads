@@ -1,0 +1,21 @@
+{% if chat is none %}
+<p class="warning">ads did not answer: this chat cannot be shown now.</p>
+{% else %}
+<dl class="card chat-head">
+  <dt>Chat</dt><dd>{{ chat.session.name }}</dd>
+  {% if chat.project_name %}<dt>Project</dt><dd>{{ chat.project_name }}</dd>{% endif %}
+  {% if chat.session.description %}<dt>About</dt><dd>{{ chat.session.description }}</dd>{% endif %}
+</dl>
+<section class="chat">
+  {% for turn in chat.turns %}
+  {% include 'commons/turn.html' %}
+  {% else %}
+  <p class="empty">No messages in this chat.</p>
+  {% endfor %}
+</section>
+{% endif %}
+<p class="note">
+  <a href="/journal?conversation={{ conversation | urlencode }}"
+     hx-get="/journal?conversation={{ conversation | urlencode }}" hx-target="#main-pane"
+     hx-swap="outerHTML" hx-push-url="true">Every decision in this chat</a>
+</p>

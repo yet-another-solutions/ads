@@ -123,6 +123,11 @@ data:
          "attributes": {"include.in.token.scope": "true"},
          "protocolMappers": [
            {"name": "audience-ads-guardrail", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": {"included.client.audience": "ads-guardrail", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true"}}
+         ]},
+        {"name": "ads-audit-ads", "protocol": "openid-connect",
+         "attributes": {"include.in.token.scope": "true"},
+         "protocolMappers": [
+           {"name": "audience-ads", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": {"included.client.audience": "ads", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true"}}
          ]}
       ],
       "defaultDefaultClientScopes": ["basic", "acr", "email", "profile", "roles", "web-origins"],
@@ -173,7 +178,9 @@ data:
           "directAccessGrantsEnabled": false,
           "redirectUris": ["https://audit.ads.local:8445/*"],
           "webOrigins": ["https://audit.ads.local:8445"],
-          "attributes": {"post.logout.redirect.uris": "https://audit.ads.local:8445/*"},
+          "attributes": {"standard.token.exchange.enabled": "true",
+                         "post.logout.redirect.uris": "https://audit.ads.local:8445/*"},
+          "optionalClientScopes": ["ads-audit-ads"],
           "protocolMappers": [
             {
               "name": "audience-ads-audit", "protocol": "openid-connect",
