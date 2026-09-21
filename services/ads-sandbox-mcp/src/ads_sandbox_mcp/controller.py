@@ -65,14 +65,16 @@ class ToolController:
     def __init__(self, service: ExecService, settings: Settings) -> None:
         self._service = service
         self._settings = settings
+        # The same allowlist the HTTP layer admits: ads-guardrail when it fronts the sandbox.
+        self.allowed_callers = settings.allowed_callers
 
-    @require_caller("ads-engine")
+    @require_caller()
     async def list_tools(
         self, ctx: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         return types.ListToolsResult(tools=TOOLS)
 
-    @require_caller("ads-engine")
+    @require_caller()
     async def call_tool(
         self, ctx: ServerRequestContext[Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:

@@ -376,3 +376,30 @@ async def test_sdk_failure_after_database_resolution_disposes_engine(sandbox_set
     boundary.producer_client.start.assert_not_awaited()
     boundary.consumer_client.start.assert_not_awaited()
     engine.dispose.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("allowed", "caller", "admitted"),
+    [
+        (("ads-engine",), "ads-engine", True),
+        (("ads-guardrail",), "ads-guardrail", True),
+        (("ads-guardrail",), "ads-engine", False),
+    ],
+)
+async def test_tools_admit_the_callers_the_http_layer_admits(
+    sandbox_settings, allowed, caller, admitted
+):
+    # Behind the guardrail only ads-guardrail reaches the sandbox; the tools must agree.
+    from ads_commons.security import AccessDenied, SecurityContext, SecurityContextHolder
+
+    tools = ToolController(Mock(), replace(sandbox_settings, allowed_callers=allowed))
+    context = SecurityContext(
+        subject="alice", name="Alice", roles=frozenset({"user"}), authorized_party=caller
+    )
+    with SecurityContextHolder.bound(context):
+        if admitted:
+            listed = await tools.list_tools(Mock(), None)
+            assert [tool.name for tool in listed.tools] == ["exec_shell", "exec_python"]
+        else:
+            with pytest.raises(AccessDenied):
+                await tools.list_tools(Mock(), None)
