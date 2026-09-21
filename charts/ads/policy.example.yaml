@@ -2,10 +2,8 @@
 # installed: copy what you need under `policy.document` in your values, and the chart
 # mounts it as a directory the running pod re-reads without a restart.
 #
-# As written it reproduces the matrix compiled into the image, plus the bindings for
-# the MCP probe (`mcpProbe.enabled`), which the built-in policy does not know. Leave
-# those out and it is the built-in matrix exactly — the hash the service computes over
-# it is then the same either way.
+# As written it reproduces the matrix compiled into the image exactly: the hash the
+# service computes over it is the same either way.
 #
 # Anything no rule covers is denied.
 schemaVersion: ads.governance/v1
@@ -111,24 +109,6 @@ bindings:
   # it verbatim; whether it may run at all follows from the site — Kata, level vm.
   - {source: "mcp:sandbox", tool: exec_shell, capability: process.exec, argument: command}
   - {source: "mcp:sandbox", tool: exec_python, capability: process.exec, argument: code}
-
-  # The MCP probe, once per site in `mcpProbe.sites`: the source is `mcp:<site name>`.
-  # Its tools do nothing real; each is bound so that it trips one check. The same tool
-  # is decided by where its server runs, so `run_command` is allowed on probe-vm (Kata,
-  # level vm) and refused on probe-container (level container). `diagnostics` is left
-  # out on purpose: a call to it must be refused before it reaches the probe.
-  - {source: "mcp:probe-vm", tool: echo, capability: fs.read, value: /workspace/notes.md}
-  - {source: "mcp:probe-vm", tool: env_config, capability: fs.read, value: /workspace/.env.example}
-  - {source: "mcp:probe-vm", tool: release_notes, capability: fs.read, value: /workspace/NOTES.md}
-  - {source: "mcp:probe-vm", tool: tail_log, capability: fs.read, value: /workspace/notes.md}
-  - {source: "mcp:probe-vm", tool: read_file, capability: fs.read, argument: path}
-  - {source: "mcp:probe-vm", tool: run_command, capability: process.exec, argument: command}
-  - {source: "mcp:probe-container", tool: echo, capability: fs.read, value: /workspace/notes.md}
-  - {source: "mcp:probe-container", tool: env_config, capability: fs.read, value: /workspace/.env.example}
-  - {source: "mcp:probe-container", tool: release_notes, capability: fs.read, value: /workspace/NOTES.md}
-  - {source: "mcp:probe-container", tool: tail_log, capability: fs.read, value: /workspace/notes.md}
-  - {source: "mcp:probe-container", tool: read_file, capability: fs.read, argument: path}
-  - {source: "mcp:probe-container", tool: run_command, capability: process.exec, argument: command}
 
 # capability x resource class x isolation level. An empty `levels` is an explicit deny
 # that still carries a weight, which is how a refusal costs more than a miss and how a

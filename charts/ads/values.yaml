@@ -114,30 +114,6 @@ injectionScanner:
     limits:
       memory: 1536Mi
 
-# A harmless MCP server for checking the whole chain. One deployment per site; each
-# site is also added to the guardrail's server table as mcp:<name>, and its tools
-# still need bindings in policy.document before they are allowed: policy.example.yaml
-# has them for the two sites below, next to the built-in rules.
-mcpProbe:
-  enabled: false
-  image:
-    repository: ghcr.io/yet-another-solutions/ads-mcp-probe
-    tag: "0.0.1"
-    pullPolicy: IfNotPresent
-  service:
-    port: 8084
-  tls:
-    secretName: ""
-  resources: {}
-  sites:
-    - name: probe-vm
-      runtimeClassName: kata-qemu
-      nodeLabels:
-        ads.io/sandbox-node: "true"
-    - name: probe-container
-      nodeLabels:
-        ads.io/application-node: "true"
-
 audit:
   replicaCount: 1
   image:
@@ -205,7 +181,7 @@ engine:
   # mcpAudience. Needs guardrail.enabled and tls.caBundle.secretName.
   tools:
     enabled: false
-    # Empty takes the probe's sites when mcpProbe is enabled.
+    # Names from guardrail.mcpServers the engine offers the model as tools.
     mcpServers: []
     mcpAudience: ads-mcp
     maxModelRounds: 8

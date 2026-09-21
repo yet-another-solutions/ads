@@ -42,7 +42,6 @@ jobs:
           - services/ads-engine/Containerfile
           - services/ads-guardrail/Containerfile
           - services/ads-injection-scanner/Containerfile
-          - services/ads-mcp-probe/Containerfile
           - services/ads-policy/Containerfile
           - services/ads-preferences/Containerfile
           - services/ads-context-meter/Containerfile
@@ -103,11 +102,6 @@ jobs:
             file: services/ads-guardrail/Containerfile
             context: .
             smoke: "import ads_guardrail; print(ads_guardrail.__version__)"
-            pack: "false"
-          - image: ads-mcp-probe
-            file: services/ads-mcp-probe/Containerfile
-            context: .
-            smoke: "import ads_mcp_probe; print(ads_mcp_probe.__version__)"
             pack: "false"
           - image: ads-injection-scanner
             file: services/ads-injection-scanner/Containerfile
@@ -324,18 +318,23 @@ jobs:
             exit 1
           fi
           helm template ads charts/ads $VALUES $GOVERNED \
-            --set injectionScanner.enabled=true --set mcpProbe.enabled=true \
-            --set engine.tools.enabled=true >/tmp/ads-chain.yaml
-          test "$(grep -c '^kind: Deployment$' /tmp/ads-chain.yaml)" -eq 14
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-chain.yaml)" -eq 13
+            --set injectionScanner.enabled=true --set engine.tools.enabled=true \
+            --set-json 'engine.tools.mcpServers=["retriever"]' \
+            --set-json 'guardrail.mcpServers=[{"name":"retriever","url":"http://retriever:8080/mcp","site":{"runtimeClassName":"kata-clh","nodeLabels":{"ads.io/sandbox-node":"true"}}}]' \
+            >/tmp/ads-chain.yaml
+          test "$(grep -c '^kind: Deployment$' /tmp/ads-chain.yaml)" -eq 12
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-chain.yaml)" -eq 11
           grep -q 'app.kubernetes.io/component: ads-injection-scanner' /tmp/ads-chain.yaml
           grep -q 'ADS_INJECTION_SCANNER_URL: "https://ads-injection-scanner:8085"' /tmp/ads-chain.yaml
           grep -q 'ADS_INJECTION_SCANNER_API_TOKEN' /tmp/ads-chain.yaml
           grep -q 'ADS_SCANNER_API_TOKEN' /tmp/ads-chain.yaml
-          grep -q 'runtimeClassName: kata-qemu' /tmp/ads-chain.yaml
-          grep -q '\\"name\\":\\"probe-vm\\"' /tmp/ads-chain.yaml
-          grep -q '\\"url\\":\\"https://ads-mcp-probe-container:8084/mcp\\"' /tmp/ads-chain.yaml
-          grep -q 'ADS_ENGINE_MCP_SERVERS: "probe-vm,probe-container"' /tmp/ads-chain.yaml
+          grep -q '\\"name\\":\\"retriever\\"' /tmp/ads-chain.yaml
+          grep -q 'ADS_ENGINE_MCP_SERVERS: "retriever"' /tmp/ads-chain.yaml
+          if helm template ads charts/ads $VALUES $GOVERNED \
+            --set engine.tools.enabled=true >/tmp/ads-tools-no-servers.yaml 2>&1; then
+            echo 'engine tools rendered with no server to offer' >&2
+            exit 1
+          fi
           grep -q 'ADS_ENGINE_GUARDRAIL_URL: "https://ads-guardrail:8083"' /tmp/ads-chain.yaml
           grep -q 'ADS_ENGINE_GUARDRAIL_API_TOKEN' /tmp/ads-chain.yaml
           if helm template ads charts/ads $VALUES --set=engine.tools.enabled=true \
@@ -344,7 +343,7 @@ jobs:
             exit 1
           fi
           if helm template ads charts/ads $VALUES --set=guardrail.enabled=true \
-            --set engine.tools.enabled=true --set-json 'engine.tools.mcpServers=["probe"]' \
+            --set engine.tools.enabled=true --set-json 'engine.tools.mcpServers=["retriever"]' \
             --set engine.workspace.project=ads --set engine.workspace.repo=r \
             --set engine.workspace.env=test >/tmp/ads-tools-no-ca.yaml 2>&1; then
             echo 'engine tools rendered without a CA to trust the guardrail' >&2
@@ -369,11 +368,6 @@ jobs:
           grep -q 'ADS_ENGINE_MCP_URL: "https://ads-sandbox-mcp:8080/mcp"' /tmp/ads-cm.yaml
           if grep -q 'ADS_SANDBOX_MCP_ALLOWED_CALLERS' /tmp/ads-cm.yaml; then
             echo 'callers were narrowed with no guardrail in front' >&2
-            exit 1
-          fi
-          if helm template ads charts/ads $VALUES --set=mcpProbe.enabled=true \
-            --set-json 'mcpProbe.sites=[{"name":"nowhere"}]' >/tmp/ads-probe-nowhere.yaml 2>&1; then
-            echo 'a probe rendered without saying where it runs' >&2
             exit 1
           fi
           grep -q 'ADS_EGRESS_ALLOWLIST: "mirror.interlab,llm-gateway.interlab,tool-broker.interlab,git-proxy.interlab"' /tmp/ads-cm.yaml

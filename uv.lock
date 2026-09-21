@@ -21,7 +21,6 @@ members = [
     "ads-engine",
     "ads-guardrail",
     "ads-injection-scanner",
-    "ads-mcp-probe",
     "ads-policy",
     "ads-preferences",
     "ads-sandbox-ipc",
@@ -349,25 +348,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "ads-mcp-probe"
-version = "0.0.1"
-source = { editable = "services/ads-mcp-probe" }
-dependencies = [
-    { name = "litestar" },
-    { name = "msgspec" },
-    { name = "structlog" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "litestar", specifier = "==2.24.0" },
-    { name = "msgspec", specifier = "==0.21.1" },
-    { name = "structlog", specifier = "==26.1.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
-]
-
-[[package]]
 name = "ads-policy"
 version = "0.0.1"
 source = { editable = "services/ads-policy" }
@@ -551,7 +531,6 @@ dependencies = [
     { name = "ads-engine" },
     { name = "ads-guardrail" },
     { name = "ads-injection-scanner" },
-    { name = "ads-mcp-probe" },
     { name = "ads-policy" },
     { name = "ads-preferences" },
     { name = "ads-sandbox-ipc" },
@@ -594,7 +573,6 @@ requires-dist = [
     { name = "ads-engine", editable = "services/ads-engine" },
     { name = "ads-guardrail", editable = "services/ads-guardrail" },
     { name = "ads-injection-scanner", editable = "services/ads-injection-scanner" },
-    { name = "ads-mcp-probe", editable = "services/ads-mcp-probe" },
     { name = "ads-policy", editable = "services/ads-policy" },
     { name = "ads-preferences", editable = "services/ads-preferences" },
     { name = "ads-sandbox-ipc", editable = "services/ads-sandbox-ipc" },

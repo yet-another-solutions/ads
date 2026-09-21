@@ -1,6 +1,7 @@
 # Overrides for a throwaway local cluster (kind / minikube): the whole chain, from the
-# browser to the MCP probe. See deploy/local/README.md; deploy/local/up.sh does it all
-# in order, and applies deploy/local/rendered.yaml where there is no helm.
+# browser through the guardrail to the session sandbox. See deploy/local/README.md;
+# deploy/local/up.sh does it all in order, and applies deploy/local/rendered.yaml where
+# there is no helm.
 #
 #   helm upgrade --install ads charts/ads -n default -f charts/ads/values-local.yaml \
 #     -f <policy.example.yaml wrapped under policy.document>
@@ -85,9 +86,6 @@ engine:
     project: ads
     repo: yet-another-solutions/ads
     env: local
-  tools:
-    enabled: true
-    mcpAudience: ads-mcp
 
 kafka:
   bootstrapServers: ads-kafka:9092
@@ -144,19 +142,6 @@ injectionScanner:
     repository: localhost/ads-injection-scanner
     tag: local
     pullPolicy: Never
-
-# kind has no Kata, so the probe runs only on an ordinary node: process.exec is refused
-# there, which is one of the things to see.
-mcpProbe:
-  enabled: true
-  image:
-    repository: localhost/ads-mcp-probe
-    tag: local
-    pullPolicy: Never
-  sites:
-    - name: probe-container
-      nodeLabels:
-        ads.io/application-node: "true"
 
 egressControlplane:
   image:

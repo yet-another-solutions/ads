@@ -33,8 +33,6 @@ _SRC = (
     "services/ads-guardrail/tests",
     "services/ads-injection-scanner/src",
     "services/ads-injection-scanner/tests",
-    "services/ads-mcp-probe/src",
-    "services/ads-mcp-probe/tests",
     "services/ads-policy/src",
     "services/ads-policy/tests",
     "services/ads-preferences/src",
@@ -64,7 +62,6 @@ _PACKAGES = (
     "services/ads-audit",
     "services/ads-guardrail",
     "services/ads-injection-scanner",
-    "services/ads-mcp-probe",
     "services/ads-policy",
     "services/ads-preferences",
     "services/ads-context-meter",
@@ -132,7 +129,6 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads-audit", external=True)
     session.run("uv", "build", "--package", "ads-preferences", external=True)
     session.run("uv", "build", "--package", "ads-guardrail", external=True)
-    session.run("uv", "build", "--package", "ads-mcp-probe", external=True)
     session.run("uv", "build", "--package", "ads-injection-scanner", external=True)
     session.run("uv", "build", "--package", "ads-context-meter", external=True)
     session.run("uv", "build", "--package", "ads-context-compactor", external=True)

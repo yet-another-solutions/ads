@@ -16,10 +16,9 @@ Unauthenticated browsers are sent to Keycloak. After login the shell renders the
 - `services/ads-audit` — append-only journal of decisions, deny budget
 - `services/ads-guardrail` — enforcement point outside every sandbox: MCP proxy and decision API
 - `services/ads-injection-scanner` — prompt-injection classifier on ONNX Runtime for tool results (in `review` until a model is chosen)
-- `services/ads-mcp-probe` — harmless MCP server whose tools trip every check, for end-to-end checks
 - `services/ads-egress-controlplane` — dummy egress control plane (idle process)
 - `services/ads-sandbox-manager`: golden-ensure service, included in workspace Nox gates and CI image builds; application deployment wiring follows in a later slice
-- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, injection scanner, MCP probe and engine tools, sandbox namespace and workloads, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
+- `charts/ads` — Helm chart (ADS + engine + preferences + policy + audit + egress-controlplane Deployments, optional guardrail, injection scanner and engine tools, sandbox namespace and workloads, ClusterIP Services, ConfigMaps, Secrets, ads HTTPRoute)
 - Nox sessions: `lint`, `deps`, `typecheck`, `test`, `package`
 
 Images:
@@ -31,7 +30,6 @@ Images:
 - `ghcr.io/yet-another-solutions/ads-audit`
 - `ghcr.io/yet-another-solutions/ads-guardrail`
 - `ghcr.io/yet-another-solutions/ads-injection-scanner`
-- `ghcr.io/yet-another-solutions/ads-mcp-probe`
 - `ghcr.io/yet-another-solutions/ads-egress-controlplane`
 
 ## Configuration

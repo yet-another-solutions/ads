@@ -33,9 +33,6 @@ data:
         "url" (printf "https://%s:%v/mcp" (include "ads.sandboxName" (dict "root" . "component" "mcp")) .Values.sandbox.mcp.port)
         "audience" "ads-sandbox-mcp"
         "site" (include "ads.guardrailSite" $sandboxSite | fromJson)) }}
-  {{- range (include "ads.mcpProbeServers" . | fromJsonArray) }}
-  {{- $servers = append $servers (dict "name" .name "url" .url "site" (include "ads.guardrailSite" .site | fromJson)) }}
-  {{- end }}
   {{- range .Values.guardrail.mcpServers }}
   {{- if eq (.name | toString) "sandbox" }}
   {{- fail "guardrail.mcpServers[] may not be named \"sandbox\": the chart owns that name" }}

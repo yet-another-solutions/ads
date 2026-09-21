@@ -151,7 +151,7 @@ def test_without_mcp_servers_there_are_no_tools(monkeypatch: pytest.MonkeyPatch)
 
 def test_mcp_servers_bring_the_tool_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_environment(monkeypatch)
-    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "probe, probe-vm")
+    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "retriever, retriever-vm")
     monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_URL", "https://guardrail.test:8083/")
     monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_API_TOKEN", "guardrail-api-token-32-bytes")
     monkeypatch.setenv("ADS_ENGINE_WORKSPACE_PROJECT", "ads")
@@ -159,7 +159,7 @@ def test_mcp_servers_bring_the_tool_settings(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("ADS_ENGINE_WORKSPACE_ENV", "test")
     tools = load_settings().tools
     assert tools is not None
-    assert tools.mcp_servers == ("probe", "probe-vm")
+    assert tools.mcp_servers == ("retriever", "retriever-vm")
     assert tools.guardrail_url == "https://guardrail.test:8083"
     assert tools.mcp_audience == "ads-mcp"
     assert tools.workspace.workdir == "/workspace"
@@ -168,7 +168,7 @@ def test_mcp_servers_bring_the_tool_settings(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.parametrize(
     ("servers", "message"),
-    [("probe,probe", "twice"), ("../etc", "not a server name")],
+    [("retriever,retriever", "twice"), ("../etc", "not a server name")],
 )
 def test_malformed_mcp_servers_stop_the_engine(
     monkeypatch: pytest.MonkeyPatch, servers: str, message: str
@@ -181,7 +181,7 @@ def test_malformed_mcp_servers_stop_the_engine(
 
 def test_mcp_servers_need_an_https_guardrail(monkeypatch: pytest.MonkeyPatch) -> None:
     _minimal_environment(monkeypatch)
-    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "probe")
+    monkeypatch.setenv("ADS_ENGINE_MCP_SERVERS", "retriever")
     monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_URL", "http://guardrail.test")
     monkeypatch.setenv("ADS_ENGINE_GUARDRAIL_API_TOKEN", "guardrail-api-token-32-bytes")
     with pytest.raises(RuntimeError, match="https"):

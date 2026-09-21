@@ -63,13 +63,7 @@ data:
   {{- if not $.Values.guardrail.enabled }}
   {{- fail "engine.tools.enabled needs guardrail.enabled: every tool call goes through it" }}
   {{- end }}
-  {{- $servers := .mcpServers }}
-  {{- if not $servers }}
-  {{- range (include "ads.mcpProbeServers" $ | fromJsonArray) }}
-  {{- $servers = append $servers .name }}
-  {{- end }}
-  {{- end }}
-  ADS_ENGINE_MCP_SERVERS: {{ required "engine.tools.mcpServers is required (or enable mcpProbe)" (join "," $servers) | quote }}
+  ADS_ENGINE_MCP_SERVERS: {{ required "engine.tools.mcpServers is required" (join "," .mcpServers) | quote }}
   ADS_ENGINE_MCP_AUDIENCE: {{ .mcpAudience | quote }}
   ADS_ENGINE_MAX_MODEL_ROUNDS: {{ .maxModelRounds | quote }}
   ADS_ENGINE_TOOL_CALL_ATTEMPTS: {{ .callAttempts | quote }}

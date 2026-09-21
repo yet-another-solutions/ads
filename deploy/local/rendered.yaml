@@ -435,10 +435,6 @@ data:
   ADS_ENGINE_WORKSPACE_REPO: "yet-another-solutions/ads"
   ADS_ENGINE_WORKSPACE_ENV: "local"
   ADS_ENGINE_WORKSPACE_WORKDIR: "/workspace"
-  ADS_ENGINE_MCP_SERVERS: "probe-container"
-  ADS_ENGINE_MCP_AUDIENCE: "ads-mcp"
-  ADS_ENGINE_MAX_MODEL_ROUNDS: "8"
-  ADS_ENGINE_TOOL_CALL_ATTEMPTS: "3"
   ADS_ALLOW_UNLISTED_MODELS: "1"
 ---
 # Source: ads/templates/guardrail-configmap.yaml
@@ -466,7 +462,7 @@ data:
   ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
   ADS_KEYCLOAK_CLIENT_ID: "ads-guardrail"
   ADS_INJECTION_SCANNER_URL: "https://ads-injection-scanner:8085"
-  ADS_MCP_SERVERS: "[{\"audience\":\"ads-sandbox-mcp\",\"name\":\"sandbox\",\"site\":{\"node_labels\":{\"ads.io/sandbox-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":\"kata-qemu-ads\"},\"url\":\"https://ads-sandbox-mcp:8080/mcp\"},{\"name\":\"probe-container\",\"site\":{\"node_labels\":{\"ads.io/application-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":null},\"url\":\"https://ads-mcp-probe-container:8084/mcp\"}]"
+  ADS_MCP_SERVERS: "[{\"audience\":\"ads-sandbox-mcp\",\"name\":\"sandbox\",\"site\":{\"node_labels\":{\"ads.io/sandbox-node\":\"true\"},\"placement\":\"cluster\",\"runtime_class_name\":\"kata-qemu-ads\"},\"url\":\"https://ads-sandbox-mcp:8080/mcp\"}]"
   ADS_APPLICATIONS: "[]"
 ---
 # Source: ads/templates/injection-scanner-configmap.yaml
@@ -488,25 +484,6 @@ data:
   ADS_TLS_CERT_PATH: "/certs/tls.crt"
   ADS_TLS_KEY_PATH: "/certs/tls.key"
   ADS_SCANNER_THRESHOLD: "0.5"
----
-# Source: ads/templates/mcp-probe.yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  namespace: ads
-  name: ads-mcp-probe
-  labels:
-    helm.sh/chart: ads-0.0.2
-    app.kubernetes.io/name: ads
-    app.kubernetes.io/instance: ads
-    app.kubernetes.io/version: "0.0.1"
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/component: ads-mcp-probe
-data:
-  ADS_BIND_HOST: "0.0.0.0"
-  ADS_PORT: "8084"
-  ADS_TLS_CERT_PATH: "/certs/tls.crt"
-  ADS_TLS_KEY_PATH: "/certs/tls.key"
 ---
 # Source: ads/templates/policy-configmap.yaml
 apiVersion: v1
@@ -596,54 +573,6 @@ data:
       capability: process.exec
       source: mcp:sandbox
       tool: exec_python
-    - capability: fs.read
-      source: mcp:probe-vm
-      tool: echo
-      value: /workspace/notes.md
-    - capability: fs.read
-      source: mcp:probe-vm
-      tool: env_config
-      value: /workspace/.env.example
-    - capability: fs.read
-      source: mcp:probe-vm
-      tool: release_notes
-      value: /workspace/NOTES.md
-    - capability: fs.read
-      source: mcp:probe-vm
-      tool: tail_log
-      value: /workspace/notes.md
-    - argument: path
-      capability: fs.read
-      source: mcp:probe-vm
-      tool: read_file
-    - argument: command
-      capability: process.exec
-      source: mcp:probe-vm
-      tool: run_command
-    - capability: fs.read
-      source: mcp:probe-container
-      tool: echo
-      value: /workspace/notes.md
-    - capability: fs.read
-      source: mcp:probe-container
-      tool: env_config
-      value: /workspace/.env.example
-    - capability: fs.read
-      source: mcp:probe-container
-      tool: release_notes
-      value: /workspace/NOTES.md
-    - capability: fs.read
-      source: mcp:probe-container
-      tool: tail_log
-      value: /workspace/notes.md
-    - argument: path
-      capability: fs.read
-      source: mcp:probe-container
-      tool: read_file
-    - argument: command
-      capability: process.exec
-      source: mcp:probe-container
-      tool: run_command
     capabilities:
     - capability: fs.read
       classifier:
@@ -695,20 +624,20 @@ data:
         checks:
         - secrets
         - injection
+        "on": enforce
         review:
         - injection
-        "true": enforce
       request:
         checks:
         - secrets
-        "true": enforce
+        "on": enforce
       response:
         checks:
         - secrets
         - injection
+        "on": enforce
         review:
         - injection
-        "true": enforce
     mode: enforce
     protectedBranches:
     - main
@@ -1174,32 +1103,6 @@ spec:
     app.kubernetes.io/name: ads
     app.kubernetes.io/instance: ads
     app.kubernetes.io/component: ads-injection-scanner
----
-# Source: ads/templates/mcp-probe.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  namespace: ads
-  name: ads-mcp-probe-container
-  labels:
-    helm.sh/chart: ads-0.0.2
-    app.kubernetes.io/name: ads
-    app.kubernetes.io/instance: ads
-    app.kubernetes.io/version: "0.0.1"
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/component: ads-mcp-probe
-spec:
-  type: ClusterIP
-  ports:
-    - port: 8084
-      targetPort: https
-      protocol: TCP
-      name: https
-  selector:
-    app.kubernetes.io/name: ads
-    app.kubernetes.io/instance: ads
-    app.kubernetes.io/component: ads-mcp-probe
-    ads.io/probe-site: "probe-container"
 ---
 # Source: ads/templates/policy-service.yaml
 apiVersion: v1
@@ -1922,80 +1825,6 @@ spec:
       nodeSelector:
         ads.io/application-node: "true"
 ---
-# Source: ads/templates/mcp-probe.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  namespace: ads
-  name: ads-mcp-probe-container
-  labels:
-    helm.sh/chart: ads-0.0.2
-    app.kubernetes.io/name: ads
-    app.kubernetes.io/instance: ads
-    app.kubernetes.io/version: "0.0.1"
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/component: ads-mcp-probe
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: ads
-      app.kubernetes.io/instance: ads
-      app.kubernetes.io/component: ads-mcp-probe
-      ads.io/probe-site: "probe-container"
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: ads
-        app.kubernetes.io/instance: ads
-        app.kubernetes.io/component: ads-mcp-probe
-        ads.io/probe-site: "probe-container"
-    spec:
-      serviceAccountName: ads
-      automountServiceAccountToken: false
-      securityContext:
-        fsGroup: 1000
-      containers:
-        - name: ads-mcp-probe
-          securityContext:
-            allowPrivilegeEscalation: false
-            runAsGroup: 1000
-            runAsNonRoot: true
-            runAsUser: 1000
-          image: "localhost/ads-mcp-probe:local"
-          imagePullPolicy: Never
-          ports:
-            - name: https
-              containerPort: 8084
-              protocol: TCP
-          envFrom:
-            - configMapRef:
-                name: ads-mcp-probe
-          volumeMounts:
-            - name: tls
-              mountPath: /certs
-              readOnly: true
-          livenessProbe:
-            httpGet:
-              path: /health/live
-              port: https
-              scheme: HTTPS
-            periodSeconds: 20
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: https
-              scheme: HTTPS
-            periodSeconds: 10
-          resources:
-            {}
-      volumes:
-        - name: tls
-          secret:
-            secretName: ads-mcp-probe-container-tls
-      nodeSelector:
-        ads.io/application-node: "true"
----
 # Source: ads/templates/policy-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -2489,30 +2318,6 @@ spec:
     - "ads-injection-scanner.ads"
     - "ads-injection-scanner.ads.svc"
     - "ads-injection-scanner.ads.svc.cluster.local"
----
-# Source: ads/templates/mcp-probe.yaml
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  namespace: ads
-  name: ads-mcp-probe-container
-  labels:
-    helm.sh/chart: ads-0.0.2
-    app.kubernetes.io/name: ads
-    app.kubernetes.io/instance: ads
-    app.kubernetes.io/version: "0.0.1"
-    app.kubernetes.io/managed-by: Helm
-spec:
-  secretName: ads-mcp-probe-container-tls
-  issuerRef:
-    name: testlab-ca
-    kind: ClusterIssuer
-    group: cert-manager.io
-  dnsNames:
-    - "ads-mcp-probe-container"
-    - "ads-mcp-probe-container.ads"
-    - "ads-mcp-probe-container.ads.svc"
-    - "ads-mcp-probe-container.ads.svc.cluster.local"
 ---
 # Source: ads/templates/policy-service.yaml
 apiVersion: cert-manager.io/v1

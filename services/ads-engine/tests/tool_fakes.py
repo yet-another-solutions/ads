@@ -11,9 +11,9 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 
 GUARDRAIL_API_TOKEN = "guardrail-api-token-32-bytes"
 MCP_TOKEN = "mcp-audience-token"
-SESSION_ID = "probe-session-1"
+SESSION_ID = "fake-session-1"
 
-PROBE_TOOLS = [
+FAKE_TOOLS = [
     {
         "name": "echo",
         "description": "Returns the text it is given.",
@@ -114,13 +114,13 @@ class FakeGuardrail:
                     {
                         "protocolVersion": "2025-06-18",
                         "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "ads-mcp-probe", "version": "0.0.1"},
+                        "serverInfo": {"name": "fake-mcp", "version": "0.0.1"},
                     },
                 ),
                 headers={"mcp-session-id": SESSION_ID},
             )
         if method == "tools/list":
-            return web.json_response(_result(message, {"tools": PROBE_TOOLS}))
+            return web.json_response(_result(message, {"tools": FAKE_TOOLS}))
         if method == "tools/call":
             return await self._tool_call(request, server, message)
         return web.json_response(_error(message, "no such method"))

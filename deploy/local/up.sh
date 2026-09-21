@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The whole chain on a throwaway kind cluster: browser → ads → Kafka → engine → LLM →
-# guardrail → MCP probe, with policy, the injection scanner and the audit journal.
+# guardrail → session sandbox, with policy, the injection scanner and the audit journal.
 # Safe to run again: every step checks or applies rather than creates blindly.
 #
 #   bash deploy/local/up.sh
@@ -20,7 +20,7 @@ RELEASE_NAMESPACE=default
 KYVERNO_VERSION="${ADS_KYVERNO_VERSION:-v1.13.2}"
 IMAGES=(
   ads ads-policy ads-audit ads-engine ads-egress-controlplane ads-preferences
-  ads-guardrail ads-injection-scanner ads-mcp-probe
+  ads-guardrail ads-injection-scanner
   ads-context-meter ads-context-compactor
   ads-sandbox-mcp ads-sandbox-ipc ads-sandbox-manager
 )
@@ -153,7 +153,7 @@ if ! grep -q 'keycloak.ads.local' "$WORK/Corefile"; then
 fi
 
 if command -v helm >/dev/null; then
-  step "ads chart, with the example policy (built-in rules plus the probe's bindings)"
+  step "ads chart, with the example policy"
   {
     echo "policy:"
     echo "  document:"
@@ -218,12 +218,10 @@ cat <<EOF
      URL:         ${LLM_URL}
      Token:       anything, e.g. ollama
 
-5. Ask it to use the probe, for example:
-     "Вызови probe-container__read_file с path /workspace/src/app.py"  — allowed
-     "Вызови probe-container__read_file с path /etc/shadow"            — refused, notice
-     "Вызови probe-container__run_command с command uv sync"           — refused: no Kata
-     "Вызови probe-container__env_config"                              — the key comes back cut out
-     "Вызови probe-container__release_notes"                           — journalled, passed on
+5. Ask it to use the sandbox, for example:
+     "Обязательно вызови exec_shell с командой: ls -la /workspace"
+   kind has no Kata, so the guardrail refuses every exec by policy: a tool-refused
+   notice, the model is told, and the decision lands in the journal below.
    A few refusals in one chat and the chat loses its tools (budget 12).
 
 6. The journal:
