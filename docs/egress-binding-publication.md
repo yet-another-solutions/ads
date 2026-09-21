@@ -53,7 +53,15 @@ and `ADS_SANDBOX_MANAGER_ADS_SERVICE_SUBJECT`. These are platform-owned values,
 not message-selected addresses. Client URLs are verified HTTPS and may not
 contain credentials, query strings or fragments.
 
+Helm renders these IDs from `keycloak.serviceSubjects` (ADS, manager and IPC
+native user UUIDs), derives both internal HTTPS URLs, and exposes a manager
+ClusterIP Service with its existing TLS certificate. Empty subject defaults
+cannot authorize operations; runtime loaders require the binding subjects.
+Preferences receives the same ADS subject for read-only service authorization.
+Application Kafka accepts a referenced username/password Secret or generated
+Secret entries, plus an optional broker CA mount; credentials never enter ConfigMaps.
+
 Fresh application schemas, scoped audience permissions, Kafka principal/ACLs
-and Helm inputs must be installed together before live use. This component
+and the configured Helm inputs must be installed together before live use. This component
 does not claim paired CNI denial or an operational egress data-plane receiver.
 Those remain separate implementation/live proof gates in the canonical tracker.

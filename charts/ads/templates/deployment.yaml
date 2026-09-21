@@ -33,12 +33,30 @@ spec:
             - name: https
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+          {{- if .Values.kafka.existingSecret }}
+          env:
+            - name: ADS_KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kafka.existingSecret }}
+                  key: username
+            - name: ADS_KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.kafka.existingSecret }}
+                  key: password
+          {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "ads.fullname" . }}
             - secretRef:
                 name: {{ include "ads.fullname" . }}
           volumeMounts:
+            {{- if .Values.kafka.caBundle.secretName }}
+            - name: kafka-ca
+              mountPath: /kafka-ca
+              readOnly: true
+            {{- end }}
             - name: tls
               mountPath: /certs
               readOnly: true
@@ -64,6 +82,14 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
+        {{- if .Values.kafka.caBundle.secretName }}
+        - name: kafka-ca
+          secret:
+            secretName: {{ .Values.kafka.caBundle.secretName }}
+            items:
+              - key: {{ .Values.kafka.caBundle.key | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
         - name: tls
           secret:
             secretName: {{ include "ads.serviceSecretName" . }}

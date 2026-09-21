@@ -18,6 +18,14 @@ data:
   ADS_ENGINE_REQUEST_TOPIC: {{ .Values.kafka.requestTopic | quote }}
   ADS_ENGINE_OUTPUT_TOPIC: {{ .Values.kafka.outputTopic | quote }}
   ADS_ENGINE_CONSUMER_GROUP: {{ .Values.kafka.consumerGroup | quote }}
+  ADS_KAFKA_SECURITY_PROTOCOL: {{ .Values.kafka.securityProtocol | quote }}
+  ADS_KAFKA_SASL_MECHANISM: {{ .Values.kafka.saslMechanism | quote }}
+  {{- if .Values.kafka.caBundle.secretName }}
+  ADS_KAFKA_CA_BUNDLE: "/kafka-ca/ca.crt"
+  {{- end }}
+  ADS_SANDBOX_MANAGER_BASE_URL: {{ printf "https://%s:%v" (include "ads.sandboxName" (dict "root" . "component" "manager")) .Values.sandbox.manager.port | quote }}
+  ADS_MANAGER_SERVICE_SUBJECT: {{ .Values.keycloak.serviceSubjects.manager | quote }}
+  ADS_IPC_SERVICE_SUBJECT: {{ .Values.keycloak.serviceSubjects.ipc | quote }}
   ADS_PREFERENCES_BASE_URL: {{ include "ads.preferencesBaseUrl" . | quote }}
   ADS_PREFERENCES_AUDIENCE: {{ .Values.preferences.audience | quote }}
   ADS_ENGINE_AUDIENCE: {{ .Values.engine.keycloak.audience | quote }}

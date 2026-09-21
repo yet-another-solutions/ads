@@ -232,7 +232,7 @@ def test_broker_transport_requires_credentials_and_never_exposes_password(settin
         replace(secured, kafka_security_protocol="invalid").kafka_options()
 
 
-@pytest.mark.parametrize("failure", ["none", "start", "consume"])
+@pytest.mark.parametrize("failure", ["none", "start", "consume", "ended"])
 def test_configuration_broker_lifecycle_and_consumer_death(settings, monkeypatch, failure):
     class Consumer:
         def __init__(self):
@@ -258,6 +258,8 @@ def test_configuration_broker_lifecycle_and_consumer_death(settings, monkeypatch
             if failure == "consume":
                 raise RuntimeError("broker lost")
             yield SimpleNamespace(value=b"record", headers=[])
+            if failure == "ended":
+                return
             await asyncio.Event().wait()
 
     async def run():
@@ -277,7 +279,7 @@ def test_configuration_broker_lifecycle_and_consumer_death(settings, monkeypatch
                     while not (runtime.failed or consumer.done.is_set()):
                         await asyncio.sleep(0)
                 assert consumer.topics == [EGRESS_CONFIG_TOPIC]
-                if failure == "consume":
+                if failure in ("consume", "ended"):
                     assert runtime.failed
                 else:
                     runtime.controller.on_record.assert_awaited_once_with(b"record", [])

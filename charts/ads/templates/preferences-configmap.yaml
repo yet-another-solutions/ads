@@ -12,6 +12,7 @@ data:
   ADS_PREFERENCES_KEYCLOAK_AUDIENCE: {{ .Values.preferences.keycloak.audience | quote }}
   ADS_PREFERENCES_KEYCLOAK_CLIENT_ID: {{ .Values.preferences.keycloak.clientId | quote }}
   ADS_PREFERENCES_ALLOWED_CALLERS: {{ .Values.preferences.keycloak.allowedCallers | join "," | quote }}
+  ADS_PREFERENCES_ADS_SERVICE_SUBJECT: {{ .Values.keycloak.serviceSubjects.ads | quote }}
   ADS_PREFERENCES_BIND_HOST: "0.0.0.0"
   ADS_PREFERENCES_PORT: {{ .Values.preferences.service.port | quote }}
   ADS_PREFERENCES_TLS_CERT_PATH: "/certs/tls.crt"

@@ -83,6 +83,10 @@ class EgressKafka:
         except Exception:
             self.failed = True
             log.error("egress_configuration_consumer_failed")
+        finally:
+            if self.started:
+                self.failed = True
+                log.error("egress_configuration_consumer_stopped")
 
     async def stop(self) -> None:
         self.started = False
