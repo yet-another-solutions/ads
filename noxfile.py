@@ -41,6 +41,8 @@ _SRC = (
     "services/ads-sandbox-ipc/tests",
     "services/ads-sandbox-manager/src",
     "services/ads-sandbox-manager/tests",
+    "services/ads-sandbox-egress/src",
+    "services/ads-sandbox-egress/tests",
     "noxfile.py",
 )
 
@@ -57,6 +59,7 @@ _PACKAGES = (
     "services/ads-sandbox-mcp",
     "services/ads-sandbox-ipc",
     "services/ads-sandbox-manager",
+    "services/ads-sandbox-egress",
 )
 
 
@@ -119,3 +122,4 @@ def package(session: nox.Session) -> None:
     session.run("uv", "build", "--package", "ads-sandbox-mcp", external=True)
     session.run("uv", "build", "--package", "ads-sandbox-ipc", external=True)
     session.run("uv", "build", "--package", "ads-sandbox-manager", external=True)
+    session.run("uv", "build", "--package", "ads-sandbox-egress", external=True)

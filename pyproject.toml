@@ -18,6 +18,7 @@ dependencies = [
     "ads-sandbox-mcp",
     "ads-sandbox-ipc",
     "ads-sandbox-manager",
+    "ads-sandbox-egress",
 ]
 
 [tool.uv]
@@ -42,6 +43,7 @@ members = [
     "services/ads-sandbox-mcp",
     "services/ads-sandbox-ipc",
     "services/ads-sandbox-manager",
+    "services/ads-sandbox-egress",
 ]
 
 [tool.uv.sources]
@@ -58,6 +60,7 @@ ads-context-runtime = { workspace = true }
 ads-sandbox-mcp = { workspace = true }
 ads-sandbox-ipc = { workspace = true }
 ads-sandbox-manager = { workspace = true }
+ads-sandbox-egress = { workspace = true }
 
 [[tool.uv.index]]
 name = "pypi"
@@ -111,6 +114,8 @@ src = [
     "services/ads-sandbox-ipc/tests",
     "services/ads-sandbox-manager/src",
     "services/ads-sandbox-manager/tests",
+    "services/ads-sandbox-egress/src",
+    "services/ads-sandbox-egress/tests",
 ]
 line-length = 100
 target-version = "py312"
@@ -120,8 +125,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src:services/ads-context-meter/src:services/ads-context-compactor/src:libraries/ads-context-runtime/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
-packages = ["ads_commons", "ads_commons_beans", "ads_commons_schema", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_context_meter", "ads_context_compactor", "ads_context_runtime", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager"]
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-preferences/src:services/ads-context-meter/src:services/ads-context-compactor/src:libraries/ads-context-runtime/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src:services/ads-sandbox-egress/src"
+packages = ["ads_commons", "ads_commons_beans", "ads_commons_schema", "ads", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_context_meter", "ads_context_compactor", "ads_context_runtime", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager", "ads_sandbox_egress"]
 explicit_package_bases = true
 strict = true
 warn_unused_ignores = true
@@ -164,6 +169,7 @@ testpaths = [
     "services/ads-sandbox-mcp/tests",
     "services/ads-sandbox-ipc/tests",
     "services/ads-sandbox-manager/tests",
+    "services/ads-sandbox-egress/tests",
 ]
 addopts = "-q"
 markers = [
@@ -171,4 +177,4 @@ markers = [
 ]
 
 [tool.deptry]
-known_first_party = ["ads", "ads_commons", "ads_commons_beans", "ads_commons_schema", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_context_meter", "ads_context_compactor", "ads_context_runtime", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager"]
+known_first_party = ["ads", "ads_commons", "ads_commons_beans", "ads_commons_schema", "ads_engine", "ads_egress_controlplane", "ads_preferences", "ads_context_meter", "ads_context_compactor", "ads_context_runtime", "ads_sandbox_mcp", "ads_sandbox_ipc", "ads_sandbox_manager", "ads_sandbox_egress"]
