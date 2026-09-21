@@ -23,6 +23,7 @@ from ads_commons.engine import (
     ToolResult,
     UserHistoryTurn,
 )
+from ads_context_runtime.failures import failure_reason
 
 STARVATION = "context starvation. recall prohibited"
 RECALL_PROMPT = (
@@ -74,7 +75,7 @@ class FrameModel(Protocol):
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
-        cap: int,
+        cap: int | None,
     ) -> AIMessage: ...
 
 
@@ -86,16 +87,19 @@ class LangChainFrameModel:
         self,
         messages: list[BaseMessage],
         tools: list[dict[str, Any]],
-        cap: int,
+        cap: int | None,
     ) -> AIMessage:
         with tracing_context(enabled=False):
+            completion_options: dict[str, Any] = (
+                {"max_completion_tokens": cap} if cap is not None else {}
+            )
             model = ChatOpenAI(
                 model=self._settings.options.model_name,
                 base_url=self._settings.url,
                 api_key=lambda: self._settings.authentication.openai_bearer.token,
                 max_retries=0,
-                max_completion_tokens=cap,
                 timeout=120,
+                **completion_options,
             )
             try:
                 runnable = model.bind_tools(tools, parallel_tool_calls=False) if tools else model
@@ -125,6 +129,7 @@ class Frame:
     pending_results: list[ToolResult] = field(default_factory=list)
     reserve: int | None = None
     starvation_percentage: int | None = None
+    finalization_reason: str = STARVATION
 
     @property
     def charged(self) -> list[HistoryTurn]:
@@ -146,7 +151,9 @@ class Frame:
             ]
         return [*self.charged, call, result]
 
-    def provider_messages(self) -> list[BaseMessage]:
+    def provider_messages(
+        self, *, total: int | None = None, remaining: int | None = None
+    ) -> list[BaseMessage]:
         evidence: list[dict[str, Any]] = []
         for item in self.source:
             if isinstance(item, Tombstone):
@@ -159,8 +166,25 @@ class Frame:
                 value.pop("metadata", None)
                 value.pop("task_transitions", None)
                 evidence.append(value)
+        prompt = self.prompt
+        if total is not None:
+            prompt += (
+                "\nADS isolated frame context budget (estimated visible messages; excludes "
+                "system instructions, tool schemas and provider overhead): "
+                f"total_context_tokens={total}; remaining_context_tokens={remaining} "
+                "(after output reserve). This is this frame's budget, not the parent's "
+                "remaining budget."
+                f"\nFinal visible answer must not exceed {self.cap} tokens. "
+                "Reasoning is not part of that visible-answer limit."
+            )
+        if self.finalization_only:
+            prompt += (
+                "\nComplete the answer now using available evidence. No further tools are "
+                "available or permitted. Report missing evidence and failed recall honestly; "
+                "do not invent results."
+            )
         messages: list[BaseMessage] = [
-            SystemMessage(self.prompt),
+            SystemMessage(prompt),
             HumanMessage("Historical evidence:\n" + json.dumps(evidence, ensure_ascii=False)),
             HumanMessage(self.question),
         ]
@@ -208,19 +232,20 @@ class RecallRuntime:
         *,
         reserve: int = 1024,
         answer_cap: int = 1024,
-        answer_completion_cap: int = 1024,
+        answer_completion_cap: int | None = None,
         starvation_percentage: int = 10,
         top_level_reserve: int = 1024,
         top_level_answer_cap: int = 1024,
-        top_level_completion_cap: int = 1024,
+        top_level_completion_cap: int | None = None,
         top_level_starvation_percentage: int = 10,
     ) -> None:
         if (
             reserve <= 0
             or answer_cap <= 0
-            or answer_completion_cap <= 0
+            or (answer_completion_cap is not None and answer_completion_cap <= 0)
             or not 0 < starvation_percentage < 100
-            or min(top_level_reserve, top_level_answer_cap, top_level_completion_cap) <= 0
+            or min(top_level_reserve, top_level_answer_cap) <= 0
+            or (top_level_completion_cap is not None and top_level_completion_cap <= 0)
             or not 0 < top_level_starvation_percentage < 100
         ):
             raise ValueError("invalid recall budgets")
@@ -324,10 +349,8 @@ class RecallRuntime:
             question,
             prompt,
             cap,
-            completion_cap=max(
-                1,
-                (self.top_level_completion_cap if top_level else self.answer_completion_cap)
-                // (2 if attempt else 1),
+            completion_cap=(
+                self.top_level_completion_cap if top_level else self.answer_completion_cap
             ),
             reserve=self.top_level_reserve if top_level else None,
             starvation_percentage=self.top_level_starvation_percentage if top_level else None,
@@ -357,22 +380,29 @@ class RecallRuntime:
         if call.name == "remaining_context":
             result = await self.resolved_result(frame, call, "current frame capacity")
         elif call.name == "memory_recall":
-            memory, question = self.visible_memory(frame.source, call)
-            # Check parent tool envelope admission independently from child source admission.
-            if await self.resolved_result(frame, call, "") is None:
+            try:
+                memory, question = self.visible_memory(frame.source, call)
+                # Check parent envelope admission independently from child source admission.
                 result = None
-            else:
-                result = None
-                for attempt in range(2):
-                    cap = min(self.answer_cap, max(1, int(report["remaining_tokens"]) // 2))
-                    if attempt:
-                        cap = max(1, cap // 2)
-                    answer = await self.child_answer(memory, question, cap, attempt)
-                    if answer is None:
-                        continue
-                    result = await self.resolved_result(frame, call, answer)
-                    if result is not None:
-                        break
+                if await self.resolved_result(frame, call, "") is not None:
+                    for attempt in range(2):
+                        cap = min(self.answer_cap, max(1, int(report["remaining_tokens"]) // 2))
+                        if attempt:
+                            cap = max(1, cap // 2)
+                        answer = await self.child_answer(memory, question, cap, attempt)
+                        if answer is None:
+                            continue
+                        result = await self.resolved_result(frame, call, answer)
+                        if result is not None:
+                            break
+            except Exception as exc:
+                frame.finalization_only = True
+                frame.finalization_reason = "recall_failed"
+                result = ToolResult(call.id, call.name, "error", failure_reason(exc))
+                if (await self.remaining(frame.with_result(call, result), frame))[
+                    "remaining_tokens"
+                ] < 0:
+                    raise ContextOverflow("recall_prohibition_does_not_fit") from None
         else:
             raise ContextFailure("unknown_recall_tool")
         if result is None:
@@ -411,7 +441,9 @@ class RecallRuntime:
                 # further tools, including remaining_context, after starvation.
                 result = next(p for p in frame.pending_results if p.tool_call_id == call.id)
                 frame.pending_results.remove(result)
-                frame.exchanges.append(result)
+                frame.exchanges.append(
+                    ToolResult(call.id, call.name, "error", frame.finalization_reason)
+                )
             else:
                 result = await self.dispatch(frame, call)
         await self.guard(frame)
@@ -427,12 +459,25 @@ class RecallRuntime:
                 schemas = LOCAL_TOOLS
             # Provider completion allowance is distinct from final visible answer
             # size, and cannot exceed this frame's metered remaining capacity.
-            completion_cap = min(
-                current.completion_cap or current.cap,
-                int(report["remaining_tokens"])
-                + (current.reserve if current.reserve is not None else self.reserve),
+            completion_cap = (
+                min(
+                    current.completion_cap,
+                    int(report["remaining_tokens"])
+                    + (current.reserve if current.reserve is not None else self.reserve),
+                )
+                if current.completion_cap is not None
+                else None
             )
-            response = await self.model.invoke(current.provider_messages(), schemas, completion_cap)
+            response = await self.model.invoke(
+                current.provider_messages(
+                    total=self.settings.options.max_context_tokens,
+                    remaining=int(report["remaining_tokens"]),
+                ),
+                schemas,
+                completion_cap,
+            )
+            if response.response_metadata.get("finish_reason") == "length":
+                raise ContextFailure("frame_completion_truncated")
             if response.invalid_tool_calls:
                 raise ContextFailure("invalid_recall_tool_calls")
             if response.tool_calls:

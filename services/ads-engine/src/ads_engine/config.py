@@ -21,6 +21,11 @@ def _callers(raw: str) -> frozenset[str]:
     return parties
 
 
+def _optional_cap(name: str) -> int | None:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else None
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     kafka_bootstrap_servers: str
@@ -47,11 +52,11 @@ class Settings:
     context_target: int = 50
     recall_reserve: int = 1024
     recall_answer_cap: int = 1024
-    recall_completion_cap: int = 1024
+    recall_completion_cap: int | None = None
     recall_starvation_percentage: int = 10
     top_level_recall_reserve: int = 1024
     top_level_recall_answer_cap: int = 1024
-    top_level_recall_completion_cap: int = 1024
+    top_level_recall_completion_cap: int | None = None
     top_level_recall_starvation_percentage: int = 10
 
     def __post_init__(self) -> None:
@@ -83,14 +88,17 @@ class Settings:
             raise ValueError("inner recall output reserve must be positive")
         if (
             self.recall_answer_cap <= 0
-            or self.recall_completion_cap <= 0
+            or (self.recall_completion_cap is not None and self.recall_completion_cap <= 0)
             or not 0 < self.recall_starvation_percentage < 100
             or min(
                 self.top_level_recall_reserve,
                 self.top_level_recall_answer_cap,
-                self.top_level_recall_completion_cap,
             )
             <= 0
+            or (
+                self.top_level_recall_completion_cap is not None
+                and self.top_level_recall_completion_cap <= 0
+            )
             or not 0 < self.top_level_recall_starvation_percentage < 100
         ):
             raise ValueError("invalid recall budgets")
@@ -130,7 +138,7 @@ def load_settings() -> Settings:
         context_target=int(_env("ADS_ENGINE_CONTEXT_TARGET", "50")),
         recall_reserve=int(_env("ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS", "1024")),
         recall_answer_cap=int(_env("ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS", "1024")),
-        recall_completion_cap=int(_env("ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS", "1024")),
+        recall_completion_cap=_optional_cap("ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS"),
         recall_starvation_percentage=int(
             _env("ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE", "10")
         ),
@@ -140,8 +148,8 @@ def load_settings() -> Settings:
         top_level_recall_answer_cap=int(
             _env("ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS", "1024")
         ),
-        top_level_recall_completion_cap=int(
-            _env("ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS", "1024")
+        top_level_recall_completion_cap=_optional_cap(
+            "ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS"
         ),
         top_level_recall_starvation_percentage=int(
             _env("ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE", "10")

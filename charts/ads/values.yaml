@@ -46,12 +46,12 @@ engine:
     topLevel:
       reservedOutputTokens: 1024
       answerCapTokens: 1024
-      completionCapTokens: 1024
+      completionCapTokens: null
       starvationPercentage: 10
     inner:
       reservedOutputTokens: 1024
       answerCapTokens: 1024
-      completionCapTokens: 1024
+      completionCapTokens: null
       starvationPercentage: 10
 
 # ads consumes ads.engine.output and produces ads.engine.request.
@@ -122,7 +122,7 @@ contextCompactor:
   recall:
     reservedOutputTokens: 1024
     answerCapTokens: 1024
-    completionCapTokens: 1024
+    completionCapTokens: null
     starvationPercentage: 10
 
 context:

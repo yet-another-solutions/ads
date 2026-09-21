@@ -138,7 +138,7 @@ class ContextCompactorService:
         starvation_percentage: int = 10,
         recall_reserve: int = 1024,
         recall_answer_cap: int = 1024,
-        recall_completion_cap: int = 1024,
+        recall_completion_cap: int | None = None,
         recall_starvation_percentage: int = 10,
         minimum_reduction_percentage: int = 10,
     ) -> None:

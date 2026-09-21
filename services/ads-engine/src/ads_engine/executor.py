@@ -17,13 +17,16 @@ from langsmith import tracing_context
 from ads_commons.context_compactor import CompactionBoundary
 from ads_commons.engine import (
     AssistantHistoryTurn,
+    ContextPressure,
     EngineRequest,
     HistoryTurn,
     Tombstone,
     ToolCall,
+    ToolResult,
     UserHistoryTurn,
 )
-from ads_context_runtime.frames import LOCAL_TOOLS
+from ads_context_runtime.failures import failure_reason
+from ads_context_runtime.frames import LOCAL_TOOLS, ContextFailure
 from ads_engine.chat import (
     AdsChatOpenAI,
     StreamDelta,
@@ -38,13 +41,13 @@ from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials
 
 log = structlog.get_logger("ads_engine")
 COMPLETE_ONLY_PROMPT = (
-    "\nContext compaction failed. Complete the answer now using the evidence already available. "
+    "\nContext compaction or recall failed. Complete the answer now using available evidence. "
     "No further tools are available or permitted, including memory_recall. "
     "State any limitations; do not claim unperformed work or invent tool results."
 )
 EMPTY_COMPLETION = (
-    "I cannot continue tool-based work in this turn because context compaction could not "
-    "complete. No further tools were executed."
+    "I cannot continue tool-based work in this turn because context compaction or recall "
+    "could not complete. No further tools were executed after that failure."
 )
 
 
@@ -85,6 +88,28 @@ class ExecutorChatStreamer:
                         emitted = False
                         dispatched = False
                         publications: dict[int, asyncio.Event] = {}
+                        meter_unavailable = False
+
+                        async def measure(
+                            active: list[HistoryTurn], complete_only: bool = False
+                        ) -> ContextPressure | None:
+                            nonlocal meter_unavailable
+                            if meter_unavailable:
+                                return None
+                            try:
+                                return await context.measure(active)
+                            except Exception:
+                                if not complete_only:
+                                    raise
+                                # Recovery must not depend on the failed recall's meter.
+                                # No guessed counts or alternate tokenizer: omit pressure.
+                                meter_unavailable = True
+                                log.warning(
+                                    "complete_only_meter_unavailable",
+                                    session_id=str(request.session_id),
+                                    message_id=str(request.message_id),
+                                )
+                                return None
 
                         async def publish_call(delta: StreamDelta) -> None:
                             nonlocal emitted
@@ -158,14 +183,22 @@ class ExecutorChatStreamer:
                                 instructions += (
                                     "\nVisible memory can be queried with memory_recall."
                                 )
-                            pressure = await context.measure(active)
-                            instructions += (
-                                "\nADS context budget (estimated model-visible messages; excludes "
-                                "system instructions, tool schemas and provider overhead): "
-                                f"total_context_tokens={pressure.total_context}; "
-                                "remaining_context_tokens="
-                                f"{max(0, pressure.total_context - pressure.used_context)}."
-                            )
+                            pressure = await measure(active, complete_only)
+                            if pressure is not None:
+                                instructions += (
+                                    "\nADS context budget (estimated model-visible messages; "
+                                    "excludes system instructions, tool schemas and provider "
+                                    f"overhead): total_context_tokens={pressure.total_context}; "
+                                    "remaining_context_tokens="
+                                    f"{max(0, pressure.total_context - pressure.used_context)}."
+                                )
+                            else:
+                                instructions += (
+                                    "\nADS context budget: "
+                                    "total_context_tokens="
+                                    f"{request.model.options.max_context_tokens}; "
+                                    "remaining_context_tokens=unknown (meter unavailable)."
+                                )
                             if complete_only:
                                 instructions += COMPLETE_ONLY_PROMPT
                             messages = context_messages(active, instructions)
@@ -191,7 +224,7 @@ class ExecutorChatStreamer:
                                                 candidate = [*active]
                                                 if text:
                                                     candidate.append(AssistantHistoryTurn(text))
-                                                pressure = await context.measure(candidate)
+                                                pressure = await measure(candidate, complete_only)
                                                 emitted = True
                                                 writer(replace(delta, pressure=pressure))
                                     break
@@ -216,8 +249,8 @@ class ExecutorChatStreamer:
                                         StreamDelta(
                                             "message",
                                             text=text,
-                                            pressure=await context.measure(
-                                                [*active, AssistantHistoryTurn(text)]
+                                            pressure=await measure(
+                                                [*active, AssistantHistoryTurn(text)], True
                                             ),
                                         )
                                     )
@@ -242,7 +275,6 @@ class ExecutorChatStreamer:
                                     if not call.id or call.id in seen:
                                         raise ExecutionFailed("invalid local recall call id")
                                     seen.add(call.id)
-                                    context.recall.visible_memory(active, call)
                                 for call in calls:
                                     active.append(call)
                                     await publish_call(
@@ -254,13 +286,36 @@ class ExecutorChatStreamer:
                                     )
                                     emitted = True
                                 for call in calls:
-                                    result = await context.recall.recall_top_level(active, call)
+                                    if state["complete_only"]:
+                                        result = ToolResult(
+                                            call.id, call.name, "error", "recall_failed"
+                                        )
+                                    else:
+                                        try:
+                                            result = await context.recall.recall_top_level(
+                                                active, call
+                                            )
+                                        except Exception as exc:
+                                            result = ToolResult(
+                                                call.id, call.name, "error", failure_reason(exc)
+                                            )
+                                        if result.status == "error":
+                                            state = {**state, "complete_only": True}
+                                            log.warning(
+                                                "recall_complete_only",
+                                                session_id=str(request.session_id),
+                                                message_id=str(request.message_id),
+                                                tool_call_id=call.id,
+                                                reason=failure_reason(
+                                                    ContextFailure(str(result.content))
+                                                ),
+                                            )
                                     active.append(result)
                                     writer(
                                         StreamDelta(
                                             "tool_result",
                                             tool_result=result,
-                                            pressure=await context.measure(active),
+                                            pressure=await measure(active, state["complete_only"]),
                                         )
                                     )
                             else:

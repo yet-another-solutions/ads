@@ -16,7 +16,9 @@ data:
   ADS_CONTEXT_COMPACTOR_RECALL_RESERVED_OUTPUT_TOKENS: {{ .Values.contextCompactor.recall.reservedOutputTokens | quote }}
   ADS_CONTEXT_COMPACTOR_RECALL_STARVATION_PERCENTAGE: {{ .Values.contextCompactor.recall.starvationPercentage | quote }}
   ADS_CONTEXT_COMPACTOR_RECALL_ANSWER_CAP_TOKENS: {{ .Values.contextCompactor.recall.answerCapTokens | quote }}
+  {{- if .Values.contextCompactor.recall.completionCapTokens }}
   ADS_CONTEXT_COMPACTOR_RECALL_COMPLETION_CAP_TOKENS: {{ .Values.contextCompactor.recall.completionCapTokens | quote }}
+  {{- end }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.contextCompactor.keycloak.wellKnownUrl | quote }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_ISSUER: {{ .Values.contextCompactor.keycloak.issuer | quote }}
   ADS_CONTEXT_COMPACTOR_KEYCLOAK_AUDIENCE: {{ .Values.contextCompactor.keycloak.audience | quote }}

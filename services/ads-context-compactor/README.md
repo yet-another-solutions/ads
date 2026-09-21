@@ -148,10 +148,10 @@ Engine settings:
 | `ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS` | `1024` |
 | `ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE` | `10` |
 | `ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS` | `1024` |
-| `ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS` | unset |
 | `ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS` | `1024` |
 | `ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS` | `1024` |
-| `ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS` | `1024` |
+| `ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS` | unset |
 | `ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE` | `10` |
 
 Compactor requires `ADS_CONTEXT_COMPACTOR_KEYCLOAK_WELL_KNOWN_URL`,
@@ -164,16 +164,41 @@ Optional `ADS_CONTEXT_COMPACTOR_TLS_CA_BUNDLE` applies to outgoing HTTPS.
 `SUMMARY_CAP_TOKENS` with the same prefix default to 1024 and 2048.
 Additional settings with that prefix are `COMPLETION_CAP_TOKENS` (2048),
 `STARVATION_PERCENTAGE` (10), `RECALL_RESERVED_OUTPUT_TOKENS` (1024),
-`RECALL_ANSWER_CAP_TOKENS` (1024), `RECALL_COMPLETION_CAP_TOKENS` (1024),
+`RECALL_ANSWER_CAP_TOKENS` (1024), `RECALL_COMPLETION_CAP_TOKENS` (unset),
 `RECALL_STARVATION_PERCENTAGE` (10), and `MINIMUM_REDUCTION_PERCENTAGE` (10).
 Summary/repair frames use the compactor's own reserve and starvation floor;
 their recall workers use the separate `RECALL_*` values at every recursive depth.
 Engine top-level and engine inner recall have independent configurations and
 never supply defaults to compactor recall.
-Provider completion allowances include any provider-counted reasoning and are
-distinct from metered final-answer limits. They are clipped to metered available
-frame capacity including the output reserve. The one shorter-answer retry halves
-both its visible answer cap and provider allowance.
+Each recall frame has its own context budget with total length copied from its
+parent model's configured `max_context_tokens`, not the parent's remaining capacity.
+Every frame invocation, including compactor summary and format-repair invocations,
+receives a fresh system-prompt budget and visible-answer limit. The existing
+`remaining_context` tool reports the same frame-local remaining capacity after reserve.
+Prompt/token-schema/provider overhead remains outside the approximate ADS meter.
+
+Recall provider completion caps are independently optional for engine top-level,
+engine inner, and compactor recall. Unset or empty environment variables (Helm
+`completionCapTokens: null`) omit `max_completion_tokens` entirely; no main-loop
+setting, visible-answer cap, or other recall group's setting supplies a fallback.
+Provider defaults and context limits still apply. An explicit positive recall cap
+is passed to the provider, clipped to metered frame capacity including reserve.
+Compactor summary/repair provider caps are unchanged and independent.
+
+Provider completion allowances include provider-counted reasoning; final visible
+answer limits do not. The bounded shorter-answer retry halves only the visible
+answer cap, never the independent provider completion allowance. A provider
+`finish_reason=length` is a failure even if partial text is nonempty.
+
+Failed top-level recall returns an error tool result and latches engine
+complete-only mode, without further tools, recall, or compaction. Already-published
+calls in the same batch receive error closure without dispatch. The final answer
+uses existing evidence and ends with normal `finish`, preserving completed work.
+Recursive recall failure similarly closes the call and finalizes its calling frame.
+Errors are allowlisted codes, not provider text. Cancellation still propagates.
+If the meter itself is unavailable during engine finalization, pressure is omitted
+and the prompt labels remaining capacity unknown; no alternate counter is used.
+Safe engine diagnostics include session/message/tool-call IDs and recovery reason.
 See [Helm context budget settings](../../charts/ads/README.md#context-budget-settings)
 for the complete values mapping and validation.
 The model adapter has a 120-second invocation timeout and the REST client a

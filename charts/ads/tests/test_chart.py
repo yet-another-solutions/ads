@@ -770,14 +770,14 @@ class ChartTests(unittest.TestCase):
                 if component == "engine":
                     self.assertEqual(settings.recall_starvation_percentage, 15 if custom else 10)
                     self.assertEqual(settings.recall_answer_cap, 768 if custom else 1024)
-                    self.assertEqual(settings.recall_completion_cap, 8192 if custom else 1024)
+                    self.assertEqual(settings.recall_completion_cap, 8192 if custom else None)
                     self.assertEqual(settings.context_trigger, 75 if custom else 80)
                     self.assertEqual(settings.context_target, 40 if custom else 50)
                     self.assertEqual(settings.recall_reserve, 512 if custom else 1024)
                     self.assertEqual(settings.top_level_recall_reserve, 128 if custom else 1024)
                     self.assertEqual(settings.top_level_recall_answer_cap, 2048 if custom else 1024)
                     self.assertEqual(
-                        settings.top_level_recall_completion_cap, 4096 if custom else 1024
+                        settings.top_level_recall_completion_cap, 4096 if custom else None
                     )
                     self.assertEqual(
                         settings.top_level_recall_starvation_percentage, 25 if custom else 10
@@ -786,7 +786,7 @@ class ChartTests(unittest.TestCase):
                     self.assertEqual(settings.recall_reserve, 384 if custom else 1024)
                     self.assertEqual(settings.recall_starvation_percentage, 18 if custom else 10)
                     self.assertEqual(settings.recall_answer_cap, 640 if custom else 1024)
-                    self.assertEqual(settings.recall_completion_cap, 3072 if custom else 1024)
+                    self.assertEqual(settings.recall_completion_cap, 3072 if custom else None)
                     self.assertEqual(settings.reserve, 256 if custom else 1024)
                     self.assertEqual(settings.starvation_percentage, 12 if custom else 10)
                     self.assertEqual(settings.summary_cap, 1536 if custom else 2048)
@@ -834,7 +834,7 @@ class ChartTests(unittest.TestCase):
         fields = {
             "reservedOutputTokens": ("RESERVED_OUTPUT_TOKENS", 128, 1024),
             "answerCapTokens": ("ANSWER_CAP_TOKENS", 640, 1024),
-            "completionCapTokens": ("COMPLETION_CAP_TOKENS", 8192, 1024),
+            "completionCapTokens": ("COMPLETION_CAP_TOKENS", 8192, None),
             "starvationPercentage": ("STARVATION_PERCENTAGE", 25, 10),
         }
         for changed in groups:
@@ -845,9 +845,11 @@ class ChartTests(unittest.TestCase):
                 for group, (name, prefix) in groups.items():
                     config = docs["ConfigMap", name]["data"]
                     for suffix, custom, default in fields.values():
-                        self.assertEqual(
-                            config[prefix + suffix], str(custom if group == changed else default)
-                        )
+                        expected = custom if group == changed else default
+                        if expected is None:
+                            self.assertNotIn(prefix + suffix, config)
+                        else:
+                            self.assertEqual(config[prefix + suffix], str(expected))
                 compactor = docs["ConfigMap", "ads-context-compactor"]["data"]
                 self.assertEqual(compactor["ADS_CONTEXT_COMPACTOR_RESERVED_OUTPUT_TOKENS"], "1024")
                 self.assertEqual(compactor["ADS_CONTEXT_COMPACTOR_STARVATION_PERCENTAGE"], "10")

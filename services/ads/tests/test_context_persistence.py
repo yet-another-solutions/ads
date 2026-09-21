@@ -11,6 +11,8 @@ from ads_commons.engine import (
     ErrorOutput,
     Finish,
     PartialResponse,
+    ToolCall,
+    ToolResult,
     UserHistoryTurn,
 )
 from context_fakes import memory
@@ -157,6 +159,35 @@ def test_failure_rewinds_candidates_and_late_parts_cannot_revive_new_run(
     assert chat_of(db_engine, sid).committed_tombstone_id == committed
     assert all(str(candidate.memory_id) not in row.text for row in entries_of(db_engine, sid))
     assert kafka.requests[-1].history == [base, UserHistoryTurn("base")]
+
+
+def test_failed_recall_tool_result_and_normal_finish_preserve_work_and_history(
+    client, app, db_engine, kafka, context_session
+):
+    project, sid, model_id = context_session
+    send(client, project, sid, "remember", model_id)
+    req = kafka.requests[-1]
+    call = ToolCall("recall-1", "memory_recall", {"memory_id": str(uuid.uuid4()), "question": "q"})
+    result = ToolResult(call.id, call.name, "error", "frame_completion_truncated")
+    for order, payload in enumerate(
+        [
+            {"message": AssistantMessage("Completed earlier work.")},
+            {"tool_call": call},
+            {"tool_result": result},
+            {"message": AssistantMessage("Recall failed. Final answer uses existing evidence.")},
+        ]
+    ):
+        emit(app, PartialResponse(sid, order, message_id=req.message_id, **payload))
+    emit(app, Finish(sid, 3, req.message_id))
+    assert run_of(db_engine, sid) is None
+    rows = entries_of(db_engine, sid)
+    assert rows[0].text == "remember"
+    assert any(row.text == "Completed earlier work." for row in rows)
+    assert rows[-1].text == "Recall failed. Final answer uses existing evidence."
+    send(client, project, sid, "continue", model_id)
+    history = kafka.requests[-1].history
+    assert call in history and result in history
+    assert AssistantHistoryTurn("Completed earlier work.") in history
 
 
 def test_pressure_follows_contiguous_part_order_not_arrival(
