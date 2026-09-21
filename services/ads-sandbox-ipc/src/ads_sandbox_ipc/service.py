@@ -102,7 +102,7 @@ class IpcService:
                         prepared = False
                         log.warning("startup_guest_not_ready")
                     configured = self.egress is None or (
-                        self.egress.ever_installed.is_set() and await self.egress.healthy()
+                        await self.egress.healthy() and self.egress.installed is not None
                     )
                     if self.egress is not None and self.egress.failed:
                         raise RuntimeError("initial egress delivery failed")

@@ -127,6 +127,44 @@ async def test_changed_uuid_reapplies_in_background_without_revoking_admission(t
 
 
 @pytest.mark.anyio
+async def test_second_restart_during_background_apply_is_not_lost(tmp_path):
+    delivery, transport = setup(tmp_path)
+    delivery.timeout_seconds = 5
+    await delivery.receive(delivery.project_id, snapshot())
+    transport.instance = uuid4()
+    transport.delay = asyncio.Event()
+    assert await delivery.healthy()
+    await asyncio.sleep(0)
+    assert len(transport.calls) == 2
+    transport.instance = uuid4()
+    assert await delivery.healthy()
+    transport.delay.set()
+    await delivery._reapply
+    assert len(transport.calls) == 3
+    assert delivery.installed.instance_id == transport.instance
+    assert delivery.ever_installed.is_set()
+    await delivery.close()
+
+
+@pytest.mark.anyio
+async def test_startup_observes_restart_after_unexpected_initial_apply(ipc, tmp_path):
+    from ipc_support import eventually
+
+    delivery, transport = setup(tmp_path / "floor")
+    ipc.service.egress = delivery
+    replacement = uuid4()
+    transport.return_instance = replacement
+    await delivery.receive(delivery.project_id, snapshot())
+    assert delivery.installed is None and not delivery.ever_installed.is_set()
+    transport.return_instance = None
+    transport.instance = replacement
+    async with ipc.running(boot=False):
+        await eventually(lambda: ipc.service.kafka_ready)
+        assert delivery.installed.instance_id == replacement
+        assert len(transport.calls) == 2
+
+
+@pytest.mark.anyio
 async def test_late_response_after_new_observation_is_not_installation_evidence(tmp_path):
     delivery, transport = setup(tmp_path)
     transport.delay = asyncio.Event()

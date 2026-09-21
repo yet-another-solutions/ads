@@ -182,8 +182,19 @@ class EgressDelivery:
 
     async def _background_apply(self) -> None:
         async with self._lock:
-            if self.snapshot is not None and self.installed is None:
+            while (
+                not self.stopped
+                and not self.failed
+                and self.snapshot is not None
+                and self.installed is None
+            ):
+                observed = self.instance
                 await self._apply(self.snapshot)
+                # A further UUID observation while this task was active must not
+                # be lost. Only that new observation schedules another delivery,
+                # not stale_revision or an unexpected-UUID success by itself.
+                if self.instance == observed:
+                    break
 
     async def close(self) -> None:
         self.stopped = True
