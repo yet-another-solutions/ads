@@ -109,6 +109,22 @@ def test_langchain_frame_model_never_binds_tools_in_finalization(monkeypatch):
     assert asyncio.run(LangChainFrameModel(model_settings()).invoke([], [], 100)).content == "final"
 
 
+def test_unset_completion_cap_is_omitted_from_provider_request(monkeypatch):
+    options = {}
+
+    class Chat:
+        def __init__(self, **kwargs):
+            options.update(kwargs)
+
+        async def ainvoke(self, messages):
+            return AIMessage("final")
+
+    monkeypatch.setattr("ads_context_runtime.frames.ChatOpenAI", Chat)
+    result = asyncio.run(LangChainFrameModel(model_settings()).invoke([], [], None))
+    assert result.content == "final"
+    assert "max_completion_tokens" not in options and "max_tokens" not in options
+
+
 @pytest.mark.parametrize("reason", ["no_safe_fitting_prefix", "provider secret payload"])
 def test_compaction_failure_reason_is_typed_and_allowlisted(monkeypatch, reason):
     class Exchange:

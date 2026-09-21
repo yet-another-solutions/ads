@@ -328,7 +328,8 @@ def test_top_level_visible_output_limit_is_not_a_parent_starvation_result():
     call = ToolCall("top", "memory_recall", {"memory_id": str(m.memory_id), "question": "q"})
     result = asyncio.run(runtime.recall_top_level([m], call))
     assert result.status == "error" and result.content == "recall_answer_limit_exceeded"
-    assert [c[2] for c in model.calls] == [4096, 2048]
+    assert [c[2] for c in model.calls] == [4096, 4096]
+    assert "Final visible answer must not exceed 1 tokens" in str(model.calls[1][0])
 
 
 def test_retained_response_text_and_calls_remain_in_one_provider_message():

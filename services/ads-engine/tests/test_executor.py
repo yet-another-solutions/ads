@@ -629,9 +629,140 @@ def test_pings_continue_during_context_waits_and_late_results_cannot_revive(
             assert publisher.messages == snapshot
 
     asyncio.run(scenario())
-    assert sum(isinstance(x, Finish) for x in publisher.messages) == (ending == "finish")
-    assert sum(isinstance(x, ErrorOutput) for x in publisher.messages) == (ending == "error")
+    recoverable = waiting == "nested_recall" and ending == "error"
+    assert sum(isinstance(x, Finish) for x in publisher.messages) == (
+        ending == "finish" or recoverable
+    )
+    assert sum(isinstance(x, ErrorOutput) for x in publisher.messages) == (
+        ending == "error" and not recoverable
+    )
     assert not h.executions and h.run._pair is None
+
+
+@pytest.mark.parametrize(
+    "failure", ["empty", "truncated", "oversized", "unknown", "unauthorized", "meter"]
+)
+def test_recall_failure_closes_batch_and_finishes_without_more_tools(
+    sdk_harness, store, jwt_verifier, access_token, failure
+):
+    import msgspec
+
+    from ads_commons.engine import (
+        AckResponse,
+        ErrorOutput,
+        Finish,
+        PartialResponse,
+        authorization_headers,
+        encode_ack_response,
+        encode_request,
+    )
+    from ads_context_runtime.frames import RecallRuntime
+    from ads_engine.context import EngineContext
+    from ads_engine.listener import EngineListener
+    from ads_engine.service import EngineService
+    from context_fakes import Meter, Model, memory, model_settings
+    from engine_fakes import FakeTokenExchange, RecordingPublisher
+
+    h = sdk_harness
+    archived = memory([])
+
+    class Clients(Meter):
+        failed = False
+        compactions = 0
+
+        async def meter(self, body):
+            if self.failed:
+                raise RuntimeError("private meter failure")
+            return await super().meter(body)
+
+        async def compact(self, body):
+            self.compactions += 1
+            raise AssertionError("unexpected compaction")
+
+    clients = Clients()
+    responses = {
+        "empty": [AIMessage("")],
+        "truncated": [AIMessage("#", response_metadata={"finish_reason": "length"})],
+        "oversized": ["x" * 3000, "y" * 3000],
+        "unknown": [RuntimeError("secret-provider-payload")],
+        "unauthorized": [],
+        "meter": [RuntimeError("meter unavailable")],
+    }
+
+    class RecallModel(Model):
+        async def invoke(self, *args):
+            if failure == "meter":
+                clients.failed = True
+            return await super().invoke(*args)
+
+    model = RecallModel(*responses[failure])
+
+    class Factory:
+        def open(self, request):
+            return EngineContext(request, clients, RecallRuntime(clients, model, request.model))
+
+    memory_id = str(uuid.uuid4() if failure == "unauthorized" else archived.memory_id)
+    recall_calls = [
+        {
+            "id": name,
+            "name": "memory_recall",
+            "index": i,
+            "args": json.dumps({"memory_id": memory_id, "question": "q"}),
+        }
+        for i, name in enumerate(("recall-a", "recall-b"))
+    ]
+    FakeModel.scripts = [
+        [native(), AIMessageChunk("Earlier work retained.")],
+        [AIMessageChunk("", tool_call_chunks=recall_calls)],
+        [
+            native(call_id="forbidden"),
+            AIMessageChunk("Recall failed; here is the available result."),
+        ],
+    ]
+    streamer = ExecutorChatStreamer(h.credentials, h.streamer._sandbox, Factory())
+    publisher = RecordingPublisher()
+    service = EngineService(store, publisher, streamer, FakeTokenExchange(), h.settings)
+    listener = EngineListener(service, publisher, jwt_verifier, h.settings)
+    request = msgspec.structs.replace(
+        make_request(authorization_token=access_token),
+        model=model_settings(),
+        history=[archived],
+    )
+
+    async def scenario():
+        async with h.sdk.session_manager.run():
+            task = asyncio.create_task(listener.on_message(encode_request(request)))
+            await asyncio.wait_for(publisher.acknowledged.wait(), 2)
+            await listener.on_message(
+                encode_ack_response(AckResponse(request.session_id, request.message_id)),
+                headers=authorization_headers(access_token),
+            )
+            await asyncio.wait_for(task, 3)
+
+    asyncio.run(scenario())
+    assert len(h.executions) == 1 and clients.compactions == 0
+    assert not any(isinstance(p, ErrorOutput) for p in publisher.messages)
+    assert sum(isinstance(p, Finish) for p in publisher.messages) == 1
+    parts = [p for p in publisher.messages if isinstance(p, PartialResponse)]
+    results = [
+        p.tool_result for p in parts if p.tool_result and p.tool_result.name == "memory_recall"
+    ]
+    assert [(r.tool_call_id, r.status) for r in results] == [
+        ("recall-a", "error"),
+        ("recall-b", "error"),
+    ]
+    assert results[-1].content == "recall_failed"
+    assert len(model.calls) == (
+        0 if failure == "unauthorized" else 2 if failure == "oversized" else 1
+    )
+    assert not any(p.tool_call and p.tool_call.id == "forbidden" for p in parts)
+    assert "Earlier work retained." in str(FakeModel.calls[-1])
+    assert "No further tools" in FakeModel.calls[-1][0].content
+    assert len(FakeModel.bindings) == 2  # No bind_tools call on finalization.
+    assert "secret-provider-payload" not in str(parts)
+    if failure == "meter":
+        assert "remaining_context_tokens=unknown" in FakeModel.calls[-1][0].content
+        assert all(p.pressure is None for p in parts if p.tool_result in results)
 
 
 class FakeCredentials:

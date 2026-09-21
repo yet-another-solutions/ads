@@ -10,7 +10,6 @@ from ads_context_runtime.frames import (
     RECALL_PROMPT,
     STARVATION,
     ContextFailure,
-    ContextOverflow,
     Frame,
     RecallRuntime,
 )
@@ -77,12 +76,15 @@ def test_nested_recall_only_unwraps_visible_memory():
     assert "model-secret" not in str(model.calls)
 
 
-def test_child_overflow_is_not_compacted_or_retried():
+def test_child_overflow_closes_call_and_finalizes_parent_without_retry():
     m = memory([U("x" * 5000)])
     model = Model("not called")
     runtime = RecallRuntime(Meter(), model, model_settings(2000), reserve=100)
-    with pytest.raises(ContextOverflow, match="frame_source_overflow"):
-        asyncio.run(runtime.recall([m], m.memory_id, "q"))
+    frame = Frame([m], "", RECALL_PROMPT, 100)
+    call = ToolCall("call", "memory_recall", {"memory_id": str(m.memory_id), "question": "q"})
+    result = asyncio.run(runtime.dispatch(frame, call))
+    assert result.status == "error" and result.content == "frame_source_overflow"
+    assert frame.finalization_only and frame.exchanges == [call, result]
     assert not model.calls
 
 
@@ -96,7 +98,10 @@ def test_oversized_answer_one_retry_never_enters_parent(second, accepted):
     result = asyncio.run(runtime.dispatch(frame, call))
     assert len(model.calls) == 2
     assert "Compact-result retry" in str(model.calls[1][0])
-    assert model.calls[1][2] < model.calls[0][2]
+    assert model.calls[1][2] is model.calls[0][2] is None
+    first_report = asyncio.run(runtime.remaining([m, U("")]))
+    retry_cap = min(runtime.answer_cap, int(first_report["remaining_tokens"]) // 2) // 2
+    assert f"Final visible answer must not exceed {retry_cap} tokens" in str(model.calls[1][0])
     assert "x" * 4000 not in str(frame.exchanges)
     assert result.status == ("success" if accepted else "error")
     assert frame.finalization_only is not accepted

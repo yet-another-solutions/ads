@@ -17,10 +17,14 @@ data:
   ADS_ENGINE_INNER_RECALL_RESERVED_OUTPUT_TOKENS: {{ .Values.engine.recall.inner.reservedOutputTokens | quote }}
   ADS_ENGINE_INNER_RECALL_STARVATION_PERCENTAGE: {{ .Values.engine.recall.inner.starvationPercentage | quote }}
   ADS_ENGINE_INNER_RECALL_ANSWER_CAP_TOKENS: {{ .Values.engine.recall.inner.answerCapTokens | quote }}
+  {{- if .Values.engine.recall.inner.completionCapTokens }}
   ADS_ENGINE_INNER_RECALL_COMPLETION_CAP_TOKENS: {{ .Values.engine.recall.inner.completionCapTokens | quote }}
+  {{- end }}
   ADS_ENGINE_TOP_LEVEL_RECALL_RESERVED_OUTPUT_TOKENS: {{ .Values.engine.recall.topLevel.reservedOutputTokens | quote }}
   ADS_ENGINE_TOP_LEVEL_RECALL_ANSWER_CAP_TOKENS: {{ .Values.engine.recall.topLevel.answerCapTokens | quote }}
+  {{- if .Values.engine.recall.topLevel.completionCapTokens }}
   ADS_ENGINE_TOP_LEVEL_RECALL_COMPLETION_CAP_TOKENS: {{ .Values.engine.recall.topLevel.completionCapTokens | quote }}
+  {{- end }}
   ADS_ENGINE_TOP_LEVEL_RECALL_STARVATION_PERCENTAGE: {{ .Values.engine.recall.topLevel.starvationPercentage | quote }}
   ADS_ENGINE_KAFKA_BOOTSTRAP_SERVERS: {{ .Values.engine.kafka.bootstrapServers | quote }}
   ADS_ENGINE_REQUEST_TOPIC: {{ .Values.engine.kafka.requestTopic | quote }}

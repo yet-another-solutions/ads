@@ -19,9 +19,10 @@ See [the compaction contract](../../services/ads-context-compactor/README.md).
 
 ## Context budget settings
 
-All values below are integers. Token limits must be positive; percentages must
+All values below are integers except optional recall completion caps, which also
+accept `null`. Token limits must be positive; percentages must
 be between 1 and 99, with target strictly below trigger. Helm and the service
-settings reject invalid values. Defaults are unchanged.
+settings reject invalid values.
 
 | Helm value | Default | Meaning |
 | --- | --- | --- |
@@ -29,15 +30,15 @@ settings reject invalid values. Defaults are unchanged.
 | `context.targetPercentage` | 50 | Fixed target for the compacted active context. |
 | `engine.recall.topLevel.reservedOutputTokens` | 1024 | Output reserve for an engine-invoked recall worker. |
 | `engine.recall.topLevel.answerCapTokens` | 1024 | Maximum visible answer returned by that worker to the engine. |
-| `engine.recall.topLevel.completionCapTokens` | 1024 | Provider completion allowance for that worker. |
+| `engine.recall.topLevel.completionCapTokens` | null | Independent optional provider completion allowance; null omits the parameter. |
 | `engine.recall.topLevel.starvationPercentage` | 10 | Internal recursive-tool floor inside that worker, not a gate on the engine's top-level call. |
 | `engine.recall.inner.reservedOutputTokens` | 1024 | Output reserve for recursively invoked engine recall workers. |
 | `engine.recall.inner.answerCapTokens` | 1024 | Maximum visible answer from an inner worker. |
-| `engine.recall.inner.completionCapTokens` | 1024 | Provider completion allowance for an inner worker. |
+| `engine.recall.inner.completionCapTokens` | null | Independent optional provider completion allowance for an inner worker. |
 | `engine.recall.inner.starvationPercentage` | 10 | Internal tool floor inside each inner worker. |
 | `contextCompactor.recall.reservedOutputTokens` | 1024 | Output reserve for all compactor recall workers, including their recursion. |
 | `contextCompactor.recall.answerCapTokens` | 1024 | Maximum visible answer from a compactor recall worker. |
-| `contextCompactor.recall.completionCapTokens` | 1024 | Provider completion allowance for a compactor recall worker. |
+| `contextCompactor.recall.completionCapTokens` | null | Independent optional provider completion allowance for a compactor recall worker. |
 | `contextCompactor.recall.starvationPercentage` | 10 | Internal tool floor inside each compactor recall worker. |
 | `contextCompactor.reservedOutputTokens` | 1024 | Output reserve in summary/repair frames only. |
 | `contextCompactor.starvationPercentage` | 10 | Recall-tool floor inside the summary/repair frame. |
@@ -53,9 +54,17 @@ overlays rather than relying on a silent fallback. No database migration is invo
 
 For reasoning models the provider completion allowance can include hidden
 reasoning, so increasing it does not increase the permitted visible summary or
-recall-answer size. The runtime clips it to metered frame headroom including the
+recall-answer size. When explicitly configured, the runtime clips it to metered frame headroom including the
 output reserve. ADS estimates still exclude system prompts, tool schemas and
 provider wrappers; this is not an exact provider-token guarantee.
+
+All three recall provider caps default to `null`: no `max_completion_tokens`
+parameter is sent and no main-loop completion setting is consulted. Existing
+overlays with explicit limits must clear each of the three keys to adopt this
+behavior. Visible-answer caps and reserves remain separate and enforced.
+Each recall, compactor summary, and format-repair invocation receives refreshed
+total/remaining frame capacity and its visible-answer cap in the system prompt.
+Total frame capacity comes from the supplied model context-length setting.
 
 Recursive and compactor-frame recall batches run sequentially. All calls and starvation-result envelopes are
 reserved before execution; accepted answers are charged before the next call.
@@ -65,11 +74,16 @@ safe split boundaries and the 50/40/30/20/10 overflow-backoff sequence remain
 code-enforced v1 rules, not deployment tunables.
 
 Top-level engine recall is never denied because the engine context is near full.
-Every emitted call/result pair is completed, then the engine compacts at its
+On successful recall, every emitted call/result pair is completed, then the engine compacts at its
 existing safe boundary before another model invocation (also on terminal turns).
 It does not compact through unresolved tool calls. The top-level worker has its
 own four settings above; its nested workers use only `engine.recall.inner`.
 Compactor recall workers use only `contextCompactor.recall`, at every depth.
+If a recall fails, its caller receives a safe error tool result and enters
+complete-only mode; already-emitted sibling calls are closed without dispatch.
+The engine then finishes normally using existing evidence, with no further tools
+or compaction, so ADS retains the turn. Recursive callers similarly finalize
+without more tools. Provider-truncated output is never accepted as success.
 Worker source overflow still fails explicitly, and two oversized
 worker answers return `recall_answer_limit_exceeded`, not a parent starvation
 error. An unsplittable current turn can still make compaction fail under the

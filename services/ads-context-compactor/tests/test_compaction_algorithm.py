@@ -153,6 +153,19 @@ def test_first_and_repeated_compaction_preserve_originals_and_current_user_once(
     assert result.remaining_messages == source[2:]
 
 
+def test_summary_and_format_repair_receive_fresh_frame_budget_in_system_prompt():
+    model = Model("invalid envelope", SUMMARY)
+    source = [U("a" * 3000), A("b" * 3000), U("current")]
+    result = compact(source, model)
+    assert result.summarization == "concise" and len(model.calls) == 2
+    prompts = [call[0][0].content for call in model.calls]
+    assert all("total_context_tokens=10000" in prompt for prompt in prompts)
+    assert all("remaining_context_tokens=" in prompt for prompt in prompts)
+    assert all("Final visible answer must not exceed" in prompt for prompt in prompts)
+    assert prompts[0] != prompts[1]
+    assert "FORMAT REPAIR" in prompts[1] and model.calls[1][1] == []
+
+
 def test_fixed_target_resets_after_each_success_no_whole_remainder_pass():
     source = []
     for char in "abcd":

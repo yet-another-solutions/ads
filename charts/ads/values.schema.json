@@ -10,7 +10,7 @@
       "properties": {
         "reservedOutputTokens": {"$ref": "#/definitions/tokens"},
         "answerCapTokens": {"$ref": "#/definitions/tokens"},
-        "completionCapTokens": {"$ref": "#/definitions/tokens"},
+        "completionCapTokens": {"type": ["integer", "null"], "minimum": 1},
         "starvationPercentage": {"$ref": "#/definitions/percentage"}
       }
     }

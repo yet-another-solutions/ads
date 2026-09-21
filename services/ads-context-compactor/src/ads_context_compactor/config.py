@@ -26,7 +26,7 @@ class Settings:
     starvation_percentage: int = 10
     recall_reserve: int = 1024
     recall_answer_cap: int = 1024
-    recall_completion_cap: int = 1024
+    recall_completion_cap: int | None = None
     recall_starvation_percentage: int = 10
     minimum_reduction_percentage: int = 10
 
@@ -38,9 +38,9 @@ class Settings:
                 self.completion_cap,
                 self.recall_reserve,
                 self.recall_answer_cap,
-                self.recall_completion_cap,
             )
             <= 0
+            or (self.recall_completion_cap is not None and self.recall_completion_cap <= 0)
             or not 0 < self.recall_starvation_percentage < 100
             or not 0 < self.starvation_percentage < 100
             or not 0 < self.minimum_reduction_percentage < 100
@@ -76,6 +76,7 @@ def load_settings() -> Settings:
         return value
 
     ca = os.environ.get(prefix + "TLS_CA_BUNDLE")
+    recall_cap = os.environ.get(prefix + "RECALL_COMPLETION_CAP_TOKENS", "").strip()
     settings = Settings(
         keycloak_well_known_url=env("KEYCLOAK_WELL_KNOWN_URL"),
         keycloak_issuer=env("KEYCLOAK_ISSUER"),
@@ -94,7 +95,7 @@ def load_settings() -> Settings:
         starvation_percentage=int(env("STARVATION_PERCENTAGE", "10")),
         recall_reserve=int(env("RECALL_RESERVED_OUTPUT_TOKENS", "1024")),
         recall_answer_cap=int(env("RECALL_ANSWER_CAP_TOKENS", "1024")),
-        recall_completion_cap=int(env("RECALL_COMPLETION_CAP_TOKENS", "1024")),
+        recall_completion_cap=int(recall_cap) if recall_cap else None,
         recall_starvation_percentage=int(env("RECALL_STARVATION_PERCENTAGE", "10")),
         minimum_reduction_percentage=int(env("MINIMUM_REDUCTION_PERCENTAGE", "10")),
     )
