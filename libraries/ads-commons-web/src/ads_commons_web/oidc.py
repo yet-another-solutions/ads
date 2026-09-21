@@ -1,20 +1,37 @@
 from __future__ import annotations
 
 import ssl
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
 from urllib.parse import urlencode
 
 import httpx2
 import stamina
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-from ads.config import Settings
-from ads.identity import Identity
 from ads_commons_beans import JwtVerifier
+from ads_commons_web.identity import Identity
+
+
+class OidcSettings(Protocol):
+    @property
+    def keycloak_well_known_url(self) -> str: ...
+
+    @property
+    def keycloak_client_id(self) -> str: ...
+
+    @property
+    def keycloak_client_secret(self) -> str: ...
+
+    @property
+    def public_base_url(self) -> str: ...
+
+    @property
+    def tls_ca_bundle(self) -> Path | None: ...
 
 
 class OidcClient:
-    def __init__(self, settings: Settings, verifier: JwtVerifier) -> None:
+    def __init__(self, settings: OidcSettings, verifier: JwtVerifier) -> None:
         self._settings = settings
         self._metadata: dict[str, Any] | None = None
         self._verifier = verifier

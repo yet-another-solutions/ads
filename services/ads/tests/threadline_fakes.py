@@ -8,12 +8,6 @@ from litestar.testing import TestClient
 
 from ads.audit_client import ConversationBlockView
 from ads.exceptions import NotFound
-from ads.identity import (
-    ACCESS_TOKEN_SESSION_KEY,
-    identity_from_claims,
-    security_context_from_identity,
-)
-from ads.session_binder import SessionBinder
 from ads_commons.engine import (
     Abort,
     AckResponse,
@@ -32,6 +26,12 @@ from ads_commons.preferences import (
     ModelWrite,
 )
 from ads_commons.security import InvalidAccessToken, SecurityContext
+from ads_commons_web.identity import (
+    ACCESS_TOKEN_SESSION_KEY,
+    identity_from_claims,
+    security_context_from_identity,
+)
+from ads_commons_web.session_binder import SessionBinder
 
 USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 USER_ACCESS_TOKEN = "user-access-token"
@@ -280,8 +280,15 @@ class _NoRefresh:
         raise AssertionError("OIDC refresh should not run")
 
 
-def _unused_session_factory() -> Any:
-    raise AssertionError("refresh token store should not open")
+class _UnusedRefreshTokens:
+    async def load(self, sid: str) -> str | None:
+        raise AssertionError("refresh token store should not open")
+
+    async def save(self, sid: str, user_id: uuid.UUID, refresh_token: str) -> None:
+        raise AssertionError("refresh token store should not open")
+
+    async def delete(self, sid: str) -> None:
+        raise AssertionError("refresh token store should not open")
 
 
 def attach_fake_session_binder(
@@ -291,7 +298,7 @@ def attach_fake_session_binder(
     app.state.session_binder = SessionBinder(
         oidc_verifier,  # type: ignore[arg-type]
         _NoRefresh(),
-        _unused_session_factory,
+        _UnusedRefreshTokens(),
         "ads",
     )
     return oidc_verifier

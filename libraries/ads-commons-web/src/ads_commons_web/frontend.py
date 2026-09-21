@@ -10,8 +10,8 @@ from litestar.exceptions import MethodNotAllowedException
 from litestar.handlers import BaseRouteHandler
 from litestar.response import Redirect
 
-from ads.authenticated import provide_identity, provide_security_context
-from ads.security_holder import SecurityContextHolder
+from ads_commons_web.authenticated import provide_identity, provide_security_context
+from ads_commons_web.security_holder import SecurityContextHolder
 
 RETURN_TO_SESSION_KEY = "return_to"
 _BLOCKED_RETURN_PATHS = frozenset({"/login", "/auth/callback", "/logout"})

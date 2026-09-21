@@ -6,9 +6,9 @@ from typing import cast
 import pytest
 
 from ads.config import Settings
-from ads.identity import Identity
-from ads.oidc import OidcClient
 from ads_commons_beans import JwtVerifier
+from ads_commons_web.identity import Identity
+from ads_commons_web.oidc import OidcClient
 
 
 class _RecordingVerifier:

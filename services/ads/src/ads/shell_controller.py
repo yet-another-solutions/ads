@@ -12,14 +12,14 @@ from litestar.di import NamedDependency
 from litestar.response import Template
 
 from ads.catalog_service import CatalogService
-from ads.frontend import FrontendController
-from ads.identity import Identity
-from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.session_service import SessionService
 from ads.views import ModelOption, ModelView, ProjectView, TranscriptView
 from ads_commons.model_catalog import ModelTypeInfo, unlisted_models_allowed
 from ads_commons.security import AccessDenied, AuthenticationRequired
+from ads_commons_web.frontend import FrontendController
+from ads_commons_web.identity import Identity
+from ads_commons_web.inject import inject
 
 log = structlog.get_logger("ads.shell")
 

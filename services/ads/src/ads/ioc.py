@@ -23,9 +23,9 @@ from ads.kafka import (
     SeekToEndListener,
 )
 from ads.live import LiveHub
-from ads.oidc import OidcClient
 from ads.preferences_client import PreferencesClient
 from ads.project_service import ProjectService
+from ads.refresh_tokens import SqlRefreshTokenStore
 from ads.repository import (
     ProjectRepository,
     SessionEntryRepository,
@@ -34,7 +34,6 @@ from ads.repository import (
     SessionRunRepository,
 )
 from ads.send_service import SendService
-from ads.session_binder import SessionBinder
 from ads.session_service import SessionService
 from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
 from ads.watchdog import Watchdog
@@ -49,6 +48,8 @@ from ads_commons_beans import (
     TokenExchange,
     TokenExchangeSettings,
 )
+from ads_commons_web.oidc import OidcClient, OidcSettings
+from ads_commons_web.session_binder import SessionBinder
 from ads_policy.audit import AuditSink, BufferedAuditSink, RabbitAuditSink
 from ads_policy.build import identity
 from ads_policy.client import PolicyClient, build_policy_client
@@ -146,6 +147,10 @@ class AppProvider(Provider):
         )
         return BufferedAuditSink(sink, decided_by=identity("ads"))
 
+    @provide(scope=Scope.APP)
+    def oidc_settings(self, settings: Settings) -> OidcSettings:
+        return settings
+
     oidc_client = provide(OidcClient, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
@@ -201,7 +206,7 @@ class AppProvider(Provider):
         return SessionBinder(
             verifier,
             oidc,
-            session_factory_for(engine),
+            SqlRefreshTokenStore(session_factory_for(engine)),
             settings.keycloak_client_id,
         )
 

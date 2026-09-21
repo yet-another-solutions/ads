@@ -5,7 +5,9 @@ from litestar import Litestar, get, post
 from litestar.testing import RequestFactory, TestClient
 
 from ads.app import build_session_config
-from ads.authenticated import (
+from ads.config import Settings
+from ads_commons.security import AccessDenied, AuthenticationRequired, require_role
+from ads_commons_web.authenticated import (
     AUTH_EXCEPTION_HANDLERS,
     AuthenticatedController,
     handle_access_denied,
@@ -13,12 +15,10 @@ from ads.authenticated import (
     provide_identity,
     provide_security_context,
 )
-from ads.config import Settings
-from ads.identity import Identity
-from ads.security_context import SecurityContext
-from ads.security_holder import SecurityContextHolder
-from ads.security_middleware import SecurityContextMiddleware
-from ads_commons.security import AccessDenied, AuthenticationRequired, require_role
+from ads_commons_web.identity import Identity
+from ads_commons_web.security_context import SecurityContext
+from ads_commons_web.security_holder import SecurityContextHolder
+from ads_commons_web.security_middleware import SecurityContextMiddleware
 from tests.threadline_fakes import USER_ACCESS_TOKEN, USER_ID, attach_fake_session_binder, login
 
 

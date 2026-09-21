@@ -4,9 +4,9 @@ import pytest
 from litestar.testing import TestClient
 from sqlalchemy.orm import Session
 
-from ads.identity import ACCESS_TOKEN_SESSION_KEY, Identity
 from ads.models import OidcRefreshToken
-from ads.oidc import OidcClient
+from ads_commons_web.identity import ACCESS_TOKEN_SESSION_KEY, Identity
+from ads_commons_web.oidc import OidcClient
 from tests.threadline_fakes import USER_ACCESS_TOKEN, USER_ID
 
 

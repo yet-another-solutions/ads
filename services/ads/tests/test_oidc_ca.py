@@ -12,8 +12,8 @@ import httpx2
 import pytest
 
 from ads.config import Settings
-from ads.oidc import OidcClient
 from ads_commons_beans import JwtVerifier
+from ads_commons_web.oidc import OidcClient
 from tests.certs import issue_tls, openssl_available
 
 pytestmark = pytest.mark.skipif(not openssl_available(), reason="openssl required")

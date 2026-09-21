@@ -7,7 +7,7 @@ from litestar.testing import RequestFactory, TestClient
 
 from ads.app import build_session_config
 from ads.config import Settings
-from ads.frontend import (
+from ads_commons_web.frontend import (
     RETURN_TO_SESSION_KEY,
     FrontendController,
     LoginRequired,
@@ -16,7 +16,7 @@ from ads.frontend import (
     require_frontend_login,
     safe_return_to,
 )
-from ads.security_middleware import SecurityContextMiddleware
+from ads_commons_web.security_middleware import SecurityContextMiddleware
 from tests.threadline_fakes import attach_fake_session_binder, login
 
 

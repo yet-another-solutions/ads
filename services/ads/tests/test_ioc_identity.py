@@ -7,7 +7,6 @@ from sqlalchemy import Engine
 
 from ads.config import Settings
 from ads.ioc import AppProvider
-from ads.oidc import OidcClient
 from ads.tokens import TokenAuthenticator, TokenMinter
 from ads_commons_beans import (
     CommonsBeansProvider,
@@ -16,6 +15,7 @@ from ads_commons_beans import (
     TokenExchange,
     TokenExchangeSettings,
 )
+from ads_commons_web.oidc import OidcClient
 
 
 class _OfflineSecurity(Provider):

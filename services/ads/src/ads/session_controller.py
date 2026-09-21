@@ -12,14 +12,14 @@ from litestar.enums import RequestEncodingType
 from litestar.params import Body
 from litestar.response import Template
 
-from ads.authenticated import AuthenticatedController
 from ads.catalog_service import CatalogService
-from ads.identity import Identity
-from ads.inject import inject
 from ads.project_service import ProjectService
 from ads.send_service import SendService
 from ads.session_service import SessionService
 from ads.shell_controller import initials, model_options
+from ads_commons_web.authenticated import AuthenticatedController
+from ads_commons_web.identity import Identity
+from ads_commons_web.inject import inject
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]
 

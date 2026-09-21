@@ -8,8 +8,8 @@ from typing import Any, TypeVar
 
 import wrapt
 
-from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied
+from ads_commons_web.security_holder import SecurityContextHolder
 from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.client import UNREACHABLE, PolicyClient, unreachable
 from ads_policy.config import DENIED_MESSAGE

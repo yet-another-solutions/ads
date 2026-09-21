@@ -7,8 +7,8 @@ from litestar import delete, get
 
 from ads.audit_client import ConversationBlockView
 from ads.auditing import AuditingService
-from ads.authenticated import AuthenticatedController
-from ads.inject import inject
+from ads_commons_web.authenticated import AuthenticatedController
+from ads_commons_web.inject import inject
 
 
 @inject

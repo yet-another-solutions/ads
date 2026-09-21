@@ -6,11 +6,11 @@ from litestar.params import FromQuery
 from litestar.testing import TestClient
 
 from ads.app import build_session_config
-from ads.authenticated import AuthenticatedController
 from ads.config import Settings
 from ads.governance.enforcement import Enforcer, require_permission
 from ads.governance.middleware import PolicyEnforcementMiddleware
-from ads.security_middleware import SecurityContextMiddleware
+from ads_commons_web.authenticated import AuthenticatedController
+from ads_commons_web.security_middleware import SecurityContextMiddleware
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Capability, IsolationLevel

@@ -5,7 +5,7 @@ from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from ads.security_context import SecurityContext
+from ads_commons_web.security_context import SecurityContext
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.config import PlacementRules, ResourceNaming
 from ads_policy.contract import (

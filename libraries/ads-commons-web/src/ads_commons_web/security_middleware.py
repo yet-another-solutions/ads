@@ -5,9 +5,9 @@ from collections.abc import MutableMapping
 from litestar.enums import ScopeType
 from litestar.types import ASGIApp, Receive, Scope, Send
 
-from ads.security_holder import SecurityContextHolder
-from ads.session_binder import SessionBinder
 from ads_commons.security import SecurityContext
+from ads_commons_web.security_holder import SecurityContextHolder
+from ads_commons_web.session_binder import SessionBinder
 
 _BOUND_SCOPES = frozenset({ScopeType.HTTP, ScopeType.WEBSOCKET})
 

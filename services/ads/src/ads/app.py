@@ -17,13 +17,11 @@ from sqlalchemy import Engine
 
 from ads.audit_client import AuditApi
 from ads.auditor_controller import AuditorController
-from ads.auth import AuthController
 from ads.config import Settings
 from ads.db import Base, create_db_engine
 from ads.engine_output_controller import EngineOutputController
 from ads.engine_output_service import EngineOutputService
 from ads.exceptions import EXCEPTION_HANDLERS
-from ads.frontend import LoginRequired, handle_login_required
 from ads.health import live, ready
 from ads.ioc import AppProvider, SecuritySettingsProvider, session_factory_for
 from ads.kafka import EngineOutputConsumer, EngineRequests
@@ -33,13 +31,16 @@ from ads.logconfig import configure_logging
 from ads.models import Project
 from ads.models_controller import ModelsController, ModelTypesController
 from ads.project_controller import ProjectController
-from ads.security_middleware import SecurityContextMiddleware
 from ads.session_controller import SessionController
 from ads.shell_controller import ShellController
 from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
 from ads_commons.preferences import PreferencesApi
 from ads_commons_beans import CommonsBeansProvider, JwtVerifier
+from ads_commons_web import STATIC_DIRECTORY
+from ads_commons_web.auth import AuthController
+from ads_commons_web.frontend import LoginRequired, handle_login_required
+from ads_commons_web.security_middleware import SecurityContextMiddleware
 from ads_policy.audit import AuditSink, BufferedAuditSink
 
 _ = Project
@@ -199,7 +200,7 @@ def create_app(
             live,
             ready,
             create_static_files_router(
-                path="/static", directories=[root / "static"], name="static"
+                path="/static", directories=[root / "static", STATIC_DIRECTORY], name="static"
             ),
         ],
         plugins=[HTMXPlugin()],

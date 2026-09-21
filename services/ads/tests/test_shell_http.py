@@ -66,7 +66,7 @@ def test_rail_keeps_plus_and_identity_inside_the_rail(client: TestClient) -> Non
     assert '<span class="label">longprojectnamethatmustellipsis</span>' in page.text
     assert '<span class="name">verylongsessionnamethatmustellipsis</span>' in page.text
     assert 'id="open-settings"' in page.text
-    assert "--plate: 52px" in (client.get("/static/ads.css").text)
+    assert "--plate: 52px" in (client.get("/static/commons.css").text)
 
 
 def test_shell_is_visible_without_the_user_role(client: TestClient) -> None:

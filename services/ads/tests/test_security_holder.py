@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from litestar.testing import TestClient
 
-from ads.security_context import SecurityContext
-from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AuthenticationRequired, require_role
 from ads_commons.security import SecurityContextHolder as CommonsHolder
+from ads_commons_web.security_context import SecurityContext
+from ads_commons_web.security_holder import SecurityContextHolder
 from tests.threadline_fakes import USER_ACCESS_TOKEN, USER_ID, login
 
 

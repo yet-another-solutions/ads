@@ -14,6 +14,7 @@ members = [
     "ads-commons",
     "ads-commons-beans",
     "ads-commons-schema",
+    "ads-commons-web",
     "ads-context-compactor",
     "ads-context-meter",
     "ads-context-runtime",
@@ -37,19 +38,18 @@ dependencies = [
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
     { name = "ads-commons-schema" },
+    { name = "ads-commons-web" },
     { name = "ads-policy" },
     { name = "advanced-alchemy" },
     { name = "aio-pika" },
     { name = "aiokafka" },
     { name = "alembic" },
-    { name = "authlib" },
     { name = "dishka" },
     { name = "httpx2" },
     { name = "litestar", extra = ["jinja"] },
     { name = "msgspec" },
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
-    { name = "stamina" },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "wrapt" },
@@ -60,19 +60,18 @@ requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
+    { name = "ads-commons-web", editable = "libraries/ads-commons-web" },
     { name = "ads-policy", editable = "services/ads-policy" },
     { name = "advanced-alchemy", specifier = "==1.8.1" },
     { name = "aio-pika", specifier = "==10.0.1" },
     { name = "aiokafka", specifier = "==0.14.0" },
     { name = "alembic", specifier = "==1.16.5" },
-    { name = "authlib", specifier = "==1.8.0" },
     { name = "dishka", specifier = "==1.10.1" },
     { name = "httpx2", specifier = "==2.12.0" },
     { name = "litestar", extras = ["jinja"], specifier = "==2.24.0" },
     { name = "msgspec", specifier = "==0.21.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.12" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
-    { name = "stamina", specifier = "==26.1.0" },
     { name = "structlog", specifier = "==26.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },
     { name = "wrapt", specifier = "==2.4.1" },
@@ -150,6 +149,33 @@ dependencies = [
 requires-dist = [
     { name = "alembic", specifier = "==1.16.5" },
     { name = "sqlalchemy", specifier = "==2.0.43" },
+]
+
+[[package]]
+name = "ads-commons-web"
+version = "0.0.1"
+source = { editable = "libraries/ads-commons-web" }
+dependencies = [
+    { name = "ads-commons" },
+    { name = "ads-commons-beans" },
+    { name = "authlib" },
+    { name = "dishka" },
+    { name = "httpx2" },
+    { name = "litestar" },
+    { name = "stamina" },
+    { name = "structlog" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "authlib", specifier = "==1.8.0" },
+    { name = "dishka", specifier = "==1.10.1" },
+    { name = "httpx2", specifier = "==2.12.0" },
+    { name = "litestar", specifier = "==2.24.0" },
+    { name = "stamina", specifier = "==26.1.0" },
+    { name = "structlog", specifier = "==26.1.0" },
 ]
 
 [[package]]
@@ -524,6 +550,7 @@ dependencies = [
     { name = "ads-commons" },
     { name = "ads-commons-beans" },
     { name = "ads-commons-schema" },
+    { name = "ads-commons-web" },
     { name = "ads-context-compactor" },
     { name = "ads-context-meter" },
     { name = "ads-context-runtime" },
@@ -566,6 +593,7 @@ requires-dist = [
     { name = "ads-commons", editable = "libraries/ads-commons" },
     { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
     { name = "ads-commons-schema", editable = "libraries/ads-commons-schema" },
+    { name = "ads-commons-web", editable = "libraries/ads-commons-web" },
     { name = "ads-context-compactor", editable = "services/ads-context-compactor" },
     { name = "ads-context-meter", editable = "services/ads-context-meter" },
     { name = "ads-context-runtime", editable = "libraries/ads-context-runtime" },

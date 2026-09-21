@@ -9,10 +9,10 @@ from litestar.handlers import BaseRouteHandler
 from litestar.response import Response
 from litestar.types import ExceptionHandlersMap
 
-from ads.identity import Identity, identity_from_security_context
-from ads.security_context import SecurityContext
-from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
+from ads_commons_web.identity import Identity, identity_from_security_context
+from ads_commons_web.security_context import SecurityContext
+from ads_commons_web.security_holder import SecurityContextHolder
 
 
 def _bound_context() -> SecurityContext:

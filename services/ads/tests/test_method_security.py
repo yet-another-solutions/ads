@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 
 from ads.project_service import ProjectService
 from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
-from ads.security_context import SecurityContext
-from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
+from ads_commons_web.security_context import SecurityContext
+from ads_commons_web.security_holder import SecurityContextHolder
 
 USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 

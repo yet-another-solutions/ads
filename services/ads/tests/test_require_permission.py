@@ -5,8 +5,8 @@ import inspect
 import pytest
 
 from ads.governance.enforcement import Enforcer, EnforcerHolder, require_permission
-from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
+from ads_commons_web.security_holder import SecurityContextHolder
 from ads_policy.audit import BufferedAuditSink, CollectingAuditSink
 from ads_policy.config import DENIED_MESSAGE
 from ads_policy.contract import Capability, Effect, IsolationLevel

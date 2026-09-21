@@ -10,6 +10,7 @@ dependencies = [
     "ads-commons",
     "ads-commons-beans",
     "ads-commons-schema",
+    "ads-commons-web",
     "ads-engine",
     "ads-egress-controlplane",
     "ads-guardrail",
@@ -35,6 +36,7 @@ members = [
     "libraries/ads-commons",
     "libraries/ads-commons-beans",
     "libraries/ads-commons-schema",
+    "libraries/ads-commons-web",
     "services/ads",
     "services/ads-audit",
     "services/ads-engine",
@@ -57,6 +59,7 @@ ads-audit = { workspace = true }
 ads-commons = { workspace = true }
 ads-commons-beans = { workspace = true }
 ads-commons-schema = { workspace = true }
+ads-commons-web = { workspace = true }
 ads-engine = { workspace = true }
 ads-egress-controlplane = { workspace = true }
 ads-guardrail = { workspace = true }
@@ -104,6 +107,7 @@ src = [
     "libraries/ads-commons-beans/tests",
     "libraries/ads-commons-schema/src",
     "libraries/ads-commons-schema/tests",
+    "libraries/ads-commons-web/src",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-audit/src",
@@ -141,11 +145,12 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
-mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-policy/src:services/ads-preferences/src:services/ads-context-meter/src:services/ads-context-compactor/src:libraries/ads-context-runtime/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
+mypy_path = "libraries/ads-commons/src:libraries/ads-commons-beans/src:libraries/ads-commons-schema/src:libraries/ads-commons-web/src:services/ads/src:services/ads-audit/src:services/ads-engine/src:services/ads-egress-controlplane/src:services/ads-guardrail/src:services/ads-injection-scanner/src:services/ads-policy/src:services/ads-preferences/src:services/ads-context-meter/src:services/ads-context-compactor/src:libraries/ads-context-runtime/src:services/ads-sandbox-mcp/src:services/ads-sandbox-ipc/src:services/ads-sandbox-manager/src"
 packages = [
     "ads_commons",
     "ads_commons_beans",
     "ads_commons_schema",
+    "ads_commons_web",
     "ads",
     "ads_audit",
     "ads_engine",
@@ -225,6 +230,7 @@ known_first_party = [
   "ads_commons",
   "ads_commons_beans",
   "ads_commons_schema",
+  "ads_commons_web",
   "ads_context_compactor",
   "ads_context_meter",
   "ads_context_runtime",

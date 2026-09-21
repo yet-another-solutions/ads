@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from ads.identity import (
+from ads_commons.security import SecurityContext
+from ads_commons_web.identity import (
     access_token_from_session,
     identity_from_claims,
     identity_from_security_context,
     security_context_from_identity,
 )
-from ads_commons.security import SecurityContext
 
 
 def test_roles_from_realm_and_client() -> None:

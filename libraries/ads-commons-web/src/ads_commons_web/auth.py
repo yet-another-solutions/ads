@@ -8,11 +8,11 @@ from litestar import Controller, Request, get
 from litestar.exceptions import NotAuthorizedException
 from litestar.response import Redirect
 
-from ads.frontend import pop_return_to
-from ads.inject import inject
-from ads.oidc import OidcClient
-from ads.session_binder import SessionBinder
 from ads_commons.security import InvalidAccessToken
+from ads_commons_web.frontend import pop_return_to
+from ads_commons_web.inject import inject
+from ads_commons_web.oidc import OidcClient
+from ads_commons_web.session_binder import SessionBinder
 
 
 @inject
@@ -53,13 +53,13 @@ class AuthController(Controller):
         if not isinstance(refresh_token, str) or not refresh_token.strip():
             raise NotAuthorizedException(detail="token response missing refresh_token")
         try:
-            self.binder.establish(request.session, access_token, refresh_token)
+            await self.binder.establish(request.session, access_token, refresh_token)
         except InvalidAccessToken as exc:
             raise NotAuthorizedException(detail="invalid access_token") from exc
         return Redirect(pop_return_to(request.session))
 
     @get("/logout")
     async def logout(self, request: Request[Any, Any, Any]) -> Redirect:
-        self.binder.forget(request.session)
+        await self.binder.forget(request.session)
         request.session.clear()
         return Redirect("/login")

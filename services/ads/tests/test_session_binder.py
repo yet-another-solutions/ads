@@ -8,11 +8,12 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from ads.domain import utc_now
-from ads.identity import ACCESS_TOKEN_SESSION_KEY
 from ads.ioc import session_factory_for
 from ads.models import OidcRefreshToken
-from ads.session_binder import ACCESS_TOKEN_REFRESH_SKEW_SECONDS, SessionBinder
+from ads.refresh_tokens import SqlRefreshTokenStore
 from ads_commons.security import InvalidAccessToken
+from ads_commons_web.identity import ACCESS_TOKEN_SESSION_KEY
+from ads_commons_web.session_binder import ACCESS_TOKEN_REFRESH_SKEW_SECONDS, SessionBinder
 from tests.threadline_fakes import (
     USER_ACCESS_TOKEN,
     USER_ID,
@@ -28,7 +29,12 @@ def _binder(
 ) -> tuple[SessionBinder, FakeOidcVerifier, FakeTokenRefresher]:
     oidc = verifier or FakeOidcVerifier()
     tokens = refresher or FakeTokenRefresher()
-    binder = SessionBinder(oidc, tokens, session_factory_for(engine), "ads")  # type: ignore[arg-type]
+    binder = SessionBinder(
+        oidc,  # type: ignore[arg-type]
+        tokens,
+        SqlRefreshTokenStore(session_factory_for(engine)),
+        "ads",
+    )
     return binder, oidc, tokens
 
 
@@ -40,7 +46,7 @@ def _row(engine: Engine, sid: str) -> OidcRefreshToken | None:
 def test_establish_stores_refresh_not_cookie(db_engine: Engine) -> None:
     binder, _, _ = _binder(db_engine)
     session: dict[str, object] = {"identity": {"sub": "stale"}, "refresh_token": "leaked"}
-    binder.establish(session, USER_ACCESS_TOKEN, "refresh-1")
+    asyncio.run(binder.establish(session, USER_ACCESS_TOKEN, "refresh-1"))
     assert session[ACCESS_TOKEN_SESSION_KEY] == USER_ACCESS_TOKEN
     assert "identity" not in session
     assert "refresh_token" not in session
@@ -65,7 +71,7 @@ def test_establish_requires_sid(db_engine: Engine) -> None:
     }
     binder, _, _ = _binder(db_engine, verifier=verifier)
     with pytest.raises(InvalidAccessToken, match="sid"):
-        binder.establish({}, "no-sid", "refresh-1")
+        asyncio.run(binder.establish({}, "no-sid", "refresh-1"))
     assert _row(db_engine, f"sid-{USER_ID}") is None
 
 
@@ -123,7 +129,7 @@ def test_near_expiry_refreshes_and_writes_new_access(db_engine: Engine) -> None:
     }
     binder, _, refresher = _binder(db_engine, verifier=verifier)
     session: dict[str, object] = {}
-    binder.establish(session, near, "refresh-1")
+    asyncio.run(binder.establish(session, near, "refresh-1"))
     context = asyncio.run(binder.bind(session))
     assert context is not None
     assert context.access_token == rotated
@@ -154,7 +160,7 @@ def test_refresh_fail_while_valid_keeps_access(db_engine: Engine) -> None:
     refresher.error = RuntimeError("sso dead")
     binder, _, _ = _binder(db_engine, verifier=verifier, refresher=refresher)
     session: dict[str, object] = {}
-    binder.establish(session, near, "refresh-1")
+    asyncio.run(binder.establish(session, near, "refresh-1"))
     context = asyncio.run(binder.bind(session))
     assert context is not None
     assert context.access_token == near
