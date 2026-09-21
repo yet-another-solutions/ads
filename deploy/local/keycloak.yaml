@@ -6,10 +6,12 @@
 #
 # Dev mode, no persistence: the realm is imported again on every start.
 #
-# The client scopes are listed in full because the engine asks for three by name
-# (ads-engine-ack, ads-engine-context-meter, ads-engine-context-compactor), and a
-# realm import that names any client scope gets no built-in ones: basic, roles and
-# profile are copied as Keycloak creates them, or tokens lose sub and roles.
+# The client scopes are listed in full because the engine asks for its audiences by
+# scope name (ads-engine-ack, -context-meter, -context-compactor, -sandbox-mcp,
+# -guardrail), and a realm import that names any client scope gets no built-in ones:
+# basic, roles and profile are copied as Keycloak creates them, or tokens lose sub and
+# roles. The engine carries no audience mapper of its own: a refresh would bring every
+# one of them back into the credential, and the engine refuses a widened audience.
 #
 #   kubectl apply -n ads -f deploy/local/keycloak.yaml
 apiVersion: cert-manager.io/v1
@@ -111,6 +113,16 @@ data:
          "attributes": {"include.in.token.scope": "true"},
          "protocolMappers": [
            {"name": "audience-ads-context-compactor", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": {"included.client.audience": "ads-context-compactor", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true"}}
+         ]},
+        {"name": "ads-engine-sandbox-mcp", "protocol": "openid-connect",
+         "attributes": {"include.in.token.scope": "true"},
+         "protocolMappers": [
+           {"name": "audience-ads-sandbox-mcp", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": {"included.client.audience": "ads-sandbox-mcp", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true"}}
+         ]},
+        {"name": "ads-engine-guardrail", "protocol": "openid-connect",
+         "attributes": {"include.in.token.scope": "true"},
+         "protocolMappers": [
+           {"name": "audience-ads-guardrail", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper", "config": {"included.client.audience": "ads-guardrail", "access.token.claim": "true", "id.token.claim": "false", "introspection.token.claim": "true"}}
          ]}
       ],
       "defaultDefaultClientScopes": ["basic", "acr", "email", "profile", "roles", "web-origins"],
@@ -164,19 +176,14 @@ data:
           "attributes": {"standard.token.exchange.enabled": "true",
                          "standard.token.exchange.enableRefreshRequestedTokenType": "SAME_SESSION"},
           "defaultClientScopes": ["basic"],
-          "optionalClientScopes": ["ads-engine-ack", "ads-engine-context-meter", "ads-engine-context-compactor"],
+          "optionalClientScopes": ["ads-engine-ack", "ads-engine-context-meter", "ads-engine-context-compactor",
+                                   "ads-engine-sandbox-mcp", "ads-engine-guardrail"],
           "protocolMappers": [
             {
               "name": "scoped-user-role", "protocol": "openid-connect",
               "protocolMapper": "oidc-usermodel-realm-role-mapper",
               "config": {"claim.name": "realm_access.roles", "jsonType.label": "String", "multivalued": "true",
                          "access.token.claim": "true", "id.token.claim": "false"}
-            },
-            {
-              "name": "audience-ads-guardrail", "protocol": "openid-connect",
-              "protocolMapper": "oidc-audience-mapper",
-              "config": {"included.client.audience": "ads-guardrail", "access.token.claim": "true",
-                         "id.token.claim": "false", "introspection.token.claim": "true"}
             }
           ]
         },

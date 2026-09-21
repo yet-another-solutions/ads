@@ -23,6 +23,11 @@ from ads_engine.config import Settings
 
 MCP_AUDIENCE = "ads-sandbox-mcp"
 ENGINE_CLIENT = "ads-engine"
+# The audience comes from a client scope asked for by name, never from a mapper on the
+# client: an exchange narrows the audience to the one requested but a refresh does not,
+# and every audience mapped onto the client would come back on the first refresh.
+SANDBOX_SCOPE = "ads-engine-sandbox-mcp"
+GUARDRAIL_SCOPE = "ads-engine-guardrail"
 
 
 class ExecutionFailed(Exception):
@@ -76,6 +81,7 @@ class McpCredentials:
         # Behind a guardrail the credential is addressed to it: it exchanges the token for
         # the sandbox, which Keycloak allows only to a client within the token's audience.
         self._audience = settings.guardrail.audience if settings.guardrail else MCP_AUDIENCE
+        self._scope = GUARDRAIL_SCOPE if settings.guardrail else SANDBOX_SCOPE
         if not exchange.token_endpoint.startswith("https://"):
             raise ValueError("MCP token endpoint must use HTTPS")
 
@@ -95,6 +101,7 @@ class McpCredentials:
                     "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
                     "requested_token_type": "urn:ietf:params:oauth:token-type:refresh_token",
                     "audience": self._audience,
+                    "scope": self._scope,
                 },
                 subject,
             )

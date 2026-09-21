@@ -177,6 +177,7 @@ def test_initial_ste_then_watcher_refresh_after_inbound_expiry(
                 assert forms[0]["subject_token"] == inbound
                 assert forms[0]["requested_token_type"].endswith(":refresh_token")
                 assert forms[0]["audience"] == "ads-sandbox-mcp"
+                assert forms[0]["scope"] == "ads-engine-sandbox-mcp"
                 for generation in (2, 3):
                     await original_sleep(0)
                     before = run.current()
@@ -351,5 +352,6 @@ def test_behind_a_guardrail_the_credential_is_minted_for_it(
 
     asyncio.run(scenario())
     assert forms[0]["audience"] == "ads-guardrail"
+    assert forms[0]["scope"] == "ads-engine-guardrail"
     with pytest.raises((ValueError, InvalidAccessToken)):
         factory._validate(token_payload(jwt_key), ENGINE_SUBJECT, time.time())

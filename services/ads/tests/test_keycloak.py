@@ -419,6 +419,10 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                         if caller == "ads-engine" and audience == "ads-context-meter"
                         else {"scope": "ads-engine-context-compactor"}
                         if caller == "ads-engine" and audience == "ads-context-compactor"
+                        else {"scope": "ads-engine-sandbox-mcp"}
+                        if caller == "ads-engine" and audience == "ads-sandbox-mcp"
+                        else {"scope": "ads-engine-guardrail"}
+                        if caller == "ads-engine" and audience == "ads-guardrail"
                         else {}
                     ),
                 },
@@ -453,7 +457,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 for c in admin("GET", admin_path + "/clients")
                 if c["clientId"] in secrets
             }
-            assert len(clients) == 8
+            assert len(clients) == 9
             for name, client in clients.items():
                 assert client["directAccessGrantsEnabled"] is False
                 assert client["standardFlowEnabled"] == (name == "ads")
@@ -556,6 +560,7 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                     "client_secret": secrets["ads-engine"],
                     "subject_token": engine,
                     "audience": "ads-sandbox-mcp",
+                    "scope": "ads-engine-sandbox-mcp",
                 }
             )
             for _ in range(3):
@@ -578,6 +583,41 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                         "refresh_token": pair["refresh_token"],
                     }
                 )
+            # Behind a guardrail the credential is addressed to it, and stays addressed to
+            # it alone across refreshes, so that the guardrail may exchange it.
+            guarded = token(
+                {
+                    "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "requested_token_type": "urn:ietf:params:oauth:token-type:refresh_token",
+                    "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                    "client_id": "ads-engine",
+                    "client_secret": secrets["ads-engine"],
+                    "subject_token": engine,
+                    "audience": "ads-guardrail",
+                    "scope": "ads-engine-guardrail",
+                }
+            )
+            for _ in range(3):
+                claims = verifier("ads-guardrail").verified_claims(guarded["access_token"])
+                assert claims["sub"] == user_id and claims["azp"] == "ads-engine"
+                assert claims["aud"] in ("ads-guardrail", ["ads-guardrail"])
+                assert set(claims["realm_access"]["roles"]) == {"user"}
+                assert not claims.get("resource_access")
+                upstream = exchange(
+                    "ads-guardrail", "ads-sandbox-mcp", guarded["access_token"], has_user_role=False
+                )
+                assert (
+                    verifier("ads-sandbox-mcp").verified_claims(upstream)["azp"] == "ads-guardrail"
+                )
+                guarded = token(
+                    {
+                        "grant_type": "refresh_token",
+                        "client_id": "ads-engine",
+                        "client_secret": secrets["ads-engine"],
+                        "refresh_token": guarded["refresh_token"],
+                    }
+                )
+            exchange("ads-guardrail", "ads-sandbox-mcp", engine, allowed=False)
             # Revocation is recomputed on refresh, never copied from the first pair.
             admin("DELETE", admin_path + f"/users/{user_id}/role-mappings/realm", [role])
             revoked = token(

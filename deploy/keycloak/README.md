@@ -22,7 +22,7 @@ slice plan, reconcile an existing realm, deploy ADS, or contain lab secrets.
    realms on one Keycloak instance.
 4. Provision Secret `ads-realm-client-secrets` in the **Keycloak namespace**, with
    keys `ads`, `ads-engine`, `ads-preferences`, `ads-context-meter`, `ads-context-compactor`, `ads-sandbox-mcp`,
-   `ads-sandbox-manager`, and `ads-sandbox-ipc`. Supply independently generated
+   `ads-sandbox-manager`, `ads-sandbox-ipc`, and `ads-guardrail`. Supply independently generated
    confidential-client secrets using your approved secret-management process.
    There is intentionally no Secret manifest with example passwords.
 5. Review the full realm and perform a server-side dry run, then apply the
@@ -52,7 +52,8 @@ replacement can expose the import Job's environment variables.
 | Client | Browser code flow | STE V2 | Access-token audiences |
 | --- | --- | --- | --- |
 | `ads` | Yes | Yes | `ads`, `ads-engine`, `ads-preferences` |
-| `ads-engine` | No | Yes | Default: `ads-sandbox-mcp`; optional `ads-engine-ack`: `ads`; optional `ads-engine-context-meter`: `ads-context-meter`; optional `ads-engine-context-compactor`: `ads-context-compactor` |
+| `ads-engine` | No | Yes | None by default; optional `ads-engine-ack`: `ads`; optional `ads-engine-context-meter`: `ads-context-meter`; optional `ads-engine-context-compactor`: `ads-context-compactor`; optional `ads-engine-sandbox-mcp`: `ads-sandbox-mcp`; optional `ads-engine-guardrail`: `ads-guardrail` |
+| `ads-guardrail` | No | Yes | `ads-sandbox-mcp`; exchanges the engine's credential for the sandbox behind it |
 | `ads-preferences` | No | No | `ads-preferences` |
 | `ads-context-meter` | No | No | None; inbound resource server only |
 | `ads-context-compactor` | No | Yes | `ads-context-meter`; caller-only internal REST |
@@ -60,7 +61,9 @@ replacement can expose the import Job's environment variables.
 | `ads-sandbox-manager` | No | Yes | `ads-sandbox-manager`, `ads-sandbox-ipc`, `ads-sandbox-mcp` |
 | `ads-sandbox-ipc` | No | Yes | `ads-sandbox-manager` |
 
-All eight clients are confidential; only `ads-context-meter` has no service account.
+All nine clients are confidential; only `ads-context-meter` has no service account.
+`ads-guardrail`, like the compactor, has no role scope mapping: the sandbox checks
+none, and what the sandbox mints onward takes its roles from its own client.
 The meter has no role scope mappings and requires `azp=ads-engine` or
 `azp=ads-context-compactor` after
 normal JWT validation for `aud=ads-context-meter`. It does not need its client
@@ -107,16 +110,32 @@ default 120-second MCP timeout. Refresh recomputes claims from client scopes and
 mappers, so `audience` on the initial STE alone is not a durable restriction.
 See [Keycloak token exchange](https://www.keycloak.org/securing-apps/token-exchange).
 
-The engine has only `basic` and metadata-only `service_account` as default scopes, a direct MCP audience mapper, a
+The engine has only `basic` and metadata-only `service_account` as default scopes, a
 direct realm-role mapper, `fullScopeAllowed=false`, and explicit `user` role
-scope mapping. It has no default `roles`, audience-resolve, service-account role,
-offline, or broad client-role mapper. The separate `ads-engine-ack` optional
-scope adds only `ads`; engine ACK STE explicitly requests it, while MCP STE never
-does. The additional `ads-engine-context-meter` optional scope adds only
-`ads-context-meter` and is requested only by fresh access-only meter STE calls.
-The `ads-engine-context-compactor` optional scope similarly adds only
+scope mapping. It has no audience mapper of its own, no default `roles`,
+audience-resolve, service-account role, offline, or broad client-role mapper.
+Every audience it holds comes from an optional scope it asks for by name: an
+exchange narrows the audience to the one requested, but a refresh recomputes it from
+the client's mappers and the exchange's scopes, so an audience mapped onto the client
+would reappear in the MCP pair on its first refresh and the engine would refuse it.
+
+The MCP pair asks for exactly one of two scopes. `ads-engine-sandbox-mcp` adds only
+`ads-sandbox-mcp`, for an engine that reaches the sandbox itself.
+`ads-engine-guardrail` adds only `ads-guardrail`, for an engine behind the guardrail:
+Keycloak lets a client exchange a token only when that client is within the token's
+audience, so the credential is addressed to the guardrail, which exchanges it for
+`ads-sandbox-mcp` as `ads-guardrail`. With the guardrail, set the chart's
+`guardrail.personTokenAudience` to `ads-guardrail`: the engine mints for that value
+and refuses to start on an empty one.
+
+The separate `ads-engine-ack` optional scope adds only `ads`; engine ACK STE
+explicitly requests it, while MCP STE never does. The additional
+`ads-engine-context-meter` optional scope adds only `ads-context-meter` and is
+requested only by fresh access-only meter STE calls. The
+`ads-engine-context-compactor` optional scope similarly adds only
 `ads-context-compactor` for the engine's fresh compactor REST hop.
-Do not attach any of these scopes as default or request them for the MCP refresh pair.
+Attach none of these scopes as default, and never request the ACK or context scopes
+for the MCP refresh pair.
 Because declaring custom scopes suppresses automatic built-in scope creation on
 realm import, the sample also includes explicit Keycloak 26.7.2 definitions for
 `basic`, `roles`, `profile`, `email`, and `service_account`, exported without IDs
@@ -133,7 +152,8 @@ resources from `spec.realm` in the sample:
    match. On that client, `PUT /clients/{id}` the existing representation with
    `fullScopeAllowed=false` and the sample engine attributes merged into
    `attributes`. Preserve its live secret, UUID and other unrelated fields.
-2. `GET /client-scopes`: upsert both `ads-engine-ack` and `ads-engine-context-meter`
+2. `GET /client-scopes`: upsert the `ads-engine-ack`, `ads-engine-context-meter`,
+   `ads-engine-context-compactor`, `ads-engine-sandbox-mcp` and `ads-engine-guardrail`
    optional scopes with exactly each sample
    scope's mapper/config via `POST /client-scopes` or `PUT /client-scopes/{id}`;
    reconcile its `/protocol-mappers/models` explicitly as well. This shared
@@ -142,21 +162,26 @@ resources from `spec.realm` in the sample:
    `basic` and `service_account` with `DELETE .../{scope-id}`. Attach either if missing using
    `PUT .../{scope-id}`. Inspect both scopes for unexpected custom role or
    audience mappers before proceeding; do not silently modify a shared scope.
-4. Reconcile `/clients/{id}/optional-client-scopes` to only `ads-engine-ack`
-   and `ads-engine-context-meter`
-   using the same GET/DELETE/PUT membership endpoints.
-5. Reconcile `/clients/{id}/protocol-mappers/models` to the two engine mappers
-   in the sample: `audience-ads-sandbox-mcp` and `scoped-user-role`. Delete superseded
-   ADS/engine audience mappers, audience-resolve, or other widening mappers.
+4. Reconcile `/clients/{id}/optional-client-scopes` to only the five scopes of
+   step 2 using the same GET/DELETE/PUT membership endpoints.
+5. Reconcile `/clients/{id}/protocol-mappers/models` to the one engine mapper
+   in the sample, `scoped-user-role`. Delete `audience-ads-sandbox-mcp`, which the
+   `ads-engine-sandbox-mcp` scope replaces, and any superseded ADS/engine audience
+   mappers, audience-resolve, or other widening mappers.
    Create/update by mapper name using POST or PUT with the observed mapper ID.
 6. Reconcile `/clients/{id}/scope-mappings/realm` to the real `user` role
    representation (`GET /roles/user`). Remove other realm and client-role scope
    mappings, inspect composites, and verify service accounts have no user role.
    Keep human role assignments unchanged.
 7. Read all resources back and compare against these desired fields. Verify a
-   browser-user token → engine STE → MCP pair, then at least two refreshes:
+   browser-user token → engine STE with `scope=ads-engine-sandbox-mcp` → MCP pair,
+   then at least two refreshes:
    unchanged UUID subject, `azp=ads-engine`, singleton `ads-sandbox-mcp` audience,
-   only `user` realm role, no `resource_access`, and usable expiry. Separately
+   only `user` realm role, no `resource_access`, and usable expiry. With the
+   guardrail, provision `ads-guardrail` from the sample and verify the same with
+   `scope=ads-engine-guardrail` and a singleton `ads-guardrail` audience, and that
+   `ads-guardrail` exchanges each refreshed access token for `ads-sandbox-mcp`
+   with `azp=ads-guardrail`. Separately
    verify ACK STE with `scope=ads-engine-ack` targets `ads` and still supports the
    return ADS→engine exchange. Provision the `ads-context-meter` resource client
    from the sample and separately verify access-only meter STE with

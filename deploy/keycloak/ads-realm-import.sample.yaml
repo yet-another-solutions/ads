@@ -24,6 +24,8 @@ spec:
       secret: {name: ads-realm-client-secrets, key: ads-sandbox-manager}
     ADS_SANDBOX_IPC_CLIENT_SECRET:
       secret: {name: ads-realm-client-secrets, key: ads-sandbox-ipc}
+    ADS_GUARDRAIL_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-guardrail}
   realm:
     realm: ads
     displayName: ADS
@@ -398,6 +400,35 @@ spec:
               included.client.audience: ads-context-compactor
               access.token.claim: "true"
               id.token.claim: "false"
+      # The engine's MCP credential, one scope per way to the sandbox. A scope and not a
+      # mapper on the client: a refresh keeps the scopes of the exchange, but it would
+      # bring back every audience mapped onto the client.
+      - name: ads-engine-sandbox-mcp
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: audience-ads-sandbox-mcp
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-sandbox-mcp
+              access.token.claim: "true"
+              id.token.claim: "false"
+      # With a guardrail in front, addressed to the guardrail, which exchanges it for
+      # the sandbox; Keycloak lets only a client within a token's audience exchange it.
+      - name: ads-engine-guardrail
+        protocol: openid-connect
+        attributes:
+          include.in.token.scope: "true"
+        protocolMappers:
+          - name: audience-ads-guardrail
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-guardrail
+              access.token.claim: "true"
+              id.token.claim: "false"
     # Built-in definitions above are explicit because this import also declares
     # a custom optional scope. No client receives offline_access.
     clients:
@@ -461,7 +492,12 @@ spec:
         # Keycloak automatically attaches service_account for enabled service
         # accounts; its session-note mappers add metadata, not roles/audiences.
         defaultClientScopes: [basic, service_account]
-        optionalClientScopes: [ads-engine-ack, ads-engine-context-meter, ads-engine-context-compactor]
+        optionalClientScopes:
+          - ads-engine-ack
+          - ads-engine-context-meter
+          - ads-engine-context-compactor
+          - ads-engine-sandbox-mcp
+          - ads-engine-guardrail
         attributes:
           standard.token.exchange.enabled: "true"
           standard.token.exchange.enableRefreshRequestedTokenType: SAME_SESSION
@@ -476,6 +512,26 @@ spec:
               multivalued: "true"
               access.token.claim: "true"
               id.token.claim: "false"
+      # Exchanges the engine's credential for the sandbox behind it and mints nothing
+      # else. No role scope: the sandbox asks for none, and the manager's token takes
+      # its roles from the sandbox's own client, not from this one.
+      - clientId: ads-guardrail
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_GUARDRAIL_CLIENT_SECRET}
+        serviceAccountsEnabled: true
+        standardFlowEnabled: false
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        defaultClientScopes: [basic, service_account]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "true"
+          access.token.lifespan: "300"
+        protocolMappers:
           - name: audience-ads-sandbox-mcp
             protocol: openid-connect
             protocolMapper: oidc-audience-mapper

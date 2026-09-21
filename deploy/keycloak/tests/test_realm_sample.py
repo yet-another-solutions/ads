@@ -18,10 +18,20 @@ CLIENTS = {
     "ads-sandbox-mcp",
     "ads-sandbox-manager",
     "ads-sandbox-ipc",
+    "ads-guardrail",
 }
+ENGINE_SCOPES = [
+    "ads-engine-ack",
+    "ads-engine-context-meter",
+    "ads-engine-context-compactor",
+    "ads-engine-sandbox-mcp",
+    "ads-engine-guardrail",
+]
 AUDIENCES = {
     "ads": {"ads", "ads-engine", "ads-preferences"},
-    "ads-engine": {"ads-sandbox-mcp"},
+    # Every engine audience comes from a scope: a refresh would bring back a mapped one.
+    "ads-engine": set(),
+    "ads-guardrail": {"ads-sandbox-mcp"},
     "ads-preferences": {"ads-preferences"},
     "ads-context-meter": set(),
     "ads-context-compactor": {"ads-context-meter"},
@@ -41,7 +51,7 @@ def test_operator_resource_and_secret_placeholders():
     assert spec["keycloakCRName"] == "keycloak"
     placeholders = spec["placeholders"]
     assert set(re.findall(r"\$\{([A-Z_]+)\}", text)) == set(placeholders)
-    assert len(placeholders) == 8
+    assert len(placeholders) == 9
     assert {p["secret"]["key"] for p in placeholders.values()} == CLIENTS
     for placeholder in placeholders.values():
         assert placeholder["secret"]["name"] == "ads-realm-client-secrets"
@@ -59,6 +69,7 @@ def test_flows_scopes_audiences_and_role_assignment():
     assert {m["client"] for m in realm["scopeMappings"]} == CLIENTS - {
         "ads-context-meter",
         "ads-context-compactor",
+        "ads-guardrail",
     }
     assert all(m["roles"] == ["user"] for m in realm["scopeMappings"])
     assert realm["roles"]["realm"][0]["name"] == "user"
@@ -71,11 +82,7 @@ def test_flows_scopes_audiences_and_role_assignment():
         assert client["standardFlowEnabled"] == (name == "ads")
         assert client["directAccessGrantsEnabled"] is False
         assert client["implicitFlowEnabled"] is False
-        assert client["optionalClientScopes"] == (
-            ["ads-engine-ack", "ads-engine-context-meter", "ads-engine-context-compactor"]
-            if name == "ads-engine"
-            else []
-        )
+        assert client["optionalClientScopes"] == (ENGINE_SCOPES if name == "ads-engine" else [])
         assert "offline_access" not in client["defaultClientScopes"]
         assert "basic" in client["defaultClientScopes"]
         if name == "ads-engine":
@@ -85,12 +92,11 @@ def test_flows_scopes_audiences_and_role_assignment():
                 == "SAME_SESSION"
             )
             assert {m["protocolMapper"] for m in client["protocolMappers"]} == {
-                "oidc-audience-mapper",
                 "oidc-usermodel-realm-role-mapper",
             }
         elif name == "ads-context-meter":
             assert client["defaultClientScopes"] == ["basic"]
-        elif name == "ads-context-compactor":
+        elif name in {"ads-context-compactor", "ads-guardrail"}:
             assert client["defaultClientScopes"] == ["basic", "service_account"]
         else:
             assert "roles" in client["defaultClientScopes"]
@@ -117,9 +123,7 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         "profile",
         "email",
         "service_account",
-        "ads-engine-ack",
-        "ads-engine-context-meter",
-        "ads-engine-context-compactor",
+        *ENGINE_SCOPES,
     }
     for client in realm["clients"]:
         assert set(client["defaultClientScopes"] + client["optionalClientScopes"]) <= scopes.keys()
@@ -147,6 +151,21 @@ def test_engine_ack_scope_is_optional_and_only_adds_ads():
         "access.token.claim": "true",
         "id.token.claim": "false",
     }
+
+
+def test_each_way_to_the_sandbox_is_one_optional_scope_with_one_audience():
+    realm = yaml.safe_load(SAMPLE.read_text())["spec"]["realm"]
+    scopes = {s["name"]: s for s in realm["clientScopes"]}
+    for name, audience in [
+        ("ads-engine-sandbox-mcp", "ads-sandbox-mcp"),
+        ("ads-engine-guardrail", "ads-guardrail"),
+    ]:
+        mappers = scopes[name]["protocolMappers"]
+        assert [m["protocolMapper"] for m in mappers] == ["oidc-audience-mapper"]
+        assert mappers[0]["config"]["included.client.audience"] == audience
+        for client in realm["clients"]:
+            assert name not in client["defaultClientScopes"]
+            assert (name in client["optionalClientScopes"]) == (client["clientId"] == "ads-engine")
 
 
 def test_lifecycle_subjects_are_native_and_legacy_attribute_stays_admin_protected():
