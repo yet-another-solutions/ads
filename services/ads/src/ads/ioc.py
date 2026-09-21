@@ -34,6 +34,7 @@ from ads.session_binder import SessionBinder
 from ads.session_service import SessionService
 from ads.tokens import TokenAuthenticator, TokenMinter, ssl_context_for
 from ads.watchdog import Watchdog
+from ads_commons.egress import ProjectEgressApi
 from ads_commons.preferences import PreferencesApi
 from ads_commons.security import (
     jwks_uri_from_well_known,
@@ -92,6 +93,7 @@ class AppProvider(Provider):
         preferences: PreferencesApi | None = None,
         kafka: EngineRequests | None = None,
         hub: LiveHub | None = None,
+        egress_preferences: ProjectEgressApi | None = None,
     ) -> None:
         super().__init__()
         self._settings = settings
@@ -99,6 +101,7 @@ class AppProvider(Provider):
         self._preferences = preferences
         self._kafka = kafka
         self._hub = hub
+        self._egress_preferences = egress_preferences
 
     @provide(scope=Scope.APP)
     def settings(self) -> Settings:
@@ -114,6 +117,12 @@ class AppProvider(Provider):
     def preferences(self, settings: Settings, tokens: TokenMinter) -> PreferencesApi:
         if self._preferences is not None:
             return self._preferences
+        return PreferencesClient(settings, tokens)
+
+    @provide(scope=Scope.APP)
+    def egress_preferences(self, settings: Settings, tokens: TokenMinter) -> ProjectEgressApi:
+        if self._egress_preferences is not None:
+            return self._egress_preferences
         return PreferencesClient(settings, tokens)
 
     @provide(scope=Scope.APP)

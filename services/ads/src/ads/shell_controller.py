@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import msgspec
 import structlog
 from dishka.integrations.litestar import FromDishka
 from litestar import Request, get
@@ -167,6 +168,19 @@ class ShellController(FrontendController):
         return Template(
             template_name="partials/settings.html",
             context={"models": models, "selected": selected, "types": types},
+        )
+
+    @get("/dialogs/project-egress/{project_id:uuid}")
+    async def egress_settings_dialog(self, project_id: uuid.UUID) -> Template:
+        snapshot = await self.projects.get_egress(project_id)
+        return Template(
+            template_name="partials/egress_settings.html",
+            context={
+                "project": await self.projects.get(project_id),
+                "snapshot": snapshot,
+                "settings_json": msgspec.to_builtins(snapshot.settings),
+                "saved": False,
+            },
         )
 
 

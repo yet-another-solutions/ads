@@ -20,6 +20,43 @@ from tests.threadline_fakes import FakePreferences, login
 from tests.threadline_flows import create_project, create_session, send
 
 
+def test_egress_editor_roundtrip_and_rule_order(chat: Chat, preferences: FakePreferences) -> None:
+    page = chat.page
+    page.get_by_role("button", name="Egress settings for").click()
+    dialog = page.locator("#egress-settings")
+    expect(dialog).to_be_visible()
+    expect(dialog).to_contain_text("Revision 1")
+    dialog.get_by_role("button", name="Add rule", exact=True).click()
+    first = dialog.locator("fieldset").nth(0)
+    first.get_by_label("Domain", exact=True).fill("*.example.com")
+    first.get_by_label("Method", exact=True).select_option("GET")
+    first.get_by_label("Upgrades", exact=True).select_option("selected")
+    first.get_by_label("http/2", exact=True).check()
+    first.get_by_role("button", name="Add path", exact=True).click()
+    first.get_by_label("Path pattern", exact=True).fill("/api/*")
+    first.get_by_label("Case insensitive", exact=True).check()
+    dialog.get_by_role("button", name="Add rule", exact=True).click()
+    second = dialog.locator("fieldset").nth(1)
+    second.get_by_label("Domain", exact=True).fill("second.example.com")
+    second.get_by_label("Upgrades", exact=True).select_option("none")
+    second.get_by_role("button", name="Move up", exact=True).click()
+    dialog.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#egress-settings")).to_contain_text("Revision 2")
+    snapshot = next(iter(preferences.egress.values()))
+    assert [rule.domain for rule in snapshot.settings.rules] == [
+        "second.example.com",
+        "*.example.com",
+    ]
+    assert snapshot.settings.rules[0].protocol_settings.upgrades == "none"
+    assert snapshot.settings.rules[1].protocol_settings.upgrades == ("http/2",)
+    assert snapshot.settings.rules[1].protocol_settings.paths[0].case_insensitive is True
+    page.locator("#egress-settings").get_by_role("button", name="Close", exact=True).click()
+    page.get_by_role("button", name="Egress settings for").click()
+    expect(
+        page.locator("#egress-settings fieldset").nth(0).get_by_label("Domain", exact=True)
+    ).to_have_value("second.example.com")
+
+
 def emit(client: TestClient, app: Litestar, output: EngineOutput) -> None:
     with client.portal() as portal:
         portal.call(app.state.engine_output_controller.dispatch, output)

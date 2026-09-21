@@ -34,6 +34,7 @@ from ads.session_controller import SessionController
 from ads.shell_controller import ShellController
 from ads.tokens import TokenAuthenticator, TokenMinter
 from ads.watchdog import Watchdog
+from ads_commons.egress import ProjectEgressApi
 from ads_commons.preferences import PreferencesApi
 from ads_commons_beans import CommonsBeansProvider, JwtVerifier
 
@@ -91,6 +92,7 @@ def create_app(
     *,
     engine: Engine | None = None,
     preferences: PreferencesApi | None = None,
+    egress_preferences: ProjectEgressApi | None = None,
     kafka: EngineRequests | None = None,
     hub: LiveHub | None = None,
     tokens: TokenMinter | None = None,
@@ -113,6 +115,7 @@ def create_app(
             settings=settings,
             engine=db_engine,
             preferences=preferences,
+            egress_preferences=egress_preferences,
             kafka=kafka,
             hub=hub,
         ),

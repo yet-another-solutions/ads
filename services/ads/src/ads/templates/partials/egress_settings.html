@@ -1,0 +1,27 @@
+<dialog id="egress-settings" aria-labelledby="egress-title">
+  <div class="dlg-head"><h2 id="egress-title">{{ project.name }}: egress settings</h2></div>
+  <form id="egress-form" class="fields" method="post"
+        action="/projects/{{ project.id }}/egress-settings"
+        hx-post="/projects/{{ project.id }}/egress-settings"
+        hx-target="#dialog-host" hx-swap="innerHTML">
+    <p class="note">Revision {{ snapshot.revision }}{% if saved %}. Settings saved.{% endif %}
+      Rules are evaluated in order. Whitelist with no rules denies all.</p>
+    <label>Mode
+      <select name="mode">
+        <option value="whitelist">Whitelist</option>
+        <option value="blacklist">Blacklist</option>
+      </select>
+    </label>
+    <div data-egress-rules></div>
+    <button type="button" class="ghost" data-egress-add>Add rule</button>
+    <input type="hidden" name="settings">
+    <script type="application/json" data-egress-initial>{{ settings_json | tojson }}</script>
+    <p class="note">A wildcard domain suffix matches one label. Upgrade targets require their
+      own matching rule; the editor never adds or changes rules automatically.</p>
+    <p data-egress-error role="alert" class="composer-warn"></p>
+  </form>
+  <div class="dlg-foot">
+    <button class="ghost" type="button" data-close-dialog>Close</button>
+    <button class="primary" type="submit" form="egress-form">Save settings</button>
+  </div>
+</dialog>

@@ -12,6 +12,7 @@ from ads.identity import (
     security_context_from_identity,
 )
 from ads.session_binder import SessionBinder
+from ads_commons.egress import ProjectEgressSettings, ProjectEgressSnapshot
 from ads_commons.engine import (
     Abort,
     AckResponse,
@@ -70,6 +71,27 @@ class FakePreferences:
         self.models: dict[uuid.UUID, ModelInfo] = {}
         self.patches: list[tuple[uuid.UUID, ModelPatch]] = []
         self.writes: list[ModelWrite] = []
+        self.egress: dict[uuid.UUID, ProjectEgressSnapshot] = {}
+
+    async def get_egress(self, project_id: uuid.UUID) -> ProjectEgressSnapshot:
+        from ads.exceptions import NotFound
+
+        if project_id not in self.egress:
+            raise NotFound("no such project settings")
+        return self.egress[project_id]
+
+    async def save_egress(
+        self, project_id: uuid.UUID, settings: ProjectEgressSettings
+    ) -> ProjectEgressSnapshot:
+        previous = self.egress.get(project_id)
+        snapshot = ProjectEgressSnapshot(
+            revision=previous.revision + 1 if previous else 1, settings=settings
+        )
+        self.egress[project_id] = snapshot
+        return snapshot
+
+    async def delete_egress(self, project_id: uuid.UUID) -> None:
+        self.egress.pop(project_id, None)
 
     def seed(self, description: str = "Work chat", bearer: str = STORED_BEARER) -> ModelInfo:
         model_id = uuid.uuid4()

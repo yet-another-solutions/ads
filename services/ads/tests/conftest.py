@@ -100,6 +100,7 @@ def app(
         settings,
         engine=db_engine,
         preferences=preferences,
+        egress_preferences=preferences,
         kafka=kafka,
         tokens=tokens,
         jwt_verifier=authenticator,
