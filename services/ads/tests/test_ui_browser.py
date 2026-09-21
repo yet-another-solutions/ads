@@ -20,6 +20,27 @@ from tests.threadline_fakes import FakePreferences, login
 from tests.threadline_flows import create_project, create_session, send
 
 
+def test_egress_editor_preserves_omitted_mode_dependent_case_default(
+    chat: Chat, preferences: FakePreferences
+) -> None:
+    import msgspec
+
+    page = chat.page
+    page.get_by_role("button", name="Egress settings for").click()
+    dialog = page.locator("#egress-settings")
+    dialog.get_by_label("Mode", exact=True).select_option("blacklist")
+    dialog.get_by_role("button", name="Add rule", exact=True).click()
+    rule = dialog.locator("fieldset")
+    rule.get_by_label("Domain", exact=True).fill("*.example.com")
+    rule.get_by_role("button", name="Add path", exact=True).click()
+    expect(rule.get_by_label("Case matching", exact=True)).to_have_value("mode default")
+    dialog.get_by_role("button", name="Save settings", exact=True).click()
+    expect(page.locator("#egress-settings")).to_contain_text("Revision 2")
+    snapshot = next(iter(preferences.egress.values()))
+    assert snapshot.settings.mode == "blacklist"
+    assert snapshot.settings.rules[0].protocol_settings.paths[0].case_insensitive is msgspec.UNSET
+
+
 def test_egress_editor_roundtrip_and_rule_order(chat: Chat, preferences: FakePreferences) -> None:
     page = chat.page
     page.get_by_role("button", name="Egress settings for").click()
@@ -34,7 +55,7 @@ def test_egress_editor_roundtrip_and_rule_order(chat: Chat, preferences: FakePre
     first.get_by_label("http/2", exact=True).check()
     first.get_by_role("button", name="Add path", exact=True).click()
     first.get_by_label("Path pattern", exact=True).fill("/api/*")
-    first.get_by_label("Case insensitive", exact=True).check()
+    first.get_by_label("Case matching", exact=True).select_option("case insensitive")
     dialog.get_by_role("button", name="Add rule", exact=True).click()
     second = dialog.locator("fieldset").nth(1)
     second.get_by_label("Domain", exact=True).fill("second.example.com")
