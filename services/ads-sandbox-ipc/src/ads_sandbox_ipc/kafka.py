@@ -4,10 +4,12 @@ import asyncio
 from collections.abc import Collection
 from typing import Any
 
+import msgspec
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.abc import ConsumerRebalanceListener
 
+from ads_commons.egress import EGRESS_CONFIG_TOPIC, EgressConfigRequest, ServiceOriginTokens
 from ads_commons.sandbox import (
     SandboxAcknowledge,
     SandboxIpcError,
@@ -104,16 +106,28 @@ class KafkaRuntime:
         producer: AIOKafkaProducer,
         controller: KafkaController,
         service: IpcService,
+        tokens: ServiceOriginTokens | None = None,
     ) -> None:
         self.settings = settings
         self.producer = producer
         self.controller = controller
         self.service = service
+        self.tokens = tokens
         self.consumer = self._consumer()
         self.ping_consumer = self._consumer()
         self._tasks: list[asyncio.Task[None]] = []
         self._ping_task: asyncio.Task[None] | None = None
         self._ping_started = False
+        self.config_consumer = (
+            AIOKafkaConsumer(
+                **settings.kafka_options(),
+                group_id=settings.group_id + "-egress",
+                enable_auto_commit=False,
+                auto_offset_reset="latest",
+            )
+            if settings.egress is not None
+            else None
+        )
 
     def _consumer(self) -> AIOKafkaConsumer:
         return AIOKafkaConsumer(
@@ -131,6 +145,25 @@ class KafkaRuntime:
             await self.consumer.start()
             self._tasks.append(asyncio.create_task(self._consume(self.consumer)))
             await seek.complete.wait()
+            if self.config_consumer is not None:
+                async with asyncio.timeout(self.settings.startup_seconds):
+                    config_seek = SeekToEnd(self.config_consumer)
+                    self.config_consumer.subscribe([EGRESS_CONFIG_TOPIC], listener=config_seek)
+                    await self.config_consumer.start()
+                    self._tasks.append(asyncio.create_task(self._consume(self.config_consumer)))
+                    await config_seek.complete.wait()
+                    assert self.tokens is not None and self.settings.egress is not None
+                    token = await asyncio.to_thread(self.tokens.exchange_service, "ads")
+                    await self.producer.send_and_wait(
+                        EGRESS_CONFIG_TOPIC,
+                        key=str(self.settings.egress.project_id).encode(),
+                        value=msgspec.json.encode(
+                            EgressConfigRequest(
+                                self.settings.egress.project_id, self.settings.sandbox_id
+                            )
+                        ),
+                        headers=[("authorization", token.encode())],
+                    )
             self.service.start()
             self._tasks.append(asyncio.create_task(self._gates()))
         except BaseException:
@@ -196,5 +229,7 @@ class KafkaRuntime:
         )
         await self.service.stop()
         await self.ping_consumer.stop()
+        if self.config_consumer is not None:
+            await self.config_consumer.stop()
         await self.consumer.stop()
         await self.producer.stop()

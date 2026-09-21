@@ -77,3 +77,92 @@ class ProjectEgressApi(Protocol):
     ) -> ProjectEgressSnapshot: ...
 
     async def delete_egress(self, project_id: UUID) -> None: ...
+
+
+EGRESS_CONFIG_TOPIC = "ads.sandbox.egress.config"
+
+
+class EgressConfigRequest(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag="config-request"
+):
+    project_id: UUID
+    sandbox_id: UUID
+
+
+class EgressConfigUpdate(
+    msgspec.Struct, frozen=True, forbid_unknown_fields=True, tag="config-update"
+):
+    project_id: UUID
+    snapshot: ProjectEgressSnapshot
+
+
+EgressConfigMessage = EgressConfigRequest | EgressConfigUpdate
+
+
+class EgressApply(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    project_id: UUID
+    snapshot: ProjectEgressSnapshot
+
+
+class EgressApplied(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    instance_id: UUID
+    revision: Revision
+
+
+class EgressPing(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    instance_id: UUID
+    healthy: bool
+
+
+class EgressStale(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    code: Literal["stale_revision"]
+    received_revision: Revision
+    applied_revision: Revision
+
+
+class EgressStaleResponse(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    error: EgressStale
+
+
+class SandboxProjectBinding(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    sandbox_id: UUID
+    session_id: UUID
+    project_id: UUID
+    eligible: bool
+
+
+class ServiceOriginTokens(Protocol):
+    def exchange_service(self, audience: str) -> str: ...
+
+
+def canonical_settings(settings: ProjectEgressSettings) -> ProjectEgressSettings:
+    """Expand semantic defaults for equality; retain rule/path order and never lint intent."""
+    settings = msgspec.json.decode(msgspec.json.encode(settings), type=ProjectEgressSettings)
+    return msgspec.structs.replace(
+        settings,
+        rules=tuple(
+            msgspec.structs.replace(
+                rule,
+                protocol_settings=msgspec.structs.replace(
+                    rule.protocol_settings,
+                    upgrades=(
+                        tuple(sorted(rule.protocol_settings.upgrades))
+                        if isinstance(rule.protocol_settings.upgrades, tuple)
+                        else rule.protocol_settings.upgrades
+                    ),
+                    paths=tuple(
+                        msgspec.structs.replace(
+                            path,
+                            case_insensitive=(
+                                settings.mode == "blacklist"
+                                if path.case_insensitive is msgspec.UNSET
+                                else path.case_insensitive
+                            ),
+                        )
+                        for path in rule.protocol_settings.paths
+                    ),
+                ),
+            )
+            for rule in settings.rules
+        ),
+    )

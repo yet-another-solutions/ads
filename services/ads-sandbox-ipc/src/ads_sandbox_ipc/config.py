@@ -11,6 +11,14 @@ from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
+class EgressPair:
+    project_id: UUID
+    base_url: str
+    relay_urls: tuple[str, str]
+    ads_service_subject: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     sandbox_id: UUID
     pid_directory: Path
@@ -36,6 +44,7 @@ class Settings:
     kafka_sasl_mechanism: str = "PLAIN"
     kafka_sasl_username: str | None = None
     kafka_sasl_password: str | None = field(default=None, repr=False)
+    egress: EgressPair | None = None
 
     def __post_init__(self) -> None:
         for value in (
@@ -127,6 +136,25 @@ def load_settings() -> Settings:
         stdout_bytes=int(os.environ.get(prefix + "STDOUT_BYTES", "65536")),
         stderr_bytes=int(os.environ.get(prefix + "STDERR_BYTES", "65536")),
         input_bytes=int(os.environ.get(prefix + "INPUT_BYTES", "262144")),
+        egress=(
+            EgressPair(
+                project_id=UUID(required("PROJECT_ID")),
+                base_url=required("EGRESS_URL"),
+                relay_urls=(required("LOCAL_RELAY_HEALTH_URL"), required("PEER_RELAY_HEALTH_URL")),
+                ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
+            )
+            if any(
+                os.environ.get(prefix + key)
+                for key in (
+                    "PROJECT_ID",
+                    "EGRESS_URL",
+                    "LOCAL_RELAY_HEALTH_URL",
+                    "PEER_RELAY_HEALTH_URL",
+                    "ADS_SERVICE_SUBJECT",
+                )
+            )
+            else None
+        ),
     )
     load_tls_context(settings)
     return settings

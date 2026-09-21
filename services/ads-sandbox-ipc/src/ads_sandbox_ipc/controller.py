@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
+import msgspec
 import structlog
 
+from ads_commons.egress import EGRESS_CONFIG_TOPIC, EgressConfigMessage, EgressConfigUpdate
 from ads_commons.engine import authorization_token
 from ads_commons.sandbox import (
     SandboxExecInbound,
@@ -40,6 +42,9 @@ class KafkaController:
         raw: bytes,
         headers: Sequence[tuple[str | bytes, bytes | None]] | None = None,
     ) -> None:
+        if topic == EGRESS_CONFIG_TOPIC:
+            await self._configuration(raw, headers)
+            return
         message: SandboxExecInbound | SandboxReadyMessage | SandboxPing
         try:
             if topic == READY_TOPIC:
@@ -85,3 +90,24 @@ class KafkaController:
         except Exception:
             # Do not include exception text: it can contain a JWT, command, or kube credentials.
             log.warning("ipc_message_processing_failed")
+
+    async def _configuration(
+        self, raw: bytes, headers: Sequence[tuple[str | bytes, bytes | None]] | None
+    ) -> None:
+        pair = self.settings.egress
+        if pair is None or self.service.egress is None:
+            return
+        try:
+            message = msgspec.json.decode(raw, type=EgressConfigMessage)
+            if not isinstance(message, EgressConfigUpdate) or message.project_id != pair.project_id:
+                return
+            token = authorization_token(headers)
+            if token is None:
+                return
+            context = await asyncio.to_thread(self.verifier.authenticate, token)
+            ensure_caller(context, "ads")
+            if context.user_id != pair.ads_service_subject:
+                raise AccessDenied("expected ads service subject")
+            await self.service.egress.receive(message.project_id, message.snapshot)
+        except Exception:
+            log.warning("ipc_configuration_rejected")

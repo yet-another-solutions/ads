@@ -4,7 +4,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,6 +12,58 @@ from ads_commons.sandbox import SandboxPing, SandboxShutdown, SandboxShutdownAck
 from ads_sandbox_ipc.controller import PING_REQUEST_TOPIC, READY_TOPIC
 from ads_sandbox_ipc.kafka import KafkaRuntime, SeekToEnd
 from ipc_support import eventually
+
+
+@pytest.mark.anyio
+async def test_config_subscription_seeks_before_fresh_service_request_and_fans_out(
+    ipc, monkeypatch
+):
+    from dataclasses import replace
+    from uuid import UUID, uuid4
+
+    import msgspec
+
+    from ads_commons.egress import EGRESS_CONFIG_TOPIC, EgressConfigRequest
+    from ads_sandbox_ipc.config import EgressPair
+    from ipc_support import SUBJECT
+
+    monkeypatch.setattr("ads_sandbox_ipc.kafka.AIOKafkaConsumer", FakeConsumer)
+    pair = EgressPair(
+        uuid4(),
+        "https://egress.test",
+        ("https://local.test/health", "https://peer.test/health"),
+        UUID(SUBJECT),
+    )
+    settings = replace(ipc.settings, egress=pair)
+    tokens = Mock()
+    tokens.exchange_service.return_value = "fresh-service-ste"
+    sent = []
+    producer = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
+    runtime = KafkaRuntime(settings, producer, ipc.controller, ipc.service, tokens)
+
+    async def send(topic, **kwargs):
+        assert runtime.config_consumer.started
+        assert runtime.config_consumer.seeks == [(Partition(EGRESS_CONFIG_TOPIC), 11)]
+        sent.append((topic, kwargs))
+
+    producer.send_and_wait = send
+    await runtime.start()
+    try:
+        assert len(sent) == 1 and sent[0][0] == EGRESS_CONFIG_TOPIC
+        assert msgspec.json.decode(sent[0][1]["value"], type=EgressConfigRequest) == (
+            EgressConfigRequest(pair.project_id, settings.sandbox_id)
+        )
+        assert sent[0][1]["headers"] == [("authorization", b"fresh-service-ste")]
+        tokens.exchange_service.assert_called_once_with("ads")
+        other = KafkaRuntime(
+            replace(settings, sandbox_id=uuid4()), producer, ipc.controller, ipc.service, tokens
+        )
+        assert (
+            other.config_consumer.options["group_id"]
+            != (runtime.config_consumer.options["group_id"])
+        )
+    finally:
+        await runtime.stop()
 
 
 @dataclass(frozen=True)
