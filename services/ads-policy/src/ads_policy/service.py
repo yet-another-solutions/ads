@@ -11,6 +11,7 @@ from ads_policy.audit import AuditBacklogFull, BufferedAuditSink, record
 from ads_policy.blocks import ConversationBlock, ConversationBlocks, InMemoryConversationBlocks
 from ads_policy.config import DENIED_MESSAGE, PlacementRules
 from ads_policy.contract import (
+    UNCHECKED_SOURCE_RULE,
     AuditEvent,
     Capability,
     DecisionRequest,
@@ -170,7 +171,7 @@ class PolicyService:
         capability, resource = _bound_or_named(call, policy)
         return PolicyDecision(
             effect=Effect.ALLOW,
-            rule_id="source.unchecked",
+            rule_id=UNCHECKED_SOURCE_RULE,
             reason=f"this policy does not check {call.source}",
             policy_hash=run.policy_hash,
             capability=capability,

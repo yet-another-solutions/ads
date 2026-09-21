@@ -12,6 +12,7 @@ from typing import Annotated, Any
 import msgspec
 
 MAX_CONVERSATION_LENGTH = 64
+UNCHECKED_SOURCE_RULE = "source.unchecked"
 
 ConversationId = Annotated[
     str, msgspec.Meta(max_length=MAX_CONVERSATION_LENGTH, pattern=r"^[A-Za-z0-9._:-]*$")

@@ -8,9 +8,7 @@ import pytest
 from ads_audit.consumer import AuditConsumer
 from ads_audit.repository import (
     AuditRepository,
-    Cursor,
     InMemoryAuditRepository,
-    Page,
     fixed_unit_of_work,
 )
 from ads_policy.contract import AuditEvent, Capability, Effect
@@ -41,12 +39,6 @@ class _Delivery:
 class _BrokenRepository:
     async def append(self, event: AuditEvent) -> None:
         raise ConnectionError("journal unreachable")
-
-    async def for_run(self, run_id: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return Page((), None)
-
-    async def for_subject(self, subject: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return Page((), None)
 
 
 def _event(resource: str = "ads-client-secret") -> AuditEvent:

@@ -9,8 +9,11 @@ from ads_audit.repository import deny_budget_statement
 from ads_audit.schema import (
     ADD_CONVERSATION,
     ADD_DECIDED_BY,
+    ADD_SOURCE,
+    ADD_TOOL,
     CREATE_BLOCKS_TABLE,
     CREATE_CONVERSATION_INDEX,
+    CREATE_SOURCE_INDEX,
     CREATE_TABLE,
     create_partition,
     month_bounds,
@@ -88,7 +91,15 @@ def test_the_table_carries_what_the_event_carries() -> None:
         "point",
         "decided_by",
         "conversation",
+        "source",
+        "tool",
     } <= columns
+
+
+def test_an_existing_journal_gets_where_each_call_went() -> None:
+    assert "ADD COLUMN IF NOT EXISTS source" in ADD_SOURCE
+    assert "ADD COLUMN IF NOT EXISTS tool" in ADD_TOOL
+    assert "(source, recorded_at)" in CREATE_SOURCE_INDEX
 
 
 def test_the_journal_says_which_check_produced_the_row() -> None:

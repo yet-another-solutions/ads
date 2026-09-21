@@ -2,17 +2,23 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import Select, case, desc, func, select, tuple_, update
+from sqlalchemy import ColumnElement, Select, and_, case, desc, func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_audit.budget import deny_budget
 from ads_audit.models import audit_decisions, conversation_blocks
-from ads_policy.contract import AuditEvent, Capability, Effect, InterceptionPoint
+from ads_policy.contract import (
+    UNCHECKED_SOURCE_RULE,
+    AuditEvent,
+    Capability,
+    Effect,
+    InterceptionPoint,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +49,59 @@ class Page:
     next_cursor: str | None
 
 
+_MOMENT_BOUNDS = frozenset({"since", "until"})
+
+
+@dataclass(frozen=True, slots=True)
+class JournalFilter:
+    run_id: str = ""
+    subject: str = ""
+    conversation: str = ""
+    effect: Effect | None = None
+    capability: Capability | None = None
+    rule_id: str = ""
+    source: str = ""
+    tool: str = ""
+    since: datetime | None = None
+    until: datetime | None = None
+
+    def equalities(self) -> dict[str, str]:
+        return {
+            field.name: str(getattr(self, field.name))
+            for field in fields(self)
+            if field.name not in _MOMENT_BOUNDS and getattr(self, field.name)
+        }
+
+    def admits(self, event: AuditEvent) -> bool:
+        return (
+            all(
+                str(getattr(event, name) or "") == value
+                for name, value in self.equalities().items()
+            )
+            and (self.since is None or event.recorded_at >= self.since)
+            and (self.until is None or event.recorded_at < self.until)
+        )
+
+    def conditions(self) -> list[ColumnElement[bool]]:
+        conditions = [audit_decisions.c[name] == value for name, value in self.equalities().items()]
+        if self.since is not None:
+            conditions.append(audit_decisions.c.recorded_at >= self.since)
+        if self.until is not None:
+            conditions.append(audit_decisions.c.recorded_at < self.until)
+        return conditions
+
+
+WHOLE_JOURNAL = JournalFilter()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceTraffic:
+    source: str
+    allowed: int
+    denied: int
+    unchecked: int
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationBlockRecord:
     conversation: str
@@ -60,21 +119,19 @@ class ConversationBlockRecord:
 class AuditRepository(Protocol):
     async def append(self, event: AuditEvent) -> None: ...
 
-    async def for_run(self, run_id: str, limit: int, cursor: Cursor | None = None) -> Page: ...
-
-    async def for_subject(self, subject: str, limit: int, cursor: Cursor | None = None) -> Page: ...
-
-    async def for_conversation(
-        self, conversation: str, limit: int, cursor: Cursor | None = None
-    ) -> Page: ...
-
     async def budget_for_run(self, run_id: str, repeat_multiplier: int) -> int: ...
 
     async def budget_for_subject(self, subject: str, repeat_multiplier: int) -> int: ...
 
     async def budget_for_conversation(self, conversation: str, repeat_multiplier: int) -> int: ...
 
-    async def page(self, limit: int, cursor: Cursor | None = None) -> Page: ...
+    async def page(
+        self, limit: int, cursor: Cursor | None = None, where: JournalFilter = WHOLE_JOURNAL
+    ) -> Page: ...
+
+    async def event_at(self, position: Cursor) -> AuditEvent | None: ...
+
+    async def traffic_by_source(self, since: datetime) -> Sequence[SourceTraffic]: ...
 
     async def block_conversation(
         self, conversation: str, budget: int
@@ -151,19 +208,10 @@ class SqlAuditRepository:
             point=event.point.value,
             decided_by=event.decided_by,
             conversation=event.conversation,
+            source=event.source,
+            tool=event.tool,
         )
         await self.session.execute(statement.on_conflict_do_nothing())
-
-    async def for_run(self, run_id: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return await self._page(audit_decisions.c.run_id == run_id, limit, cursor)
-
-    async def for_subject(self, subject: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return await self._page(audit_decisions.c.subject == subject, limit, cursor)
-
-    async def for_conversation(
-        self, conversation: str, limit: int, cursor: Cursor | None = None
-    ) -> Page:
-        return await self._page(audit_decisions.c.conversation == conversation, limit, cursor)
 
     async def budget_for_run(self, run_id: str, repeat_multiplier: int) -> int:
         return await self._budget(audit_decisions.c.run_id == run_id, repeat_multiplier)
@@ -224,18 +272,16 @@ class SqlAuditRepository:
         rows = (await self.session.execute(statement)).mappings().all()
         return [_block(dict(row)) for row in rows]
 
-    async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
-        return await self._page(None, limit, cursor)
-
-    async def _page(self, condition: object | None, limit: int, cursor: Cursor | None) -> Page:
+    async def page(
+        self, limit: int, cursor: Cursor | None = None, where: JournalFilter = WHOLE_JOURNAL
+    ) -> Page:
         keyset = tuple_(audit_decisions.c.recorded_at, audit_decisions.c.event_id)
         statement = (
             select(audit_decisions)
+            .where(*where.conditions())
             .order_by(desc(audit_decisions.c.recorded_at), desc(audit_decisions.c.event_id))
             .limit(limit + 1)
         )
-        if condition is not None:
-            statement = statement.where(condition)  # type: ignore[arg-type]
         if cursor is not None:
             statement = statement.where(keyset < (cursor.recorded_at, cursor.event_id))
         page_and_one_more = (await self.session.execute(statement)).mappings().all()
@@ -244,17 +290,45 @@ class SqlAuditRepository:
         following = Cursor(events[-1].recorded_at, events[-1].event_id) if has_next_page else None
         return Page(tuple(events), following.encode() if following else None)
 
+    async def event_at(self, position: Cursor) -> AuditEvent | None:
+        statement = select(audit_decisions).where(
+            audit_decisions.c.recorded_at == position.recorded_at,
+            audit_decisions.c.event_id == position.event_id,
+        )
+        row = (await self.session.execute(statement)).mappings().first()
+        return None if row is None else _event(dict(row))
+
+    async def traffic_by_source(self, since: datetime) -> Sequence[SourceTraffic]:
+        unchecked = audit_decisions.c.rule_id == UNCHECKED_SOURCE_RULE
+        allowed = audit_decisions.c.effect == Effect.ALLOW.value
+        statement = (
+            select(
+                audit_decisions.c.source,
+                func.count().filter(and_(allowed, ~unchecked)).label("allowed"),
+                func.count().filter(audit_decisions.c.effect == Effect.DENY.value).label("denied"),
+                func.count().filter(unchecked).label("unchecked"),
+            )
+            .where(audit_decisions.c.source != "", audit_decisions.c.recorded_at >= since)
+            .group_by(audit_decisions.c.source)
+            .order_by(audit_decisions.c.source)
+        )
+        rows = (await self.session.execute(statement)).mappings().all()
+        return [
+            SourceTraffic(
+                source=str(row["source"]),
+                allowed=int(row["allowed"]),
+                denied=int(row["denied"]),
+                unchecked=int(row["unchecked"]),
+            )
+            for row in rows
+        ]
+
 
 class InMemoryAuditRepository:
     def __init__(self) -> None:
         self._events: list[AuditEvent] = []
         self._seen: set[tuple[datetime, str]] = set()
         self._blocks: dict[str, ConversationBlockRecord] = {}
-
-    async def for_conversation(
-        self, conversation: str, limit: int, cursor: Cursor | None = None
-    ) -> Page:
-        return self._page(self._of_conversation(conversation), limit, cursor)
 
     async def block_conversation(
         self, conversation: str, budget: int
@@ -289,12 +363,6 @@ class InMemoryAuditRepository:
         self._seen.add(same_row)
         self._events.append(event)
 
-    async def for_run(self, run_id: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return self._page(self._of_run(run_id), limit, cursor)
-
-    async def for_subject(self, subject: str, limit: int, cursor: Cursor | None = None) -> Page:
-        return self._page(self._of_subject(subject), limit, cursor)
-
     async def budget_for_run(self, run_id: str, repeat_multiplier: int) -> int:
         return deny_budget(self._of_run(run_id), repeat_multiplier)
 
@@ -304,8 +372,29 @@ class InMemoryAuditRepository:
     async def budget_for_conversation(self, conversation: str, repeat_multiplier: int) -> int:
         return deny_budget(self._of_conversation(conversation), repeat_multiplier)
 
-    async def page(self, limit: int, cursor: Cursor | None = None) -> Page:
-        return self._page(self._events, limit, cursor)
+    async def page(
+        self, limit: int, cursor: Cursor | None = None, where: JournalFilter = WHOLE_JOURNAL
+    ) -> Page:
+        return self._page([event for event in self._events if where.admits(event)], limit, cursor)
+
+    async def event_at(self, position: Cursor) -> AuditEvent | None:
+        key = (position.recorded_at, position.event_id)
+        return next((e for e in self._events if (e.recorded_at, e.event_id) == key), None)
+
+    async def traffic_by_source(self, since: datetime) -> Sequence[SourceTraffic]:
+        counted: dict[str, SourceTraffic] = {}
+        for event in self._events:
+            if not event.source or event.recorded_at < since:
+                continue
+            seen = counted.get(event.source, SourceTraffic(event.source, 0, 0, 0))
+            if event.rule_id == UNCHECKED_SOURCE_RULE:
+                seen = replace(seen, unchecked=seen.unchecked + 1)
+            elif event.effect is Effect.ALLOW:
+                seen = replace(seen, allowed=seen.allowed + 1)
+            elif event.effect is Effect.DENY:
+                seen = replace(seen, denied=seen.denied + 1)
+            counted[event.source] = seen
+        return [counted[source] for source in sorted(counted)]
 
     def _of_run(self, run_id: str) -> list[AuditEvent]:
         return [event for event in self._events if event.run_id == run_id]
@@ -347,6 +436,8 @@ def _event(row: Mapping[str, Any]) -> AuditEvent:
         point=InterceptionPoint(str(row["point"])),
         decided_by=str(row["decided_by"]),
         conversation=str(row["conversation"]),
+        source=str(row["source"]),
+        tool=str(row["tool"]),
         event_id=str(row["event_id"]),
         recorded_at=row["recorded_at"],
     )

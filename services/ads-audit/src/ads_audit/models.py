@@ -35,6 +35,8 @@ audit_decisions = Table(
     Column("point", String(16), nullable=False, server_default="call"),
     Column("decided_by", String(128), nullable=False, server_default=""),
     Column("conversation", String(64), nullable=False, server_default=""),
+    Column("source", String(128), nullable=False, server_default=""),
+    Column("tool", String(128), nullable=False, server_default=""),
 )
 
 conversation_blocks = Table(

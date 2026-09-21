@@ -12,7 +12,12 @@ where the whole history of what an agent asked for exists.
 Decisions with their arguments: who, when, which capability, which resource, the
 verdict, the rule that produced it, and the hash of the policy version it was made
 under. Paths, commands and migration filenames are included — without them the budget
-cannot tell a stray mistake from a search for a way around.
+cannot tell a stray mistake from a search for a way around. A tool call also names the
+server and the tool it went to (`source`, `tool`), including a call to a server the
+policy does not check, which is journalled as allowed under `source.unchecked`.
+
+Every read of events goes through one filter — run, subject, chat, effect, capability,
+rule, source, tool, and a `[since, until)` window — and is paged the same way.
 
 Prompts, model answers and diffs are not recorded unless explicitly opted in per event.
 

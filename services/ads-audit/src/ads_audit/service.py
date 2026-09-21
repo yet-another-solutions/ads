@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 import msgspec
 
 from ads_audit.budget import DEFAULT_REPEAT_MULTIPLIER
-from ads_audit.repository import AuditRepository, ConversationBlockRecord, Cursor, Page
+from ads_audit.repository import (
+    WHOLE_JOURNAL,
+    AuditRepository,
+    ConversationBlockRecord,
+    Cursor,
+    JournalFilter,
+    Page,
+    SourceTraffic,
+)
 from ads_policy.contract import AuditEvent
 
 MAX_PAGE = 500
@@ -21,17 +31,6 @@ class AuditService:
         await self.repository.append(event)
         return event
 
-    async def for_run(self, run_id: str, limit: int, cursor: str | None = None) -> Page:
-        return await self.repository.for_run(run_id, *self._paging(limit, cursor))
-
-    async def for_subject(self, subject: str, limit: int, cursor: str | None = None) -> Page:
-        return await self.repository.for_subject(subject, *self._paging(limit, cursor))
-
-    async def for_conversation(
-        self, conversation: str, limit: int, cursor: str | None = None
-    ) -> Page:
-        return await self.repository.for_conversation(conversation, *self._paging(limit, cursor))
-
     async def budget_for_conversation(self, conversation: str) -> int:
         return await self.repository.budget_for_conversation(conversation, self.repeat_multiplier)
 
@@ -45,8 +44,16 @@ class AuditService:
         budget = await self.repository.budget_for_conversation(conversation, self.repeat_multiplier)
         return await self.repository.lift_conversation_block(conversation, by, budget)
 
-    async def journal(self, limit: int, cursor: str | None = None) -> Page:
-        return await self.repository.page(*self._paging(limit, cursor))
+    async def journal(
+        self, limit: int, cursor: str | None = None, where: JournalFilter = WHOLE_JOURNAL
+    ) -> Page:
+        return await self.repository.page(*self._paging(limit, cursor), where)
+
+    async def event_at(self, position: str) -> AuditEvent | None:
+        return await self.repository.event_at(Cursor.decode(position))
+
+    async def traffic_by_source(self, since: datetime) -> Sequence[SourceTraffic]:
+        return await self.repository.traffic_by_source(since)
 
     def _paging(self, limit: int, cursor: str | None) -> tuple[int, Cursor | None]:
         return max(1, min(limit, MAX_PAGE)), Cursor.decode(cursor) if cursor else None

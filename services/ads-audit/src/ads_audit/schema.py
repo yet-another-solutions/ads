@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     point       varchar(16) NOT NULL DEFAULT 'call',
     decided_by  varchar(128) NOT NULL DEFAULT '',
     conversation varchar(64) NOT NULL DEFAULT '',
+    source      varchar(128) NOT NULL DEFAULT '',
+    tool        varchar(128) NOT NULL DEFAULT '',
     PRIMARY KEY (recorded_at, id)
 ) PARTITION BY RANGE (recorded_at)
 """
@@ -35,6 +37,9 @@ ADD_DECIDED_BY = (
 ADD_CONVERSATION = (
     f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS conversation varchar(64) NOT NULL DEFAULT ''"
 )
+
+ADD_SOURCE = f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS source varchar(128) NOT NULL DEFAULT ''"
+ADD_TOOL = f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS tool varchar(128) NOT NULL DEFAULT ''"
 
 CREATE_BLOCKS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {BLOCKS_TABLE} (
@@ -61,6 +66,12 @@ CREATE_SUBJECT_INDEX = f"CREATE INDEX IF NOT EXISTS {TABLE}_subject_idx ON {TABL
 CREATE_CONVERSATION_INDEX = (
     f"CREATE INDEX IF NOT EXISTS {TABLE}_conversation_idx ON {TABLE} (conversation)"
 )
+CREATE_EFFECT_INDEX = (
+    f"CREATE INDEX IF NOT EXISTS {TABLE}_effect_idx ON {TABLE} (effect, recorded_at)"
+)
+CREATE_SOURCE_INDEX = (
+    f"CREATE INDEX IF NOT EXISTS {TABLE}_source_idx ON {TABLE} (source, recorded_at)"
+)
 
 
 def month_bounds(moment: datetime) -> tuple[date, date]:
@@ -84,10 +95,14 @@ async def ensure_schema(connection: AsyncConnection, months_ahead: int = 2) -> N
     await connection.execute(text(CREATE_TABLE))
     await connection.execute(text(ADD_DECIDED_BY))
     await connection.execute(text(ADD_CONVERSATION))
+    await connection.execute(text(ADD_SOURCE))
+    await connection.execute(text(ADD_TOOL))
     await connection.execute(text(CREATE_UNIQUE_EVENT_INDEX))
     await connection.execute(text(CREATE_RUN_INDEX))
     await connection.execute(text(CREATE_SUBJECT_INDEX))
     await connection.execute(text(CREATE_CONVERSATION_INDEX))
+    await connection.execute(text(CREATE_EFFECT_INDEX))
+    await connection.execute(text(CREATE_SOURCE_INDEX))
     await connection.execute(text(CREATE_BLOCKS_TABLE))
     await connection.execute(text(ADD_LIFTED_AT))
     await connection.execute(text(ADD_LIFTED_BY))

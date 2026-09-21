@@ -15,7 +15,7 @@ from litestar.exceptions import ClientException, NotAuthorizedException, NotFoun
 from litestar.handlers import BaseRouteHandler
 
 from ads_audit.blocking import ConversationGuard
-from ads_audit.repository import Page
+from ads_audit.repository import JournalFilter, Page
 from ads_audit.service import AuditService
 from ads_policy.contract import AuditEvent
 
@@ -93,7 +93,8 @@ class AuditController(Controller):
         tz: str | None = None,
     ) -> Page:
         zone = requested_zone(tz)
-        return _page_shown_in(zone, await _paged(service.for_run(run_id, limit, cursor)))
+        run = JournalFilter(run_id=run_id)
+        return _page_shown_in(zone, await _paged(service.journal(limit, cursor, run)))
 
     @get("/subjects/{subject:str}")
     @inject
@@ -106,7 +107,8 @@ class AuditController(Controller):
         tz: str | None = None,
     ) -> Page:
         zone = requested_zone(tz)
-        return _page_shown_in(zone, await _paged(service.for_subject(subject, limit, cursor)))
+        of_subject = JournalFilter(subject=subject)
+        return _page_shown_in(zone, await _paged(service.journal(limit, cursor, of_subject)))
 
     @get("/conversations/{conversation:str}")
     @inject
@@ -119,9 +121,8 @@ class AuditController(Controller):
         tz: str | None = None,
     ) -> Page:
         zone = requested_zone(tz)
-        return _page_shown_in(
-            zone, await _paged(service.for_conversation(conversation, limit, cursor))
-        )
+        chat = JournalFilter(conversation=conversation)
+        return _page_shown_in(zone, await _paged(service.journal(limit, cursor, chat)))
 
     @get("/conversations/{conversation:str}/budget")
     @inject
