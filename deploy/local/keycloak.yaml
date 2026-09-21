@@ -180,6 +180,7 @@ data:
           "webOrigins": ["https://audit.ads.local:8445"],
           "attributes": {"standard.token.exchange.enabled": "true",
                          "post.logout.redirect.uris": "https://audit.ads.local:8445/*"},
+          "defaultClientScopes": ["basic", "acr", "email", "profile", "roles", "web-origins"],
           "optionalClientScopes": ["ads-audit-ads"],
           "protocolMappers": [
             {
