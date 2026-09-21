@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from ads_sandbox_manager import __main__ as entrypoint
-from ads_sandbox_manager.config import load_settings, size_bytes
+from ads_sandbox_manager.config import CaSettings, load_settings, size_bytes
 
 
 @pytest.mark.parametrize(
@@ -117,6 +117,7 @@ def configure(monkeypatch, settings):
         "KEYCLOAK_CLIENT_SECRET": "fixture-only-secret",
         "ADS_BASE_URL": "https://ads.test",
         "ADS_SERVICE_SUBJECT": "11111111-1111-4111-8111-111111111111",
+        "CA": '{"image":"fixture/ca:1","signing_secret":"signer","additional_configmap":"extra"}',
         "SESSION_OBJECTS": json.dumps(
             {
                 "guest_image": "registry.test/guest:1",
@@ -139,6 +140,7 @@ def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
     monkeypatch.setenv("ADS_SANDBOX_MANAGER_TLS_CA_BUNDLE", str(manager_tls.tls_cert_path))
     settings = load_settings()
     assert settings.golden_name == "ads-sandbox-golden-v0-0-10"
+    assert settings.ca.signing_secret == "signer"
     assert settings.golden_bytes == 22 * 1024**3
     assert settings.session_size == "20Gi"
     assert settings.database_url not in repr(settings)
@@ -148,6 +150,34 @@ def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
     assert settings.detached_seconds == 7200
     assert settings.cleanup_seconds == settings.pvc_timeout_seconds == 120
     assert settings.lifecycle_batch == 50
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("image", ""),
+        ("signing_secret", ""),
+        ("additional_configmap", "bad/name"),
+        ("source_size", "63Mi"),
+        ("source_size", "2Gi"),
+        ("deadline_seconds", 0),
+        ("deadline_seconds", True),
+        ("deadline_seconds", float("nan")),
+        ("resources", []),
+    ],
+)
+def test_ca_settings_reject_incomplete_or_unsafe_inputs(field, value):
+    values = {"image": "image", "signing_secret": "signer", "additional_configmap": "extra"}
+    values[field] = value
+    with pytest.raises(ValueError):
+        CaSettings(**values)
+
+
+def test_ca_required_in_production_settings(monkeypatch, manager_tls):
+    configure(monkeypatch, manager_tls)
+    monkeypatch.delenv("ADS_SANDBOX_MANAGER_CA")
+    with pytest.raises(RuntimeError, match="CA is required"):
+        load_settings()
 
 
 def test_lifecycle_configuration_is_environment_overridable(monkeypatch, manager_tls):

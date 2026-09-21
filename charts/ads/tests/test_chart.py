@@ -385,7 +385,10 @@ class ChartTests(unittest.TestCase):
                             "HTTPRoute",
                             "BackendTLSPolicy",
                         ]:
-                            expected = sandbox if "sandbox-ipc" in metadata else app
+                            sandbox_scoped = (
+                                "sandbox-ipc" in metadata or "egress-extra-trust" in metadata
+                            )
+                            expected = sandbox if sandbox_scoped else app
                             self.assertEqual(namespace, expected)
                 self.assertCountEqual(namespace_names, [app, sandbox])
                 self.assertIn(f"ads.{app}.svc.cluster.local", result.stdout)
@@ -672,6 +675,8 @@ class ChartTests(unittest.TestCase):
             "sandbox.ipc.timeoutSeconds=55,sandbox.mcp.timeoutSeconds=66",
             "--set",
             "keycloak.serviceSubjects.ads=11111111-1111-4111-8111-111111111111",
+            "--set",
+            "sandbox.ca.signingSecret=dedicated-egress-signer",
         )
 
         def environment(component):
@@ -684,6 +689,9 @@ class ChartTests(unittest.TestCase):
         ):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
+        self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
+        self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")
+        self.assertEqual(settings.ca.source_size, "256Mi")
         self.assertEqual(settings.ads_base_url, "https://custom:8080")
         self.assertEqual(str(settings.ads_service_subject), "11111111-1111-4111-8111-111111111111")
         self.assertEqual(settings.detached_seconds, 999)
@@ -739,6 +747,31 @@ class ChartTests(unittest.TestCase):
             docs["ConfigMap", "custom-engine"]["data"]["ADS_ENGINE_MCP_URL"],
             "https://custom-sandbox-mcp:8443/mcp",
         )
+
+    def test_ca_is_explicit_offline_and_does_not_grant_secret_discovery(self):
+        docs = self.documents("--set", "sandbox.ca.signingSecret=dedicated-signer")
+        settings = json.loads(
+            docs["ConfigMap", "ads-sandbox-manager"]["data"]["ADS_SANDBOX_MANAGER_CA"]
+        )
+        self.assertEqual(settings["signing_secret"], "dedicated-signer")
+        self.assertEqual(settings["source_size"], "256Mi")
+        self.assertEqual(settings["image"], "ghcr.io/yet-another-solutions/ads-sandbox-ca:0.0.1")
+        extra = docs["ConfigMap", settings["additional_configmap"]]
+        self.assertEqual(extra["metadata"]["namespace"], "ads-sandbox")
+        self.assertEqual(extra["data"], {"ca.crt": ""})
+        policy = docs["NetworkPolicy", "ads-sandbox-ca-offline"]["spec"]
+        self.assertEqual(policy["ingress"], [])
+        self.assertEqual(policy["egress"], [])
+        self.assertEqual(policy["policyTypes"], ["Ingress", "Egress"])
+        self.assertFalse(any(kind == "Job" for kind, _ in docs))  # Manager owns the lock.
+        for (kind, _), resource in docs.items():
+            if kind in ("Role", "ClusterRole"):
+                self.assertTrue(all("secrets" not in r["resources"] for r in resource["rules"]))
+        invalid = self.render(
+            "--set-string", "sandbox.ca.additionalTrustPEM=-----BEGIN PRIVATE KEY-----"
+        )
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertIn("public certificates only", invalid.stderr)
 
     def test_byo_tls_and_external_secrets(self):
         flags = [

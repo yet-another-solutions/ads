@@ -217,6 +217,23 @@ sandbox:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-golden
       tag: "" # Chart.appVersion unless explicitly overridden
     resources: {}
+  ca:
+    # Platform-admin-provisioned intermediate Secret in sandbox.namespace.
+    # Empty fails closed in manager startup; ADS never discovers/copies this Secret.
+    signingSecret: ""
+    sourceSize: 256Mi
+    deadlineSeconds: 600
+    additionalTrustPEM: "" # Public certificates only; captured once, not live rotation.
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-sandbox-ca
+      tag: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: "1"
+        memory: 256Mi
   guest:
     # Dedicated, operator-provisioned Kata handler; see README runtime contract.
     runtimeClassName: kata-qemu-ads
