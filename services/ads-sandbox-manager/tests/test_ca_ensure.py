@@ -209,6 +209,18 @@ async def test_attempt_mismatch_blocks_pair(prepared, role):
     assert kube.calls == []
 
 
+async def test_source_with_disposable_owner_is_not_adopted_or_deleted(prepared):
+    ensure, kube = prepared
+    kube.objects[f"{CA_NAME}-private"]["metadata"]["ownerReferences"] = [
+        {"kind": "Job", "uid": kube.objects[CA_NAME]["metadata"]["uid"], "controller": True}
+    ]
+    kube.finish("Failed")
+    kube.release()
+    with pytest.raises(RuntimeError, match="incompatible"):
+        await ensure.poll()
+    assert kube.calls == []
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

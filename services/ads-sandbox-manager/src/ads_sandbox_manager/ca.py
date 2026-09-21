@@ -63,6 +63,7 @@ class CaEnsure:
         spec = pvc.get("spec", {})
         return (
             self._owned(pvc, role)
+            and not pvc["metadata"].get("ownerReferences")
             and spec.get("storageClassName") == "sandbox-block"
             and spec.get("volumeMode") == "Block"
             and spec.get("accessModes") == ["ReadWriteOnce"]
