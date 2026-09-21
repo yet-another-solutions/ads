@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from ads_commons.security import jwks_uri_from_well_known
 from ads_commons_beans import JwtVerifierSettings
 from ads_preferences.config import Settings
+from ads_preferences.egress_repository import ProjectEgressRepository
+from ads_preferences.egress_service import ProjectEgressService
 from ads_preferences.repository import UserModelRepository
 from ads_preferences.service import PreferencesService
 
@@ -64,3 +66,5 @@ class AppProvider(Provider):
 
     repository = provide(UserModelRepository, scope=Scope.REQUEST)
     service = provide(PreferencesService, scope=Scope.REQUEST)
+    egress_repository = provide(ProjectEgressRepository, scope=Scope.REQUEST)
+    egress_service = provide(ProjectEgressService, scope=Scope.REQUEST)

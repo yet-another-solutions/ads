@@ -8,7 +8,7 @@ import uvicorn
 from ads_commons_schema import alembic_ini_for, mapped_tables, prepare_schema
 from ads_preferences.app import create_app
 from ads_preferences.config import Settings, load_settings, load_tls_context
-from ads_preferences.models import UserModel
+from ads_preferences.models import ProjectEgress, UserModel
 
 STARTUP_FAILURE = 3
 
@@ -26,7 +26,7 @@ def run(settings: Settings | None = None) -> None:
     prepare_schema(
         alembic_ini=alembic_ini_for("ads-preferences"),
         database_url=loaded.database_url,
-        tables=mapped_tables(UserModel),
+        tables=mapped_tables(UserModel, ProjectEgress),
     )
     config = uvicorn.Config(
         create_app(loaded),

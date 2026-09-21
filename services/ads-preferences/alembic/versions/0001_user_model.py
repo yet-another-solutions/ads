@@ -23,6 +23,14 @@ _JSON = postgresql.JSONB(astext_type=sa.Text()).with_variant(JSON(), "sqlite")
 
 
 def upgrade() -> None:
+    # Fresh-install schema, deliberately no legacy adoption/backfill migration.
+    op.create_table(
+        "project_egress",
+        sa.Column("project_id", sa.Uuid(), primary_key=True),
+        sa.Column("revision", sa.BigInteger(), nullable=False),
+        sa.Column("settings", _JSON, nullable=False),
+        sa.CheckConstraint("revision >= 1", name="project_egress_revision_positive"),
+    )
     op.create_table(
         "user_model",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -39,5 +47,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("project_egress")
     op.drop_index("user_model_user_id_idx", table_name="user_model")
     op.drop_table("user_model")

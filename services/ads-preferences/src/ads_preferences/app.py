@@ -9,6 +9,7 @@ from ads_commons_beans import CommonsBeansProvider, JwtVerifier
 from ads_preferences.config import Settings
 from ads_preferences.controller import ModelsController
 from ads_preferences.db import Base, create_db_engine
+from ads_preferences.egress_controller import ProjectEgressController
 from ads_preferences.exceptions import EXCEPTION_HANDLERS
 from ads_preferences.health import live, ready
 from ads_preferences.ioc import AppProvider, SecuritySettingsProvider
@@ -50,7 +51,7 @@ def create_app(
     )
     verifier = container.get_sync(JwtVerifier)
     app = Litestar(
-        route_handlers=[ModelsController, live, ready],
+        route_handlers=[ModelsController, ProjectEgressController, live, ready],
         middleware=[jwt_caller_middleware(settings, verifier)],
         exception_handlers=EXCEPTION_HANDLERS,
         on_shutdown=[container.close],
