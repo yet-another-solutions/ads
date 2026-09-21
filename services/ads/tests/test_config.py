@@ -8,63 +8,6 @@ from ads.config import Settings, load_settings, load_tls_context
 from tests.certs import issue_tls, openssl_available
 
 
-def test_session_secret_must_be_at_least_16_bytes(tmp_path: Path) -> None:
-    settings = Settings(
-        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
-        keycloak_issuer="https://keycloak.test/realms/ads",
-        keycloak_client_id="ads",
-        keycloak_client_secret="test-secret",
-        keycloak_audience="ads",
-        keycloak_role="user",
-        session_secret="short",
-        public_base_url="https://testserver",
-        tls_cert_path=tmp_path / "tls.crt",
-        tls_key_path=tmp_path / "tls.key",
-        tls_ca_bundle=None,
-        bind_host="127.0.0.1",
-        port=8080,
-    )
-    with pytest.raises(RuntimeError, match="16 bytes"):
-        settings.session_secret_bytes()
-
-
-def test_cookie_secure_follows_public_https_url(tmp_path: Path) -> None:
-    cert = tmp_path / "tls.crt"
-    key = tmp_path / "tls.key"
-    http_settings = Settings(
-        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
-        keycloak_issuer="https://keycloak.test/realms/ads",
-        keycloak_client_id="ads",
-        keycloak_client_secret="test-secret",
-        keycloak_audience="ads",
-        keycloak_role="user",
-        session_secret="test-session-secret-32b!",
-        public_base_url="http://testserver",
-        tls_cert_path=cert,
-        tls_key_path=key,
-        tls_ca_bundle=None,
-        bind_host="127.0.0.1",
-        port=8080,
-    )
-    https_settings = Settings(
-        keycloak_well_known_url="https://keycloak.test/realms/ads/.well-known/openid-configuration",
-        keycloak_issuer="https://keycloak.test/realms/ads",
-        keycloak_client_id="ads",
-        keycloak_client_secret="test-secret",
-        keycloak_audience="ads",
-        keycloak_role="user",
-        session_secret="test-session-secret-32b!",
-        public_base_url="https://ads.example",
-        tls_cert_path=cert,
-        tls_key_path=key,
-        tls_ca_bundle=None,
-        bind_host="127.0.0.1",
-        port=8080,
-    )
-    assert http_settings.cookie_secure() is False
-    assert https_settings.cookie_secure() is True
-
-
 def test_load_settings_requires_tls_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(
         "ADS_KEYCLOAK_WELL_KNOWN_URL", "https://kc/realms/ads/.well-known/openid-configuration"

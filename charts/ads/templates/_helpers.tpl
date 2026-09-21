@@ -185,6 +185,14 @@ https://{{ .Values.httpRoute.hostname }}
 {{- end -}}
 {{- end }}
 
+{{- define "ads.auditPublicBaseUrl" -}}
+{{- if .Values.audit.httpRoute.publicBaseUrl -}}
+{{ .Values.audit.httpRoute.publicBaseUrl | trimSuffix "/" }}
+{{- else -}}
+https://{{ .Values.audit.httpRoute.hostname }}
+{{- end -}}
+{{- end }}
+
 {{- define "ads.guardrailSecretName" -}}
 {{- if .Values.tls.certManager.enabled -}}
 {{ include "ads.fullname" . }}-guardrail-tls

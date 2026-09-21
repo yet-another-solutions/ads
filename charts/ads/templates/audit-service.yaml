@@ -30,6 +30,7 @@ spec:
     kind: {{ .Values.tls.certManager.issuer.kind }}
     group: {{ .Values.tls.certManager.issuer.group }}
   dnsNames:
+    - {{ .Values.audit.httpRoute.hostname | quote }}
     - {{ printf "%s-audit" (include "ads.fullname" .) | quote }}
     - {{ printf "%s-audit.%s" (include "ads.fullname" .) .Values.namespace | quote }}
     - {{ printf "%s-audit.%s.svc" (include "ads.fullname" .) .Values.namespace | quote }}

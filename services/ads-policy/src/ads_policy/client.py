@@ -18,6 +18,7 @@ from ads_policy.contract import (
     PromptRequest,
     Run,
     RunRequest,
+    SourceChecks,
     ToolCallRequest,
 )
 
@@ -115,6 +116,14 @@ class HttpPolicyClient:
             )
             response.raise_for_status()
         except httpx2.HTTPError as exc:
+            raise PolicyUnavailable(f"policy service: {exc}") from exc
+
+    def sources(self) -> list[SourceChecks]:
+        try:
+            response = self._client.get("/policy/sources")
+            response.raise_for_status()
+            return msgspec.convert(response.json(), type=list[SourceChecks])
+        except (httpx2.HTTPError, ValueError, msgspec.ValidationError) as exc:
             raise PolicyUnavailable(f"policy service: {exc}") from exc
 
     def _run_or_none_if_unknown(self, method: str, path: str) -> Run | None:

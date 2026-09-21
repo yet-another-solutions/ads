@@ -127,6 +127,15 @@ audit:
   # A conversation whose weighted refusals reach this loses its tools for good.
   conversationBudgetLimit: 30
   blockDeliverySeconds: 300
+  # The auditor's own pages, on their own host, behind the same gateway as ads.
+  httpRoute:
+    hostname: ads-audit.interlab
+    # Where browsers reach the auditor's pages, when that is not https://<hostname>.
+    publicBaseUrl: ""
+  # Its own confidential client: an auditor's login never borrows the ads one.
+  keycloak:
+    clientId: ads-audit
+    audience: ads-audit
   # Both are required and neither is installed by this chart.
   rabbitmq:
     service: ads-rabbitmq
@@ -341,6 +350,8 @@ secrets:
   engineKeycloakClientSecret: ""
   policyApiToken: ""
   auditApiToken: ""
+  auditKeycloakClientSecret: ""
+  auditSessionSecret: ""
   guardrailApiToken: ""
   # Required with guardrail.enabled: the guardrail exchanges a caller's token for one
   # the server behind it accepts, so it needs its own confidential client.

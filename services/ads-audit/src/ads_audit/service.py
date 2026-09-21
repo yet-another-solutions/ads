@@ -37,6 +37,9 @@ class AuditService:
     async def conversation_block(self, conversation: str) -> ConversationBlockRecord | None:
         return await self.repository.conversation_block(conversation)
 
+    async def conversation_blocks(self) -> Sequence[ConversationBlockRecord]:
+        return await self.repository.conversation_blocks()
+
     async def lift_conversation_block(
         self, conversation: str, by: str
     ) -> ConversationBlockRecord | None:

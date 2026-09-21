@@ -1,0 +1,28 @@
+<aside class="side" id="rail"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <header class="brand">
+    <svg class="mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M6 24V8l10-5 10 5v16l-10 5-10-5Z" stroke="currentColor" stroke-width="2"/>
+      <path d="m10 20 6-10 6 10M12 17h8" stroke="currentColor" stroke-width="2"/>
+    </svg>
+    <b>ADS</b>
+    <code>audit</code>
+  </header>
+  <nav class="sections scroll" aria-label="Sections">
+    {% for key, label in sections %}
+    <a class="section{% if key == section %} active{% endif %}" href="/{{ key }}"
+       hx-get="/{{ key }}" hx-target="#main-pane" hx-swap="outerHTML" hx-push-url="true">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <footer class="account">
+    <span class="avatar" aria-hidden="true">{{ initials }}</span>
+    <span class="identity">
+      <b>{{ identity.name }}</b>
+      <small>{{ identity.email or '' }}</small>
+    </span>
+    <a class="gear" href="/logout" title="Log out" aria-label="Log out">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+        <path d="M6 3H3v10h3M10 5l3 3-3 3M13 8H6" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+    </a>
+  </footer>
+</aside>

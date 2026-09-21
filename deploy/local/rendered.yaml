@@ -99,6 +99,8 @@ stringData:
   ADS_POLICY_API_TOKEN: "local-policy-token-32-bytes"
   ADS_AMQP_URL: "amqp://guest:guest@ads-rabbitmq:5672/"
   ADS_DATABASE_URL: "postgresql+asyncpg://ads:ads@ads-postgres:5432/ads_audit"
+  ADS_KEYCLOAK_CLIENT_SECRET: "local-audit-client-secret"
+  ADS_SESSION_SECRET: "local-audit-session-secret-32-bytes"
 ---
 # Source: ads/templates/engine-secret.yaml
 apiVersion: v1
@@ -288,6 +290,12 @@ data:
   ADS_POLICY_URL: "https://ads-policy:8081"
   ADS_AUDIT_CONVERSATION_BUDGET_LIMIT: "12"
   ADS_AUDIT_BLOCK_DELIVERY_SECONDS: "30"
+  ADS_KEYCLOAK_WELL_KNOWN_URL: "https://keycloak.ads.local:8444/realms/ads/.well-known/openid-configuration"
+  ADS_KEYCLOAK_ISSUER: "https://keycloak.ads.local:8444/realms/ads"
+  ADS_KEYCLOAK_CLIENT_ID: "ads-audit"
+  ADS_KEYCLOAK_AUDIENCE: "ads-audit"
+  ADS_KEYCLOAK_AUDITOR_ROLE: "auditor"
+  ADS_PUBLIC_BASE_URL: "https://audit.ads.local:8445"
 ---
 # Source: ads/templates/configmap.yaml
 apiVersion: v1
@@ -729,6 +737,7 @@ data:
       resourceClass: protected-branch
       weight: 5
     schemaVersion: ads.governance/v1
+    sources: {}
     version: org-1
 ---
 # Source: ads/templates/preferences-configmap.yaml
@@ -2191,6 +2200,7 @@ spec:
     kind: ClusterIssuer
     group: cert-manager.io
   dnsNames:
+    - "audit.ads.local"
     - "ads-audit"
     - "ads-audit.ads"
     - "ads-audit.ads.svc"

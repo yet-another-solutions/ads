@@ -457,10 +457,10 @@ def test_published_realm_sample_import_and_identity(keycloak_tls: KeycloakTls) -
                 for c in admin("GET", admin_path + "/clients")
                 if c["clientId"] in secrets
             }
-            assert len(clients) == 9
+            assert len(clients) == 10
             for name, client in clients.items():
                 assert client["directAccessGrantsEnabled"] is False
-                assert client["standardFlowEnabled"] == (name == "ads")
+                assert client["standardFlowEnabled"] == (name in {"ads", "ads-audit"})
                 assert client["fullScopeAllowed"] is False
                 imported_scopes = admin(
                     "GET", admin_path + f"/clients/{client['id']}/default-client-scopes"

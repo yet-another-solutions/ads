@@ -41,6 +41,7 @@ from ads_commons_web import STATIC_DIRECTORY
 from ads_commons_web.auth import AuthController
 from ads_commons_web.frontend import LoginRequired, handle_login_required
 from ads_commons_web.security_middleware import SecurityContextMiddleware
+from ads_commons_web.session import cookie_session
 from ads_policy.audit import AuditSink, BufferedAuditSink
 
 _ = Project
@@ -79,13 +80,7 @@ class _TokenAuthenticatorOverrideProvider(Provider):
 
 
 def build_session_config(settings: Settings) -> CookieBackendConfig:
-    return CookieBackendConfig(
-        secret=settings.session_secret_bytes(),
-        httponly=True,
-        secure=settings.cookie_secure(),
-        samesite="lax",
-        exclude=["/health/live", "/health/ready"],
-    )
+    return cookie_session(settings.session_secret, settings.public_base_url)
 
 
 def create_schema(engine: Engine) -> None:

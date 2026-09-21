@@ -1,0 +1,16 @@
+<tr>
+  <td><a href="/journal?conversation={{ block.conversation | urlencode }}">{{ block.conversation }}</a></td>
+  <td class="moment">{{ moment(block.blocked_at) }}</td>
+  <td>{{ block.budget }}</td>
+  {% if block.in_force %}
+  <td><span class="verdict deny">blocked</span></td>
+  <td>
+    <button class="ghost" type="button" hx-delete="/blocks/{{ block.conversation | urlencode }}"
+            hx-target="closest tr" hx-swap="outerHTML"
+            hx-confirm="Lift the block on this chat?">Lift</button>
+  </td>
+  {% else %}
+  <td>lifted {{ moment(block.lifted_at) }} by {{ block.lifted_by }}</td>
+  <td></td>
+  {% endif %}
+</tr>

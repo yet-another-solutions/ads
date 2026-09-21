@@ -1,0 +1,48 @@
+<form class="filters" hx-get="/journal" hx-target="#main-pane" hx-swap="outerHTML" hx-push-url="true">
+  <label>Effect
+    <select name="effect">
+      <option value="">any</option>
+      {% for effect in effects %}
+      <option{% if asked.effect == effect %} selected{% endif %}>{{ effect }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Rule <input name="rule_id" value="{{ asked.rule_id or '' }}" placeholder="source.unchecked"></label>
+  <label>Source <input name="source" value="{{ asked.source or '' }}" placeholder="mcp:jira"></label>
+  <label>Tool <input name="tool" value="{{ asked.tool or '' }}"></label>
+  <label>Capability
+    <select name="capability">
+      <option value="">any</option>
+      {% for capability in capabilities %}
+      <option{% if asked.capability == capability %} selected{% endif %}>{{ capability }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Person <input name="subject" value="{{ asked.subject or '' }}"></label>
+  <label>Run <input name="run_id" value="{{ asked.run_id or '' }}"></label>
+  <label>Chat <input name="conversation" value="{{ asked.conversation or '' }}"></label>
+  <label>From, UTC <input type="datetime-local" name="since" value="{{ asked.since or '' }}"></label>
+  <label>To, UTC <input type="datetime-local" name="until" value="{{ asked.until or '' }}"></label>
+  <span class="filter-actions">
+    <button class="primary" type="submit">Filter</button>
+    <a class="ghost" href="/journal" hx-get="/journal" hx-target="#main-pane" hx-swap="outerHTML"
+       hx-push-url="true">Reset</a>
+  </span>
+</form>
+{% if rows %}
+<div class="table-wrap">
+  <table class="journal">
+    <thead>
+      <tr>
+        <th>When, UTC</th><th>Verdict</th><th>Rule</th><th>Source / tool</th>
+        <th>Capability</th><th>Resource</th><th>Person</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% include "partials/journal_rows.html" %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">Nothing in the journal matches.</p>
+{% endif %}

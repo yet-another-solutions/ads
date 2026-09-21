@@ -26,6 +26,8 @@ spec:
       secret: {name: ads-realm-client-secrets, key: ads-sandbox-ipc}
     ADS_GUARDRAIL_CLIENT_SECRET:
       secret: {name: ads-realm-client-secrets, key: ads-guardrail}
+    ADS_AUDIT_CLIENT_SECRET:
+      secret: {name: ads-realm-client-secrets, key: ads-audit}
   realm:
     realm: ads
     displayName: ADS
@@ -42,6 +44,9 @@ spec:
         - name: user
           description: ADS application access; assign explicitly to authorized users.
           composite: false
+        - name: auditor
+          description: Reads the decision journal and lifts chat blocks; assign explicitly.
+          composite: false
     # Scope mappings allow preservation of an existing user's role. They do NOT
     # grant that role to a user or to a service account.
     scopeMappings:
@@ -51,6 +56,7 @@ spec:
       - {client: ads-sandbox-mcp, roles: [user]}
       - {client: ads-sandbox-manager, roles: [user]}
       - {client: ads-sandbox-ipc, roles: [user]}
+      - {client: ads-audit, roles: [auditor]}
     clientScopes:
       # Keycloak 26.7.2 built-ins exported from a disposable new realm.
       # Explicit clientScopes disables automatic built-in scope creation.
@@ -476,6 +482,36 @@ spec:
               included.client.audience: ads-preferences
               access.token.claim: "true"
               id.token.claim: "false"
+      - clientId: ads-audit
+        protocol: openid-connect
+        enabled: true
+        publicClient: false
+        clientAuthenticatorType: client-secret
+        secret: ${ADS_AUDIT_CLIENT_SECRET}
+        serviceAccountsEnabled: false
+        standardFlowEnabled: true
+        implicitFlowEnabled: false
+        directAccessGrantsEnabled: false
+        fullScopeAllowed: false
+        consentRequired: false
+        rootUrl: https://ads-audit.example.com
+        baseUrl: https://ads-audit.example.com
+        redirectUris: [https://ads-audit.example.com/auth/callback]
+        webOrigins: [https://ads-audit.example.com]
+        defaultClientScopes: [basic, roles, profile, email]
+        optionalClientScopes: []
+        attributes:
+          standard.token.exchange.enabled: "false"
+          access.token.lifespan: "300"
+          post.logout.redirect.uris: https://ads-audit.example.com/
+        protocolMappers:
+          - name: audience-ads-audit
+            protocol: openid-connect
+            protocolMapper: oidc-audience-mapper
+            config:
+              included.client.audience: ads-audit
+              access.token.claim: "true"
+              id.token.claim: "true"
       - clientId: ads-engine
         protocol: openid-connect
         enabled: true

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 
 import structlog
 from aio_pika.abc import AbstractRobustConnection
 from dishka import AsyncContainer, make_async_container
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
-from litestar import Litestar
+from litestar import Litestar, Router
+from litestar.plugins.htmx import HTMXPlugin
+from litestar.plugins.jinja import JinjaTemplateEngine
+from litestar.static_files import create_static_files_router
+from litestar.template.config import TemplateConfig
+from litestar.types import ASGIApp
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ads_audit.api import AuditController
@@ -15,8 +21,9 @@ from ads_audit.blocking import ConversationGuard, PolicyBlocker
 from ads_audit.config import Settings
 from ads_audit.consumer import AuditConsumer
 from ads_audit.health import live, ready
-from ads_audit.ioc import AppProvider
+from ads_audit.ioc import AppProvider, LoginProvider
 from ads_audit.logconfig import configure_logging
+from ads_audit.policy_sources import PolicySources
 from ads_audit.repository import (
     AuditRepository,
     UnitOfWork,
@@ -24,8 +31,17 @@ from ads_audit.repository import (
     sql_unit_of_work,
 )
 from ads_audit.schema import ensure_schema
+from ads_audit.ui import AuditorActions, AuditorPages
+from ads_commons_web import STATIC_DIRECTORY
+from ads_commons_web.auth import AuthController
+from ads_commons_web.authenticated import AUTH_EXCEPTION_HANDLERS
+from ads_commons_web.frontend import LoginRequired, handle_login_required
+from ads_commons_web.security_middleware import SecurityContextMiddleware
+from ads_commons_web.session import cookie_session
 
 logger = structlog.get_logger("ads.audit")
+
+ROOT = Path(__file__).resolve().parent
 
 
 def create_app(
@@ -33,10 +49,13 @@ def create_app(
     repository: AuditRepository | None = None,
     connection: AbstractRobustConnection | None = None,
     policy_blocker: PolicyBlocker | None = None,
+    policy_sources: PolicySources | None = None,
 ) -> Litestar:
     configure_logging()
     container = make_async_container(
-        AppProvider(settings, repository, connection, policy_blocker), LitestarProvider()
+        AppProvider(settings, repository, connection, policy_blocker, policy_sources),
+        LoginProvider(),
+        LitestarProvider(),
     )
 
     keeper: list[asyncio.Task[None]] = []
@@ -63,7 +82,17 @@ def create_app(
         await container.close()
 
     app = Litestar(
-        route_handlers=[AuditController, live, ready],
+        route_handlers=[
+            AuditController,
+            live,
+            ready,
+            _auditor_ui(settings),
+            create_static_files_router(
+                path="/static", directories=[ROOT / "static", STATIC_DIRECTORY], name="static"
+            ),
+        ],
+        plugins=[HTMXPlugin()],
+        template_config=TemplateConfig(engine=JinjaTemplateEngine(directory=ROOT / "templates")),
         state=None,
         on_startup=[_prepare],
         on_shutdown=[_stop],
@@ -71,6 +100,23 @@ def create_app(
     app.state.api_token = settings.api_token
     setup_dishka(container, app)
     return app
+
+
+def _auditor_ui(settings: Settings) -> Router:
+    session = cookie_session(settings.session_secret, settings.public_base_url).middleware
+
+    def with_session(app: ASGIApp) -> ASGIApp:
+        return session(app)
+
+    return Router(
+        path="/",
+        route_handlers=[AuthController, AuditorPages, AuditorActions],
+        middleware=[with_session, SecurityContextMiddleware],
+        exception_handlers={
+            LoginRequired: handle_login_required,
+            **AUTH_EXCEPTION_HANDLERS,
+        },
+    )
 
 
 async def _open_journal(

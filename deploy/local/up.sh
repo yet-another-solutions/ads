@@ -195,7 +195,7 @@ cat <<EOF
 ==> Ready.
 
 1. Once, in /etc/hosts:
-     127.0.0.1 ads.local keycloak.ads.local
+     127.0.0.1 ads.local keycloak.ads.local audit.ads.local
 
 2. In two terminals:
      kubectl -n ${NAMESPACE} port-forward svc/ads 8443:8080
@@ -224,10 +224,12 @@ cat <<EOF
    notice, the model is told, and the decision lands in the journal below.
    A few refusals in one chat and the chat loses its tools (budget 12).
 
-6. The journal:
-     kubectl -n ${NAMESPACE} port-forward svc/ads-audit 8082:8082
+6. The journal, as an auditor:
+     kubectl -n ${NAMESPACE} port-forward svc/ads-audit 8445:8082
+   https://audit.ads.local:8445 — log in as audrey / audrey. Journal, Blocks, Sources.
+   Or as JSON:
      curl -sk -H 'authorization: Bearer local-audit-token-32-bytes' \\
-       https://127.0.0.1:8082/audit/events | python3 -m json.tool
+       https://127.0.0.1:8445/audit/events | python3 -m json.tool
 
 Tear down: ${KIND_EXPERIMENTAL_PROVIDER:+KIND_EXPERIMENTAL_PROVIDER=podman }kind delete cluster --name ${CLUSTER}
 EOF

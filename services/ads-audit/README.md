@@ -92,6 +92,18 @@ the block was. The chat is not blocked again by the budget it was forgiven: what
 spends after the lift is counted against the limit instead. A lifted row is not re-sent
 to the policy service, and the copy there is deleted at once.
 
+## The auditor's pages
+
+The same service serves an auditor's pages on its own host, in the look ads has
+(`ads-commons-web`): the journal with every filter above, one event with all it carries,
+the chat blocks with a lift, and every source with whether the policy checks it and what
+went through it in the last day. Login is Keycloak through the `ads-audit` client; only
+the `auditor` role reads. A lift records the auditor's own subject as `lifted_by`.
+
+The login, the session cookie and the refresh tokens (`oidc_refresh_tokens`, by SSO
+session) apply to the pages alone. `/audit` stays on its bearer token and `/health` stays
+public, so neither depends on Keycloak answering.
+
 ## Configuration
 
 Required:
@@ -100,14 +112,18 @@ Required:
 - `ADS_AMQP_URL`, `ADS_DATABASE_URL` (`postgresql+asyncpg://…`)
 - `ADS_POLICY_URL` (https), `ADS_POLICY_API_TOKEN` — where chat blocks are sent
 - `ADS_TLS_CERT_PATH`, `ADS_TLS_KEY_PATH`
+- `ADS_KEYCLOAK_WELL_KNOWN_URL`, `ADS_KEYCLOAK_ISSUER`, `ADS_KEYCLOAK_CLIENT_SECRET`
+- `ADS_SESSION_SECRET` — at least 16 bytes, seals the auditor's cookie
+- `ADS_PUBLIC_BASE_URL` — where browsers reach the pages; Keycloak redirects back here
 
 Optional: `ADS_TLS_CA_BUNDLE`, `ADS_BIND_HOST` (`0.0.0.0`), `ADS_PORT` (`8080`),
 `ADS_AUDIT_PREFETCH` (`100`), `ADS_AUDIT_PARTITIONS_AHEAD` (`2`),
-`ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` (`30`), `ADS_AUDIT_BLOCK_DELIVERY_SECONDS` (`300`).
+`ADS_AUDIT_CONVERSATION_BUDGET_LIMIT` (`30`), `ADS_AUDIT_BLOCK_DELIVERY_SECONDS` (`300`),
+`ADS_KEYCLOAK_CLIENT_ID` and `ADS_KEYCLOAK_AUDIENCE` (`ads-audit`),
+`ADS_KEYCLOAK_AUDITOR_ROLE` (`auditor`).
 
 ## Not built yet
 
-Who reads the journal, and on what trigger, is not decided — and until it is, the
-deny-rate and capability distribution it can already produce have no audience. A high
-deny rate means either a poor agent, or a policy that is too narrow, or a capability
-missing for the task, and telling those apart needs a process, not a table.
+An auditor can now read the journal, but on what trigger is not decided. A high deny
+rate means either a poor agent, or a policy that is too narrow, or a capability missing
+for the task, and telling those apart needs a process, not a page.

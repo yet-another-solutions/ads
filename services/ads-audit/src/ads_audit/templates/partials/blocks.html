@@ -1,0 +1,16 @@
+{% if blocks %}
+<div class="table-wrap">
+  <table class="journal">
+    <thead>
+      <tr><th>Chat</th><th>Blocked, UTC</th><th>Budget</th><th>State</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for block in blocks %}
+      {% include "partials/block_row.html" %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="empty">No chat has been blocked.</p>
+{% endif %}

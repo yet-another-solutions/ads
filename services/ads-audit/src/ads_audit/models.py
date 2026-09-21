@@ -9,11 +9,13 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    Uuid,
     func,
 )
 
 TABLE = "audit_decisions"
 BLOCKS_TABLE = "conversation_blocks"
+REFRESH_TOKENS_TABLE = "oidc_refresh_tokens"
 
 metadata = MetaData()
 
@@ -37,6 +39,15 @@ audit_decisions = Table(
     Column("conversation", String(64), nullable=False, server_default=""),
     Column("source", String(128), nullable=False, server_default=""),
     Column("tool", String(128), nullable=False, server_default=""),
+)
+
+refresh_tokens = Table(
+    REFRESH_TOKENS_TABLE,
+    metadata,
+    Column("sid", Text, primary_key=True),
+    Column("user_id", Uuid, nullable=False),
+    Column("refresh_token", Text, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
 
 conversation_blocks = Table(

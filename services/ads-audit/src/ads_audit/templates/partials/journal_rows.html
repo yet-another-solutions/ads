@@ -1,0 +1,23 @@
+{% for row in rows %}
+<tr>
+  <td class="moment">
+    <a href="/events?at={{ row.position | urlencode }}" hx-get="/events?at={{ row.position | urlencode }}"
+       hx-target="#main-pane" hx-swap="outerHTML" hx-push-url="true">{{ row.moment }}</a>
+  </td>
+  <td><span class="verdict {{ row.verdict }}">{{ row.verdict }}</span></td>
+  <td>{{ row.rule_id }}</td>
+  <td>{% if row.source %}{{ row.source }}{% if row.tool %} / {{ row.tool }}{% endif %}{% endif %}</td>
+  <td>{{ row.capability }}</td>
+  <td class="resource" title="{{ row.resource }}">{{ row.resource }}</td>
+  <td class="subject" title="{{ row.subject }}">{{ row.subject }}</td>
+</tr>
+{% endfor %}
+{% if next_cursor %}
+<tr id="more">
+  <td colspan="7">
+    <button class="ghost" type="button"
+            hx-get="/journal?{{ query }}{% if query %}&{% endif %}cursor={{ next_cursor | urlencode }}"
+            hx-target="#more" hx-swap="outerHTML">More</button>
+  </td>
+</tr>
+{% endif %}

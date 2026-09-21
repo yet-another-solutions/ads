@@ -29,6 +29,8 @@ secrets:
   sessionSecret: ci-session-secret-32-bytes-long
   policyApiToken: ci-policy-token-32-bytes-long
   auditApiToken: ci-audit-token-32-bytes-long
+  auditKeycloakClientSecret: ci-audit-client-secret
+  auditSessionSecret: ci-audit-session-secret-32-bytes
   guardrailApiToken: ci-guardrail-token-32-bytes
   guardrailKeycloakClientSecret: ci-guardrail-client-secret
   injectionScannerApiToken: ci-scanner-token-32-bytes

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -48,14 +48,6 @@ def _event(
         event_id=f"event-{minute:03d}",
         recorded_at=NOON + timedelta(minutes=minute),
     )
-
-
-@pytest.fixture(scope="module")
-def postgres_url() -> Iterator[str]:
-    from testcontainers.postgres import PostgresContainer
-
-    with PostgresContainer("postgres:16-alpine", driver="asyncpg") as postgres:
-        yield postgres.get_connection_url()
 
 
 @pytest.fixture(params=["memory", "postgres"])

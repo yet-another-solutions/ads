@@ -19,7 +19,9 @@ CLIENTS = {
     "ads-sandbox-manager",
     "ads-sandbox-ipc",
     "ads-guardrail",
+    "ads-audit",
 }
+BROWSER_LOGINS = {"ads", "ads-audit"}
 ENGINE_SCOPES = [
     "ads-engine-ack",
     "ads-engine-context-meter",
@@ -38,6 +40,7 @@ AUDIENCES = {
     "ads-sandbox-mcp": {"ads-sandbox-manager"},
     "ads-sandbox-manager": {"ads-sandbox-manager", "ads-sandbox-ipc", "ads-sandbox-mcp"},
     "ads-sandbox-ipc": {"ads-sandbox-manager"},
+    "ads-audit": {"ads-audit"},
 }
 
 
@@ -51,7 +54,7 @@ def test_operator_resource_and_secret_placeholders():
     assert spec["keycloakCRName"] == "keycloak"
     placeholders = spec["placeholders"]
     assert set(re.findall(r"\$\{([A-Z_]+)\}", text)) == set(placeholders)
-    assert len(placeholders) == 9
+    assert len(placeholders) == len(CLIENTS)
     assert {p["secret"]["key"] for p in placeholders.values()} == CLIENTS
     for placeholder in placeholders.values():
         assert placeholder["secret"]["name"] == "ads-realm-client-secrets"
@@ -71,15 +74,17 @@ def test_flows_scopes_audiences_and_role_assignment():
         "ads-context-compactor",
         "ads-guardrail",
     }
-    assert all(m["roles"] == ["user"] for m in realm["scopeMappings"])
-    assert realm["roles"]["realm"][0]["name"] == "user"
+    for mapping in realm["scopeMappings"]:
+        expected = ["auditor"] if mapping["client"] == "ads-audit" else ["user"]
+        assert mapping["roles"] == expected
+    assert [role["name"] for role in realm["roles"]["realm"]] == ["user", "auditor"]
     assert "defaultRoles" not in realm and "defaultRole" not in realm
     for client in realm["clients"]:
         name = client["clientId"]
         assert client["publicClient"] is False
         assert client["fullScopeAllowed"] is False
-        assert client["serviceAccountsEnabled"] == (name != "ads-context-meter")
-        assert client["standardFlowEnabled"] == (name == "ads")
+        assert client["serviceAccountsEnabled"] == (name not in {"ads-context-meter", "ads-audit"})
+        assert client["standardFlowEnabled"] == (name in BROWSER_LOGINS)
         assert client["directAccessGrantsEnabled"] is False
         assert client["implicitFlowEnabled"] is False
         assert client["optionalClientScopes"] == (ENGINE_SCOPES if name == "ads-engine" else [])
@@ -101,7 +106,7 @@ def test_flows_scopes_audiences_and_role_assignment():
         else:
             assert "roles" in client["defaultClientScopes"]
         assert client["attributes"]["standard.token.exchange.enabled"] == (
-            "false" if name in {"ads-preferences", "ads-context-meter"} else "true"
+            "false" if name in {"ads-preferences", "ads-context-meter", "ads-audit"} else "true"
         )
         audience_mappers = [
             m for m in client["protocolMappers"] if m["protocolMapper"] == "oidc-audience-mapper"

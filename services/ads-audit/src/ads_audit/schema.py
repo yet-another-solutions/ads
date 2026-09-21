@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from ads_audit.models import BLOCKS_TABLE, TABLE
+from ads_audit.models import BLOCKS_TABLE, REFRESH_TOKENS_TABLE, TABLE
 
 CREATE_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {TABLE} (
@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS {BLOCKS_TABLE} (
     lifted_at     timestamptz,
     lifted_by     varchar(128),
     lifted_budget integer
+)
+"""
+
+CREATE_REFRESH_TOKENS_TABLE = f"""
+CREATE TABLE IF NOT EXISTS {REFRESH_TOKENS_TABLE} (
+    sid           text PRIMARY KEY,
+    user_id       uuid NOT NULL,
+    refresh_token text NOT NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now()
 )
 """
 
@@ -107,6 +116,7 @@ async def ensure_schema(connection: AsyncConnection, months_ahead: int = 2) -> N
     await connection.execute(text(ADD_LIFTED_AT))
     await connection.execute(text(ADD_LIFTED_BY))
     await connection.execute(text(ADD_LIFTED_BUDGET))
+    await connection.execute(text(CREATE_REFRESH_TOKENS_TABLE))
     moment = datetime.now(UTC)
     for _ in range(months_ahead + 1):
         start, end = month_bounds(moment)

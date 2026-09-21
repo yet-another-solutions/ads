@@ -82,13 +82,17 @@ name = "ads-audit"
 version = "0.0.1"
 source = { editable = "services/ads-audit" }
 dependencies = [
+    { name = "ads-commons" },
+    { name = "ads-commons-beans" },
+    { name = "ads-commons-web" },
     { name = "ads-policy" },
     { name = "aio-pika" },
     { name = "anyio" },
     { name = "asyncpg" },
     { name = "dishka" },
-    { name = "litestar" },
+    { name = "litestar", extra = ["jinja"] },
     { name = "msgspec" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
     { name = "uvicorn", extra = ["standard"] },
@@ -96,13 +100,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ads-commons", editable = "libraries/ads-commons" },
+    { name = "ads-commons-beans", editable = "libraries/ads-commons-beans" },
+    { name = "ads-commons-web", editable = "libraries/ads-commons-web" },
     { name = "ads-policy", editable = "services/ads-policy" },
     { name = "aio-pika", specifier = "==10.0.1" },
     { name = "anyio", specifier = "==4.15.1" },
     { name = "asyncpg", specifier = "==0.31.0" },
     { name = "dishka", specifier = "==1.10.1" },
-    { name = "litestar", specifier = "==2.24.0" },
+    { name = "litestar", extras = ["jinja"], specifier = "==2.24.0" },
     { name = "msgspec", specifier = "==0.21.1" },
+    { name = "pyjwt", extras = ["crypto"], specifier = "==2.14.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.43" },
     { name = "structlog", specifier = "==26.1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = "==0.52.4" },

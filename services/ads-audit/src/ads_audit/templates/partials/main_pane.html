@@ -1,0 +1,11 @@
+<main class="main-pane" id="main-pane">
+  <header class="header">
+    <button class="mobile-menu" type="button" aria-label="Open sections"
+            onclick="document.getElementById('rail').classList.toggle('open')">☰</button>
+    <span class="crumb">audit /</span>
+    <h1>{{ title }}</h1>
+  </header>
+  <div class="pane scroll">
+    {% include pane %}
+  </div>
+</main>

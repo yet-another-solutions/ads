@@ -25,6 +25,14 @@ class Settings:
     policy_api_token: str = ""
     conversation_budget_limit: int = 30
     block_delivery_seconds: float = 300.0
+    keycloak_well_known_url: str = ""
+    keycloak_issuer: str = ""
+    keycloak_client_id: str = "ads-audit"
+    keycloak_client_secret: str = ""
+    keycloak_audience: str = "ads-audit"
+    keycloak_auditor_role: str = "auditor"
+    session_secret: str = ""
+    public_base_url: str = ""
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -102,6 +110,14 @@ def load_settings() -> Settings:
         policy_api_token=policy_api_token,
         conversation_budget_limit=_seconds("ADS_AUDIT_CONVERSATION_BUDGET_LIMIT", 30),
         block_delivery_seconds=_seconds("ADS_AUDIT_BLOCK_DELIVERY_SECONDS", 300),
+        keycloak_well_known_url=_env("ADS_KEYCLOAK_WELL_KNOWN_URL").strip(),
+        keycloak_issuer=_env("ADS_KEYCLOAK_ISSUER").strip(),
+        keycloak_client_id=_env("ADS_KEYCLOAK_CLIENT_ID", "ads-audit").strip(),
+        keycloak_client_secret=_env("ADS_KEYCLOAK_CLIENT_SECRET"),
+        keycloak_audience=_env("ADS_KEYCLOAK_AUDIENCE", "ads-audit").strip(),
+        keycloak_auditor_role=_env("ADS_KEYCLOAK_AUDITOR_ROLE", "auditor").strip(),
+        session_secret=_env("ADS_SESSION_SECRET"),
+        public_base_url=_env("ADS_PUBLIC_BASE_URL").strip().rstrip("/"),
     )
     load_tls_context(settings)
     return settings

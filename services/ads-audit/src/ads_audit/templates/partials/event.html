@@ -1,0 +1,24 @@
+<dl class="card">
+  <dt>When, UTC</dt><dd>{{ row.moment }}</dd>
+  <dt>Verdict</dt><dd><span class="verdict {{ row.verdict }}">{{ row.verdict }}</span></dd>
+  <dt>Rule</dt><dd>{{ event.rule_id }}</dd>
+  <dt>Weight</dt><dd>{{ event.weight }}</dd>
+  <dt>Point</dt><dd>{{ event.point.value }}</dd>
+  <dt>Source</dt><dd>{{ event.source }}</dd>
+  <dt>Tool</dt><dd>{{ event.tool }}</dd>
+  <dt>Capability</dt><dd>{{ row.capability }}</dd>
+  <dt>Resource</dt><dd>{{ event.resource }}</dd>
+  <dt>Person</dt>
+  <dd><a href="/journal?subject={{ event.subject | urlencode }}">{{ event.subject }}</a></dd>
+  <dt>Run</dt>
+  <dd><a href="/journal?run_id={{ event.run_id | urlencode }}">{{ event.run_id }}</a></dd>
+  <dt>Chat</dt>
+  <dd>{% if event.conversation %}<a href="/journal?conversation={{ event.conversation | urlencode }}">{{ event.conversation }}</a>{% endif %}</dd>
+  <dt>Policy</dt><dd>{{ event.policy_hash }}</dd>
+  <dt>Decided by</dt><dd>{{ event.decided_by }}</dd>
+  <dt>Event</dt><dd>{{ event.event_id }}</dd>
+</dl>
+{% if event.content is not none %}
+<h2 class="section-title">Content</h2>
+<pre class="content">{{ event.content }}</pre>
+{% endif %}

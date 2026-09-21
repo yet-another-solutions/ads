@@ -23,6 +23,7 @@ _SRC = (
     "libraries/ads-commons-schema/src",
     "libraries/ads-commons-schema/tests",
     "libraries/ads-commons-web/src",
+    "libraries/ads-commons-web/tests",
     "services/ads/src",
     "services/ads/tests",
     "services/ads-audit/src",

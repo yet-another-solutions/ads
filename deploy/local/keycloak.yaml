@@ -42,7 +42,7 @@ data:
       "sslRequired": "external",
       "accessTokenLifespan": 300,
       "passwordPolicy": "hashAlgorithm(pbkdf2-sha512)",
-      "roles": {"realm": [{"name": "user"}]},
+      "roles": {"realm": [{"name": "user"}, {"name": "auditor"}]},
       "scopeMappings": [{"client": "ads-engine", "roles": ["user"]}],
       "clientScopes": [
         {"name": "basic", "description": "OpenID Connect scope for add all basic claims to the token", "protocol": "openid-connect",
@@ -159,6 +159,26 @@ data:
               "name": "audience-ads-preferences", "protocol": "openid-connect",
               "protocolMapper": "oidc-audience-mapper",
               "config": {"included.client.audience": "ads-preferences", "access.token.claim": "true",
+                         "id.token.claim": "false", "introspection.token.claim": "true"}
+            }
+          ]
+        },
+        {
+          "clientId": "ads-audit",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "local-audit-client-secret",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": ["https://audit.ads.local:8445/*"],
+          "webOrigins": ["https://audit.ads.local:8445"],
+          "attributes": {"post.logout.redirect.uris": "https://audit.ads.local:8445/*"},
+          "protocolMappers": [
+            {
+              "name": "audience-ads-audit", "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {"included.client.audience": "ads-audit", "access.token.claim": "true",
                          "id.token.claim": "false", "introspection.token.claim": "true"}
             }
           ]
@@ -286,6 +306,16 @@ data:
           "lastName": "Local",
           "credentials": [{"type": "password", "value": "alice", "temporary": false}],
           "realmRoles": ["default-roles-ads", "user"]
+        },
+        {
+          "username": "audrey",
+          "enabled": true,
+          "email": "audrey@ads.local",
+          "emailVerified": true,
+          "firstName": "Audrey",
+          "lastName": "Auditor",
+          "credentials": [{"type": "password", "value": "audrey", "temporary": false}],
+          "realmRoles": ["default-roles-ads", "auditor"]
         }
       ]
     }

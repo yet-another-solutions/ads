@@ -1,0 +1,33 @@
+{% if not view.policy_answered %}
+<p class="warning">The policy service did not answer: which sources are checked is unknown.</p>
+{% endif %}
+{% if view.rows %}
+<div class="table-wrap">
+  <table class="journal">
+    <thead>
+      <tr>
+        <th>Source</th><th>Checks</th>
+        <th class="count">Allowed</th><th class="count">Denied</th><th class="count">Unchecked</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in view.rows %}
+      <tr>
+        <td><a href="/journal?source={{ row.source | urlencode }}">{{ row.source }}</a></td>
+        <td>
+          {% if row.checks is none %}<span class="verdict">unknown</span>
+          {% elif row.checks.value == "off" %}<span class="verdict unchecked">off</span>
+          {% else %}<span class="verdict allow">{{ row.checks.value }}</span>{% endif %}
+        </td>
+        <td class="count">{{ row.allowed }}</td>
+        <td class="count">{{ row.denied }}</td>
+        <td class="count">{{ row.unchecked }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="note">Calls since {{ since }} UTC.</p>
+{% else %}
+<p class="empty">No source is named by the policy or seen in the journal.</p>
+{% endif %}

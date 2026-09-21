@@ -58,17 +58,6 @@ class Settings:
     audit_url: str = ""
     audit_api_token: str = ""
 
-    def session_secret_bytes(self) -> bytes:
-        if not self.session_secret.strip():
-            raise RuntimeError("ADS_SESSION_SECRET must be non-empty")
-        encoded = self.session_secret.encode("utf-8")
-        if len(encoded) < 16:
-            raise RuntimeError("ADS_SESSION_SECRET must be at least 16 bytes")
-        return encoded[:32].ljust(32, b"\0")
-
-    def cookie_secure(self) -> bool:
-        return self.public_base_url.startswith("https://")
-
 
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
     try:

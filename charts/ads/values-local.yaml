@@ -61,6 +61,10 @@ audit:
   # Low, so a few refused calls are enough to see a chat lose its tools.
   conversationBudgetLimit: 12
   blockDeliverySeconds: 30
+  # Reached through `kubectl port-forward svc/ads-audit 8445:8082` and /etc/hosts.
+  httpRoute:
+    hostname: audit.ads.local
+    publicBaseUrl: https://audit.ads.local:8445
 
 engine:
   replicaCount: 1
@@ -210,6 +214,8 @@ secrets:
   sessionSecret: local-session-secret-32-bytes
   policyApiToken: local-policy-token-32-bytes
   auditApiToken: local-audit-token-32-bytes
+  auditKeycloakClientSecret: local-audit-client-secret
+  auditSessionSecret: local-audit-session-secret-32-bytes
   guardrailApiToken: local-guardrail-token-32-bytes
   guardrailKeycloakClientSecret: local-guardrail-client-secret
   injectionScannerApiToken: local-scanner-token-32-bytes

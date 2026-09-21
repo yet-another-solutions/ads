@@ -18,19 +18,10 @@ from ads.views import ModelOption, ModelView, ProjectView, TranscriptView
 from ads_commons.model_catalog import ModelTypeInfo, unlisted_models_allowed
 from ads_commons.security import AccessDenied, AuthenticationRequired
 from ads_commons_web.frontend import FrontendController
-from ads_commons_web.identity import Identity
+from ads_commons_web.identity import Identity, initials
 from ads_commons_web.inject import inject
 
 log = structlog.get_logger("ads.shell")
-
-
-def initials(name: str) -> str:
-    parts = [part for part in name.split() if part]
-    if not parts:
-        return "AD"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
 
 
 def is_htmx(request: Request[Any, Any, Any]) -> bool:

@@ -12,9 +12,8 @@ from litestar.params import Body
 from litestar.response import Template
 
 from ads.project_service import ProjectService
-from ads.shell_controller import initials
 from ads_commons_web.authenticated import AuthenticatedController
-from ads_commons_web.identity import Identity
+from ads_commons_web.identity import Identity, initials
 from ads_commons_web.inject import inject
 
 Form = Annotated[dict[str, str], Body(media_type=RequestEncodingType.URL_ENCODED)]

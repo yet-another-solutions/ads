@@ -18,6 +18,12 @@ data:
   ADS_POLICY_URL: {{ include "ads.policyUrl" . | quote }}
   ADS_AUDIT_CONVERSATION_BUDGET_LIMIT: {{ .Values.audit.conversationBudgetLimit | quote }}
   ADS_AUDIT_BLOCK_DELIVERY_SECONDS: {{ .Values.audit.blockDeliverySeconds | quote }}
+  ADS_KEYCLOAK_WELL_KNOWN_URL: {{ .Values.keycloak.wellKnownUrl | quote }}
+  ADS_KEYCLOAK_ISSUER: {{ .Values.keycloak.issuer | quote }}
+  ADS_KEYCLOAK_CLIENT_ID: {{ .Values.audit.keycloak.clientId | quote }}
+  ADS_KEYCLOAK_AUDIENCE: {{ .Values.audit.keycloak.audience | quote }}
+  ADS_KEYCLOAK_AUDITOR_ROLE: {{ .Values.keycloak.auditorRole | quote }}
+  ADS_PUBLIC_BASE_URL: {{ include "ads.auditPublicBaseUrl" . | quote }}
 ---
 apiVersion: v1
 kind: Secret
@@ -32,3 +38,5 @@ stringData:
   ADS_POLICY_API_TOKEN: {{ required "secrets.policyApiToken is required: it is how a chat block reaches the policy service" .Values.secrets.policyApiToken | quote }}
   ADS_AMQP_URL: {{ required "audit.rabbitmq.url is required: decisions are journalled through RabbitMQ" .Values.audit.rabbitmq.url | quote }}
   ADS_DATABASE_URL: {{ required "audit.postgres.url is required: the journal lives in PostgreSQL" .Values.audit.postgres.url | quote }}
+  ADS_KEYCLOAK_CLIENT_SECRET: {{ required "secrets.auditKeycloakClientSecret is required: an auditor logs in through the ads-audit client" .Values.secrets.auditKeycloakClientSecret | quote }}
+  ADS_SESSION_SECRET: {{ required "secrets.auditSessionSecret is required: it seals an auditor's session cookie" .Values.secrets.auditSessionSecret | quote }}

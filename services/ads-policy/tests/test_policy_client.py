@@ -4,7 +4,7 @@ import httpx2
 import msgspec
 import pytest
 
-from ads_policy.client import HttpPolicyClient, build_policy_client
+from ads_policy.client import HttpPolicyClient, PolicyUnavailable, build_policy_client
 from ads_policy.config import DENIED_MESSAGE, ResourceNaming
 from ads_policy.contract import (
     Capability,
@@ -15,6 +15,8 @@ from ads_policy.contract import (
     PolicyDecision,
     Run,
     RunContext,
+    SourceChecks,
+    Switch,
 )
 from policy_helpers import run_request
 
@@ -40,6 +42,19 @@ def _client(handler: object) -> HttpPolicyClient:
 
 def _json(payload: object, status: int = 200) -> httpx2.Response:
     return httpx2.Response(status, content=msgspec.json.encode(payload))
+
+
+def test_the_sources_come_back_with_their_checks() -> None:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        assert request.url.path == "/policy/sources"
+        return _json([{"source": "mcp:jira", "checks": "off"}])
+
+    assert _client(handler).sources() == [SourceChecks("mcp:jira", Switch.OFF)]
+
+
+def test_unreadable_sources_mean_the_policy_service_is_unavailable() -> None:
+    with pytest.raises(PolicyUnavailable):
+        _client(lambda request: _json({"not": "a list"})).sources()
 
 
 def test_a_decision_round_trips() -> None:

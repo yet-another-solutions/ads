@@ -489,6 +489,32 @@ class ChartTests(unittest.TestCase):
             if doc
         }
 
+    def test_the_auditor_logs_in_to_the_journal_on_its_own_host(self):
+        docs = self.documents()
+        config = docs["ConfigMap", "ads-audit"]["data"]
+        self.assertEqual(config["ADS_KEYCLOAK_CLIENT_ID"], "ads-audit")
+        self.assertEqual(config["ADS_KEYCLOAK_AUDIENCE"], "ads-audit")
+        self.assertEqual(config["ADS_KEYCLOAK_AUDITOR_ROLE"], "auditor")
+        self.assertEqual(config["ADS_PUBLIC_BASE_URL"], "https://ads-audit.interlab")
+        self.assertNotIn("SECRET", json.dumps(config))
+        secret = docs["Secret", "ads-audit"]["stringData"]
+        self.assertEqual(secret["ADS_KEYCLOAK_CLIENT_SECRET"], "ci-audit-client-secret")
+        self.assertIn("ADS_SESSION_SECRET", secret)
+        route = docs["HTTPRoute", "ads-audit"]["spec"]
+        self.assertEqual(route["hostnames"], ["ads-audit.interlab"])
+        self.assertEqual(route["rules"][0]["backendRefs"][0]["name"], "ads-audit")
+        tls = docs["BackendTLSPolicy", "ads-audit"]["spec"]["validation"]
+        self.assertEqual(tls["hostname"], "ads-audit.interlab")
+        certificate = docs["Certificate", "ads-audit"]["spec"]
+        self.assertIn("ads-audit.interlab", certificate["dnsNames"])
+
+    def test_the_auditor_needs_its_own_client_secret_and_session_secret(self):
+        for missing in ["secrets.auditKeycloakClientSecret", "secrets.auditSessionSecret"]:
+            with self.subTest(missing=missing):
+                result = self.render("--set", f"{missing}=")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"{missing} is required", result.stderr)
+
     def test_the_sandbox_is_reached_through_the_guardrail_and_only_through_it(self):
         governed = [
             "--set",

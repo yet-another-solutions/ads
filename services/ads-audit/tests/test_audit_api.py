@@ -13,40 +13,12 @@ from ads_audit.config import Settings
 from ads_audit.repository import InMemoryAuditRepository
 from ads_audit.service import MAX_PAGE
 from ads_policy.contract import AuditEvent, Capability, InterceptionPoint
-from audit_helpers import TOKEN, denied
-
-
-class _Broker:
-    async def channel(self) -> _Channel:
-        return _Channel()
-
-
-class _Channel:
-    async def set_qos(self, prefetch_count: int) -> None:
-        return None
-
-    async def declare_exchange(self, name: str, kind: object, durable: bool) -> _Exchange:
-        return _Exchange()
-
-    async def declare_queue(self, name: str, durable: bool) -> _Queue:
-        return _Queue()
-
-
-class _Exchange:
-    pass
-
-
-class _Queue:
-    async def bind(self, exchange: object, routing_key: str) -> None:
-        return None
-
-    async def consume(self, callback: object) -> None:
-        return None
+from audit_helpers import TOKEN, SilentBroker, denied
 
 
 @pytest.fixture
 def api(settings: Settings, repository: InMemoryAuditRepository) -> Iterator[TestClient]:
-    app = create_app(settings, repository, _Broker())  # type: ignore[arg-type]
+    app = create_app(settings, repository, SilentBroker())  # type: ignore[arg-type]
     with TestClient(app=app) as client:
         client.headers["authorization"] = f"Bearer {TOKEN}"
         yield client
@@ -61,13 +33,13 @@ def _seed(repository: InMemoryAuditRepository, *events: AuditEvent) -> None:
 
 
 def test_health_is_public(settings: Settings, repository: InMemoryAuditRepository) -> None:
-    app = create_app(settings, repository, _Broker())  # type: ignore[arg-type]
+    app = create_app(settings, repository, SilentBroker())  # type: ignore[arg-type]
     with TestClient(app=app) as client:
         assert client.get("/health/live").status_code == 200
 
 
 def test_the_api_needs_the_token(settings: Settings, repository: InMemoryAuditRepository) -> None:
-    app = create_app(settings, repository, _Broker())  # type: ignore[arg-type]
+    app = create_app(settings, repository, SilentBroker())  # type: ignore[arg-type]
     with TestClient(app=app) as client:
         assert client.get("/audit/runs/run-1/budget").status_code == 401
         client.headers["authorization"] = "Bearer wrong-token-wrong-token"

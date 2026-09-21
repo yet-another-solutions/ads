@@ -5,13 +5,17 @@ description = "ADS audit journal"
 requires-python = ">=3.12"
 authors = [{ name = "yet-another-solutions" }]
 dependencies = [
+    "ads-commons",
+    "ads-commons-beans",
+    "ads-commons-web",
     "ads-policy==0.0.1",
     "aio-pika==10.0.1",
     "anyio==4.15.1",
     "asyncpg==0.31.0",
     "dishka==1.10.1",
-    "litestar==2.24.0",
+    "litestar[jinja]==2.24.0",
     "msgspec==0.21.1",
+    "pyjwt[crypto]==2.14.0",
     "sqlalchemy[asyncio]==2.0.43",
     "structlog==26.1.0",
     "uvicorn[standard]==0.52.4",
@@ -29,6 +33,13 @@ packages = ["src/ads_audit"]
 
 [tool.deptry]
 known_first_party = ["ads_audit"]
+
+[tool.deptry.package_module_name_map]
+ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
+ads-commons-web = ["ads_commons_web"]
+ads-policy = ["ads_policy"]
+pyjwt = ["jwt"]
 
 # asyncpg is the driver SQLAlchemy dials through the URL, so nothing imports it.
 [tool.deptry.per_rule_ignores]
