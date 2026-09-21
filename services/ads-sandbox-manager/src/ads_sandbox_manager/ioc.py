@@ -18,6 +18,7 @@ from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeS
 from ads_sandbox_manager.auth import MANAGER, ClientCredentials, TokenMinter
 from ads_sandbox_manager.barrier import CoordinationPort, ManagerBarrier
 from ads_sandbox_manager.binding import AdsSessionProjects, BindingService
+from ads_sandbox_manager.ca import CaEnsure
 from ads_sandbox_manager.cleanup import CleanupAdapter, CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.controller import KafkaController
@@ -54,6 +55,10 @@ class AppProvider(Provider):
     @provide(scope=Scope.APP)
     def golden_kube(self, kube: KubeClient) -> Kubernetes:
         return kube
+
+    @provide(scope=Scope.APP)
+    def ca(self, settings: Settings, kube: Kubernetes) -> CaEnsure | None:
+        return CaEnsure(settings, kube) if settings.ca is not None else None
 
     @provide(scope=Scope.APP)
     def session_kube(self, kube: KubeClient) -> SessionKubernetes:

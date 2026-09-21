@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from ads_commons_beans import CommonsBeansProvider
 from ads_sandbox_manager.app import create_app
+from ads_sandbox_manager.config import CaSettings
 from ads_sandbox_manager.health import Dependencies, DependencyHealth
 from ads_sandbox_manager.ioc import AppProvider
 from ads_sandbox_manager.kafka import KafkaRuntime
@@ -23,6 +24,35 @@ pytestmark = pytest.mark.anyio
 
 def fake_kafka():
     return Mock(ready=True, start=AsyncMock(), stop=AsyncMock())
+
+
+async def test_ca_completion_gates_readiness_without_changing_process_liveness(manager_settings):
+    settings = replace(manager_settings, ca=CaSettings("image", "signer", "extra"))
+    golden, ca, dependencies = AsyncMock(), AsyncMock(), AsyncMock()
+    golden.poll.return_value = True
+    ca.poll.return_value = False
+    dependencies.check.return_value = True
+    runtime = ManagerRuntime(settings, golden, dependencies, fake_kafka(), ca)
+    await runtime.start()
+    try:
+        await runtime.check()
+        assert not runtime.ready
+        dependencies.check.assert_not_called()
+        ca.poll.return_value = True
+        await runtime.check()
+        assert runtime.ready
+        ca.poll.side_effect = RuntimeError("partial pair")
+        await runtime.check()
+        assert not runtime.ready
+    finally:
+        await runtime.stop()
+    missing = ManagerRuntime(settings, golden, dependencies, fake_kafka())
+    await missing.start()
+    try:
+        await missing.check()
+        assert not missing.ready  # A configured production CA cannot be bypassed by missing wiring.
+    finally:
+        await missing.stop()
 
 
 async def test_probes_transition_only_after_release_and_dependencies(baked):

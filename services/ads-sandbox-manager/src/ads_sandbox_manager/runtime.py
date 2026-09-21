@@ -7,6 +7,7 @@ from time import monotonic
 
 from kubernetes.client.exceptions import ApiException
 
+from ads_sandbox_manager.ca import CaEnsure
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.health import Dependencies
@@ -22,11 +23,13 @@ class ManagerRuntime:
         golden: GoldenEnsure,
         dependencies: Dependencies,
         kafka: KafkaRuntime,
+        ca: CaEnsure | None = None,
     ) -> None:
         self.settings = settings
         self.golden = golden
         self.dependencies = dependencies
         self.kafka = kafka
+        self.ca = ca
         self._ready = False
         self._checked = 0.0
         self._task: asyncio.Task[None] | None = None
@@ -48,7 +51,8 @@ class ManagerRuntime:
             # A whole pass is bounded as well as every individual Kubernetes call.
             async with asyncio.timeout(self.settings.control_seconds * 3):
                 golden_ready = await self.golden.poll()
-                self._ready = golden_ready and await self.dependencies.check()
+                ca_ready = await self.ca.poll() if self.ca is not None else self.settings.ca is None
+                self._ready = golden_ready and ca_ready and await self.dependencies.check()
         except ApiException as exc:
             # 409 is the Job/PVC name lock or stale delete precondition; reread next pass.
             # 404 also covers a resource disappearing between two live observations.

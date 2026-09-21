@@ -106,6 +106,32 @@ class SessionSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class CaSettings:
+    image: str
+    signing_secret: str
+    additional_configmap: str
+    source_size: str = "256Mi"
+    deadline_seconds: int = 600
+    resources: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.image.strip():
+            raise ValueError("CA image is required")
+        for name in (self.signing_secret, self.additional_configmap):
+            if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?", name):
+                raise ValueError("CA Secret and ConfigMap names must be configured DNS names")
+        if not 64 * 1024**2 <= size_bytes(self.source_size) <= 1024**3:
+            raise ValueError("CA source size must be between 64Mi and 1Gi")
+        if (
+            not isinstance(self.deadline_seconds, int)
+            or isinstance(self.deadline_seconds, bool)
+            or self.deadline_seconds <= 0
+            or not isinstance(self.resources, dict)
+        ):
+            raise ValueError("CA deadline/resources are invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     golden_version: str
     golden_image: str
@@ -148,6 +174,7 @@ class Settings:
     recovery_seconds: float = 600
     ads_base_url: str = "https://ads.invalid"
     ads_service_subject: UUID | None = None
+    ca: CaSettings | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -298,6 +325,7 @@ def load_settings() -> Settings:
         recovery_seconds=float(os.environ.get(prefix + "RECOVERY_SECONDS", "600")),
         ads_base_url=required("ADS_BASE_URL").rstrip("/"),
         ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
+        ca=CaSettings(**json.loads(required("CA"))),
     )
     load_tls_context(settings)
     if settings.session_objects is None:
