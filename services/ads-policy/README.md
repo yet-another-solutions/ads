@@ -27,6 +27,12 @@ stays written over capabilities while foreign tool names live in one place. Bind
 pinned to the run with everything else: one added mid-run does not change what that run
 may do, and a tool nothing binds is refused.
 
+A tool server can be taken out of checking altogether: `sources: {"mcp:jira": {checks:
+"off"}}` in the policy document. Its calls then need no binding, meet no rule and are
+not scanned. Each one is still journalled, allowed under `source.unchecked` with weight 0
+and naming the server and tool it went to. A run that is unknown, someone else's or over,
+and a blocked chat, still refuse it.
+
 Isolation levels are `local`, `container` and `vm`. `container` and `vm` are derived
 from where the run was actually scheduled; `local` is asserted by whoever opens a run
 on a developer machine, because node labels are a cluster notion. A cluster placement
@@ -52,6 +58,7 @@ public. Everything is HTTPS; there is no plain-HTTP mode.
 | `POST /policy/calls` | a decision for one tool call, named as the agent names it |
 | `POST /policy/prompts` | `{run_id, subject}` → what the checks on the prompt side are for this run. The content itself stays with the guardrail |
 | `GET /policy/version` | schema version, policy version, the hash the service computed, mode |
+| `GET /policy/sources` | every source the current policy names, with its checks: `enforce` or `off` |
 | `GET /health/live` | the process is up |
 | `GET /health/ready` | the run store answers. 503 otherwise |
 

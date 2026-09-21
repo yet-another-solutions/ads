@@ -18,6 +18,7 @@ from ads_policy.contract import (
     PromptRequest,
     Run,
     RunRequest,
+    SourceChecks,
     ToolCallRequest,
 )
 from ads_policy.isolation import UnknownPlacement
@@ -128,3 +129,8 @@ class PolicyController(Controller):
     @inject
     async def version(self, service: FromDishka[PolicyService]) -> dict[str, str]:
         return service.version()
+
+    @get("/sources")
+    @inject
+    async def sources(self, service: FromDishka[PolicyService]) -> tuple[SourceChecks, ...]:
+        return service.sources()

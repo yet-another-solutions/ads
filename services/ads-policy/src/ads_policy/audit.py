@@ -35,6 +35,8 @@ def record(
         content=content if include_content else None,
         point=decision.point,
         conversation=conversation,
+        source=request.source,
+        tool=request.tool,
     )
 
 

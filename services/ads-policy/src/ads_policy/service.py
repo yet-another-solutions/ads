@@ -12,11 +12,14 @@ from ads_policy.blocks import ConversationBlock, ConversationBlocks, InMemoryCon
 from ads_policy.config import DENIED_MESSAGE, PlacementRules
 from ads_policy.contract import (
     AuditEvent,
+    Capability,
     DecisionRequest,
     Effect,
+    Interception,
     InterceptionPoint,
     IsolationLevel,
     Mode,
+    Policy,
     PolicyDecision,
     PolicyRequest,
     PromptRequest,
@@ -24,6 +27,9 @@ from ads_policy.contract import (
     RunContext,
     RunRequest,
     RunState,
+    Side,
+    SourceChecks,
+    Switch,
     ToolCallRequest,
 )
 from ads_policy.isolation import UnknownPlacement, assign_isolation_level
@@ -31,6 +37,11 @@ from ads_policy.pdp import PolicyDecisionPoint, Unbound, resolve
 from ads_policy.run import RunStore
 
 logger = structlog.get_logger("ads.policy")
+
+NOTHING_INSPECTED = Interception(
+    request=Side(checks=frozenset(), on=Switch.OFF),
+    response=Side(checks=frozenset(), on=Switch.OFF),
+)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -108,27 +119,31 @@ class PolicyService:
         try:
             run = await self.runs.get(call.run_id)
         except RedisError as exc:
-            return self._journal_unresolved_call(
+            return self._journal_call(
                 call, None, self._refuse("run.store", f"run store unreachable: {exc}")
             )
         if run is None:
-            return self._journal_unresolved_call(
+            return self._journal_call(
                 call, None, self._refuse("run.unknown", f"run {call.run_id} is unknown")
             )
         if run.subject != call.subject:
-            return self._journal_unresolved_call(
+            return self._journal_call(
                 call, run, self._refuse("run.subject", f"run {run.id} belongs to someone else")
             )
         pinned_policy = self.pdp.policy_of(run)
         if pinned_policy is None:
             await self._finish_run_whose_policy_is_gone(run)
-            return self._journal_unresolved_call(
+            return self._journal_call(
                 call, run, self._refuse("policy.missing", "pinned policy is gone")
+            )
+        if pinned_policy.is_unchecked(call.source):
+            return self._journal_call(
+                call, run, await self._pass_unchecked(call, run, pinned_policy)
             )
         try:
             capability, resource = resolve(call, pinned_policy)
         except Unbound as exc:
-            return self._journal_unresolved_call(call, run, self._refuse(exc.rule_id, str(exc)))
+            return self._journal_call(call, run, self._refuse(exc.rule_id, str(exc)))
         decision = await self.decide(
             DecisionRequest(
                 run_id=call.run_id,
@@ -137,11 +152,33 @@ class PolicyService:
                 resource=resource,
                 attributes=dict(call.attributes),
                 site=call.site,
+                source=call.source,
+                tool=call.tool,
             )
         )
         return msgspec.structs.replace(decision, capability=capability, resource=resource)
 
-    def _journal_unresolved_call(
+    async def _pass_unchecked(
+        self, call: ToolCallRequest, run: Run, policy: Policy
+    ) -> PolicyDecision:
+        if run.state is not RunState.RUNNING:
+            return self._refuse("run.state", f"run {run.id} is {run.state.value}")
+        refusal = await self._refusal_of_block(run)
+        if refusal is not None:
+            return refusal
+        await self._extend_lifetime_from_now(run)
+        capability, resource = _bound_or_named(call, policy)
+        return PolicyDecision(
+            effect=Effect.ALLOW,
+            rule_id="source.unchecked",
+            reason=f"this policy does not check {call.source}",
+            policy_hash=run.policy_hash,
+            capability=capability,
+            resource=resource,
+            interception=NOTHING_INSPECTED,
+        )
+
+    def _journal_call(
         self, call: ToolCallRequest, run: Run | None, decision: PolicyDecision
     ) -> PolicyDecision:
         try:
@@ -158,14 +195,20 @@ class PolicyService:
         return AuditEvent(
             run_id=call.run_id,
             subject=call.subject,
-            capability=None,
-            resource=f"{call.source}/{call.tool}",
+            capability=decision.capability,
+            resource=decision.resource or f"{call.source}/{call.tool}",
             effect=decision.effect,
             rule_id=decision.rule_id,
-            weight=decision.weight or self.default_weight,
+            weight=(
+                decision.weight
+                if decision.effect is Effect.ALLOW
+                else decision.weight or self.default_weight
+            ),
             policy_hash=decision.policy_hash,
             point=decision.point,
             conversation=_conversation_of(run),
+            source=call.source,
+            tool=call.tool,
         )
 
     async def decide(self, request: DecisionRequest) -> PolicyDecision:
@@ -226,6 +269,14 @@ class PolicyService:
         if self.pdp.policy_of(run) is None:
             await self._finish_run_whose_policy_is_gone(run)
             return self._refuse("policy.missing", "pinned policy is gone")
+        refusal = await self._refusal_of_block(run)
+        if refusal is not None:
+            return refusal
+        decision = self._decide_running(run, request)
+        await self._extend_lifetime_from_now(run)
+        return decision
+
+    async def _refusal_of_block(self, run: Run) -> PolicyDecision | None:
         try:
             blocked = await self.blocks.is_blocked(run.conversation)
         except RedisError as exc:
@@ -234,9 +285,7 @@ class PolicyService:
             return self._refuse(
                 "conversation.revoked", f"conversation {run.conversation} is blocked"
             )
-        decision = self._decide_running(run, request)
-        await self._extend_lifetime_from_now(run)
-        return decision
+        return None
 
     def _decide_running(self, run: Run, request: DecisionRequest) -> PolicyDecision:
         try:
@@ -307,6 +356,9 @@ class PolicyService:
             "mode": policy.mode.value,
         }
 
+    def sources(self) -> tuple[SourceChecks, ...]:
+        return self.pdp.policy.source_checks()
+
     async def flush_audit(self) -> int:
         return await self.audit.drain()
 
@@ -319,6 +371,13 @@ class PolicyService:
             policy_hash=self.pdp.policy_hash,
             mode=Mode.ENFORCE,
         )
+
+
+def _bound_or_named(call: ToolCallRequest, policy: Policy) -> tuple[Capability | None, str]:
+    try:
+        return resolve(call, policy)
+    except Unbound:
+        return None, f"{call.source}/{call.tool}"
 
 
 def _conversation_of(run: Run | None) -> str:

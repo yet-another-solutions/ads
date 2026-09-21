@@ -83,7 +83,27 @@ def load_policy(document: Mapping[str, Any], settings: PolicyDefaults | None = N
         bindings=bindings,
         default_weight=int(document.get("defaultWeight", config.default_weight)),
         interception=_load_interception(document.get("interception"), "interception"),
+        unchecked_sources=_load_unchecked_sources(document.get("sources")),
     )
+
+
+def _load_unchecked_sources(raw: object) -> frozenset[str]:
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, Mapping):
+        raise ValueError("sources must be a mapping of source to its checks")
+    return frozenset(
+        str(source) for source, spec in raw.items() if _checks_are_off(spec, f"sources[{source!r}]")
+    )
+
+
+def _checks_are_off(raw: object, where: str) -> bool:
+    if not isinstance(raw, Mapping) or "checks" not in raw:
+        raise ValueError(f"{where} must state checks: enforce or off")
+    value = Switch.OFF.value if raw["checks"] is False else str(raw["checks"])
+    if value not in (Switch.ENFORCE.value, Switch.OFF.value):
+        raise ValueError(f"{where}.checks must be enforce or off")
+    return value == Switch.OFF.value
 
 
 def _load_interception(raw: object, where: str) -> Interception:
@@ -266,6 +286,7 @@ def compose(org: Policy, dev: Policy | None = None) -> Policy:
         bindings=org.bindings,
         default_weight=max(org.default_weight, dev.default_weight),
         interception=org.interception.stricter(dev.interception),
+        unchecked_sources=org.unchecked_sources,
     )
 
 

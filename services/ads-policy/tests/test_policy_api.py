@@ -115,6 +115,13 @@ def test_the_version_is_the_hash_the_pdp_computed(api: TestClient) -> None:
     assert payload["mode"] == DEFAULTS.mode.value
 
 
+def test_the_sources_the_policy_names_come_back_with_their_checks(api: TestClient) -> None:
+    assert api.get("/policy/sources").json() == [
+        {"source": "mcp:sandbox", "checks": "enforce"},
+        {"source": "opencode", "checks": "enforce"},
+    ]
+
+
 def test_the_service_derives_the_level_from_the_placement(api: TestClient) -> None:
     assert _start(api, vm=True)["isolation_level"] == IsolationLevel.VM.value
     assert _start(api, vm=False)["isolation_level"] == IsolationLevel.CONTAINER.value

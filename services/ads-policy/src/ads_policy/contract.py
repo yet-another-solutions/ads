@@ -268,6 +268,11 @@ class Rule:
         return all(attributes.get(name) == value for name, value in self.requires)
 
 
+class SourceChecks(msgspec.Struct, frozen=True):
+    source: str
+    checks: Switch
+
+
 @dataclass(frozen=True, slots=True)
 class Policy:
     schema_version: str
@@ -281,6 +286,7 @@ class Policy:
     bindings: tuple[Binding, ...] = ()
     default_weight: int = 1
     interception: Interception = Interception()
+    unchecked_sources: frozenset[str] = frozenset()
     _binding_by_tool: dict[tuple[str, str], Binding] = dataclass_field(
         init=False, repr=False, compare=False
     )
@@ -310,6 +316,16 @@ class Policy:
 
     def binding_for(self, source: str, tool: str) -> Binding | None:
         return self._binding_by_tool.get((source, tool))
+
+    def is_unchecked(self, source: str) -> bool:
+        return source in self.unchecked_sources
+
+    def source_checks(self) -> tuple[SourceChecks, ...]:
+        named = {binding.source for binding in self.bindings} | self.unchecked_sources
+        return tuple(
+            SourceChecks(source, Switch.OFF if self.is_unchecked(source) else Switch.ENFORCE)
+            for source in sorted(named)
+        )
 
     def rule_for(self, capability: Capability, resource_class: str) -> Rule | None:
         return self._rule_by_key.get((capability, str(resource_class)))
@@ -369,7 +385,11 @@ class Policy:
             ),
             self.default_weight,
             self.interception.canonical(),
+            *self._unchecked_sources_only_when_any(),
         ]
+
+    def _unchecked_sources_only_when_any(self) -> list[list[str]]:
+        return [sorted(self.unchecked_sources)] if self.unchecked_sources else []
 
 
 class Approval(msgspec.Struct, frozen=True):
@@ -453,6 +473,8 @@ class AuditEvent(msgspec.Struct, frozen=True):
     point: InterceptionPoint = InterceptionPoint.CALL
     decided_by: str = ""
     conversation: str = ""
+    source: str = ""
+    tool: str = ""
     event_id: str = msgspec.field(default_factory=lambda: uuid.uuid4().hex)
     recorded_at: datetime = msgspec.field(default_factory=lambda: datetime.now(UTC))
 
@@ -482,6 +504,8 @@ class DecisionRequest(msgspec.Struct, frozen=True):
     resource: str
     attributes: dict[str, str] = msgspec.field(default_factory=dict)
     site: Site | None = None
+    source: str = ""
+    tool: str = ""
 
 
 class PromptRequest(msgspec.Struct, frozen=True):

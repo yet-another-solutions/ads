@@ -110,6 +110,19 @@ bindings:
   - {source: "mcp:sandbox", tool: exec_shell, capability: process.exec, argument: command}
   - {source: "mcp:sandbox", tool: exec_python, capability: process.exec, argument: code}
 
+# A tool server whose calls are not checked at all: no binding is needed, no rule is
+# applied and neither side is scanned. Every call is still journalled — allowed, under
+# `source.unchecked`, with weight 0 and the server and tool it went to. What still
+# refuses it: a run that is unknown, someone else's or over, and a blocked chat.
+#
+#   sources:
+#     "mcp:jira": {checks: "off"}
+#
+# `checks` is enforce or off; a source that is not listed is enforced. Quote `"off"` for
+# the same reason as `"on"` above. Only this policy decides it: a dev policy cannot.
+# Like any change here it holds for runs started after it, not for the ones under way.
+sources: {}
+
 # capability x resource class x isolation level. An empty `levels` is an explicit deny
 # that still carries a weight, which is how a refusal costs more than a miss and how a
 # retry of the same refusal costs a multiple.
