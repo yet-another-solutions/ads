@@ -98,15 +98,30 @@ def _load_interception(raw: object, where: str) -> Interception:
     )
 
 
+# YAML 1.1 reads a bare `on` as true: PyYAML hands the key over as True, and helm, rendering
+# the chart's values into the ConfigMap, as the string "true". A bare `off` arrives as False.
+_SWITCH_KEYS: tuple[object, ...] = ("on", True, "true")
+
+
+def _switch_of(raw: Mapping[Any, Any], where: str) -> Switch:
+    given = [key for key in _SWITCH_KEYS if key in raw]
+    if len(given) > 1:
+        raise ValueError(f"{where}.on is given more than once")
+    value = raw[given[0]] if given else Switch.ENFORCE.value
+    if value is False:
+        value = Switch.OFF.value
+    try:
+        return Switch(str(value))
+    except ValueError as exc:
+        raise ValueError(f"{where}.on must be one of {[s.value for s in Switch]}") from exc
+
+
 def _load_side(raw: object, where: str, default: Side) -> Side | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
         raise ValueError(f"{where} must be a mapping of on and checks")
-    try:
-        on = Switch(str(raw.get("on", Switch.ENFORCE.value)))
-    except ValueError as exc:
-        raise ValueError(f"{where}.on must be one of {[s.value for s in Switch]}") from exc
+    on = _switch_of(raw, where)
     checks = _load_checks(raw["checks"], f"{where}.checks") if "checks" in raw else default.checks
     checks_this_side_cannot_run = checks - default.checks
     if checks_this_side_cannot_run:

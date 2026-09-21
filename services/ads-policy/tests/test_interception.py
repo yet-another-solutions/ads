@@ -342,3 +342,32 @@ def test_a_dev_policy_tightening_the_top_reaches_a_row_the_org_relaxed() -> None
 def test_review_sits_between_off_and_enforce() -> None:
     assert Switch.OFF.stricter(Switch.REVIEW) is Switch.REVIEW
     assert Switch.REVIEW.stricter(Switch.ENFORCE) is Switch.ENFORCE
+
+
+@pytest.mark.parametrize(
+    ("side", "switch"),
+    [
+        # As written and read by YAML 1.1: a bare `on` is the key True, a bare `off` is False.
+        ("{on: review}", Switch.REVIEW),
+        ("{on: off}", Switch.OFF),
+        ("{on: enforce}", Switch.ENFORCE),
+        # As helm renders the chart's values into the ConfigMap: the key becomes "true".
+        ('{"true": review}', Switch.REVIEW),
+        ('{"true": false}', Switch.OFF),
+        # Quoted, which reads the same in every YAML.
+        ('{"on": "review"}', Switch.REVIEW),
+        ('{"on": "off"}', Switch.OFF),
+    ],
+)
+def test_a_side_switch_is_honoured_however_yaml_spelled_it(side: str, switch: Switch) -> None:
+    import msgspec
+
+    policy = load_policy(
+        _document_with_inspection({"request": msgspec.yaml.decode(side.encode(), type=dict)})
+    )
+    assert policy.interception.side(InterceptionPoint.REQUEST).on is switch
+
+
+def test_a_side_switch_given_twice_is_refused() -> None:
+    with pytest.raises(ValueError, match="more than once"):
+        load_policy(_document_with_inspection({"request": {"on": "review", True: "off"}}))

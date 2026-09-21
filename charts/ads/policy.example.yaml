@@ -44,10 +44,14 @@ defaultWeight: 1
 # never a way to turn it off: unstated at the top means enforce, with both sides'
 # usual checks. A dev policy composed over this one may add checks and switch a side
 # up, never remove or switch down.
+#
+# Quote `"on"` and its value: YAML 1.1 reads a bare on/off as a boolean, and helm renders
+# such a key as "true" into the ConfigMap. The service understands those spellings too,
+# but the quoted one reads the same everywhere.
 interception:
-  prompt: {on: enforce, checks: [secrets, injection], review: [injection]}
-  request: {on: enforce, checks: [secrets]}
-  response: {on: enforce, checks: [secrets, injection], review: [injection]}
+  prompt: {"on": "enforce", checks: [secrets, injection], review: [injection]}
+  request: {"on": "enforce", checks: [secrets]}
+  response: {"on": "enforce", checks: [secrets, injection], review: [injection]}
 
 # Where an agent may reach. Exactly the addresses the perimeter allows: the package
 # mirror, the model gateway, the database broker, the git proxy. There is no internet.
@@ -173,7 +177,7 @@ rules:
   # for example, add to its row:
   #
   #   inspect:
-  #     response: {on: review, checks: [secrets]}
+  #     response: {"on": "review", checks: [secrets]}
   - id: net.egress.internet
     capability: net.egress
     resourceClass: internet
