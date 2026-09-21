@@ -1,0 +1,27 @@
+[project]
+name = "ads-sandbox-egress"
+version = "0.0.1"
+description = "ADS paired sandbox egress enforcement"
+requires-python = ">=3.12"
+authors = [{ name = "yet-another-solutions" }]
+dependencies = [
+    "ads-commons",
+    "ads-commons-beans",
+    "dishka==1.10.1",
+    "litestar==2.24.0",
+    "msgspec==0.21.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ads_sandbox_egress"]
+
+[tool.deptry]
+known_first_party = ["ads_sandbox_egress"]
+
+[tool.deptry.package_module_name_map]
+ads-commons = ["ads_commons"]
+ads-commons-beans = ["ads_commons_beans"]
