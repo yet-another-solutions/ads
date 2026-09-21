@@ -7,6 +7,7 @@ from contextlib import aclosing
 from dataclasses import replace
 from typing import Any, TypedDict, cast
 
+import structlog
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
@@ -35,6 +36,8 @@ from ads_engine.context import EngineContextFactory
 from ads_engine.guardrail import ConversationRuns, ToolsUnavailable
 from ads_engine.mcp_client import SandboxClient, ToolCallRefused
 from ads_engine.mcp_credentials import ExecutionFailed, McpCredentials, RunCredentials
+
+log = structlog.get_logger("ads_engine")
 
 
 class ExecutionState(TypedDict):
@@ -243,7 +246,14 @@ class ExecutorChatStreamer:
                                             yield value
                                         except GeneratorExit:
                                             return
-            except Exception:
+            except Exception as exc:
+                stage, kinds = _stage_and_kinds_of(exc)
+                log.warning(
+                    "sandbox_executor_failed",
+                    session_id=str(request.session_id),
+                    stage=stage,
+                    kinds=kinds,
+                )
                 raise ExecutionFailed("sandbox executor failed") from None
 
     async def _run_of(self, request: EngineRequest, credentials: RunCredentials) -> str:
@@ -262,6 +272,31 @@ class ExecutorChatStreamer:
             )
         except ToolsUnavailable as exc:
             raise ExecutionFailed("no run was opened for the tools") from exc
+
+
+def _stage_and_kinds_of(failure: BaseException) -> tuple[str | None, list[str]]:
+    # Our own ExecutionFailed wording and exception type names only, never an exception's
+    # text: SDK, provider and identity errors can carry request bodies and credentials.
+    stage: str | None = None
+    kinds: list[str] = []
+    pending: list[BaseException] = [failure]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if stage is None and isinstance(current, ExecutionFailed):
+            stage = str(current)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(current.exceptions)
+            continue
+        underlying = current.__cause__ or current.__context__
+        if underlying is None:
+            kinds.append(type(current).__name__)
+        else:
+            pending.append(underlying)
+    return stage, kinds
 
 
 def _refusal_message(refused: ToolCallRefused) -> ToolMessage:

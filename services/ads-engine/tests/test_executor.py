@@ -973,3 +973,47 @@ def test_a_refused_call_is_told_to_the_model_and_the_person_without_ending_the_r
     assert isinstance(told, ToolMessage)
     assert told.status == "error"
     assert "refused" in told.content
+
+
+def test_a_failed_run_logs_its_stage_and_kinds_but_never_the_error_text(sdk_harness, monkeypatch):
+    # The executor raises one generic failure; the log alone says where and what, and it
+    # must not repeat an identity provider's answer, which can carry a credential.
+    h = sdk_harness
+    logged = []
+    monkeypatch.setattr(
+        "ads_engine.executor.log",
+        SimpleNamespace(warning=lambda event, **fields: logged.append((event, fields))),
+    )
+
+    class RefusedMint(Exception):
+        pass
+
+    class FailingCredentials:
+        @asynccontextmanager
+        async def open(self, inbound):
+            try:
+                raise RefusedMint("invalid_scope for token secret-refresh-token-value")
+            except RefusedMint:
+                raise ExecutionFailed("MCP credential mint or refresh failed") from None
+            yield  # pragma: no cover
+
+    streamer = ExecutorChatStreamer(
+        FailingCredentials(), h.streamer._sandbox, FakeContextFactory(), h.settings
+    )
+
+    async def scenario():
+        with pytest.raises(ExecutionFailed, match="sandbox executor failed"):
+            await _collect(streamer.stream(make_request()))
+
+    asyncio.run(scenario())
+    assert logged == [
+        (
+            "sandbox_executor_failed",
+            {
+                "session_id": str(make_request().session_id),
+                "stage": "MCP credential mint or refresh failed",
+                "kinds": ["RefusedMint"],
+            },
+        )
+    ]
+    assert "secret-refresh-token-value" not in repr(logged)
