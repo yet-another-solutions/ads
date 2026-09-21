@@ -8,6 +8,7 @@ import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 
 def size_bytes(value: str) -> int:
@@ -145,6 +146,8 @@ class Settings:
     ping_interval_seconds: float = 10
     ping_timeout_seconds: float = 30
     recovery_seconds: float = 600
+    ads_base_url: str = "https://ads.invalid"
+    ads_service_subject: UUID | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -293,6 +296,8 @@ def load_settings() -> Settings:
         ping_interval_seconds=float(os.environ.get(prefix + "PING_INTERVAL_SECONDS", "10")),
         ping_timeout_seconds=float(os.environ.get(prefix + "PING_TIMEOUT_SECONDS", "30")),
         recovery_seconds=float(os.environ.get(prefix + "RECOVERY_SECONDS", "600")),
+        ads_base_url=required("ADS_BASE_URL").rstrip("/"),
+        ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
     )
     load_tls_context(settings)
     if settings.session_objects is None:

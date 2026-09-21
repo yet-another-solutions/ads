@@ -25,6 +25,7 @@ from ads.db import create_db_engine
 from ads_commons.security import AccessDenied, InvalidAccessToken, ensure_caller
 from ads_commons_beans.jwt import JwtVerifier, JwtVerifierSettings
 from tests.certs import issue_tls, openssl_available
+from tests.threadline_fakes import RecordingEgress
 
 docker_ok = shutil.which("docker") is not None
 pytestmark = pytest.mark.skipif(
@@ -303,7 +304,7 @@ def running_app(
     create_schema(db_engine)
     server = uvicorn.Server(
         uvicorn.Config(
-            create_app(settings, engine=db_engine),
+            create_app(settings, engine=db_engine, egress_updates=RecordingEgress()),
             host="127.0.0.1",
             port=app_port,
             ssl_certfile=str(keycloak_tls.server_crt),

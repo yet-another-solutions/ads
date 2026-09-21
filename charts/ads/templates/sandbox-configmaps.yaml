@@ -31,6 +31,8 @@ data:
   {{ $prefix }}ALLOWED_HOSTS: {{ printf "%s,%s:*,%s.%s,%s.%s:*,%s.%s.svc,%s.%s.svc:*,%s.%s.svc.cluster.local,%s.%s.svc.cluster.local:*" $name $name $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace $name $root.Values.namespace | quote }}
   {{- end }}
   {{- if eq $component "manager" }}
+  {{ $prefix }}ADS_BASE_URL: {{ printf "https://%s:%v" (include "ads.fullname" $root) $root.Values.service.port | quote }}
+  {{ $prefix }}ADS_SERVICE_SUBJECT: {{ $root.Values.keycloak.serviceSubjects.ads | quote }}
   ADS_SESSION_SIZE: {{ ($root.Files.Get "files/sandbox-release.yaml" | fromYaml).sessionSize | quote }}
   {{ $prefix }}GOLDEN_VERSION: {{ printf "v%s" $root.Chart.AppVersion | quote }}
   {{ $prefix }}GOLDEN_IMAGE: {{ include "ads.sandboxImage" (dict "root" $root "image" $sb.golden.image) | quote }}

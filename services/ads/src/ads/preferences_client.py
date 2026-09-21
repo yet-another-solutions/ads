@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ssl
 from uuid import UUID
 
@@ -53,8 +54,13 @@ class PreferencesClient:
         method: str,
         path: str,
         body: bytes | None = None,
+        *,
+        service_origin: bool = False,
     ) -> bytes:
-        token = self._tokens.exchange(self._audience)
+        token = await asyncio.to_thread(
+            self._tokens.exchange_service if service_origin else self._tokens.exchange,
+            self._audience,
+        )
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -100,6 +106,15 @@ class PreferencesClient:
     async def get_egress(self, project_id: UUID) -> ProjectEgressSnapshot:
         return _decode(
             await self._call("GET", f"/v1/projects/{project_id}/egress-settings"),
+            ProjectEgressSnapshot,
+        )
+
+    async def get_egress_for_startup(self, project_id: UUID) -> ProjectEgressSnapshot:
+        """Service identity is restricted to this read, never model access or writes."""
+        return _decode(
+            await self._call(
+                "GET", f"/v1/projects/{project_id}/egress-settings", service_origin=True
+            ),
             ProjectEgressSnapshot,
         )
 

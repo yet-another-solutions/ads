@@ -115,6 +115,8 @@ def configure(monkeypatch, settings):
         "KEYCLOAK_ISSUER": "https://identity.test",
         "KEYCLOAK_WELL_KNOWN_URL": "https://identity.test/.well-known/openid-configuration",
         "KEYCLOAK_CLIENT_SECRET": "fixture-only-secret",
+        "ADS_BASE_URL": "https://ads.test",
+        "ADS_SERVICE_SUBJECT": "11111111-1111-4111-8111-111111111111",
         "SESSION_OBJECTS": json.dumps(
             {
                 "guest_image": "registry.test/guest:1",

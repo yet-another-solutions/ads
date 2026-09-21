@@ -9,6 +9,7 @@ from litestar import Litestar, Request, get
 from litestar.response import Response
 
 from ads_commons_beans import CommonsBeansProvider
+from ads_sandbox_manager.binding_controller import binding
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.ioc import AppProvider
 from ads_sandbox_manager.runtime import ManagerRuntime
@@ -43,4 +44,6 @@ def create_app(settings: Settings, *, overrides: tuple[Provider, ...] = ()) -> L
         finally:
             await container.close()
 
-    return Litestar(route_handlers=[live, ready], lifespan=[lifecycle], openapi_config=None)
+    app = Litestar(route_handlers=[live, ready, binding], lifespan=[lifecycle], openapi_config=None)
+    app.state.container = container
+    return app

@@ -19,6 +19,7 @@ from tests.threadline_fakes import (
     FakeOidcVerifier,
     FakePreferences,
     FakeTokens,
+    RecordingEgress,
     RecordingKafka,
 )
 
@@ -101,6 +102,7 @@ def app(
         engine=db_engine,
         preferences=preferences,
         egress_preferences=preferences,
+        egress_updates=RecordingEgress(),
         kafka=kafka,
         tokens=tokens,
         jwt_verifier=authenticator,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+from uuid import UUID
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -47,6 +49,34 @@ class Settings:
     ping_death_seconds: float = 30.0
     finish_gap_seconds: float = 10.0
     watchdog_tick_seconds: float = 1.0
+    sandbox_manager_base_url: str = "https://ads-sandbox-manager.invalid"
+    manager_service_subject: UUID | None = None
+    ipc_service_subject: UUID | None = None
+    egress_consumer_group: str = "ads-egress-config"
+    kafka_security_protocol: str = "PLAINTEXT"
+    kafka_sasl_mechanism: str = "SCRAM-SHA-512"
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = field(default=None, repr=False)
+    kafka_ca_bundle: Path | None = None
+
+    def kafka_options(self) -> dict[str, Any]:
+        if self.kafka_security_protocol not in ("PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"):
+            raise ValueError("unsupported Kafka security protocol")
+        options: dict[str, Any] = {
+            "bootstrap_servers": self.kafka_bootstrap_servers,
+            "security_protocol": self.kafka_security_protocol,
+        }
+        if self.kafka_security_protocol.startswith("SASL"):
+            if not self.kafka_sasl_username or not self.kafka_sasl_password:
+                raise ValueError("Kafka SASL credentials required")
+            options.update(
+                sasl_mechanism=self.kafka_sasl_mechanism,
+                sasl_plain_username=self.kafka_sasl_username,
+                sasl_plain_password=self.kafka_sasl_password,
+            )
+        if self.kafka_security_protocol.endswith("SSL"):
+            options["ssl_context"] = ssl.create_default_context(cafile=self.kafka_ca_bundle)
+        return options
 
     def session_secret_bytes(self) -> bytes:
         if not self.session_secret.strip():
@@ -105,6 +135,16 @@ def load_settings() -> Settings:
         preferences_audience=_env("ADS_PREFERENCES_AUDIENCE", "ads-preferences"),
         engine_audience=_env("ADS_ENGINE_AUDIENCE", "ads-engine"),
         engine_allowed_azp=_env("ADS_ENGINE_ALLOWED_AZP", "ads-engine"),
+        sandbox_manager_base_url=_env("ADS_SANDBOX_MANAGER_BASE_URL").rstrip("/"),
+        manager_service_subject=UUID(_env("ADS_MANAGER_SERVICE_SUBJECT")),
+        ipc_service_subject=UUID(_env("ADS_IPC_SERVICE_SUBJECT")),
+        kafka_security_protocol=_env("ADS_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+        kafka_sasl_mechanism=_env("ADS_KAFKA_SASL_MECHANISM", "SCRAM-SHA-512"),
+        kafka_sasl_username=os.environ.get("ADS_KAFKA_SASL_USERNAME"),
+        kafka_sasl_password=os.environ.get("ADS_KAFKA_SASL_PASSWORD"),
+        kafka_ca_bundle=Path(os.environ["ADS_KAFKA_CA_BUNDLE"])
+        if os.environ.get("ADS_KAFKA_CA_BUNDLE")
+        else None,
     )
     load_tls_context(settings)
     return settings

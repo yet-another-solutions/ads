@@ -96,6 +96,58 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_egress_identity_bindings_and_application_sasl(self):
+        ads_subject = "11111111-1111-4111-8111-111111111111"
+        manager_subject = "22222222-2222-4222-8222-222222222222"
+        ipc_subject = "33333333-3333-4333-8333-333333333333"
+        docs = self.documents(
+            "--set",
+            f"keycloak.serviceSubjects.ads={ads_subject}",
+            "--set",
+            f"keycloak.serviceSubjects.manager={manager_subject}",
+            "--set",
+            f"keycloak.serviceSubjects.ipc={ipc_subject}",
+            "--set",
+            "kafka.securityProtocol=SASL_SSL,kafka.existingSecret=ads-broker",
+            "--set",
+            "kafka.caBundle.secretName=broker-ca",
+        )
+        app = docs["ConfigMap", "ads"]["data"]
+        manager = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+        preferences = docs["ConfigMap", "ads-preferences"]["data"]
+        self.assertEqual(app["ADS_SANDBOX_MANAGER_BASE_URL"], "https://ads-sandbox-manager:8080")
+        self.assertEqual(manager["ADS_SANDBOX_MANAGER_ADS_BASE_URL"], "https://ads:8080")
+        self.assertEqual(manager["ADS_SANDBOX_MANAGER_ADS_SERVICE_SUBJECT"], ads_subject)
+        self.assertEqual(preferences["ADS_PREFERENCES_ADS_SERVICE_SUBJECT"], ads_subject)
+        self.assertEqual(app["ADS_MANAGER_SERVICE_SUBJECT"], manager_subject)
+        self.assertEqual(app["ADS_IPC_SERVICE_SUBJECT"], ipc_subject)
+        self.assertEqual(app["ADS_KAFKA_SECURITY_PROTOCOL"], "SASL_SSL")
+        self.assertEqual(app["ADS_KAFKA_CA_BUNDLE"], "/kafka-ca/ca.crt")
+        service = docs["Service", "ads-sandbox-manager"]["spec"]
+        self.assertEqual(service["type"], "ClusterIP")
+        self.assertEqual(service["selector"]["app.kubernetes.io/component"], "ads-sandbox-manager")
+        pod = docs["Deployment", "ads"]["spec"]["template"]["spec"]
+        env = {
+            entry["name"]: entry["valueFrom"]["secretKeyRef"]
+            for entry in pod["containers"][0]["env"]
+        }
+        self.assertEqual(env["ADS_KAFKA_SASL_PASSWORD"], {"name": "ads-broker", "key": "password"})
+        self.assertNotIn("ADS_KAFKA_SASL_PASSWORD", docs["Secret", "ads"]["stringData"])
+        self.assertTrue(any(v["name"] == "kafka-ca" for v in pod["volumes"]))
+        self.assertNotEqual(self.render("--set", "kafka.securityProtocol=SASL_SSL").returncode, 0)
+        inline = self.documents(
+            "--set",
+            "kafka.securityProtocol=SASL_PLAINTEXT,kafka.saslUsername=fixture",
+            "--set",
+            "kafka.saslPassword=fixture-password",
+        )
+        self.assertEqual(
+            inline["Secret", "ads"]["stringData"]["ADS_KAFKA_SASL_PASSWORD"], "fixture-password"
+        )
+        for (kind, _), obj in inline.items():
+            if kind == "ConfigMap":
+                self.assertNotIn("fixture-password", json.dumps(obj))
+
     def test_context_compactor_is_internal_tls_with_scoped_secret_and_engine_urls(self):
         docs = self.documents()
         name = "ads-context-compactor"
@@ -618,6 +670,8 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.createSeconds=144",
             "--set",
             "sandbox.ipc.timeoutSeconds=55,sandbox.mcp.timeoutSeconds=66",
+            "--set",
+            "keycloak.serviceSubjects.ads=11111111-1111-4111-8111-111111111111",
         )
 
         def environment(component):
@@ -630,6 +684,8 @@ class ChartTests(unittest.TestCase):
         ):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
+        self.assertEqual(settings.ads_base_url, "https://custom:8080")
+        self.assertEqual(str(settings.ads_service_subject), "11111111-1111-4111-8111-111111111111")
         self.assertEqual(settings.detached_seconds, 999)
         self.assertEqual(settings.lifecycle_batch, 7)
         self.assertEqual(settings.pvc_timeout_seconds, 87)

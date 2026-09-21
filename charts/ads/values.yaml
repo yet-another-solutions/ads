@@ -60,6 +60,14 @@ kafka:
   requestTopic: ads.engine.request
   outputTopic: ads.engine.output
   consumerGroup: ads
+  securityProtocol: PLAINTEXT
+  saslMechanism: SCRAM-SHA-512
+  saslUsername: ""
+  saslPassword: ""
+  existingSecret: "" # Optional username/password keys; no inline password when supplied.
+  caBundle:
+    secretName: ""
+    key: ca.crt
 
 preferences:
   replicaCount: 1
@@ -178,6 +186,12 @@ keycloak:
   clientId: ads
   audience: ads
   role: user
+  # Native service-account user UUIDs observed from Keycloak, never client UUID overrides.
+  # Empty defaults cannot authorize the binding/configuration service operations.
+  serviceSubjects:
+    ads: ""
+    manager: ""
+    ipc: ""
 
 secrets:
   keycloakClientSecret: change-me

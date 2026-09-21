@@ -17,7 +17,7 @@ from ads.project_service import ProjectService
 from ads.repository import ProjectRepository, SessionRepository, SessionRunRepository
 from ads_commons.egress import ProjectEgressSettings, ProjectEgressSnapshot
 from ads_commons.security import SecurityContext, SecurityContextHolder
-from tests.threadline_fakes import USER_ID, FakePreferences, login
+from tests.threadline_fakes import USER_ID, FakePreferences, RecordingEgress, login
 
 
 def service(session: Session, preferences: FakePreferences) -> ProjectService:
@@ -27,6 +27,7 @@ def service(session: Session, preferences: FakePreferences) -> ProjectService:
         SessionRepository(session),
         SessionRunRepository(session),
         preferences,
+        RecordingEgress(),
     )
 
 

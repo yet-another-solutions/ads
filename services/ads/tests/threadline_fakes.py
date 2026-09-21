@@ -43,6 +43,23 @@ class ProduceFailed(Exception):
     pass
 
 
+class RecordingEgress:
+    def __init__(self) -> None:
+        self.updates = []
+        self.failed = False
+
+    async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def publish(self, project_id: uuid.UUID, snapshot: ProjectEgressSnapshot) -> None:
+        if self.failed:
+            raise ProduceFailed("configuration broker unavailable")
+        self.updates.append((project_id, snapshot))
+
+
 class RecordingKafka:
     """Records what would go on ``ads.engine.request``. No broker in tests."""
 
@@ -177,6 +194,9 @@ class FakeTokens:
         if self.error is not None:
             raise self.error
         return f"ste-{audience}"
+
+    def exchange_service(self, audience: str) -> str:
+        return self.exchange(audience, subject_token="fresh-own-service-token")
 
     def mint(self, audience: str, subject_token: str | None = None) -> SecurityContext:
         return SecurityContext(

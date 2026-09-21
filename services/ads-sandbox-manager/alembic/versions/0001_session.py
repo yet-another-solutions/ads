@@ -15,6 +15,7 @@ def upgrade() -> None:
         "sandbox_session",
         sa.Column("session_id", sa.Uuid(), primary_key=True),
         sa.Column("sandbox_id", sa.Uuid(), nullable=False, unique=True),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
         sa.Column("status", sa.String(), nullable=False),
         sa.Column("golden_version", sa.String(), nullable=False),
         sa.Column("pvc_uid", sa.String(), nullable=True),

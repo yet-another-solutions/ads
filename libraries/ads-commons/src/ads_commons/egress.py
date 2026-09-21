@@ -131,6 +131,19 @@ class SandboxProjectBinding(msgspec.Struct, frozen=True, forbid_unknown_fields=T
     eligible: bool
 
 
+class SessionProjectBinding(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    session_id: UUID
+    project_id: UUID
+
+
+class SessionProjectsApi(Protocol):
+    async def session_project(self, session_id: UUID) -> SessionProjectBinding: ...
+
+
+class SandboxBindingsApi(Protocol):
+    async def sandbox_binding(self, sandbox_id: UUID) -> SandboxProjectBinding: ...
+
+
 class ServiceOriginTokens(Protocol):
     def exchange_service(self, audience: str) -> str: ...
 

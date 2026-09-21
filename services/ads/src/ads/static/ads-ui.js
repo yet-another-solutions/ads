@@ -398,6 +398,16 @@
   /* HTMX ignores 400 by default. Only the message POST warning may swap. */
   document.addEventListener("htmx:beforeSwap", function (event) {
     var detail = event.detail;
+    if (detail && detail.xhr && detail.xhr.status === 503 &&
+        detail.target && detail.target.id === "dialog-host" &&
+        detail.xhr.getResponseHeader("X-ADS-Egress-Saved") === "true") {
+      detail.shouldSwap = true;
+      detail.isError = false;
+    }
+  });
+
+  document.addEventListener("htmx:beforeSwap", function (event) {
+    var detail = event.detail;
     if (!detail || !detail.xhr || detail.xhr.status !== 400) {
       return;
     }

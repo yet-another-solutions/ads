@@ -121,6 +121,9 @@ def test_load_settings_accepts_ca_bundle(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setenv("ADS_DATABASE_URL", "postgresql+psycopg://ads@db/ads")
     monkeypatch.setenv("ADS_KAFKA_BOOTSTRAP_SERVERS", "kafka.test:9092")
     monkeypatch.setenv("ADS_PREFERENCES_BASE_URL", "https://ads-preferences.test/")
+    monkeypatch.setenv("ADS_SANDBOX_MANAGER_BASE_URL", "https://manager.test")
+    monkeypatch.setenv("ADS_MANAGER_SERVICE_SUBJECT", "11111111-1111-4111-8111-111111111111")
+    monkeypatch.setenv("ADS_IPC_SERVICE_SUBJECT", "22222222-2222-4222-8222-222222222222")
     settings = load_settings()
     assert settings.tls_ca_bundle == ca_crt
     assert settings.database_url == "postgresql+psycopg://ads@db/ads"

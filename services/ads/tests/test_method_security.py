@@ -11,7 +11,7 @@ from ads.repository import ProjectRepository, SessionRepository, SessionRunRepos
 from ads.security_context import SecurityContext
 from ads.security_holder import SecurityContextHolder
 from ads_commons.security import AccessDenied, AuthenticationRequired
-from tests.threadline_fakes import FakePreferences
+from tests.threadline_fakes import FakePreferences, RecordingEgress
 
 USER_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
@@ -28,6 +28,7 @@ def _service(engine: Engine, session: Session) -> ProjectService:
         sessions=SessionRepository(session=session),
         runs=SessionRunRepository(session=session),
         egress=FakePreferences(),
+        updates=RecordingEgress(),
     )
 
 

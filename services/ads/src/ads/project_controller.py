@@ -14,6 +14,7 @@ from litestar.params import Body
 from litestar.response import Template
 
 from ads.authenticated import AuthenticatedController
+from ads.egress import EgressPublicationFailed
 from ads.exceptions import InvalidInput
 from ads.identity import Identity
 from ads.inject import inject
@@ -35,14 +36,22 @@ class ProjectController(AuthenticatedController):
             settings = msgspec.json.decode(data.get("settings", ""), type=ProjectEgressSettings)
         except msgspec.DecodeError as exc:
             raise InvalidInput(str(exc)) from exc
-        snapshot = await self.projects.save_egress(project_id, settings)
+        publication_failed = False
+        try:
+            snapshot = await self.projects.save_egress(project_id, settings)
+        except EgressPublicationFailed as exc:
+            snapshot = exc.snapshot
+            publication_failed = True
         return Template(
             template_name="partials/egress_settings.html",
+            status_code=503 if publication_failed else 200,
+            headers={"X-ADS-Egress-Saved": "true"},
             context={
                 "project": await self.projects.get(project_id),
                 "snapshot": snapshot,
                 "settings_json": msgspec.to_builtins(snapshot.settings),
                 "saved": True,
+                "publication_failed": publication_failed,
             },
         )
 
