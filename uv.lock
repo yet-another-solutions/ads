@@ -19,6 +19,7 @@ members = [
     "ads-egress-controlplane",
     "ads-engine",
     "ads-preferences",
+    "ads-sandbox-ca",
     "ads-sandbox-egress",
     "ads-sandbox-ipc",
     "ads-sandbox-manager",
@@ -277,6 +278,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "ads-sandbox-ca"
+version = "0.0.1"
+source = { editable = "services/ads-sandbox-ca" }
+dependencies = [
+    { name = "cryptography" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "cryptography", specifier = "==50.0.1" }]
+
+[[package]]
 name = "ads-sandbox-egress"
 version = "0.0.1"
 source = { editable = "services/ads-sandbox-egress" }
@@ -421,6 +433,7 @@ dependencies = [
     { name = "ads-egress-controlplane" },
     { name = "ads-engine" },
     { name = "ads-preferences" },
+    { name = "ads-sandbox-ca" },
     { name = "ads-sandbox-egress" },
     { name = "ads-sandbox-ipc" },
     { name = "ads-sandbox-manager" },
@@ -459,6 +472,7 @@ requires-dist = [
     { name = "ads-egress-controlplane", editable = "services/ads-egress-controlplane" },
     { name = "ads-engine", editable = "services/ads-engine" },
     { name = "ads-preferences", editable = "services/ads-preferences" },
+    { name = "ads-sandbox-ca", editable = "services/ads-sandbox-ca" },
     { name = "ads-sandbox-egress", editable = "services/ads-sandbox-egress" },
     { name = "ads-sandbox-ipc", editable = "services/ads-sandbox-ipc" },
     { name = "ads-sandbox-manager", editable = "services/ads-sandbox-manager" },

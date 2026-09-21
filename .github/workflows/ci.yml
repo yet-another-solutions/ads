@@ -45,6 +45,7 @@ jobs:
           - services/ads-sandbox-mcp/Containerfile
           - services/ads-sandbox-ipc/Containerfile
           - services/ads-sandbox-manager/Containerfile
+          - services/ads-sandbox-ca/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
           - services/ads-sandbox-base/Containerfile
@@ -119,6 +120,11 @@ jobs:
             context: .
             smoke: "import ads_sandbox_manager; print(ads_sandbox_manager.__version__)"
             pack: "false"
+          - image: ads-sandbox-ca
+            file: services/ads-sandbox-ca/Containerfile
+            context: .
+            smoke: "import ads_sandbox_ca; print(ads_sandbox_ca.__version__)"
+            pack: "false"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -190,6 +196,14 @@ jobs:
         run: |
           set +e
           docker run --rm ${{ matrix.image }}:ci
+          st=$?
+          set -e
+          test "$st" -eq 1
+      - name: CA fails closed without designated inputs and devices
+        if: matrix.image == 'ads-sandbox-ca'
+        run: |
+          set +e
+          docker run --rm --network none --read-only ads-sandbox-ca:ci
           st=$?
           set -e
           test "$st" -eq 1
