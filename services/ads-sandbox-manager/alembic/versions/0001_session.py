@@ -86,9 +86,29 @@ def upgrade() -> None:
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_ping_probe_sandbox_id", "ping_probe", ["sandbox_id"])
+    # Egress uses a fresh installation, not adoption of historical object names.
+    # Deliberately no session FK/cascade: losing a session must not erase ownership.
+    op.create_table(
+        "sandbox_pair_intent",
+        sa.Column("generation", sa.Uuid(), primary_key=True),
+        sa.Column("session_id", sa.Uuid(), nullable=False),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("claim_owner", sa.Uuid(), nullable=False),
+        sa.Column("claim_changed", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("namespace", sa.String(), nullable=False),
+        sa.Column("golden_version", sa.String(), nullable=False),
+        sa.Column("control_uids", JSONB(), nullable=False),
+        sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
+        sa.UniqueConstraint(
+            "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"
+        ),
+    )
+    op.create_index("ix_sandbox_pair_intent_session_id", "sandbox_pair_intent", ["session_id"])
 
 
 def downgrade() -> None:
+    op.drop_table("sandbox_pair_intent")
     op.drop_table("ping_probe")
     op.drop_table("cleanup_work")
     op.drop_table("session_pvc")
