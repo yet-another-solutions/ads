@@ -1,0 +1,451 @@
+#!/usr/bin/env python3
+"""Disposable Pod-local transport setup. Not the production CNI or a readiness fake."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import fcntl
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import stat
+import subprocess
+from pathlib import Path
+from uuid import UUID
+
+ROOT = Path("/run/ads-ptp")
+NETNS = Path("/run/netns")
+FIELDS = {
+    "pod_uid",
+    "generation",
+    "side",
+    "local_private",
+    "peer_private",
+    "local_tunnel",
+    "peer_tunnel",
+    "transport_mtu",
+    "peer_key",
+    "endpoint",
+    "wireguard_port",
+    "vxlan_port",
+    "vni",
+}
+
+
+def run(*args: str, data: str | None = None) -> str:
+    result = subprocess.run(args, input=data, text=True, capture_output=True, timeout=15)
+    if result.returncode:
+        # Neither arbitrary tool output nor input key material enters diagnostics.
+        raise RuntimeError(f"{args[0]} operation failed ({result.returncode})")
+    return result.stdout.strip()
+
+
+def identity() -> tuple[str, str]:
+    return str(UUID(os.environ["POD_UID"])), str(UUID(os.environ["ATTACHMENT_GENERATION"]))
+
+
+def directory() -> Path:
+    pod, generation = identity()
+    return ROOT / f"{pod}-{generation}"
+
+
+def private_file(path: Path, value: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write(value)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def read_file(path: Path) -> str:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+            raise ValueError("invalid canary state file")
+        return stream.read(65537)
+
+
+def namespace_identity(name: str) -> list[int]:
+    info = NETNS.joinpath(name).stat(follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("invalid namespace mount")
+    return [info.st_dev, info.st_ino]
+
+
+def save_namespaces(owned: dict) -> None:
+    root = directory()
+    temporary = root / "namespaces.pending"
+    private_file(temporary, json.dumps(owned, sort_keys=True))
+    os.replace(temporary, root / "namespaces.json")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def keygen() -> dict:
+    root = directory()
+    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    key = run("wg", "genkey") + "\n"
+    public = run("wg", "pubkey", data=key)
+    private_file(root / "key", key)
+    pod, generation = identity()
+    private_file(root / "identity.json", json.dumps({"pod_uid": pod, "generation": generation}))
+    return {"pod_uid": pod, "generation": generation, "public_key": public}
+
+
+def validate(config: dict) -> dict:
+    if not isinstance(config, dict) or set(config) != FIELDS:
+        raise ValueError("exact transport configuration required")
+    pod, generation = identity()
+    if config["pod_uid"] != pod or config["generation"] != generation:
+        raise ValueError("Pod or attachment generation changed")
+    if config["side"] not in ("guest", "egress"):
+        raise ValueError("invalid side")
+    addresses = {}
+    for field in ("local_private", "peer_private", "local_tunnel", "peer_tunnel"):
+        value = config[field]
+        address = ipaddress.IPv4Interface(value)
+        if str(address) != value or not any(
+            address.ip in ipaddress.IPv4Network(network)
+            for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        ):
+            raise ValueError("canonical private IPv4 interface required")
+        addresses[field] = address
+    local, peer = addresses["local_private"], addresses["peer_private"]
+    lt, pt = addresses["local_tunnel"], addresses["peer_tunnel"]
+    if (
+        local.network != peer.network
+        or local.ip == peer.ip
+        or local.network.prefixlen > 30
+        or lt.network.prefixlen != 32
+        or pt.network.prefixlen != 32
+        or lt.ip == pt.ip
+        or lt.ip in local.network
+        or pt.ip in local.network
+        or local.ip in (local.network.network_address, local.network.broadcast_address)
+        or peer.ip in (peer.network.network_address, peer.network.broadcast_address)
+    ):
+        raise ValueError("invalid private/tunnel topology")
+    for field, low, high in (
+        ("transport_mtu", 686, 65535),
+        ("wireguard_port", 1024, 65535),
+        ("vxlan_port", 1024, 65535),
+        ("vni", 1, 16777215),
+    ):
+        value = config[field]
+        if type(value) is not int or not low <= value <= high:
+            raise ValueError(f"invalid {field}")
+    key = config["peer_key"]
+    if not isinstance(key, str) or len(base64.b64decode(key, validate=True)) != 32:
+        raise ValueError("invalid peer public key")
+    if base64.b64encode(base64.b64decode(key)).decode() != key:
+        raise ValueError("noncanonical peer public key")
+    endpoint = config["endpoint"]
+    if config["side"] == "guest":
+        if not isinstance(endpoint, str) or not re.fullmatch(r"[0-9.]+:[0-9]+", endpoint):
+            raise ValueError("observed IPv4 Service endpoint required")
+        host, port = endpoint.split(":")
+        ipaddress.IPv4Address(host)
+        if str(int(port)) != port or int(port) != config["wireguard_port"]:
+            raise ValueError("Service port mismatch")
+    elif endpoint is not None:
+        raise ValueError("egress learns the authenticated peer endpoint")
+    return config
+
+
+def ns_names() -> tuple[str, str]:
+    # Mount namespace is Pod-local, but still fence every name by exact generation.
+    _, generation = identity()
+    return f"private-{generation}", f"mock-{generation}"
+
+
+def ns(name: str, *command: str, data: str | None = None) -> str:
+    return run("ip", "netns", "exec", name, *command, data=data)
+
+
+def mac(generation: str, side: str) -> str:
+    raw = hashlib.sha256(f"{generation}/{side}".encode()).digest()[:5]
+    return "02:" + ":".join(f"{value:02x}" for value in raw)
+
+
+def firewall(config: dict) -> str:
+    peer = str(ipaddress.IPv4Interface(config["peer_tunnel"]).ip)
+    port = config["vxlan_port"]
+    return f"""table inet ads_private {{
+ chain input {{
+  type filter hook input priority 0; policy drop;
+  iifname "lo" accept
+  iifname "wg-private" ip saddr {peer} udp dport {port} accept
+  iifname "wg-private" ip saddr {peer} icmp type {{ echo-request, echo-reply }} accept
+ }}
+ chain forward {{
+  type filter hook forward priority 0; policy drop;
+  iifname "br-private" oifname "br-private" accept
+ }}
+}}
+table bridge ads_private {{
+ chain forward {{
+  type filter hook forward priority 0; policy drop;
+  iifname "veth-local" oifname "vxlan-private" accept
+  iifname "vxlan-private" oifname "veth-local" accept
+ }}
+}}
+"""
+
+
+def configure(config: dict) -> dict:
+    config = validate(config)
+    root = directory()
+    expected = {"pod_uid": config["pod_uid"], "generation": config["generation"]}
+    if json.loads(read_file(root / "identity.json")) != expected:
+        raise ValueError("canary identity mismatch")
+    if root.joinpath("intent.json").exists():
+        raise ValueError("configuration already attempted; cleanup required")
+    private_file(root / "intent.json", json.dumps(config, sort_keys=True))
+    private, mock = ns_names()
+    owned = {}
+    save_namespaces(owned)
+    created = []
+    wg_created = False
+    try:
+        for name in (private, mock):
+            run("ip", "netns", "add", name)
+            created.append(name)
+            owned[name] = namespace_identity(name)
+            save_namespaces(owned)
+            ns(name, "ip", "link", "set", "lo", "up")
+            ns(name, "sysctl", "-qw", "net.ipv4.ip_forward=0")
+            if Path("/proc/sys/net/ipv6").exists():
+                ns(name, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1")
+                ns(name, "sysctl", "-qw", "net.ipv6.conf.default.disable_ipv6=1")
+        # The UDP socket stays in its CNI birthplace when the interface moves.
+        run("ip", "link", "add", "wg-private", "type", "wireguard")
+        wg_created = True
+        run("ip", "link", "set", "wg-private", "netns", private)
+        wg_created = False
+        wg_mtu, mtu = config["transport_mtu"] - 60, config["transport_mtu"] - 110
+        peer = str(ipaddress.IPv4Interface(config["peer_tunnel"]).ip)
+        local = str(ipaddress.IPv4Interface(config["local_tunnel"]).ip)
+        ns(private, "ip", "link", "set", "wg-private", "mtu", str(wg_mtu))
+        ns(private, "ip", "address", "add", config["local_tunnel"], "dev", "wg-private")
+        wg_args = [
+            "wg",
+            "set",
+            "wg-private",
+            "listen-port",
+            str(config["wireguard_port"]),
+            "private-key",
+            str(root / "key"),
+            "peer",
+            config["peer_key"],
+            "allowed-ips",
+            config["peer_tunnel"],
+        ]
+        if config["side"] == "guest":
+            wg_args += ["endpoint", config["endpoint"], "persistent-keepalive", "25"]
+        ns(private, *wg_args)
+        ns(private, "ip", "link", "set", "wg-private", "up")
+        ns(private, "ip", "route", "add", config["peer_tunnel"], "dev", "wg-private")
+        ns(private, "nft", "-f", "-", data=firewall(config))
+        ns(private, "ip", "link", "add", "br-private", "type", "bridge", "stp_state", "0")
+        ns(
+            private,
+            "ip",
+            "link",
+            "add",
+            "vxlan-private",
+            "type",
+            "vxlan",
+            "id",
+            str(config["vni"]),
+            "local",
+            local,
+            "remote",
+            peer,
+            "dev",
+            "wg-private",
+            "dstport",
+            str(config["vxlan_port"]),
+            "nolearning",
+        )
+        ns(
+            private,
+            "ip",
+            "link",
+            "add",
+            "veth-local",
+            "type",
+            "veth",
+            "peer",
+            "name",
+            "eth-private",
+            "netns",
+            mock,
+        )
+        for device in ("veth-local", "vxlan-private"):
+            ns(private, "ip", "link", "set", device, "master", "br-private")
+        for device in ("br-private", "veth-local", "vxlan-private"):
+            ns(private, "ip", "link", "set", device, "mtu", str(mtu), "up")
+        other = "egress" if config["side"] == "guest" else "guest"
+        for address in ("00:00:00:00:00:00", mac(config["generation"], other)):
+            ns(
+                private,
+                "bridge",
+                "fdb",
+                "replace",
+                address,
+                "dev",
+                "vxlan-private",
+                "dst",
+                peer,
+                "self",
+                "permanent",
+            )
+        ns(private, "bridge", "link", "set", "dev", "vxlan-private", "learning", "off")
+        ns(
+            mock,
+            "ip",
+            "link",
+            "set",
+            "eth-private",
+            "address",
+            mac(config["generation"], config["side"]),
+            "mtu",
+            str(mtu),
+            "up",
+        )
+        ns(mock, "ip", "address", "add", config["local_private"], "dev", "eth-private")
+        if config["side"] == "guest":
+            ns(
+                mock,
+                "ip",
+                "route",
+                "add",
+                "default",
+                "via",
+                str(ipaddress.IPv4Interface(config["peer_private"]).ip),
+                "dev",
+                "eth-private",
+            )
+        result = {
+            **expected,
+            "side": config["side"],
+            "private_namespace": private,
+            "mock_namespace": mock,
+            "private_mtu": mtu,
+            "wireguard_mtu": wg_mtu,
+            "socket_configured": True,
+            "tunnel_proven": False,
+        }
+        private_file(root / "ready.json", json.dumps(result, sort_keys=True))
+        return result
+    except BaseException:
+        # Delete only resources this attempt actually created, never an existing name.
+        if wg_created:
+            run("ip", "link", "delete", "wg-private")
+        for name in reversed(created):
+            run("ip", "netns", "delete", name)
+        raise
+
+
+def inspect() -> dict:
+    private, mock = ns_names()
+    config = validate(json.loads(read_file(directory() / "intent.json")))
+    return {
+        "ready": json.loads(read_file(directory() / "ready.json")),
+        "transport_links": json.loads(run("ip", "-j", "-d", "link")),
+        "private_links": json.loads(ns(private, "ip", "-j", "-d", "link")),
+        "private_addresses": json.loads(ns(private, "ip", "-j", "address")),
+        "private_routes": json.loads(ns(private, "ip", "-j", "route")),
+        "mock_links": json.loads(ns(mock, "ip", "-j", "-d", "link")),
+        "mock_routes": json.loads(ns(mock, "ip", "-j", "route")),
+        "fdb": json.loads(ns(private, "bridge", "-j", "fdb", "show")),
+        "rules": json.loads(ns(private, "nft", "-j", "list", "ruleset")),
+        "wireguard": {
+            field: ns(private, "wg", "show", "wg-private", field)
+            for field in (
+                "public-key",
+                "peers",
+                "endpoints",
+                "allowed-ips",
+                "latest-handshakes",
+                "transfer",
+                "persistent-keepalive",
+            )
+        },
+        "input_identity": {k: config[k] for k in ("pod_uid", "generation", "side")},
+    }
+
+
+def cleanup() -> dict:
+    root = directory()
+    pod, generation = identity()
+    if json.loads(read_file(root / "identity.json")) != {
+        "pod_uid": pod,
+        "generation": generation,
+    }:
+        raise ValueError("cleanup identity mismatch")
+    names = ns_names()
+    owned = (
+        json.loads(read_file(root / "namespaces.json"))
+        if root.joinpath("namespaces.json").exists()
+        else {}
+    )
+    existing = {item["name"] for item in json.loads(run("ip", "-j", "netns", "list"))}
+    # Validate all identities before any deletion, including a partially created attempt.
+    for name in names:
+        if name in existing and (name not in owned or namespace_identity(name) != owned[name]):
+            raise RuntimeError("foreign or replaced namespace")
+    for name in reversed(names):
+        if name in existing:
+            # Never kill an unrecorded PID or unmount a namespace still holding captures.
+            if run("ip", "netns", "pids", name):
+                raise RuntimeError("namespace still has processes; stop owned diagnostics first")
+            run("ip", "netns", "delete", name)
+    remaining = {item["name"] for item in json.loads(run("ip", "-j", "netns", "list"))}
+    if remaining.intersection(names):
+        raise RuntimeError("namespace cleanup incomplete")
+    for name in (
+        "ready.json",
+        "intent.json",
+        "key",
+        "identity.json",
+        "namespaces.json",
+        "namespaces.pending",
+    ):
+        root.joinpath(name).unlink(missing_ok=True)
+    root.rmdir()
+    return {"pod_uid": pod, "generation": generation, "cleaned": True}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("keygen", "configure", "inspect", "cleanup", "ready"))
+    args = parser.parse_args()
+    ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock = os.open(ROOT / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    # The descriptor remains open for the entire short-lived CLI process.
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if args.action == "configure":
+        import sys
+
+        result = configure(json.loads(sys.stdin.read(65537)))
+    elif args.action == "ready":
+        result = json.loads(read_file(directory() / "ready.json"))
+    else:
+        result = {"keygen": keygen, "inspect": inspect, "cleanup": cleanup}[args.action]()
+    print(json.dumps(result, sort_keys=True))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        # Fail closed without a traceback that might include caller configuration.
+        raise SystemExit(f"canary operation failed: {type(exc).__name__}") from None
