@@ -30,15 +30,24 @@ def reset_volatile_runtime() -> None:
         stack.callback(os.close, run)
         targets = []
         # Open/validate the complete allowlist before deleting either subtree.
-        for parent, name in (("containers", "storage"), ("", "libpod")):
+        for parents, name in (
+            (("containers",), "storage"),
+            ((), "libpod"),
+            (("user", "0"), "libpod"),
+            ((), "crun"),
+        ):
             directory = run
-            if parent:
+            for parent in parents:
                 try:
-                    directory = os.open(parent, flags, dir_fd=run)
+                    directory = os.open(parent, flags, dir_fd=directory)
                 except FileNotFoundError:
-                    continue
+                    break
                 stack.callback(os.close, directory)
-            path = str(RUN / parent / name)
+            else:
+                parent = None
+            if parent is not None:
+                continue
+            path = str(RUN.joinpath(*parents, name))
             if any(mount == path or mount.startswith(path + "/") for mount in mounts):
                 raise RuntimeError("mounted volatile runtime subtree is not safe to reset")
             try:

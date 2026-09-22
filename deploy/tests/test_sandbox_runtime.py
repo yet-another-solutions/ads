@@ -344,7 +344,8 @@ def test_agent_refuses_old_ranges_or_disabled_seccomp(monkeypatch, range_value, 
 
 def test_agent_resets_only_nested_volatile_runtime(tmp_path, monkeypatch):
     run = tmp_path / "run"
-    for path in (run / "containers/storage", run / "libpod", run / "keep"):
+    targets = (run / "containers/storage", run / "libpod", run / "user/0/libpod", run / "crun")
+    for path in (*targets, run / "keep", run / "user/0/keep"):
         path.mkdir(parents=True)
         (path / "marker").write_text(path.name)
     mountinfo = tmp_path / "mountinfo"
@@ -356,14 +357,14 @@ def test_agent_resets_only_nested_volatile_runtime(tmp_path, monkeypatch):
     (graphroot / "image").write_text("persistent")
     (run / "libpod/link").symlink_to(graphroot, target_is_directory=True)
     agent.reset_volatile_runtime()
-    assert not (run / "containers/storage").exists()
-    assert not (run / "libpod").exists()
+    assert all(not path.exists() for path in targets)
     assert (run / "keep/marker").read_text() == "keep"
+    assert (run / "user/0/keep/marker").read_text() == "keep"
     assert (graphroot / "image").read_text() == "persistent"
     agent.reset_volatile_runtime()
 
 
-@pytest.mark.parametrize("parent", ["run", "containers"])
+@pytest.mark.parametrize("parent", ["run", "containers", "user", "user/0"])
 def test_agent_refuses_symlinked_runroot_ancestors(tmp_path, monkeypatch, parent):
     run = tmp_path / "run"
     elsewhere = tmp_path / "elsewhere"
@@ -372,8 +373,8 @@ def test_agent_refuses_symlinked_runroot_ancestors(tmp_path, monkeypatch, parent
     if parent == "run":
         run.symlink_to(elsewhere, target_is_directory=True)
     else:
-        run.mkdir()
-        (run / "containers").symlink_to(elsewhere, target_is_directory=True)
+        (run / parent).parent.mkdir(parents=True)
+        (run / parent).symlink_to(elsewhere, target_is_directory=True)
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
     monkeypatch.setattr(agent, "RUN", run)
@@ -383,12 +384,14 @@ def test_agent_refuses_symlinked_runroot_ancestors(tmp_path, monkeypatch, parent
     assert (elsewhere / "storage/marker").read_text() == "persistent"
 
 
-def test_agent_validates_complete_runroot_allowlist_before_cleanup(tmp_path, monkeypatch):
+@pytest.mark.parametrize("target", ["libpod", "user/0/libpod", "crun"])
+def test_agent_validates_complete_runroot_allowlist_before_cleanup(tmp_path, monkeypatch, target):
     run = tmp_path / "run"
     (run / "containers/storage").mkdir(parents=True)
     (run / "containers/storage/marker").write_text("retained")
     (run / "elsewhere").mkdir()
-    (run / "libpod").symlink_to(run / "elsewhere", target_is_directory=True)
+    (run / target).parent.mkdir(parents=True, exist_ok=True)
+    (run / target).symlink_to(run / "elsewhere", target_is_directory=True)
     mountinfo = tmp_path / "mountinfo"
     mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
     monkeypatch.setattr(agent, "RUN", run)
@@ -396,19 +399,34 @@ def test_agent_validates_complete_runroot_allowlist_before_cleanup(tmp_path, mon
     with pytest.raises(RuntimeError, match="local directory"):
         agent.reset_volatile_runtime()
     assert (run / "containers/storage/marker").read_text() == "retained"
-    assert (run / "libpod").is_symlink()
+    assert (run / target).is_symlink()
 
 
-def test_agent_refuses_mounted_nested_runroot(tmp_path, monkeypatch):
+def test_stale_rootless_pause_cache_is_removed_without_touching_user_data(tmp_path, monkeypatch):
     run = tmp_path / "run"
-    (run / "containers/storage").mkdir(parents=True)
+    (run / "user/0/libpod/tmp").mkdir(parents=True)
+    (run / "user/0/libpod/tmp/pause.pid").write_text("1102\n")
+    (run / "user/0/agent-data").write_text("retain")
     mountinfo = tmp_path / "mountinfo"
-    mountinfo.write_text(f"1 0 0:1 / {run}/containers/storage/overlay rw - tmpfs tmpfs rw\n")
+    mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
+    monkeypatch.setattr(agent, "RUN", run)
+    monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
+    agent.reset_volatile_runtime()
+    assert not (run / "user/0/libpod").exists()
+    assert (run / "user/0/agent-data").read_text() == "retain"
+
+
+@pytest.mark.parametrize("target", ["containers/storage", "libpod", "user/0/libpod", "crun"])
+def test_agent_refuses_mounted_nested_runroot(tmp_path, monkeypatch, target):
+    run = tmp_path / "run"
+    (run / target).mkdir(parents=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(f"1 0 0:1 / {run}/{target}/overlay rw - tmpfs tmpfs rw\n")
     monkeypatch.setattr(agent, "RUN", run)
     monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
     with pytest.raises(RuntimeError, match="mounted volatile"):
         agent.reset_volatile_runtime()
-    assert (run / "containers/storage").is_dir()
+    assert (run / target).is_dir()
 
 
 def test_missing_controller_does_not_enable_partial_delegation(tree):
