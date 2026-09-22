@@ -7,6 +7,7 @@ RUN apt-get update \
 COPY services/ads-ptp-tools/ads-ptp-canary /usr/local/bin/ads-ptp-canary
 COPY services/ads-ptp-tools/ads-ptp /usr/local/bin/ads-ptp
 COPY services/ads-ptp-tools/ads-ptp-relay /usr/local/bin/ads-ptp-relay
-RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay
+COPY services/ads-ptp-tools/ads-ptp-attest /usr/local/bin/ads-ptp-attest
+RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay /usr/local/bin/ads-ptp-attest
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "-c", "import time; time.sleep(86400)"]

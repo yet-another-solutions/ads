@@ -21,7 +21,10 @@ remains a separate integration gate.
 
 A trusted node attestor must publish a root-owned mode-0600 binding under a
 root-owned mode-0700 binding directory. This publisher is a subsequent
-integration component, not a success-returning fallback. Missing attestation
+integration component described in `egress-node-attestation.md`, not a
+success-returning fallback. Production ADD/CHECK invoke it on demand and
+require `attestorConfig`; static records alone are accepted only by in-process
+kernel fixtures. Missing attestation
 fails ADD. Relays and guests must never write the binding/state directories.
 Neither receives a host runtime socket, general host filesystem, Kubernetes
 credential or node CNI authority from this component.
@@ -36,7 +39,7 @@ These inputs are platform-owned, never project policy. The attestor must establi
 these from current Kubernetes/CRI observations, reject terminating/replaced or
 foreign-node objects, and verify the private namespace belongs to that exact
 relay runtime. A root-authored record is authorization, not proof of those
-facts by itself. This PR does not claim to implement the attestor.
+facts by itself. Live node integration remains a separate proof.
 
 Both namespace references are opened and verified using nsfs type and
 device/inode. Held descriptors, not a later PID lookup, address kernel

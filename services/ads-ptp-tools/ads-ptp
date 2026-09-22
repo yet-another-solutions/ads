@@ -6,6 +6,8 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
+import importlib.machinery
+import importlib.util
 import ipaddress
 import json
 import os
@@ -551,7 +553,20 @@ def perform(config, env):
             delete(saved, state_path)
             return None
         root = private_directory(config["bindingDir"])
-        attestation = binding(read_record(root / (req["pod_uid"] + ".json")), req)
+        if "attestorConfig" in config:
+            loader = importlib.machinery.SourceFileLoader(
+                "ads_ptp_node_attestor", str(Path(__file__).with_name("ads-ptp-attest"))
+            )
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            # Re-observe before every ADD/CHECK. Failure never falls back to an
+            # older record; DEL deliberately uses only its original journal.
+            observed = module.refresh(config["attestorConfig"], req, root)
+        else:
+            # In-process native kernel fixtures only. CLI requires live attestation.
+            observed = read_record(root / (req["pod_uid"] + ".json"))
+        attestation = binding(observed, req)
         if req["command"] == "ADD":
             return add(req, attestation, state_path, config.get("prevResult"))
         saved = read_record(state_path)
@@ -571,6 +586,8 @@ def main():
             return
         if os.geteuid() != 0:
             raise PermissionError("node-root execution required")
+        if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("attestorConfig"):
+            raise ValueError("live node attestation configuration required")
         output = perform(config, os.environ)
         if output is not None:
             print(json.dumps(output))

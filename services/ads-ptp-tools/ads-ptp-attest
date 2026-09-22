@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+"""Node-root, on-demand Kubernetes/CRI attestation. No listener or network mutation."""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import select
+import stat
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from uuid import UUID
+
+COMPONENT = "app.kubernetes.io/component"
+LABELS = (
+    "ads.io/session-id",
+    "ads.io/sandbox-id",
+    "ads.io/project-id",
+    "ads.io/attachment-generation",
+)
+FIELDS = {
+    "node",
+    "namespace",
+    "network",
+    "kubeconfig",
+    "kubectl",
+    "crictl",
+    "cri_endpoint",
+    "relay_image",
+    "relay_image_id",
+    "relay_container",
+    "guest_runtime",
+    "egress_runtime",
+    "transport_mtu",
+}
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def cni_module():
+    path = Path(__file__).with_name("ads-ptp")
+    loader = importlib.machinery.SourceFileLoader("ads_ptp_attestation_cni", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def validate(config):
+    require(isinstance(config, dict) and set(config) == FIELDS, "exact node configuration required")
+    for name in (
+        "node",
+        "namespace",
+        "network",
+        "relay_container",
+        "guest_runtime",
+        "egress_runtime",
+    ):
+        require(
+            isinstance(config[name], str)
+            and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", config[name]),
+            "invalid platform name",
+        )
+    require(
+        type(config["transport_mtu"]) is int and 686 <= config["transport_mtu"] <= 65535,
+        "invalid path MTU",
+    )
+    require(
+        re.fullmatch(r"sha256:[0-9a-f]{64}", config["relay_image_id"]), "exact image ID required"
+    )
+    require(
+        isinstance(config["relay_image"], str)
+        and 0 < len(config["relay_image"]) <= 512
+        and not any(c.isspace() for c in config["relay_image"]),
+        "invalid relay image",
+    )
+    endpoint = config["cri_endpoint"]
+    require(isinstance(endpoint, str) and endpoint.startswith("unix:///"), "local CRI required")
+    socket = Path(endpoint.removeprefix("unix://"))
+    require(socket.resolve() == socket, "canonical CRI path required")
+    for name in ("kubeconfig", "kubectl", "crictl"):
+        path = Path(config[name])
+        info = path.lstat()
+        require(
+            path.is_absolute()
+            and path.resolve() == path
+            and stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0
+            and not info.st_mode & 0o022,
+            "protected platform file required",
+        )
+        if name == "kubeconfig":
+            require(not info.st_mode & 0o077, "private API credentials required")
+        else:
+            require(info.st_mode & 0o111, "platform executable required")
+    return config
+
+
+class Observer:
+    def __init__(self, config):
+        self.config = config
+        self.deadline = time.monotonic() + 20
+
+    def command(self, *args):
+        remaining = min(4, self.deadline - time.monotonic())
+        require(remaining > 0, "attestation deadline exceeded")
+        # CRI inspect includes runtime configuration. Keep it out of logs and
+        # avoid buffering an unbounded command response in process memory.
+        with tempfile.TemporaryFile() as output:
+            reply = subprocess.run(
+                args,
+                stdout=output,
+                stderr=subprocess.DEVNULL,
+                timeout=remaining,
+                env={
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "LANG": "C",
+                    "HOME": "/nonexistent",
+                },
+            )
+            require(reply.returncode == 0 and output.tell() <= 1048576, "observation failed")
+            output.seek(0)
+            return json.load(output)
+
+    def pods(self, selector=None):
+        config = self.config
+        args = [
+            config["kubectl"],
+            "--kubeconfig=" + config["kubeconfig"],
+            "--insecure-skip-tls-verify=false",
+            "--request-timeout=3s",
+            "-n",
+            config["namespace"],
+            "get",
+            "pods",
+            "--field-selector=spec.nodeName=" + config["node"],
+            "-o",
+            "json",
+        ]
+        if selector:
+            args.append("--selector=" + selector)
+        reply = self.command(*args)
+        require(not reply.get("metadata", {}).get("continue"), "incomplete Pod observation")
+        return reply["items"]
+
+    def cri(self, *args):
+        return self.command(
+            self.config["crictl"],
+            "--runtime-endpoint=" + self.config["cri_endpoint"],
+            "--timeout=3s",
+            *args,
+        )
+
+
+def pod_identity(pod, config, component):
+    meta, spec = pod["metadata"], pod["spec"]
+    require(
+        meta.get("namespace") == config["namespace"]
+        and not meta.get("deletionTimestamp")
+        and spec.get("nodeName") == config["node"]
+        and not any(spec.get(name, False) for name in ("hostNetwork", "hostPID", "hostIPC"))
+        and meta.get("labels", {}).get(COMPONENT) == component
+        and pod.get("status", {}).get("phase") in ("Pending", "Running"),
+        "Pod identity is not an active local pair member",
+    )
+    uid = meta["uid"]
+    require(str(UUID(uid)) == uid, "canonical Pod UID required")
+    labels = meta["labels"]
+    for name in LABELS:
+        require(str(UUID(labels[name])) == labels[name], "canonical pair labels required")
+    return (uid, *(labels[name] for name in LABELS))
+
+
+def select_pair(pods, uid, config):
+    matches = [pod for pod in pods if pod.get("metadata", {}).get("uid") == uid]
+    require(len(matches) == 1, "exact VM Pod missing")
+    vm = matches[0]
+    component = vm["metadata"].get("labels", {}).get(COMPONENT)
+    require(component in ("ads-sandbox", "ads-sandbox-egress"), "not an execution or egress VM")
+    side = "guest" if component == "ads-sandbox" else "egress"
+    identity = pod_identity(vm, config, component)
+    require(vm["spec"].get("runtimeClassName") == config[side + "_runtime"], "VM runtime mismatch")
+    relay_component = "ads-sandbox-relay" if side == "guest" else "ads-sandbox-egress-relay"
+    candidates = [
+        pod
+        for pod in pods
+        if pod.get("metadata", {}).get("labels", {}).get(COMPONENT) == relay_component
+        and all(pod["metadata"]["labels"].get(k) == vm["metadata"]["labels"][k] for k in LABELS)
+    ]
+    require(len(candidates) == 1, "exact local relay missing or ambiguous")
+    relay = candidates[0]
+    require(pod_identity(relay, config, relay_component)[1:] == identity[1:], "pair changed")
+    require(relay["metadata"]["uid"] != uid, "relay aliases VM")
+    require(not relay["spec"].get("runtimeClassName"), "relay must use ordinary node runtime")
+    containers = relay["spec"].get("containers", [])
+    require(
+        len(containers) == 1
+        and containers[0].get("name") == config["relay_container"]
+        and containers[0].get("image") == config["relay_image"]
+        and relay.get("status", {}).get("phase") == "Running",
+        "relay image or process mismatch",
+    )
+    statuses = relay["status"].get("containerStatuses", [])
+    require(
+        len(statuses) == 1
+        and statuses[0].get("name") == config["relay_container"]
+        and "running" in statuses[0].get("state", {}),
+        "relay container is not running",
+    )
+    container_id = statuses[0].get("containerID", "")
+    require(
+        re.fullmatch(r"containerd://[0-9a-f]{64}", container_id), "exact containerd ID required"
+    )
+    return vm, relay, side, container_id.removeprefix("containerd://")
+
+
+def runtime_identity(observer, relay, container_id):
+    config, meta = observer.config, relay["metadata"]
+    items = observer.cri("pods", "-o", "json")["items"]
+    matches = [
+        item
+        for item in items
+        if item.get("metadata", {}).get("uid") == meta["uid"]
+        and item["metadata"].get("namespace") == config["namespace"]
+        and item.get("state") == "SANDBOX_READY"
+    ]
+    require(len(matches) == 1, "exact ready CRI sandbox required")
+    sandbox = matches[0]
+    require(re.fullmatch(r"[0-9a-f]{64}", sandbox["id"]), "invalid runtime sandbox ID")
+    detail = observer.cri("inspectp", "-o", "json", sandbox["id"])
+    status = detail["status"]
+    require(
+        status["id"] == sandbox["id"]
+        and status["state"] == "SANDBOX_READY"
+        and status["metadata"]["uid"] == meta["uid"]
+        and status["metadata"]["namespace"] == config["namespace"]
+        and status["metadata"]["name"] == meta["name"],
+        "runtime sandbox replaced",
+    )
+    container = observer.cri("inspect", "-o", "json", container_id)
+    status = container["status"]
+    require(
+        status["id"] == container_id
+        and status["state"] == "CONTAINER_RUNNING"
+        and status["metadata"]["name"] == config["relay_container"]
+        and status["labels"].get("io.kubernetes.pod.uid") == meta["uid"]
+        and status["labels"].get("io.kubernetes.pod.namespace") == config["namespace"]
+        and status["imageRef"].split("@")[-1] == config["relay_image_id"]
+        and container["info"].get("sandboxID") == sandbox["id"],
+        "runtime container identity mismatch",
+    )
+    pids = (detail["info"]["pid"], container["info"]["pid"])
+    require(all(type(pid) is int and pid > 1 for pid in pids), "invalid runtime PID")
+    return sandbox["id"], pids
+
+
+def ticks(pid):
+    # Linux comm may contain spaces and parentheses; fields start after the last ')'.
+    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    require(fields[0] not in ("Z", "X"), "runtime process exited")
+    return fields[19]
+
+
+@contextlib.contextmanager
+def processes(pids):
+    with contextlib.ExitStack() as stack:
+        originals = []
+        for pid in pids:
+            fd = os.pidfd_open(pid)
+            stack.callback(os.close, fd)
+            originals.append((pid, fd, ticks(pid)))
+
+        def check():
+            for pid, fd, start in originals:
+                require(
+                    not select.select([fd], [], [], 0)[0] and ticks(pid) == start,
+                    "runtime process replaced",
+                )
+
+        check()
+        yield check
+        check()
+
+
+def observe_binding(observer, plugin, req):
+    config = observer.config
+    require(req["network"] == config["network"], "network mismatch")
+    first = select_pair(observer.pods(), req["pod_uid"], config)
+    vm, relay, side, container = first
+    require(req["ifname"] == ("eth0" if side == "guest" else "eth1"), "private interface mismatch")
+    runtime, (sandbox_pid, container_pid) = runtime_identity(observer, relay, container)
+    generation = vm["metadata"]["labels"]["ads.io/attachment-generation"]
+    private_path = f"/proc/{container_pid}/root/run/netns/private-{generation}"
+    transport_path = f"/proc/{sandbox_pid}/ns/net"
+    with processes((sandbox_pid, container_pid)) as check_processes:
+        with (
+            plugin.namespace(private_path) as private,
+            plugin.namespace(transport_path) as transport,
+            plugin.namespace(f"/proc/{container_pid}/ns/net") as container_net,
+        ):
+
+            def identity(fd):
+                info = os.fstat(fd)
+                require(fcntl.ioctl(fd, 0xB703) == 0x40000000, "network namespace required")
+                return [info.st_dev, info.st_ino]
+
+            require(identity(transport) == identity(container_net), "relay transport mismatch")
+            require(identity(private) != identity(transport), "private aliases transport")
+            journal = plugin.read_record(
+                Path(f"/proc/{container_pid}/root/run/relay-state/state.json")
+            )
+            require(
+                journal.get("complete") is True
+                and not journal.get("stopped")
+                and journal.get("pod_uid") == relay["metadata"]["uid"]
+                and journal.get("generation") == generation
+                and journal.get("sandbox_id") == vm["metadata"]["labels"]["ads.io/sandbox-id"]
+                and journal.get("private") == identity(private)
+                and journal.get("transport") == identity(transport),
+                "relay setup journal mismatch",
+            )
+            record = {
+                "pod_uid": req["pod_uid"],
+                "generation": generation,
+                "sandbox_id": journal["sandbox_id"],
+                "role": side,
+                "ifname": req["ifname"],
+                "network": config["network"],
+                "relay_pod_uid": relay["metadata"]["uid"],
+                "relay_runtime_id": runtime,
+                "private": {"path": private_path, "identity": identity(private)},
+                "transport": {"path": transport_path, "identity": identity(transport)},
+                "mtu": config["transport_mtu"] - 110,
+                "address": "10.10.30.2/24" if side == "guest" else "10.10.30.1/24",
+                "gateway": "10.10.30.1" if side == "guest" else None,
+            }
+            plugin.binding(record, req)
+            # Repeat API and CRI after namespace observations, not from a cached watch.
+            again = select_pair(observer.pods(), req["pod_uid"], config)
+            require(
+                again[0]["metadata"]["uid"] == vm["metadata"]["uid"]
+                and again[1]["metadata"]["uid"] == relay["metadata"]["uid"]
+                and again[2:] == first[2:]
+                and all(
+                    again[0]["metadata"]["labels"][k] == vm["metadata"]["labels"][k] for k in LABELS
+                ),
+                "pair changed during observation",
+            )
+            require(
+                runtime_identity(observer, again[1], container)
+                == (runtime, (sandbox_pid, container_pid)),
+                "runtime changed during observation",
+            )
+            check_processes()
+            return record
+
+
+def refresh(config_path, req, directory, plugin=None):
+    require(os.geteuid() == 0, "node-root attestor required")
+    plugin = plugin or cni_module()
+    config = validate(plugin.read_record(Path(config_path)))
+    record = observe_binding(Observer(config), plugin, req)
+    root = plugin.private_directory(directory)
+    plugin.save_record(root / (req["pod_uid"] + ".json"), record)
+    return record
