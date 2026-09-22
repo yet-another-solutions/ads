@@ -233,6 +233,17 @@ jobs:
           st=$?
           set -e
           test "$st" -eq 1
+      - name: Prove private NIC handoff into a rootless network namespace
+        if: matrix.image == 'ads-sandbox-base'
+        run: |
+          docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
+            --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+            --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add DAC_OVERRIDE \
+            --cap-add KILL --cap-add SETPCAP \
+            --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
+            --entrypoint unshare \
+            -v "$PWD/services/ads-sandbox-base/network-kernel-smoke.py:/network-kernel-smoke.py:ro" \
+            ads-sandbox-base:ci --mount --net --mount-proc -- python3 /network-kernel-smoke.py
       - name: Guest shared trust verifier import
         if: matrix.image == 'ads-sandbox-base'
         run: |

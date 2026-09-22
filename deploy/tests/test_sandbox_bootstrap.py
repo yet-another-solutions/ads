@@ -35,7 +35,9 @@ def test_guest_boot_uses_device_free_isolated_outer_container():
         "infinity",
     ]
     assert "/dev/fuse" not in script
-    assert script.index("\ngreen2\n") < script.index("\n/usr/local/sbin/ads-session-device-check\n")
+    assert script.index("none) green2;;") < script.index(
+        "\n/usr/local/sbin/ads-session-device-check\n"
+    )
     assert script.index("podman_cmd start dev-sandbox") < script.index(
         "touch /run/ads-sandbox-ready"
     )
@@ -180,3 +182,46 @@ podman_cmd() {{
     assert (result.returncode == 0) is (trust_status == 0)
     calls = (tmp_path / "calls").read_text()
     assert "update-ca-certificates" in calls
+
+
+@pytest.mark.parametrize("failure", ["none", "attach", "dns"])
+def test_private_handoff_and_dns_failure_stop_before_readiness(tmp_path, failure):
+    script = BOOT.read_text()
+    startup = script[script.index("if podman_cmd container exists") : script.index("exec capsh")]
+    startup = startup.replace("/usr/local/sbin/ads-sandbox-network attach", "handoff")
+    startup = startup.replace(
+        "/usr/local/sbin/ads-agent-init", shlex.quote(str(BOOT.with_name("ads-agent-init")))
+    )
+    harness = f"""
+set -euo pipefail
+export ADS_SANDBOX_NETWORK_MODE=private
+unset ADS_CA_ATTEMPT
+fail() {{ exit 1; }}
+sleep() {{ :; }}
+touch() {{ echo ready > ready; }}
+handoff() {{ echo handoff >> calls; return {1 if failure == "attach" else 0}; }}
+podman_cmd() {{
+  printf '%s\\n' "$*" >> calls
+  case "$1" in
+    container) return 0;;
+    inspect) echo nested-v1;;
+    exec)
+      if [[ "$3" == /bin/sh ]]; then return {1 if failure == "dns" else 0}; fi
+      if [[ "$2" == -i ]]; then cat > initialized; fi
+      ;;
+  esac
+}}
+{startup}
+"""
+    result = subprocess.run(
+        ["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert (result.returncode == 0) is (failure == "none")
+    assert (tmp_path / "ready").exists() is (failure == "none")
+    assert (tmp_path / "initialized").exists() is (failure == "none")
+    calls = (tmp_path / "calls").read_text()
+    assert calls.index("start dev-sandbox") < calls.index("handoff")
+    if failure != "attach":
+        assert calls.index("handoff") < calls.index("nameserver 10.10.30.1")
+    else:
+        assert "nameserver" not in calls
