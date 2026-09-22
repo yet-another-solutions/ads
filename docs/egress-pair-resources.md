@@ -60,9 +60,33 @@ PodGroup finalizers are never stripped; deletion lag remains incomplete.
 
 The lifecycle caller must durably commit pair/generation intent before creation
 and persist each returned UID before advancing. This adapter does not yet wire
-that ledger into session provisioning or broaden deployed RBAC. Its tests use
+the pair into session provisioning or broaden deployed RBAC. Its tests use
 simulated API responses; neither live manager integration nor readiness is
 claimed. Read/create errors are not successful absence or adoption.
+
+`PairIntentRepository` records one generation and all eight intended control
+resources under the existing session's exact creating claim (sandbox/project,
+owner UUID and transition timestamp). Callers own transactions: commit the
+intent before calling the adapter, then commit each observed UID before further
+work. An unknown UID is not evidence of absence. Idempotent retries preserve the
+generation and UID; replacement UIDs, stale claims, configuration drift and
+corrupt intent fail closed. Database uniqueness and row locks serialize replica
+attempts. Captured namespace and builder version must be used for that generation
+instead of reinterpreting it under a later manager configuration.
+
+Intent has no cascading foreign key to the mutable session row, so recovery or
+session-row loss cannot erase old ownership. There is deliberately no retirement
+or same-sandbox generation-reset operation yet: a later provisioning claim must
+not overwrite that history before exact cleanup and attachment-release evidence
+are wired. A replacement sandbox gets a new generation while keeping the old
+record. This bounded repository is not called by provisioning or cleanup yet and
+does not claim pair readiness or end-to-end restart recovery.
+
+The table belongs to the fresh `0001_session` schema bootstrap, not an upgrade,
+backfill or legacy-object adoption path. Startup validates that it exists; an old
+database already stamped at head will fail validation rather than invent empty
+ownership. A candidate rollout therefore still requires the authorized scoped
+fresh-schema/model-credential preservation and restoration procedure.
 
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
