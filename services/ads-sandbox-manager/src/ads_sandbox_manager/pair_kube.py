@@ -33,6 +33,14 @@ class PairControlAdapter:
         self.networking = client.NetworkingV1Api(kube.api_client)
         self.custom = client.CustomObjectsApi(kube.api_client)
 
+    @property
+    def namespace(self) -> str:
+        return self.kube.settings.namespace
+
+    @property
+    def golden_version(self) -> str:
+        return self.kube.settings.golden_version
+
     def _desired(self, pair: PairBinding, kind: ControlKind, role: str) -> Object:
         builders = {
             "PodGroup": pod_group,
@@ -184,3 +192,15 @@ class PairControlAdapter:
             return True
         self._identity(remaining, desired, uid)
         return False
+
+    async def observe(
+        self, pair: PairBinding, kind: ControlKind, role: str, uid: str | None = None
+    ) -> str | None:
+        """Observe captured intent, including ambiguous creates; never create.
+
+        Terminating or spec-drifted owned objects still need exact cleanup.
+        None is only this read's absence, not runtime-release/retirement proof.
+        """
+        desired = self._desired(pair, kind, role)
+        observed = await self._read(desired)
+        return None if observed is None else self._identity(observed, desired, uid)
