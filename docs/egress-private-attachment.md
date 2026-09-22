@@ -58,7 +58,16 @@ VERSION, attachment identity, result handling and repeated/missing-namespace
 cleanup. This component advertises CNI 1.0.0. The network/runtime/interface
 tuple selects a locked journal; intent is fsynced before link creation.
 Links carry a generation/Pod/runtime-derived alias, and completion persists
-their observed indices. Failed/partial ADD retains intent for DEL; it never
+their observed indices. A nonzero numeric link group derived from that same
+identity is set atomically on both veth ends at creation; aliases are then set
+explicitly before attachment/up. The kernel applies IFLA_GROUP during creation
+but IFLA_IFALIAS only on updates
+([rtnetlink implementation](https://raw.githubusercontent.com/torvalds/linux/v6.11/net/core/rtnetlink.c)).
+For incomplete ADD only, DEL tolerates a missing alias if the original exact
+namespace, interface kind and creation group still match. It never tolerates
+a foreign nonempty alias or missing/replaced group. This is an ownership fence
+against lifecycle mistakes, not protection against trusted host-root forgery.
+Failed/partial ADD retains intent for DEL; it never
 pretends setup succeeded. A repeated ADD is rejected until DEL.
 
 CHECK requires the recorded private interface in `prevResult`, the unchanged

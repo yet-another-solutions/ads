@@ -249,9 +249,11 @@ def kernel(plugin, inputs, monkeypatch):
                     "ifindex": index,
                     "mtu": 1340,
                     "flags": ["UP"],
-                    "ifalias": marker,
+                    "group": plugin.link_group(marker),
                     "linkinfo": {"info_kind": "veth"},
                 }
+        if args[:3] == ("ip", "link", "set") and "alias" in args:
+            current[fd][args[3]]["ifalias"] = args[-1]
         if "master" in args:
             current[20]["veth-local"]["master"] = "br-private"
         if args[:3] == ("ip", "link", "delete"):
@@ -313,7 +315,7 @@ def test_partial_add_retains_intent_for_del(plugin, inputs, kernel, monkeypatch)
     assert not state.exists()
 
 
-@pytest.mark.parametrize("change", ["alias", "index", "binding", "bridge", "other-nic"])
+@pytest.mark.parametrize("change", ["alias", "index", "group", "binding", "bridge", "other-nic"])
 def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, change):
     config, env, record = inputs
     req, _, state, current, paths, calls = kernel
@@ -335,7 +337,8 @@ def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, 
         plugin.save_record(Path(config["bindingDir"]) / (req["pod_uid"] + ".json"), record)
         env["CNI_COMMAND"] = "CHECK"
     else:
-        current[20]["veth-local"]["ifalias" if change == "alias" else "ifindex"] = "replacement"
+        field = {"alias": "ifalias", "index": "ifindex", "group": "group"}[change]
+        current[20]["veth-local"][field] = "replacement"
         env["CNI_COMMAND"] = "DEL"
     with pytest.raises(ValueError):
         plugin.perform(config, env)
@@ -506,3 +509,45 @@ def test_check_rejects_endpoint_drift(plugin, inputs, kernel, monkeypatch, fault
     with pytest.raises(ValueError):
         plugin.perform(config, env)
     assert kernel[2].exists()
+
+
+@pytest.mark.parametrize("side", [10, 20])
+def test_interrupted_alias_update_cleans_only_creation_tagged_links(
+    plugin, inputs, kernel, monkeypatch, side
+):
+    config, env, _ = inputs
+    original = plugin.execute
+
+    def interrupted(fd, *args, **kwargs):
+        if fd == side and "alias" in args:
+            raise RuntimeError("interrupted before alias update")
+        return original(fd, *args, **kwargs)
+
+    monkeypatch.setattr(plugin, "execute", interrupted)
+    with pytest.raises(RuntimeError):
+        plugin.perform(config, env)
+    assert plugin.read_record(kernel[2])["indices"] is None
+    assert kernel[3][20]["veth-local"]["group"]
+    env["CNI_COMMAND"] = "DEL"
+    assert plugin.perform(config, env) is None
+    assert not kernel[2].exists()
+    assert "eth0" not in kernel[3][10]
+
+
+def test_partial_add_does_not_delete_untagged_link(plugin, inputs, kernel, monkeypatch):
+    config, env, _ = inputs
+    original = plugin.execute
+
+    def interrupted(fd, *args, **kwargs):
+        if "alias" in args:
+            raise RuntimeError("interrupted")
+        return original(fd, *args, **kwargs)
+
+    monkeypatch.setattr(plugin, "execute", interrupted)
+    with pytest.raises(RuntimeError):
+        plugin.perform(config, env)
+    kernel[3][20]["veth-local"].pop("group")
+    env["CNI_COMMAND"] = "DEL"
+    with pytest.raises(ValueError):
+        plugin.perform(config, env)
+    assert "eth0" in kernel[3][10]

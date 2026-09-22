@@ -306,10 +306,17 @@ def alias(req, attestation):
     )
 
 
-def check_link(link, marker, index=None):
+def link_group(marker):
+    # IFLA_GROUP, unlike IFLA_IFALIAS, is applied atomically on link creation.
+    return (int(hashlib.sha256(marker.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1
+
+
+def check_link(link, marker, index=None, *, incomplete=False):
     if (
         link.get("ifalias") != marker
+        and not (incomplete and not link.get("ifalias"))
         or link.get("linkinfo", {}).get("info_kind") != "veth"
+        or link.get("group") != link_group(marker)
         or index is not None
         and link.get("ifindex") != index
     ):
@@ -397,8 +404,8 @@ def add(req, attestation, state_path, previous):
             mac,
             "mtu",
             str(attestation["mtu"]),
-            "alias",
-            marker,
+            "group",
+            str(link_group(marker)),
             "type",
             "veth",
             "peer",
@@ -406,12 +413,15 @@ def add(req, attestation, state_path, previous):
             "veth-local",
             "mtu",
             str(attestation["mtu"]),
-            "alias",
-            marker,
+            "group",
+            str(link_group(marker)),
             "netns",
             f"/proc/self/fd/{private}",
             other=(private,),
         )
+        for fd, name in ((vm, req["ifname"]), (private, "veth-local")):
+            check_link(links(fd)[name], marker, incomplete=True)
+            execute(fd, "ip", "link", "set", name, "alias", marker)
         execute(private, "ip", "link", "set", "veth-local", "master", "br-private")
         execute(private, "ip", "link", "set", "veth-local", "up")
         execute(vm, "ip", "link", "set", req["ifname"], "up")
@@ -490,7 +500,7 @@ def delete(saved, state_path):
             link = links(fd).get(name)
             if link is not None:
                 index = (saved["indices"] or {}).get(side)
-                check_link(link, saved["alias"], index)
+                check_link(link, saved["alias"], index, incomplete=saved["indices"] is None)
                 candidates.append((fd, name))
         # Validate both sides before deleting either; never follow new binding data.
         if candidates:

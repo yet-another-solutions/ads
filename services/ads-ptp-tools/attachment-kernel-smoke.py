@@ -77,11 +77,10 @@ try:
         "br-private",
         "mtu",
         "1340",
-        "alias",
-        plugin.bridge_identity(record),
         "type",
         "bridge",
     )
+    canary.ns(private, "ip", "link", "set", "br-private", "alias", plugin.bridge_identity(record))
     canary.ns(private, "ip", "link", "set", "br-private", "up")
     canary.ns(private, "ip", "link", "add", "wg-private", "type", "wireguard")
     canary.ns(private, "ip", "address", "add", "198.18.0.1/32", "dev", "wg-private")
@@ -142,9 +141,31 @@ try:
     assert plugin.perform(config, env) is None
     assert json.loads(canary.ns(names[0], "ip", "-j", "link"))[0]["ifname"] == "lo"
     assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
-    # Missing runtime namespace after successful ADD remains an idempotent DEL.
+    # Linux ignores creation-time aliases; a crash before the explicit update
+    # must retain the creation group and still permit fenced DEL.
     env["CNI_COMMAND"] = "ADD"
     config.pop("prevResult")
+    execute = plugin.execute
+
+    def interrupted(fd, *args, **kwargs):
+        if "alias" in args:
+            raise RuntimeError("injected interruption before alias update")
+        return execute(fd, *args, **kwargs)
+
+    plugin.execute = interrupted
+    try:
+        plugin.perform(config, env)
+    except RuntimeError as error:
+        assert str(error) == "injected interruption before alias update"
+    else:
+        raise AssertionError("injected failure was not reached")
+    finally:
+        plugin.execute = execute
+    env["CNI_COMMAND"] = "DEL"
+    assert plugin.perform(config, env) is None
+    assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
+    # Missing runtime namespace after successful ADD remains an idempotent DEL.
+    env["CNI_COMMAND"] = "ADD"
     plugin.perform(config, env)
     canary.run("ip", "netns", "delete", names[0])
     created.remove(names[0])
@@ -162,6 +183,7 @@ print(
             "real_private_cni_add_check_del": True,
             "static_private_endpoint_no_cluster_ipam": True,
             "replacement_cleanup_refused": True,
+            "interrupted_alias_update_cleanup": True,
             "missing_namespace_del_idempotent": True,
             "node_attestation_and_kata_handoff_proven": False,
         }
