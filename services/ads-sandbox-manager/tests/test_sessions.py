@@ -485,6 +485,9 @@ async def test_creation_timeout_and_api_denial_fail_without_deleting_disk(
     h, sid = sessions_harness, uuid4()
     h.service.settings = replace(
         h.settings,
+        # This test expires creation explicitly below. Failure persistence is
+        # not the timeout under test; retain its production database budget.
+        control_seconds=10,
         session_objects=replace(
             h.settings.session_objects,
             create_seconds=0.15,

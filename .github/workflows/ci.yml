@@ -129,7 +129,7 @@ jobs:
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
             context: .
-            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp'))"
+            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay'))"
             pack: "false"
     steps:
       - uses: actions/checkout@v7
@@ -203,6 +203,15 @@ jobs:
             --security-opt seccomp=unconfined \
             -v "$PWD/services/ads-ptp-tools/attachment-kernel-smoke.py:/attachment-kernel-smoke.py:ro" \
             ads-ptp-tools:ci python /attachment-kernel-smoke.py
+      - name: Prove production relay session health and frame isolation
+        if: matrix.image == 'ads-ptp-tools'
+        run: |
+          docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
+            --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add NET_RAW \
+            --security-opt no-new-privileges --security-opt apparmor=unconfined \
+            --security-opt seccomp=unconfined \
+            -v "$PWD/services/ads-ptp-tools/relay-kernel-smoke.py:/relay-kernel-smoke.py:ro" \
+            ads-ptp-tools:ci python /relay-kernel-smoke.py
       - name: Smoke golden entrypoint
         if: matrix.pack == 'true'
         run: |

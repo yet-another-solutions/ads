@@ -1,0 +1,632 @@
+#!/usr/bin/env python3
+"""Pair-local relay runtime. No VM endpoint, policy proxy, host mount or API client."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import contextlib
+import fcntl
+import hashlib
+import ipaddress
+import json
+import os
+import signal
+import socket
+import ssl
+import stat
+import subprocess
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from uuid import UUID
+
+FIELDS = {
+    "pod_uid",
+    "generation",
+    "sandbox_id",
+    "side",
+    "local_private",
+    "peer_private",
+    "local_tunnel",
+    "peer_tunnel",
+    "transport_mtu",
+    "peer_key",
+    "endpoint",
+    "wireguard_port",
+    "vxlan_port",
+    "vni",
+    "packet_rate",
+}
+LIMIT = 65536
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def pairs(items):
+    value = {}
+    for key, item in items:
+        require(key not in value, "duplicate field")
+        value[key] = item
+    return value
+
+
+def protected(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        require(
+            stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0
+            and not info.st_mode & 0o077
+            and info.st_size <= LIMIT,
+            "protected root-owned input required",
+        )
+        value = stream.read(LIMIT + 1)
+        require(len(value) <= LIMIT, "input exceeds bound")
+        return value
+
+
+def key(value):
+    require(isinstance(value, str), "invalid WireGuard key")
+    raw = base64.b64decode(value, validate=True)
+    require(
+        len(raw) == 32 and any(raw) and base64.b64encode(raw).decode() == value,
+        "invalid WireGuard key",
+    )
+    return value
+
+
+def validate(config, pod_uid, generation):
+    require(
+        isinstance(config, dict) and set(config) == FIELDS, "exact relay configuration required"
+    )
+    for name in ("pod_uid", "generation", "sandbox_id"):
+        require(str(UUID(config[name])) == config[name], "canonical UUID required")
+    require(config["pod_uid"] == pod_uid and config["generation"] == generation, "identity changed")
+    require(config["side"] in ("guest", "egress"), "invalid relay side")
+    addresses = {}
+    for name in ("local_private", "peer_private", "local_tunnel", "peer_tunnel"):
+        address = ipaddress.IPv4Interface(config[name])
+        require(
+            str(address) == config[name]
+            and any(
+                address.ip in ipaddress.IPv4Network(network)
+                for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+            ),
+            "canonical RFC1918 address required",
+        )
+        addresses[name] = address
+    local, peer = addresses["local_private"], addresses["peer_private"]
+    tunnel, remote = addresses["local_tunnel"], addresses["peer_tunnel"]
+    require(
+        local.network == peer.network
+        and local.network.prefixlen == 24
+        and local.ip != peer.ip
+        and all(
+            a.ip not in (local.network.network_address, local.network.broadcast_address)
+            for a in (local, peer)
+        )
+        and tunnel.network.prefixlen == remote.network.prefixlen == 32
+        and tunnel.ip != remote.ip
+        and tunnel.ip not in local.network
+        and remote.ip not in local.network,
+        "invalid isolated pair topology",
+    )
+    for name, minimum, maximum in (
+        ("transport_mtu", 686, 65535),
+        ("wireguard_port", 1024, 65535),
+        ("vxlan_port", 1024, 65535),
+        ("vni", 1, 16777215),
+        ("packet_rate", 100, 100000),
+    ):
+        require(type(config[name]) is int and minimum <= config[name] <= maximum, "invalid bound")
+    key(config["peer_key"])
+    if config["side"] == "guest":
+        require(isinstance(config["endpoint"], str), "numeric Service endpoint required")
+        host, port = config["endpoint"].split(":")
+        require(str(ipaddress.IPv4Address(host)) == host, "numeric Service IPv4 required")
+        require(str(config["wireguard_port"]) == port, "Service port mismatch")
+        require(
+            not ipaddress.IPv4Address(host).is_multicast
+            and not ipaddress.IPv4Address(host).is_unspecified,
+            "invalid Service address",
+        )
+    else:
+        require(config["endpoint"] is None, "egress must learn authenticated endpoint")
+    return config
+
+
+def run(*args, data=None, deadline=None, descriptors=()):
+    timeout = 15 if deadline is None else min(15, deadline - time.monotonic())
+    require(timeout > 0, "operation deadline exceeded")
+    reply = subprocess.run(
+        args, input=data, text=True, capture_output=True, timeout=timeout, pass_fds=descriptors
+    )
+    if reply.returncode:
+        raise RuntimeError("relay network operation failed")
+    return reply.stdout.strip()
+
+
+def mac(config, side):
+    raw = hashlib.sha256(f"{config['generation']}/{side}".encode()).digest()[:5]
+    return "02:" + ":".join(f"{byte:02x}" for byte in raw)
+
+
+def address(config, name):
+    return str(ipaddress.IPv4Interface(config[name]).ip)
+
+
+def firewall(config):
+    peer = address(config, "peer_tunnel")
+    local_tunnel = address(config, "local_tunnel")
+    lines = [
+        "table inet ads_relay {",
+        " chain input { type filter hook input priority 0; policy drop;",
+        '  iifname "lo" accept',
+        f'  iifname "wg-private" ip saddr {peer} ip daddr {local_tunnel} '
+        f"udp dport {config['vxlan_port']} accept",
+        f'  iifname "wg-private" ip saddr {peer} ip daddr {local_tunnel} '
+        "icmp type { echo-request, echo-reply } limit rate 20/second burst 40 packets accept",
+        " }",
+        " chain output { type filter hook output priority 0; policy drop;",
+        '  oifname "lo" accept',
+        f'  oifname "wg-private" ip daddr {peer} udp dport {config["vxlan_port"]} accept',
+        f'  oifname "wg-private" ip daddr {peer} icmp type {{ echo-request, echo-reply }} '
+        "limit rate 20/second burst 40 packets accept",
+        " }",
+        " chain forward { type filter hook forward priority 0; policy drop;",
+        '  iifname "br-private" oifname "br-private" accept',
+        " }",
+        "}",
+        "table bridge ads_relay {",
+        " chain input { type filter hook input priority 0; policy drop; }",
+        " chain output { type filter hook output priority 0; policy drop; }",
+        " chain forward { type filter hook forward priority 0; policy drop;",
+    ]
+    other = "egress" if config["side"] == "guest" else "guest"
+    local_ip, peer_ip = address(config, "local_private"), address(config, "peer_private")
+    for incoming, outgoing, side, src_ip, dst_ip in (
+        ("veth-local", "vxlan-private", config["side"], local_ip, peer_ip),
+        ("vxlan-private", "veth-local", other, peer_ip, local_ip),
+    ):
+        destination_side = "egress" if side == "guest" else "guest"
+        prefix = f'  iifname "{incoming}" oifname "{outgoing}" ether saddr {mac(config, side)} '
+        lines.append(
+            prefix + f"ether daddr {{ ff:ff:ff:ff:ff:ff, {mac(config, destination_side)} }} "
+            f"ether type arp arp saddr ip {src_ip} arp daddr ip {dst_ip} "
+            "arp operation { request, reply } limit rate 20/second burst 40 packets accept"
+        )
+        # Guest source is fixed; proxy replies preserve the original public source.
+        restriction = f"ip saddr {src_ip}" if side == "guest" else f"ip daddr {dst_ip}"
+        lines.append(
+            prefix + f"ether daddr {mac(config, destination_side)} ether type ip {restriction} "
+            f"limit rate {config['packet_rate']}/second "
+            f"burst {config['packet_rate'] * 2} packets accept"
+        )
+    lines += [" }", "}"]
+    return "\n".join(lines) + "\n"
+
+
+class Relay:
+    def __init__(self, config, root, key_path):
+        self.config = config
+        self.root = root
+        self.key_path = key_path
+        self.name = "private-" + config["generation"]
+        self.path = Path("/run/netns") / self.name
+        self.bridge_alias = "ads-ptp:" + config["pod_uid"] + ":" + config["generation"]
+        self.group = (
+            int(hashlib.sha256(self.bridge_alias.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF
+        ) or 1
+        self.state = None
+        self.public_key = None
+
+    def save(self):
+        payload = json.dumps(self.state, sort_keys=True).encode()
+        require(len(payload) <= LIMIT, "journal exceeds bound")
+        pending = self.root / "state.pending"
+        fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(pending, self.root / "state.json")
+        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    @contextlib.contextmanager
+    def private(self):
+        fd = os.open(self.path, os.O_RDONLY | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            require(fcntl.ioctl(fd, 0xB703) == 0x40000000, "not a network namespace")
+            require(
+                [info.st_dev, info.st_ino] == self.state["private"], "private namespace replaced"
+            )
+            yield fd
+        finally:
+            os.close(fd)
+
+    def ns(self, *args, data=None, deadline=None):
+        with self.private() as fd:
+            return run(
+                "nsenter",
+                f"--net=/proc/self/fd/{fd}",
+                "--",
+                *args,
+                data=data,
+                deadline=deadline,
+                descriptors=(fd,),
+            )
+
+    def start(self):
+        require(os.geteuid() == 0, "relay root required")
+        require(
+            self.root.is_absolute() and self.root.resolve() == self.root,
+            "canonical state path required",
+        )
+        own_key = key(protected(self.key_path).decode().strip())
+        self.public_key = run("wg", "pubkey", data=own_key + "\n")
+        del own_key
+        require(self.public_key != self.config["peer_key"], "self peer forbidden")
+        self.root.mkdir(mode=0o700, exist_ok=False)
+        transport = os.stat("/proc/self/ns/net")
+        self.state = {
+            "pod_uid": self.config["pod_uid"],
+            "generation": self.config["generation"],
+            "sandbox_id": self.config["sandbox_id"],
+            "private": None,
+            "transport": [transport.st_dev, transport.st_ino],
+            "complete": False,
+        }
+        require(
+            "wg-private" not in {item["ifname"] for item in json.loads(run("ip", "-j", "link"))},
+            "transport interface name occupied",
+        )
+        self.save()
+        try:
+            run("ip", "netns", "add", self.name)
+            info = self.path.stat()
+            self.state["private"] = [info.st_dev, info.st_ino]
+            require(
+                self.state["private"] != self.state["transport"],
+                "private namespace aliases transport",
+            )
+            self.save()
+            # Fresh proc is mounted only in ip-netns-exec's disposable mount namespace.
+            run(
+                "ip",
+                "netns",
+                "exec",
+                self.name,
+                "python3",
+                "-I",
+                "-c",
+                "import pathlib,subprocess; "
+                "subprocess.run(['mount','-t','proc','-o','nosuid,nodev,noexec','proc','/proc'],"
+                "check=True,capture_output=True); "
+                "root=pathlib.Path('/proc/sys/net'); "
+                "paths=['ipv4/ip_forward']+(['ipv6/conf/all/disable_ipv6',"
+                "'ipv6/conf/default/disable_ipv6'] if (root/'ipv6').exists() else []); "
+                "[(root/p).write_text('0' if p=='ipv4/ip_forward' else '1') for p in paths]",
+            )
+            self.ns("ip", "link", "set", "lo", "up")
+            run("ip", "link", "add", "wg-private", "group", str(self.group), "type", "wireguard")
+            run("ip", "link", "set", "wg-private", "netns", self.name)
+            mtu = self.config["transport_mtu"]
+            self.ns("ip", "link", "set", "wg-private", "mtu", str(mtu - 60))
+            self.ns("ip", "address", "add", self.config["local_tunnel"], "dev", "wg-private")
+            args = [
+                "wg",
+                "set",
+                "wg-private",
+                "listen-port",
+                str(self.config["wireguard_port"]),
+                "private-key",
+                str(self.key_path),
+                "peer",
+                self.config["peer_key"],
+                "allowed-ips",
+                self.config["peer_tunnel"],
+            ]
+            if self.config["side"] == "guest":
+                args += ["endpoint", self.config["endpoint"], "persistent-keepalive", "25"]
+            self.ns(*args)
+            self.ns("nft", "-f", "-", data=firewall(self.config))
+            self.ns("ip", "link", "set", "wg-private", "up")
+            self.ns("ip", "route", "add", self.config["peer_tunnel"], "dev", "wg-private")
+            self.ns(
+                "ip",
+                "link",
+                "add",
+                "br-private",
+                "mtu",
+                str(mtu - 110),
+                "type",
+                "bridge",
+                "stp_state",
+                "0",
+                "mcast_snooping",
+                "0",
+            )
+            self.ns("ip", "link", "set", "br-private", "alias", self.bridge_alias)
+            self.ns(
+                "ip",
+                "link",
+                "add",
+                "vxlan-private",
+                "mtu",
+                str(mtu - 110),
+                "type",
+                "vxlan",
+                "id",
+                str(self.config["vni"]),
+                "local",
+                address(self.config, "local_tunnel"),
+                "remote",
+                address(self.config, "peer_tunnel"),
+                "dev",
+                "wg-private",
+                "dstport",
+                str(self.config["vxlan_port"]),
+                "nolearning",
+            )
+            self.ns("ip", "link", "set", "vxlan-private", "master", "br-private")
+            for name in ("br-private", "vxlan-private"):
+                self.ns("ip", "link", "set", name, "mtu", str(mtu - 110), "up")
+            flood = [
+                item
+                for item in json.loads(
+                    self.ns("bridge", "-j", "fdb", "show", "dev", "vxlan-private")
+                )
+                if item.get("mac") == "00:00:00:00:00:00"
+            ]
+            require(
+                len(flood) == 1 and flood[0].get("dst") == address(self.config, "peer_tunnel"),
+                "fixed flood peer mismatch",
+            )
+            other = "egress" if self.config["side"] == "guest" else "guest"
+            self.ns(
+                "bridge",
+                "fdb",
+                "add",
+                mac(self.config, other),
+                "dev",
+                "vxlan-private",
+                "dst",
+                address(self.config, "peer_tunnel"),
+                "self",
+                "static",
+            )
+            self.state["complete"] = True
+            self.save()
+        except BaseException:
+            self.stop()
+            raise
+
+    def healthy(self):
+        deadline = time.monotonic() + 3
+        try:
+            require(self.state is not None and self.state["complete"], "relay setup incomplete")
+            links = {
+                item["ifname"]: item
+                for item in json.loads(self.ns("ip", "-d", "-j", "link", deadline=deadline))
+            }
+            require(
+                set(links)
+                in (
+                    {"lo", "wg-private", "br-private", "vxlan-private"},
+                    {"lo", "wg-private", "br-private", "vxlan-private", "veth-local"},
+                ),
+                "unexpected private interface",
+            )
+            require(
+                all("UP" in link.get("flags", []) for link in links.values()), "private link down"
+            )
+            bridge = links["br-private"]
+            require(
+                bridge.get("ifalias") == self.bridge_alias
+                and bridge.get("linkinfo", {}).get("info_kind") == "bridge",
+                "bridge identity changed",
+            )
+            members = {
+                name
+                for name, link in links.items()
+                if link.get("master") in ("br-private", bridge["ifindex"])
+            }
+            require(
+                members == set(links) - {"lo", "wg-private", "br-private"},
+                "bridge membership changed",
+            )
+            require(
+                self.ns("wg", "show", "wg-private", "peers", deadline=deadline)
+                == self.config["peer_key"],
+                "peer changed",
+            )
+            require(
+                self.ns("wg", "show", "wg-private", "public-key", deadline=deadline)
+                == self.public_key,
+                "local key changed",
+            )
+            require(
+                self.ns("wg", "show", "wg-private", "allowed-ips", deadline=deadline).split()
+                == [self.config["peer_key"], self.config["peer_tunnel"]],
+                "allowed peer IP changed",
+            )
+            # Active traffic proves a usable authenticated session even after idle/rekey.
+            # No route, interface, key or peer configuration is mutated by health.
+            self.ns(
+                "ping",
+                "-n",
+                "-I",
+                "wg-private",
+                "-c",
+                "1",
+                "-W",
+                "1",
+                address(self.config, "peer_tunnel"),
+                deadline=deadline,
+            )
+            return True
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+            return False
+
+    def stop(self):
+        if self.state is None:
+            return
+        require(
+            self.state["pod_uid"] == self.config["pod_uid"]
+            and self.state["generation"] == self.config["generation"],
+            "cleanup identity changed",
+        )
+        self.state["complete"] = False
+        self.save()
+        if self.state["private"] is not None and self.path.exists():
+            with self.private():
+                require(
+                    not run("ip", "netns", "pids", self.name),
+                    "private namespace still has processes",
+                )
+                run("ip", "netns", "delete", self.name)
+            require(not self.path.exists(), "namespace cleanup incomplete")
+        transport = os.stat("/proc/self/ns/net")
+        require(
+            [transport.st_dev, transport.st_ino] == self.state["transport"],
+            "transport namespace changed",
+        )
+        links = {item["ifname"]: item for item in json.loads(run("ip", "-N", "-d", "-j", "link"))}
+        if "wg-private" in links:
+            link = links["wg-private"]
+            require(
+                str(link.get("group")) == str(self.group)
+                and link.get("linkinfo", {}).get("info_kind") == "wireguard",
+                "foreign transport link",
+            )
+            run("ip", "link", "delete", "wg-private")
+            require(
+                "wg-private"
+                not in {item["ifname"] for item in json.loads(run("ip", "-j", "link"))},
+                "transport cleanup incomplete",
+            )
+        # Keep a nonsecret stopped journal for the node/lifecycle observer.
+        self.state["stopped"] = True
+        self.save()
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_error(404)
+            return
+        status = 200 if self.server.relay.healthy() else 503
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+
+class HealthServer(ThreadingHTTPServer):
+    daemon_threads = False
+    block_on_close = True
+    allow_reuse_address = False
+
+    def __init__(self, address, context, relay):
+        self.context = context
+        self.relay = relay
+        self.slots = threading.BoundedSemaphore(4)
+        super().__init__(address, HealthHandler)
+        self.timeout = 0.5
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(3)
+        try:
+            return self.context.wrap_socket(
+                connection, server_side=True, do_handshake_on_connect=False
+            ), address
+        except BaseException:
+            connection.close()
+            raise
+
+    def process_request(self, request, client_address):
+        if not self.slots.acquire(blocking=False):
+            request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        # Socket timeouts alone reset on each read and permit slow headers to
+        # hold a worker forever. Bound TLS + headers + session check as one unit.
+        deadline = threading.Timer(6, self.expire_request, args=(request,))
+        deadline.daemon = True
+        deadline.start()
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            deadline.cancel()
+            self.slots.release()
+
+    @staticmethod
+    def expire_request(request):
+        try:
+            request.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        request.close()
+
+    def handle_error(self, request, client_address):
+        pass  # TLS/request errors must not dump client-supplied data or key paths.
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--key", required=True, type=Path)
+    parser.add_argument("--cert", required=True, type=Path)
+    parser.add_argument("--tls-key", required=True, type=Path)
+    parser.add_argument("--state", required=True, type=Path)
+    parser.add_argument("--port", type=int, default=8443)
+    args = parser.parse_args()
+    require(1024 <= args.port <= 65535, "invalid health port")
+    config = validate(
+        json.loads(protected(args.config), object_pairs_hook=pairs),
+        os.environ["POD_UID"],
+        os.environ["ATTACHMENT_GENERATION"],
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(args.cert, args.tls_key)  # Main thread, before network effects.
+    relay = Relay(config, args.state, args.key)
+    stopped = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stopped.set())
+    relay.start()
+    try:
+        with HealthServer(("0.0.0.0", args.port), context, relay) as server:
+            while not stopped.is_set():
+                server.handle_request()
+    finally:
+        relay.stop()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        raise SystemExit(f"relay failed: {type(error).__name__}") from None
