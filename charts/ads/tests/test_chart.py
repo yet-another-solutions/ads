@@ -710,7 +710,25 @@ class ChartTests(unittest.TestCase):
             str(23 * 1024**3),
         )
         sid, bid, pid = uuid4(), uuid4(), uuid4()
-        guest = guest_deployment(settings, sid, bid, settings.golden_version, pid)
+        attempt = uuid4()
+        with self.assertRaisesRegex(ValueError, "CA attempt"):
+            guest_deployment(settings, sid, bid, settings.golden_version, pid)
+        guest = guest_deployment(settings, sid, bid, settings.golden_version, pid, attempt)
+        guest_pod = guest["spec"]["template"]["spec"]
+        self.assertIn(
+            {"name": "ADS_CA_ATTEMPT", "value": str(attempt)},
+            guest_pod["containers"][0]["env"],
+        )
+        self.assertEqual(
+            guest_pod["volumes"][-1],
+            {
+                "name": "ca-public",
+                "persistentVolumeClaim": {
+                    "claimName": f"ads-ca-guest-{bid}",
+                    "readOnly": True,
+                },
+            },
+        )
         self.assertEqual(guest["metadata"]["namespace"], "guests")
         self.assertEqual(
             guest["spec"]["template"]["spec"]["containers"][0]["resources"],
