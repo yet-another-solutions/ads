@@ -89,6 +89,10 @@ def ca_job(settings: Settings) -> Object:
                                 "readOnlyRootFilesystem": True,
                                 "capabilities": {"drop": ["ALL"], "add": ["SYS_ADMIN"]},
                                 "seccompProfile": {"type": "RuntimeDefault"},
+                                # Runtime-default AppArmor denies mount even with
+                                # SYS_ADMIN. Only this trusted offline initializer
+                                # mounts its two designated CSI output devices.
+                                "appArmorProfile": {"type": "Unconfined"},
                             },
                             "volumeDevices": [
                                 {"name": role, "devicePath": f"/dev/ads-ca-{role}"}

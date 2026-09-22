@@ -285,6 +285,12 @@ async def test_normal_runtime_job_is_offline_and_secrets_never_guest_outputs(ca_
     container = pod["containers"][0]
     assert container["securityContext"]["privileged"] is False
     assert container["securityContext"]["capabilities"] == {"drop": ["ALL"], "add": ["SYS_ADMIN"]}
+    assert container["securityContext"]["appArmorProfile"] == {"type": "Unconfined"}
+    assert container["securityContext"]["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert container["securityContext"]["allowPrivilegeEscalation"] is False
+    assert container["securityContext"]["readOnlyRootFilesystem"] is True
+    assert not any(v.get("hostPath") for v in pod["volumes"])
+    assert not any(pod.get(field) for field in ("hostNetwork", "hostPID", "hostIPC"))
     assert container["env"][0]["valueFrom"]["fieldRef"]["fieldPath"].endswith(
         "['batch.kubernetes.io/controller-uid']"
     )

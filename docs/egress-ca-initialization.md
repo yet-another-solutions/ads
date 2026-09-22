@@ -98,6 +98,15 @@ The CA Job gets no API token and a matching deny-all network policy; no manager
 Secret read/list/copy permission is added. Platform policies must not add a
 conflicting broad network allow.
 
+The trusted normal-runtime initializer requires `SYS_ADMIN` only for its two
+designated CSI filesystems. Its AppArmor profile is explicitly `Unconfined`:
+the lab's containerd default profile denied even a read-only filesystem mount
+despite this capability. A comparison using the same published image, devices,
+capabilities and RuntimeDefault seccomp succeeded when only AppArmor changed.
+This is a per-Job setting, not a node policy change or permission to run an
+untrusted guest unconfined. No privileged mode, host namespace, hostPath, API
+token, extra capability, writable rootfs or privilege escalation is added.
+
 Readiness requires golden completion, CA pair completion and ordinary
 dependencies. HTTPS liveness remains independent while initialization/recovery
 is pending. Unit-only settings may omit CA, but production environment loading
@@ -167,5 +176,8 @@ The fresh initial schema stores only attempt/source/clone identities, no key
 bytes, tokens or credentials. No legacy schema upgrade is added.
 
 Complete guest/egress pair deployment remains the next integration boundary.
-No CA Job has run in the lab and no integrated trust, kernel read-only or TLS
-defect-mirroring acceptance is claimed here.
+The first live CA Job failed at its first mount under default AppArmor, leaving
+one formatted source and one blank source. This is not a committed CA pair.
+Recovery must still positively release and replace both failed outputs through
+the production controller; never reformat that partial pair in place.
+Integrated trust and TLS defect-mirroring acceptance remain unproved.
