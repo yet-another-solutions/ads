@@ -365,9 +365,65 @@ def test_command_failure_or_oversize_is_not_returned(monkeypatch, output, code):
 
 def test_private_mode_handoff_precedes_trust_init_readiness():
     boot = SCRIPT.with_name("ads-sandbox-boot").read_text()
+    assert boot.count("ads-sandbox-runtime prepare") == 1
+    assert boot.index("ads-sandbox-runtime prepare") < boot.index("ads-sandbox-network preflight")
     assert boot.index("ads-sandbox-network preflight") < boot.index("ads-session-device-check")
     assert boot.index("podman_cmd start dev-sandbox") < boot.index("ads-sandbox-network attach")
     assert boot.index("ads-sandbox-network attach") < boot.index("ads-sandbox-trust certificate")
     assert boot.index("nameserver 10.10.30.1") < boot.index("ads-agent-init")
     assert "cap_sys_admin,cap_net_admin,cap_sys_ptrace" in boot
     assert "unsupported sandbox network mode" in boot
+
+
+@pytest.mark.parametrize("ipv6_available", [True, False])
+def test_guest_ipv6_hardening_uses_only_fixed_local_sysctls(tmp_path, monkeypatch, ipv6_available):
+    monkeypatch.setattr(network, "PROC", tmp_path)
+    if ipv6_available:
+        (tmp_path / "sys/net/ipv6").mkdir(parents=True)
+    execute = Mock()
+    monkeypatch.setattr(network, "execute", execute)
+    network.disable_guest_ipv6()
+    if ipv6_available:
+        execute.assert_called_once_with(
+            [
+                "/usr/sbin/sysctl",
+                "-q",
+                "-w",
+                "net.ipv6.conf.all.disable_ipv6=1",
+                "net.ipv6.conf.default.disable_ipv6=1",
+            ]
+        )
+    else:
+        execute.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["preflight", "attach"])
+def test_only_preflight_hardens_ipv6_after_guest_identity(monkeypatch, action):
+    calls = []
+    monkeypatch.setattr(network.sys, "argv", ["network", action])
+    monkeypatch.setattr(network, "configuration", lambda _: CONFIG)
+    monkeypatch.setattr(network, "trusted_guest", lambda: calls.append("trusted"))
+    monkeypatch.setattr(network, "disable_guest_ipv6", lambda: calls.append("ipv6"))
+    monkeypatch.setattr(network, "inventory", lambda: observation())
+    monkeypatch.setattr(network, "validate_network", lambda *args: calls.append("validate"))
+    monkeypatch.setattr(network, "attach", lambda _: calls.append("attach"))
+    network.main()
+    assert calls == (
+        ["trusted", "ipv6", "validate"]
+        if action == "preflight"
+        else ["trusted", "validate", "attach"]
+    )
+
+
+def test_failed_ipv6_hardening_never_reaches_readiness_or_attach(monkeypatch):
+    monkeypatch.setattr(network.sys, "argv", ["network", "preflight"])
+    monkeypatch.setattr(network, "configuration", lambda _: CONFIG)
+    monkeypatch.setattr(network, "trusted_guest", Mock())
+    monkeypatch.setattr(network, "disable_guest_ipv6", Mock(side_effect=ValueError("sysctl")))
+    validate, attach = Mock(), Mock()
+    monkeypatch.setattr(network, "validate_network", validate)
+    monkeypatch.setattr(network, "attach", attach)
+    with pytest.raises(ValueError, match="sysctl"):
+        network.main()
+    validate.assert_not_called()
+    attach.assert_not_called()

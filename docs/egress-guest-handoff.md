@@ -15,6 +15,14 @@ default gateway, lack of other routes/interfaces, and disabled IPv4 forwarding.
 The no-network branch retains its original loopback/default-route/DNS checks.
 Unknown modes fail rather than choosing a default.
 
+The existing trusted runtime preparation validates and unmasks the guest proc
+tree before private preflight, still before workspace mounting or rootless
+process startup. Private preflight disables guest IPv6 with fixed local sysctls
+before enforcing the unchanged strict topology. This is necessary because Kata
+creates the NIC in its own kernel and can synthesize an IPv6 link-local address
+despite host CNI sysctls. Kernels without IPv6 skip only the absent sysctls, not
+topology validation. Attach never repeats this normalization or permits IPv6.
+
 Rootless Podman creates or starts `dev-sandbox` with the unchanged `nested-v1`
 contract, `--network=none` and the existing delegated cgroup budget. No old
 container is adopted automatically under a new contract, deleted or migrated.
