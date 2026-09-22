@@ -250,7 +250,9 @@ def execute(fd, *args, other=()):
 
 
 def links(fd):
-    return {item["ifname"]: item for item in json.loads(execute(fd, "ip", "-d", "-j", "link"))}
+    return {
+        item["ifname"]: item for item in json.loads(execute(fd, "ip", "-N", "-d", "-j", "link"))
+    }
 
 
 def require_ipv4_only(fd):
@@ -316,7 +318,7 @@ def check_link(link, marker, index=None, *, incomplete=False):
         link.get("ifalias") != marker
         and not (incomplete and not link.get("ifalias"))
         or link.get("linkinfo", {}).get("info_kind") != "veth"
-        or link.get("group") != link_group(marker)
+        or str(link.get("group")) != str(link_group(marker))
         or index is not None
         and link.get("ifindex") != index
     ):

@@ -249,7 +249,7 @@ def kernel(plugin, inputs, monkeypatch):
                     "ifindex": index,
                     "mtu": 1340,
                     "flags": ["UP"],
-                    "group": plugin.link_group(marker),
+                    "group": str(plugin.link_group(marker)),
                     "linkinfo": {"info_kind": "veth"},
                 }
         if args[:3] == ("ip", "link", "set") and "alias" in args:
