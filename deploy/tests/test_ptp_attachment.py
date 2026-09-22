@@ -54,6 +54,8 @@ def inputs(plugin, tmp_path):
         "private": {"path": "/run/netns/test-private", "identity": [1, 2]},
         "transport": {"path": "/run/netns/test-cni", "identity": [1, 3]},
         "mtu": 1340,
+        "address": "10.10.30.2/24",
+        "gateway": "10.10.30.1",
     }
     plugin.save_record(tmp_path / "bindings" / (uid + ".json"), attestation)
     return config, env, attestation
@@ -98,6 +100,18 @@ def test_del_accepts_missing_namespace_and_uid_and_repetition(plugin, inputs):
         ("mtu", True),
         ("mtu", 575),
         ("mtu", 65426),
+        ("address", "::1/24"),
+        ("address", "10.10.30.0/24"),
+        ("address", "10.10.30.255/24"),
+        ("address", "8.8.8.8/24"),
+        ("address", "127.0.0.2/24"),
+        ("address", "169.254.0.2/24"),
+        ("address", "240.0.0.2/24"),
+        ("address", "10.10.30.2/32"),
+        ("gateway", "10.10.30.2"),
+        ("gateway", "10.10.31.1"),
+        ("gateway", "10.10.30.0"),
+        ("gateway", "10.10.30.255"),
         ("private", {"path": "relative", "identity": [1, 2]}),
         ("private", {"path": "/run/netns/private", "identity": [True, 2]}),
     ],
@@ -152,12 +166,13 @@ def test_namespace_replacement_and_non_namespace_rejected(plugin, monkeypatch, t
         assert fd is None
 
 
-def test_result_adds_only_l2_and_preserves_egress_upstream(plugin, inputs):
+def test_result_adds_static_private_endpoint_and_preserves_egress_upstream(plugin, inputs):
     config, env, record = inputs
     req = plugin.request(config, env)
     value = plugin.result(req, record, "02:00:00:00:00:01", None)
-    assert value["ips"] == value["routes"] == []
-    assert value["dns"] == {}
+    assert value["ips"] == [{"address": "10.10.30.2/24", "interface": 0, "gateway": "10.10.30.1"}]
+    assert value["routes"] == [{"dst": "0.0.0.0/0", "gw": "10.10.30.1"}]
+    assert value["dns"] == {"nameservers": ["10.10.30.1"]}
     previous = {
         "cniVersion": "1.0.0",
         "interfaces": [{"name": "upstream"}],
@@ -167,8 +182,11 @@ def test_result_adds_only_l2_and_preserves_egress_upstream(plugin, inputs):
     with pytest.raises(ValueError, match="guest"):
         plugin.result(req, record, "02:00:00:00:00:01", previous)
     record["role"] = "egress"
+    with pytest.raises(ValueError, match="upstream gateway"):
+        plugin.result(req, record, "02:00:00:00:00:01", previous)
+    record.update(address="10.10.30.1/24", gateway=None)
     value = plugin.result(req, record, "02:00:00:00:00:01", previous)
-    assert value["ips"] == previous["ips"]
+    assert value["ips"] == previous["ips"] + [{"address": "10.10.30.1/24", "interface": 1}]
     assert value["routes"] == previous["routes"]
     assert len(previous["interfaces"]) == 1
     assert len(value["interfaces"]) == 2
@@ -215,7 +233,13 @@ def kernel(plugin, inputs, monkeypatch):
     def execute(fd, *args, **kwargs):
         calls.append((fd, args))
         if args[:3] == ("ip", "-j", "address"):
-            return json.dumps([{"addr_info": []}])
+            return json.dumps(
+                [{"addr_info": [{"family": "inet", "local": "10.10.30.2", "prefixlen": 24}]}]
+                if fd == 10
+                else [{"addr_info": []}]
+            )
+        if args[:3] == ("ip", "-j", "route"):
+            return json.dumps([{"gateway": "10.10.30.1", "dev": "eth0"}])
         if args[:3] == ("ip", "link", "add"):
             assert plugin.read_record(state)["indices"] is None
             marker = plugin.alias(req, record)
@@ -259,9 +283,12 @@ def test_real_add_journal_check_and_idempotent_delete_with_fake_kernel(plugin, i
     assert not state.exists()
     assert set(current[10]) == {"lo"}
     assert set(current[20]) == {"br-private", "vxlan-private"}
-    assert not any(
-        args[:2] in (("ip", "route"), ("ip", "address")) and "add" in args for _, args in calls
-    )
+    address_calls = [(fd, args) for fd, args in calls if args[:3] == ("ip", "address", "add")]
+    assert address_calls == [(10, ("ip", "address", "add", "10.10.30.2/24", "dev", "eth0"))]
+    route_calls = [(fd, args) for fd, args in calls if args[:3] == ("ip", "route", "add")]
+    assert route_calls == [
+        (10, ("ip", "route", "add", "default", "via", "10.10.30.1", "dev", "eth0"))
+    ]
     create = next(args for _, args in calls if args[:3] == ("ip", "link", "add"))
     assert create[-1] == "/proc/self/fd/20"
 
@@ -448,3 +475,34 @@ def test_ipv6_precondition_is_not_an_optimizable_assertion(plugin, monkeypatch):
     assert calls[0][1:4] == ("python3", "-I", "-c")
     assert "sys.exit(" in calls[0][-1]
     assert "assert " not in calls[0][-1]
+
+
+@pytest.mark.parametrize("fault", ["result-ip", "kernel-ip", "extra-ip", "default-route"])
+def test_check_rejects_endpoint_drift(plugin, inputs, kernel, monkeypatch, fault):
+    config, env, _ = inputs
+    config["prevResult"] = plugin.perform(config, env)
+    env["CNI_COMMAND"] = "CHECK"
+    original = plugin.execute
+    if fault == "result-ip":
+        config["prevResult"]["ips"][-1]["address"] = "10.10.30.3/24"
+    else:
+
+        def changed(fd, *args, **kwargs):
+            value = original(fd, *args, **kwargs)
+            if fd == 10 and args[:3] == ("ip", "-j", "address"):
+                result = json.loads(value)
+                if fault == "kernel-ip":
+                    result[0]["addr_info"][0]["local"] = "10.10.30.3"
+                elif fault == "extra-ip":
+                    result[0]["addr_info"].append(
+                        {"family": "inet6", "local": "::1", "prefixlen": 128}
+                    )
+                return json.dumps(result)
+            if args[:3] == ("ip", "-j", "route") and fault == "default-route":
+                return '[{"gateway":"10.10.30.3","dev":"eth0"}]'
+            return value
+
+        monkeypatch.setattr(plugin, "execute", changed)
+    with pytest.raises(ValueError):
+        plugin.perform(config, env)
+    assert kernel[2].exists()

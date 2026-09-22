@@ -1,4 +1,4 @@
-"""GitHub CI: real L2 CNI effects and cleanup, not Kata or node attestation proof."""
+"""GitHub CI: real private CNI effects, not Kata or node attestation proof."""
 
 from __future__ import annotations
 
@@ -58,6 +58,8 @@ try:
         "relay_pod_uid": relay,
         "relay_runtime_id": "d" * 64,
         "mtu": 1340,
+        "address": "10.10.30.2/24",
+        "gateway": "10.10.30.1",
         "private": {
             "path": "/run/netns/" + private,
             "identity": canary.namespace_identity(private),
@@ -108,14 +110,19 @@ try:
     )
     canary.ns(private, "ip", "link", "set", "vxlan-private", "master", "br-private")
     canary.ns(private, "ip", "link", "set", "vxlan-private", "up")
+    print("private bridge preflight: " + canary.ns(private, "ip", "-d", "-j", "link"), flush=True)
     plugin.save_record(root / "bindings" / (uid + ".json"), record)
     output = plugin.perform(config, env)
-    assert output["ips"] == output["routes"] == []
-    assert output["dns"] == {}
+    assert output["ips"] == [{"interface": 0, "address": "10.10.30.2/24", "gateway": "10.10.30.1"}]
+    assert output["routes"] == [{"dst": "0.0.0.0/0", "gw": "10.10.30.1"}]
+    assert output["dns"] == {"nameservers": ["10.10.30.1"]}
     assert len(output["interfaces"]) == 1
-    assert canary.ns(names[0], "ip", "-j", "route") == "[]"
+    routes = json.loads(canary.ns(names[0], "ip", "-j", "route", "show", "default"))
+    assert len(routes) == 1 and routes[0]["gateway"] == "10.10.30.1"
+    assert routes[0]["dev"] == "eth0"
     addresses = json.loads(canary.ns(names[0], "ip", "-j", "address", "show", "dev", "eth0"))
-    assert len(addresses) == 1 and not addresses[0]["addr_info"]
+    assert len(addresses) == 1 and len(addresses[0]["addr_info"]) == 1
+    assert addresses[0]["addr_info"][0]["local"] == "10.10.30.2"
     config["prevResult"] = output
     env["CNI_COMMAND"] = "CHECK"
     assert plugin.perform(config, env) is None
@@ -152,8 +159,8 @@ assert not json.loads(canary.run("ip", "-j", "netns", "list"))
 print(
     json.dumps(
         {
-            "real_l2_cni_add_check_del": True,
-            "no_ipam_routes_or_dns": True,
+            "real_private_cni_add_check_del": True,
+            "static_private_endpoint_no_cluster_ipam": True,
             "replacement_cleanup_refused": True,
             "missing_namespace_del_idempotent": True,
             "node_attestation_and_kata_handoff_proven": False,
