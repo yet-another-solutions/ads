@@ -157,7 +157,7 @@ class Observer:
         return self.command(
             self.config["crictl"],
             "--runtime-endpoint=" + self.config["cri_endpoint"],
-            "--timeout=3",
+            "--timeout=3s",
             *args,
         )
 

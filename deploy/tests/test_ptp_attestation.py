@@ -241,6 +241,9 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(attest, fix
     assert "--field-selector=spec.nodeName=worker" in args
     assert args[args.index("-n") + 1] == "sandboxes"
     assert not any(word in args for word in ("secrets", "exec", "delete", "patch", "apply"))
+    observer.cri("pods", "-o", "json")
+    assert "--timeout=3s" in calls[-1]
+    assert "--runtime-endpoint=unix:///run/runtime.sock" in calls[-1]
 
 
 @pytest.mark.parametrize("fault", [None, "journal", "namespace", "replaced"])
