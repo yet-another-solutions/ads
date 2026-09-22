@@ -17,6 +17,8 @@ _SRC = (
     "services/ads-sandbox-base/scripts/ads-agent-init",
     "services/ads-sandbox-base/scripts/ads-sandbox-trust",
     "services/ads-ptp-tools/ads-ptp-canary",
+    "services/ads-ptp-tools/ads-ptp",
+    "services/ads-ptp-tools/attachment-kernel-smoke.py",
     "services/ads-ptp-tools/kernel-smoke.py",
     "services/ads-sandbox-golden/scripts/ads-session-device-check",
     "libraries/ads-commons/src",
