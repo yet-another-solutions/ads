@@ -3,11 +3,63 @@ from __future__ import annotations
 from copy import deepcopy
 from uuid import UUID
 
+from kubernetes.utils.quantity import parse_quantity
+
 from ads_sandbox_manager.config import Settings
-from ads_sandbox_manager.objects import COMPONENT, VERSION, Object
+from ads_sandbox_manager.objects import COMPONENT, JOB_UID, VERSION, Object
 
 SESSION = "ads.io/session-id"
 SANDBOX = "ads.io/sandbox-id"
+CA_CONSUMER = "ads-sandbox-ca-consumer"
+CA_CONSUMER_ROLE = "ads.io/ca-consumer"
+CA_SOURCE_UID = "ads.io/ca-source-uid"
+CA_CONSUMERS = {"guest": "public", "egress": "public", "key": "private"}
+
+
+def ca_consumer_name(sandbox_id: UUID, role: str) -> str:
+    if role not in CA_CONSUMERS:
+        raise ValueError("invalid CA consumer")
+    return f"ads-ca-{role}-{sandbox_id}"
+
+
+def ca_consumer_pvc(
+    settings: Settings,
+    session_id: UUID,
+    sandbox_id: UUID,
+    version: str,
+    role: str,
+    source: Object,
+) -> Object:
+    meta = source["metadata"]
+    storage = source["spec"]["resources"]["requests"]["storage"]
+    capacity = source.get("status", {}).get("capacity", {}).get("storage", storage)
+    return {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {
+            "name": ca_consumer_name(sandbox_id, role),
+            "namespace": settings.namespace,
+            "labels": {
+                **labels(session_id, sandbox_id, version, CA_CONSUMER),
+                CA_CONSUMER_ROLE: role,
+                CA_SOURCE_UID: meta["uid"],
+                JOB_UID: meta["labels"][JOB_UID],
+            },
+        },
+        "spec": {
+            "storageClassName": "sandbox-block",
+            "volumeMode": "Block",
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {
+                "requests": {"storage": str(max(parse_quantity(storage), parse_quantity(capacity)))}
+            },
+            "dataSource": {
+                "apiGroup": "",
+                "kind": "PersistentVolumeClaim",
+                "name": meta["name"],
+            },
+        },
+    }
 
 
 def session_name(session_id: UUID) -> str:
@@ -84,11 +136,14 @@ def guest_deployment(
     sandbox_id: UUID,
     version: str,
     pvc_id: UUID,
+    ca_attempt: UUID | None = None,
 ) -> Object:
     config = settings.session_objects
     assert config is not None
     pod_labels = labels(session_id, sandbox_id, version, "ads-sandbox")
-    return _deployment(
+    if settings.ca is not None and ca_attempt is None:
+        raise ValueError("guest requires committed CA attempt")
+    body = _deployment(
         settings,
         session_name(sandbox_id),
         pod_labels,
@@ -136,6 +191,21 @@ def guest_deployment(
             ],
         },
     )
+    if ca_attempt is not None:
+        pod = body["spec"]["template"]["spec"]
+        container = pod["containers"][0]
+        container["env"].append({"name": "ADS_CA_ATTEMPT", "value": str(ca_attempt)})
+        container["volumeDevices"].append({"name": "ca-public", "devicePath": "/dev/ads-ca-public"})
+        pod["volumes"].append(
+            {
+                "name": "ca-public",
+                "persistentVolumeClaim": {
+                    "claimName": ca_consumer_name(sandbox_id, "guest"),
+                    "readOnly": True,
+                },
+            }
+        )
+    return body
 
 
 def ipc_deployment(

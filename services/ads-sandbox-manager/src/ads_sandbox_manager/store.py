@@ -37,6 +37,9 @@ class SandboxSession(Base):
     guest_deployment_uid: Mapped[str | None]
     ipc_deployment_uid: Mapped[str | None]
     ipc_pvc_uid: Mapped[str | None]
+    ca_attempt: Mapped[UUID | None]
+    ca_sources: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    ca_clones: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     claimed_by: Mapped[UUID | None]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -103,6 +106,12 @@ class SessionRepository:
             .execution_options(populate_existing=True)
         )
         if row is None or row.pvc_id is None or row.status_changed_at != expected:
+            return False
+        if row.ca_attempt is not None and (
+            set(row.ca_sources or {}) != {"public", "private"}
+            or set(row.ca_clones or {}) != {"guest", "egress", "key"}
+            or not all((row.ca_clones or {}).values())
+        ):
             return False
         pvc = await db.get(SessionPVC, row.pvc_id, with_for_update=True)
         if pvc is None or pvc.state != "attaching":
@@ -258,6 +267,9 @@ class SessionRepository:
                 guest_deployment_uid=None,
                 ipc_deployment_uid=None,
                 ipc_pvc_uid=None,
+                ca_attempt=None,
+                ca_sources=None,
+                ca_clones=None,
             )
             .returning(SandboxSession)
             .execution_options(populate_existing=True)

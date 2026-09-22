@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -11,13 +12,17 @@ from kubernetes.utils.quantity import parse_quantity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_commons.egress import SessionProjectsApi
+from ads_sandbox_manager.ca import CaEnsure
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.kube import SessionKubernetes
-from ads_sandbox_manager.objects import COMPONENT, VERSION, Object
+from ads_sandbox_manager.objects import COMPONENT, JOB_UID, VERSION, Object
 from ads_sandbox_manager.session_objects import (
+    CA_CONSUMERS,
     SANDBOX,
     SESSION,
+    ca_consumer_name,
+    ca_consumer_pvc,
     guest_deployment,
     ipc_deployment,
     ipc_pvc,
@@ -85,6 +90,7 @@ class SessionProvisioner:
         repository: SessionRepository,
         topics: TopicPreparation,
         projects: SessionProjectsApi,
+        ca: CaEnsure | None = None,
     ) -> None:
         self.settings = settings
         self.kube = kube
@@ -93,6 +99,7 @@ class SessionProvisioner:
         self.repository = repository
         self.topics = topics
         self.projects = projects
+        self.ca = ca
 
     async def provision(self, session_id: UUID) -> SandboxSession:
         if not isinstance(session_id, UUID):
@@ -142,6 +149,7 @@ class SessionProvisioner:
         try:
             async with asyncio.timeout(config.create_seconds):
                 row = await self._disk(row, owner, resume=resume)
+                row = await self._ca_disks(row, owner)
                 await self.topics.prepare(row.sandbox_id)
                 row = await self._current(row, owner)
                 row = await self._object(
@@ -152,6 +160,7 @@ class SessionProvisioner:
                 )
                 # Re-GET the exact bind immediately before each compute create.
                 await self._verify_disk(row)
+                await self._verify_ca(row)
                 assert row.pvc_id is not None
                 row = await self._object(
                     row,
@@ -162,10 +171,12 @@ class SessionProvisioner:
                         row.sandbox_id,
                         row.golden_version,
                         row.pvc_id,
+                        row.ca_attempt,
                     ),
                     "guest_deployment_uid",
                 )
                 await self._verify_disk(row)
+                await self._verify_ca(row)
                 return await self._object(
                     row,
                     owner,
@@ -343,3 +354,118 @@ class SessionProvisioner:
         ):
             raise SessionBindError("foreign, replaced, or incompatible session object")
         return await self._record(row, owner, **{uid_field: meta["uid"]})
+
+    async def _ca_sources(self, row: SandboxSession) -> dict[str, Object]:
+        if self.ca is None:
+            raise SessionBindError("CA source service is required")
+        sources = await self.ca.clone_sources()
+        if sources is None:
+            raise SessionBindError("CA output pair is not a safe clone source")
+        attempts = {UUID(obj["metadata"]["labels"][JOB_UID]) for obj in sources.values()}
+        if len(attempts) != 1 or (row.ca_attempt is not None and attempts != {row.ca_attempt}):
+            raise SessionBindError("CA initialization attempt changed")
+        identities = {role: obj["metadata"]["uid"] for role, obj in sources.items()}
+        if row.ca_sources is not None and identities != row.ca_sources:
+            raise SessionBindError("CA source identity changed")
+        return sources
+
+    def _ca_bind(self, row: SandboxSession, role: str, obj: Object, body: Object) -> str:
+        meta, spec = obj.get("metadata", {}), obj.get("spec", {})
+        previous = (row.ca_clones or {}).get(role)
+        # Kubernetes mirrors a local dataSource into dataSourceRef. Nothing else,
+        # especially cross-namespace references, is accepted.
+        reference = spec.get("dataSourceRef")
+        expected_ref = body["spec"]["dataSource"]
+        # API quantity canonicalization (e.g. bytes -> Mi) and omitted core API
+        # group are semantic defaults, not permission to accept a different source.
+        comparable = deepcopy(obj)
+        wanted_storage = body["spec"]["resources"]["requests"]["storage"]
+        actual_storage = spec.get("resources", {}).get("requests", {}).get("storage", "0")
+        same_size = parse_quantity(actual_storage) == parse_quantity(wanted_storage)
+        if same_size:
+            comparable["spec"]["resources"]["requests"]["storage"] = wanted_storage
+        for key in ("dataSource", "dataSourceRef"):
+            value = comparable.get("spec", {}).get(key)
+            if isinstance(value, dict) and value.get("apiGroup") is None:
+                value["apiGroup"] = ""
+        reference = comparable.get("spec", {}).get("dataSourceRef")
+        if (
+            not meta.get("uid")
+            or not meta.get("resourceVersion")
+            or meta.get("deletionTimestamp")
+            or meta.get("ownerReferences")
+            or obj.get("status", {}).get("phase") == "Lost"
+            or previous is not None
+            and previous != meta["uid"]
+            or reference is not None
+            and reference != expected_ref
+            or not same_size
+            or not contains(comparable, body)
+        ):
+            raise SessionBindError("foreign, replaced, or incompatible CA clone")
+        return str(meta["uid"])
+
+    async def _ca_disks(self, row: SandboxSession, owner: UUID) -> SandboxSession:
+        if self.settings.ca is None:
+            return row  # Isolated component fixtures; runtime settings require CA.
+        sources = await self._ca_sources(row)
+        if row.ca_attempt is None:
+            # Commit intent BEFORE the first create, including lost-response cleanup names.
+            row = await self._record(
+                row,
+                owner,
+                ca_attempt=UUID(sources["public"]["metadata"]["labels"][JOB_UID]),
+                ca_sources={role: obj["metadata"]["uid"] for role, obj in sources.items()},
+                ca_clones={},
+            )
+        for role, source_role in CA_CONSUMERS.items():
+            row = await self._current(row, owner)
+            sources = await self._ca_sources(row)
+            body = ca_consumer_pvc(
+                self.settings,
+                row.session_id,
+                row.sandbox_id,
+                row.golden_version,
+                role,
+                sources[source_role],
+            )
+            obj = await self.kube.named_pvc(body["metadata"]["name"])
+            if obj is None:
+                if (row.ca_clones or {}).get(role):
+                    raise SessionBindError("committed CA clone missing; recovery required")
+                try:
+                    await self.kube.create_pvc(body)
+                except ApiException as exc:
+                    if exc.status != 409:
+                        raise
+                obj = await self.kube.named_pvc(body["metadata"]["name"])
+            if obj is None:
+                raise SessionBindError("CA clone not observable after create")
+            uid = self._ca_bind(row, role, obj, body)
+            await self._ca_sources(row)  # Fence source replacement during CSI create.
+            row = await self._record(row, owner, ca_clones={**(row.ca_clones or {}), role: uid})
+        return row
+
+    async def _verify_ca(self, row: SandboxSession) -> None:
+        if self.settings.ca is None:
+            return
+        if row.ca_attempt is None or set(row.ca_clones or {}) != set(CA_CONSUMERS):
+            raise SessionBindError("CA clones are not durably bound")
+        sources = await self._ca_sources(row)
+        for role, source_role in CA_CONSUMERS.items():
+            obj = await self.kube.named_pvc(ca_consumer_name(row.sandbox_id, role))
+            if obj is None:
+                raise SessionBindError("CA clone missing before compute")
+            self._ca_bind(
+                row,
+                role,
+                obj,
+                ca_consumer_pvc(
+                    self.settings,
+                    row.session_id,
+                    row.sandbox_id,
+                    row.golden_version,
+                    role,
+                    sources[source_role],
+                ),
+            )
