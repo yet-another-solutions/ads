@@ -28,7 +28,7 @@ NS_GET_OWNER_UID = 0xB704
 LIMIT = 65536
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C"}
 INSPECT = (
-    '{"id":{{json .Id}},"pid":{{json .State.Pid}},"running":{{json .State.Running}},'
+    '{"id":{{json .ID}},"pid":{{json .State.Pid}},"running":{{json .State.Running}},'
     '"network":{{json .HostConfig.NetworkMode}},'
     '"contract":{{json (index .Config.Labels "ads.io/runtime-contract")}}}'
 )
