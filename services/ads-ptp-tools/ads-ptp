@@ -85,10 +85,13 @@ def read_record(path):
 
 
 def save_record(path, value):
+    payload = json.dumps(value, sort_keys=True).encode()
+    if len(payload) > LIMIT:
+        raise ValueError("protected record exceeds bound")
     fd, pending = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, sort_keys=True)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(pending, path)

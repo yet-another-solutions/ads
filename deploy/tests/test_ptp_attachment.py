@@ -151,6 +151,11 @@ def test_records_reject_symlink_permissions_duplicate_and_oversize(plugin, tmp_p
         plugin.decode(" " * 65537)
     with pytest.raises(ValueError):
         plugin.decode("[]")
+    prior = record.read_bytes()
+    with pytest.raises(ValueError, match="record exceeds bound"):
+        plugin.save_record(record, {"oversized": "x" * plugin.LIMIT})
+    assert record.read_bytes() == prior
+    assert not list(tmp_path.glob(".pending-*"))
 
 
 def test_namespace_replacement_and_non_namespace_rejected(plugin, monkeypatch, tmp_path):
