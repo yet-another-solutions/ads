@@ -306,6 +306,7 @@ def test_exec_placement_precedes_privilege_drop_and_preserves_arguments(tree, mo
 def test_agent_leaf_preparation_and_resume(tree, monkeypatch):
     cg, _ = tree
     monkeypatch.setattr(agent, "CG", cg)
+    monkeypatch.setattr(agent, "reset_volatile_runtime", Mock())
     original_read, original_write = Path.read_text, Path.write_text
 
     def read(path, *args, **kwargs):
@@ -327,6 +328,7 @@ def test_agent_leaf_preparation_and_resume(tree, monkeypatch):
     assert (cg / "agent/cgroup.procs").read_text() == "1"
     assert (cg / "cgroup.subtree_control").read_text() == "+cpu +memory +pids"
     agent.prepare()
+    assert agent.reset_volatile_runtime.call_count == 2
 
 
 @pytest.mark.parametrize("range_value,seccomp", [("root:100000:65536", "2"), ("root:1:65536", "0")])
@@ -338,6 +340,75 @@ def test_agent_refuses_old_ranges_or_disabled_seccomp(monkeypatch, range_value, 
     )
     with pytest.raises(RuntimeError):
         agent.prepare()
+
+
+def test_agent_resets_only_nested_volatile_runtime(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    for path in (run / "containers/storage", run / "libpod", run / "keep"):
+        path.mkdir(parents=True)
+        (path / "marker").write_text(path.name)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
+    monkeypatch.setattr(agent, "RUN", run)
+    monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
+    graphroot = tmp_path / "var/lib/containers/storage"
+    graphroot.mkdir(parents=True)
+    (graphroot / "image").write_text("persistent")
+    (run / "libpod/link").symlink_to(graphroot, target_is_directory=True)
+    agent.reset_volatile_runtime()
+    assert not (run / "containers/storage").exists()
+    assert not (run / "libpod").exists()
+    assert (run / "keep/marker").read_text() == "keep"
+    assert (graphroot / "image").read_text() == "persistent"
+    agent.reset_volatile_runtime()
+
+
+@pytest.mark.parametrize("parent", ["run", "containers"])
+def test_agent_refuses_symlinked_runroot_ancestors(tmp_path, monkeypatch, parent):
+    run = tmp_path / "run"
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "storage").mkdir(parents=True)
+    (elsewhere / "storage/marker").write_text("persistent")
+    if parent == "run":
+        run.symlink_to(elsewhere, target_is_directory=True)
+    else:
+        run.mkdir()
+        (run / "containers").symlink_to(elsewhere, target_is_directory=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
+    monkeypatch.setattr(agent, "RUN", run)
+    monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
+    with pytest.raises(OSError):
+        agent.reset_volatile_runtime()
+    assert (elsewhere / "storage/marker").read_text() == "persistent"
+
+
+def test_agent_validates_complete_runroot_allowlist_before_cleanup(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    (run / "containers/storage").mkdir(parents=True)
+    (run / "containers/storage/marker").write_text("retained")
+    (run / "elsewhere").mkdir()
+    (run / "libpod").symlink_to(run / "elsewhere", target_is_directory=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("1 0 0:1 / / rw - rootfs rootfs rw\n")
+    monkeypatch.setattr(agent, "RUN", run)
+    monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
+    with pytest.raises(RuntimeError, match="local directory"):
+        agent.reset_volatile_runtime()
+    assert (run / "containers/storage/marker").read_text() == "retained"
+    assert (run / "libpod").is_symlink()
+
+
+def test_agent_refuses_mounted_nested_runroot(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    (run / "containers/storage").mkdir(parents=True)
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(f"1 0 0:1 / {run}/containers/storage/overlay rw - tmpfs tmpfs rw\n")
+    monkeypatch.setattr(agent, "RUN", run)
+    monkeypatch.setattr(agent, "MOUNTINFO", mountinfo)
+    with pytest.raises(RuntimeError, match="mounted volatile"):
+        agent.reset_volatile_runtime()
+    assert (run / "containers/storage").is_dir()
 
 
 def test_missing_controller_does_not_enable_partial_delegation(tree):
