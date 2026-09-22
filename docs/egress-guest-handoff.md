@@ -59,6 +59,10 @@ persistent workspace.
 
 Unit tests cover configuration, topology, identity/namespace changes, descriptor
 use, command bounds, one-shot failure, and boot ordering. GitHub Actions exercises
+the selected-field template against actual Podman-created metadata (no fetched
+or executed image), rather than trusting a mocked formatter. The ID field is
+`.ID`; Podman's `.Id` compatibility alias is not supported inside `json`.
+GitHub Actions also exercises
 the real transfer function into a subordinate-ID-mapped rootless Linux network
 namespace, with a private TCP roundtrip, outer loopback-only check and duplicate
 denial. This native kernel test does not impersonate a full Podman/CRI or Kata

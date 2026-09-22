@@ -155,6 +155,9 @@ def test_container_inspection_requires_exact_identity(monkeypatch, field, value)
 
 
 def test_container_inspection_runs_only_trusted_rootless_helper(monkeypatch):
+    # .Id is only a compatibility rewrite in simple templates, not inside json.
+    assert "{{json .ID}}" in network.INSPECT
+    assert "{{json .Id}}" not in network.INSPECT
     execute = Mock(return_value=json.dumps(RECORD))
     monkeypatch.setattr(network, "execute", execute)
     assert network.inspect_container() == RECORD

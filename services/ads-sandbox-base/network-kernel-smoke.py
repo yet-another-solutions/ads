@@ -10,6 +10,7 @@ import pwd
 import select
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -36,6 +37,48 @@ def run(*command):
     return subprocess.run(command, check=True, capture_output=True, text=True, timeout=10).stdout
 
 
+def inspect_template():
+    """Exercise actual Podman formatting, without fetching or running an image."""
+    with tempfile.TemporaryDirectory(prefix="ads-inspect-") as directory:
+        root = Path(directory)
+        (root / "rootfs").mkdir()
+        podman = [
+            "podman",
+            "--root",
+            str(root / "store"),
+            "--runroot",
+            str(root / "run"),
+            "--storage-driver=vfs",
+            "--cgroup-manager=cgroupfs",
+        ]
+        container_id = run(
+            *podman,
+            "create",
+            "--name",
+            "inspect-contract",
+            "--network=none",
+            "--label",
+            "ads.io/runtime-contract=nested-v1",
+            "--rootfs",
+            str(root / "rootfs"),
+            "/bin/true",
+        ).strip()
+        try:
+            actual = json.loads(run(*podman, "inspect", "--format", network.INSPECT, container_id))
+            assert actual == {
+                "id": container_id,
+                "pid": 0,
+                "running": False,
+                "network": "none",
+                "contract": "nested-v1",
+            }
+        finally:
+            run(*podman, "rm", container_id)
+        assert json.loads(run(*podman, "ps", "-a", "--format", "json")) == []
+    print("real Podman selected-field inspection template passed")
+
+
+inspect_template()
 try:
     # This Python process was launched under a new netns, never the runner host netns.
     assert {link["ifname"] for link in json.loads(run("ip", "-j", "link"))} == {"lo"}
