@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""Private node-side CNI attachment. Root-owned attestation is mandatory."""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from uuid import UUID
+
+VERSION = "1.0.0"
+NS_GET_NSTYPE = 0xB703
+CLONE_NEWNET = 0x40000000
+LIMIT = 65536
+BINDING_FIELDS = {
+    "pod_uid",
+    "generation",
+    "sandbox_id",
+    "role",
+    "ifname",
+    "network",
+    "relay_pod_uid",
+    "relay_runtime_id",
+    "private",
+    "transport",
+    "mtu",
+    "address",
+    "gateway",
+}
+
+
+def object_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field")
+        result[key] = value
+    return result
+
+
+def decode(raw):
+    if len(raw) > LIMIT:
+        raise ValueError("input exceeds bound")
+    value = json.loads(raw, object_pairs_hook=object_pairs)
+    if not isinstance(value, dict):
+        raise ValueError("object required")
+    return value
+
+
+def private_directory(path):
+    path = Path(path)
+    info = path.lstat()
+    if (
+        not path.is_absolute()
+        or path.resolve() != path
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_mode & 0o077
+    ):
+        raise ValueError("private root-owned directory required")
+    return path
+
+
+def read_record(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o077
+            or info.st_size > LIMIT
+        ):
+            raise ValueError("invalid protected record")
+        return decode(stream.read(LIMIT + 1))
+
+
+def save_record(path, value):
+    payload = json.dumps(value, sort_keys=True).encode()
+    if len(payload) > LIMIT:
+        raise ValueError("protected record exceeds bound")
+    fd, pending = tempfile.mkstemp(prefix=".pending-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(pending, path)
+        sync_directory(path.parent)
+    finally:
+        if os.path.exists(pending):
+            os.unlink(pending)
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def request(config, env):
+    if config.get("cniVersion") != VERSION or config.get("type") != "ads-ptp":
+        raise ValueError("unsupported CNI version or plugin type")
+    network = config.get("name", "")
+    container = env.get("CNI_CONTAINERID", "")
+    interface = env.get("CNI_IFNAME", "")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", network):
+        raise ValueError("invalid network")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}", container):
+        raise ValueError("invalid CNI_CONTAINERID")
+    if not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{0,14}", interface):
+        raise ValueError("invalid CNI_IFNAME")
+    arguments = {}
+    for item in filter(None, env.get("CNI_ARGS", "").split(";")):
+        key, value = item.split("=", 1)
+        if key in arguments:
+            raise ValueError("duplicate CNI argument")
+        arguments[key] = value
+    uid = arguments.get("K8S_POD_UID")
+    if uid is not None and str(UUID(uid)) != uid:
+        raise ValueError("invalid Pod UID")
+    command = env.get("CNI_COMMAND")
+    if command not in ("ADD", "CHECK", "DEL"):
+        raise ValueError("unsupported CNI_COMMAND")
+    if command != "DEL" and (uid is None or not env.get("CNI_NETNS")):
+        raise ValueError("CNI_NETNS and K8S_POD_UID required")
+    key = hashlib.sha256(f"{network}/{container}/{interface}".encode()).hexdigest()
+    return {
+        "command": command,
+        "network": network,
+        "container_id": container,
+        "ifname": interface,
+        "pod_uid": uid,
+        "netns": env.get("CNI_NETNS", ""),
+        "key": key,
+    }
+
+
+def binding(value, req):
+    if set(value) != BINDING_FIELDS:
+        raise ValueError("exact node attestation required")
+    for key in ("pod_uid", "generation", "sandbox_id", "relay_pod_uid"):
+        if str(UUID(value[key])) != value[key]:
+            raise ValueError("canonical attested UUID required")
+    if (
+        value["pod_uid"] != req["pod_uid"]
+        or value["network"] != req["network"]
+        or value["ifname"] != req["ifname"]
+        or value["pod_uid"] == value["relay_pod_uid"]
+        or value["role"] not in ("guest", "egress")
+        or not re.fullmatch(r"[a-f0-9]{64}", value["relay_runtime_id"])
+        or type(value["mtu"]) is not int
+        or not 576 <= value["mtu"] <= 65425
+    ):
+        raise ValueError("attachment identity mismatch")
+    for key in ("private", "transport"):
+        ns = value[key]
+        if (
+            not isinstance(ns, dict)
+            or set(ns) != {"path", "identity"}
+            or not isinstance(ns["path"], str)
+            or not ns["path"].startswith("/")
+            or not isinstance(ns["identity"], list)
+            or len(ns["identity"]) != 2
+            or not all(type(x) is int and x > 0 for x in ns["identity"])
+        ):
+            raise ValueError("invalid attested namespace")
+    if value["private"]["identity"] == value["transport"]["identity"]:
+        raise ValueError("private namespace is ordinary transport")
+    endpoint(value)
+    return value
+
+
+def endpoint(attestation):
+    address = ipaddress.IPv4Interface(attestation["address"])
+    if (
+        str(address) != attestation["address"]
+        or address.network.prefixlen != 24
+        or not any(
+            address.ip in ipaddress.IPv4Network(network)
+            for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+        )
+        or address.ip in (address.network.network_address, address.network.broadcast_address)
+    ):
+        raise ValueError("invalid pair-local endpoint address")
+    gateway = attestation["gateway"]
+    if attestation["role"] == "egress":
+        if gateway is not None:
+            raise ValueError("egress private attachment must not replace upstream gateway")
+    else:
+        gateway = ipaddress.IPv4Address(gateway)
+        if (
+            str(gateway) != attestation["gateway"]
+            or gateway not in address.network
+            or gateway
+            in (address.ip, address.network.network_address, address.network.broadcast_address)
+        ):
+            raise ValueError("invalid private gateway")
+    return address, gateway
+
+
+@contextlib.contextmanager
+def namespace(path, expected=None, missing=False):
+    try:
+        # Namespace procfs references are intentional; the held FD and nsfs
+        # device/inode prevent a later path/PID replacement from retargeting us.
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    except FileNotFoundError:
+        if not missing:
+            raise
+        yield None
+        return
+    try:
+        info = os.fstat(fd)
+        identity = [info.st_dev, info.st_ino]
+        if fcntl.ioctl(fd, NS_GET_NSTYPE) != CLONE_NEWNET:
+            raise ValueError("not a network namespace")
+        if expected is not None and identity != expected:
+            raise ValueError("namespace replaced")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def ns_identity(fd):
+    info = os.fstat(fd)
+    return [info.st_dev, info.st_ino]
+
+
+def execute(fd, *args, other=()):
+    descriptors = (fd, *other)
+    result = subprocess.run(
+        ["nsenter", f"--net=/proc/self/fd/{fd}", "--", *args],
+        pass_fds=descriptors,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode:
+        raise RuntimeError("network operation failed")
+    return result.stdout.strip()
+
+
+def links(fd):
+    return {
+        item["ifname"]: item for item in json.loads(execute(fd, "ip", "-N", "-d", "-j", "link"))
+    }
+
+
+def require_ipv4_only(fd):
+    execute(
+        fd,
+        "python3",
+        "-I",
+        "-c",
+        "import sys; from pathlib import Path; p=Path('/proc/sys/net/ipv6'); "
+        "sys.exit(0 if not p.exists() or "
+        "all((p / ('conf/'+n+'/disable_ipv6')).read_text().strip()=='1' "
+        "for n in ('all','default')) else 1)",
+    )
+
+
+def bridge_identity(attestation):
+    return "ads-ptp:" + attestation["relay_pod_uid"] + ":" + attestation["generation"]
+
+
+def verify_bridge(fd, attestation, attached=False):
+    current = links(fd)
+    bridge = current.get("br-private", {})
+    if (
+        bridge.get("linkinfo", {}).get("info_kind") != "bridge"
+        or bridge.get("ifalias") != bridge_identity(attestation)
+        or bridge.get("mtu") != attestation["mtu"]
+        or "UP" not in bridge.get("flags", [])
+    ):
+        raise ValueError("private bridge identity mismatch")
+    members = {
+        name
+        for name, link in current.items()
+        if link.get("master") in ("br-private", bridge["ifindex"])
+    }
+    if members != ({"vxlan-private", "veth-local"} if attached else {"vxlan-private"}):
+        raise ValueError("unexpected private bridge membership")
+    if not attached and "veth-local" in current:
+        raise ValueError("private attachment name occupied")
+    if current["vxlan-private"].get("linkinfo", {}).get("info_kind") != "vxlan":
+        raise ValueError("private bridge uplink is not VXLAN")
+    addresses = json.loads(execute(fd, "ip", "-j", "address", "show", "dev", "br-private"))
+    if len(addresses) != 1 or addresses[0].get("addr_info"):
+        raise ValueError("private bridge must be unnumbered")
+    return current
+
+
+def alias(req, attestation):
+    return (
+        "ads-ptp:"
+        + hashlib.sha256(
+            f"{req['key']}/{attestation['pod_uid']}/{attestation['generation']}".encode()
+        ).hexdigest()
+    )
+
+
+def link_group(marker):
+    # IFLA_GROUP, unlike IFLA_IFALIAS, is applied atomically on link creation.
+    return (int(hashlib.sha256(marker.encode()).hexdigest()[:8], 16) & 0x7FFFFFFF) or 1
+
+
+def check_link(link, marker, index=None, *, incomplete=False):
+    if (
+        link.get("ifalias") != marker
+        and not (incomplete and not link.get("ifalias"))
+        or link.get("linkinfo", {}).get("info_kind") != "veth"
+        or str(link.get("group")) != str(link_group(marker))
+        or index is not None
+        and link.get("ifindex") != index
+    ):
+        raise ValueError("foreign or replaced attachment link")
+
+
+def result(req, attestation, mac, previous):
+    if previous:
+        if attestation["role"] == "guest":
+            raise ValueError("guest must not have a previous CNI network")
+        if previous.get("cniVersion") != VERSION:
+            raise ValueError("previous result version mismatch")
+    value = (
+        json.loads(json.dumps(previous))
+        if previous
+        else {
+            "cniVersion": VERSION,
+            "interfaces": [],
+            "ips": [],
+            "routes": [],
+            "dns": {},
+        }
+    )
+    if any(
+        i.get("name") == req["ifname"] and i.get("sandbox") == req["netns"]
+        for i in value.get("interfaces", [])
+    ):
+        raise ValueError("previous result already contains private interface")
+    value.setdefault("interfaces", []).append(
+        {"name": req["ifname"], "mac": mac, "sandbox": req["netns"]}
+    )
+    address, gateway = endpoint(attestation)
+    ip = {"interface": len(value["interfaces"]) - 1, "address": str(address)}
+    if gateway is not None:
+        ip["gateway"] = str(gateway)
+        value.setdefault("routes", []).append({"dst": "0.0.0.0/0", "gw": str(gateway)})
+        value["dns"] = {"nameservers": [str(gateway)]}
+    value.setdefault("ips", []).append(ip)
+    # Static pair-local addressing, not cluster IPAM. Relay links stay unnumbered.
+    return value
+
+
+def add(req, attestation, state_path, previous):
+    if state_path.exists():
+        raise ValueError("attachment already attempted; DEL required")
+    with (
+        namespace(req["netns"]) as vm,
+        namespace(attestation["private"]["path"], attestation["private"]["identity"]) as private,
+        namespace(
+            attestation["transport"]["path"], attestation["transport"]["identity"]
+        ) as transport,
+        namespace("/proc/self/ns/net") as host,
+    ):
+        identities = [tuple(ns_identity(fd)) for fd in (vm, private, transport, host)]
+        if len(set(identities)) != 4:
+            raise ValueError("host, VM, private and transport namespaces must differ")
+        require_ipv4_only(vm)
+        require_ipv4_only(private)
+        current = links(vm)
+        if req["ifname"] in current or attestation["role"] == "guest" and set(current) != {"lo"}:
+            raise ValueError("guest has another interface or attachment name is occupied")
+        verify_bridge(private, attestation)
+        marker = alias(req, attestation)
+        raw = hashlib.sha256(
+            f"{attestation['generation']}/{attestation['role']}".encode()
+        ).digest()[:5]
+        mac = "02:" + ":".join(f"{x:02x}" for x in raw)
+        output = result(req, attestation, mac, previous)
+        state = {
+            "request": req,
+            "binding": attestation,
+            "vm_identity": ns_identity(vm),
+            "alias": marker,
+            "result": output,
+            "indices": None,
+        }
+        save_record(state_path, state)  # Durable intent precedes the first effect.
+        execute(
+            vm,
+            "ip",
+            "link",
+            "add",
+            req["ifname"],
+            "address",
+            mac,
+            "mtu",
+            str(attestation["mtu"]),
+            "group",
+            str(link_group(marker)),
+            "type",
+            "veth",
+            "peer",
+            "name",
+            "veth-local",
+            "mtu",
+            str(attestation["mtu"]),
+            "group",
+            str(link_group(marker)),
+            "netns",
+            f"/proc/self/fd/{private}",
+            other=(private,),
+        )
+        for fd, name in ((vm, req["ifname"]), (private, "veth-local")):
+            check_link(links(fd)[name], marker, incomplete=True)
+            execute(fd, "ip", "link", "set", name, "alias", marker)
+        execute(private, "ip", "link", "set", "veth-local", "master", "br-private")
+        execute(private, "ip", "link", "set", "veth-local", "up")
+        execute(vm, "ip", "link", "set", req["ifname"], "up")
+        address, gateway = endpoint(attestation)
+        execute(vm, "ip", "address", "add", str(address), "dev", req["ifname"])
+        if gateway is not None:
+            execute(vm, "ip", "route", "add", "default", "via", str(gateway), "dev", req["ifname"])
+        vm_link, peer = links(vm)[req["ifname"]], links(private)["veth-local"]
+        check_link(vm_link, marker)
+        check_link(peer, marker)
+        state["indices"] = {"vm": vm_link["ifindex"], "peer": peer["ifindex"]}
+        save_record(state_path, state)
+        return output
+
+
+def check(req, attestation, saved, previous):
+    if attestation != saved["binding"] or not saved["indices"]:
+        raise ValueError("binding changed or ADD incomplete")
+    own = saved["result"]["interfaces"][-1]
+    if (
+        not isinstance(previous, dict)
+        or previous.get("cniVersion") != VERSION
+        or [
+            i
+            for i in previous.get("interfaces", [])
+            if i.get("name") == req["ifname"] and i.get("sandbox") == req["netns"]
+        ]
+        != [own]
+    ):
+        raise ValueError("CHECK requires the recorded result")
+    own_index = previous["interfaces"].index(own)
+    expected_ip = {**saved["result"]["ips"][-1], "interface": own_index}
+    if [ip for ip in previous.get("ips", []) if ip.get("interface") == own_index] != [expected_ip]:
+        raise ValueError("CHECK requires the recorded private IP")
+    with (
+        namespace(req["netns"], saved["vm_identity"]) as vm,
+        namespace(attestation["private"]["path"], attestation["private"]["identity"]) as private,
+        namespace(attestation["transport"]["path"], attestation["transport"]["identity"]),
+    ):
+        current = verify_bridge(private, attestation, attached=True)
+        addresses = json.loads(execute(vm, "ip", "-j", "address", "show", "dev", req["ifname"]))
+        address, gateway = endpoint(attestation)
+        if len(addresses) != 1 or [
+            (entry.get("family"), entry.get("local"), entry.get("prefixlen"))
+            for entry in addresses[0].get("addr_info", [])
+        ] != [("inet", str(address.ip), address.network.prefixlen)]:
+            raise ValueError("private endpoint address changed")
+        if gateway is not None:
+            routes = json.loads(execute(vm, "ip", "-j", "route", "show", "default"))
+            if len(routes) != 1 or (routes[0].get("gateway"), routes[0].get("dev")) != (
+                str(gateway),
+                req["ifname"],
+            ):
+                raise ValueError("private default route changed")
+        for link, index in (
+            (links(vm).get(req["ifname"], {}), saved["indices"]["vm"]),
+            (current.get("veth-local", {}), saved["indices"]["peer"]),
+        ):
+            check_link(link, saved["alias"], index)
+            if link.get("mtu") != attestation["mtu"] or "UP" not in link.get("flags", []):
+                raise ValueError("private link not operational")
+
+
+def delete(saved, state_path):
+    req, attestation = saved["request"], saved["binding"]
+    with (
+        namespace(req["netns"], saved["vm_identity"], missing=True) as vm,
+        namespace(
+            attestation["private"]["path"], attestation["private"]["identity"], missing=True
+        ) as private,
+    ):
+        candidates = []
+        for fd, name, side in ((vm, req["ifname"], "vm"), (private, "veth-local", "peer")):
+            if fd is None:
+                continue
+            link = links(fd).get(name)
+            if link is not None:
+                index = (saved["indices"] or {}).get(side)
+                check_link(link, saved["alias"], index, incomplete=saved["indices"] is None)
+                candidates.append((fd, name))
+        # Validate both sides before deleting either; never follow new binding data.
+        if candidates:
+            fd, name = candidates[0]
+            try:
+                execute(fd, "ip", "link", "delete", name)
+            except RuntimeError:
+                # The kernel can asynchronously remove the peer after its VM
+                # namespace vanishes. An error is harmless only if now absent;
+                # never suppress a failed deletion of a surviving/replaced link.
+                if name in links(fd):
+                    raise
+        for fd, name in candidates:
+            if name in links(fd):
+                raise RuntimeError("attachment link remains")
+    state_path.unlink()
+    sync_directory(state_path.parent)
+
+
+def perform(config, env):
+    req = request(config, env)
+    root = private_directory(config["stateDir"])
+    state_path = root / (req["key"] + ".json")
+    lock = os.open(
+        root / (req["key"] + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+    )
+    try:
+        info = os.fstat(lock)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError("invalid attachment lock")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if req["command"] == "DEL":
+            if not state_path.exists() and not state_path.is_symlink():
+                return None
+            saved = read_record(state_path)
+            if any(
+                saved["request"][key] != req[key]
+                for key in ("key", "network", "container_id", "ifname")
+            ):
+                raise ValueError("cleanup identity mismatch")
+            if req["pod_uid"] and req["pod_uid"] != saved["request"]["pod_uid"]:
+                raise ValueError("cleanup Pod UID changed")
+            delete(saved, state_path)
+            return None
+        root = private_directory(config["bindingDir"])
+        attestation = binding(read_record(root / (req["pod_uid"] + ".json")), req)
+        if req["command"] == "ADD":
+            return add(req, attestation, state_path, config.get("prevResult"))
+        saved = read_record(state_path)
+        if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
+            raise ValueError("CHECK identity changed")
+        check(req, attestation, saved, config.get("prevResult"))
+        return None
+    finally:
+        os.close(lock)
+
+
+def main():
+    try:
+        config = decode(sys.stdin.buffer.read(LIMIT + 1))
+        if os.environ.get("CNI_COMMAND") == "VERSION":
+            print(json.dumps({"cniVersion": VERSION, "supportedVersions": [VERSION]}))
+            return
+        if os.geteuid() != 0:
+            raise PermissionError("node-root execution required")
+        output = perform(config, os.environ)
+        if output is not None:
+            print(json.dumps(output))
+    except Exception as error:
+        print(
+            json.dumps(
+                {
+                    "cniVersion": VERSION,
+                    "code": 100,
+                    "msg": "ads-ptp attachment rejected",
+                    "details": type(error).__name__,
+                }
+            )
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
