@@ -169,6 +169,32 @@ def ns(name: str, *command: str, data: str | None = None) -> str:
     return run("ip", "netns", "exec", name, *command, data=data)
 
 
+def configure_namespace(name: str) -> None:
+    # ip netns exec creates a disposable child mount namespace. The container's
+    # default /proc/sys bind is read-only; mount a fresh proc only in that child.
+    # Its PID namespace remains the Pod's, and net sysctls affect only `name`.
+    ns(
+        name,
+        "python",
+        "-c",
+        """
+import pathlib, subprocess
+subprocess.run(["mount", "-t", "proc", "-o", "nosuid,nodev,noexec", "proc", "/proc"],
+               check=True, capture_output=True)
+root = pathlib.Path("/proc/sys/net")
+values = {"ipv4/ip_forward": "0"}
+if (root / "ipv6").exists():
+    values.update({"ipv6/conf/all/disable_ipv6": "1",
+                   "ipv6/conf/default/disable_ipv6": "1"})
+for key, value in values.items():
+    path = root / key
+    path.write_text(value)
+    if path.read_text().strip() != value:
+        raise RuntimeError("private namespace sysctl did not apply")
+""",
+    )
+
+
 def mac(generation: str, side: str) -> str:
     raw = hashlib.sha256(f"{generation}/{side}".encode()).digest()[:5]
     return "02:" + ":".join(f"{value:02x}" for value in raw)
@@ -220,10 +246,7 @@ def configure(config: dict) -> dict:
             owned[name] = namespace_identity(name)
             save_namespaces(owned)
             ns(name, "ip", "link", "set", "lo", "up")
-            ns(name, "sysctl", "-qw", "net.ipv4.ip_forward=0")
-            if Path("/proc/sys/net/ipv6").exists():
-                ns(name, "sysctl", "-qw", "net.ipv6.conf.all.disable_ipv6=1")
-                ns(name, "sysctl", "-qw", "net.ipv6.conf.default.disable_ipv6=1")
+            configure_namespace(name)
         # The UDP socket stays in its CNI birthplace when the interface moves.
         run("ip", "link", "add", "wg-private", "type", "wireguard")
         wg_created = True
@@ -391,6 +414,9 @@ def ready() -> dict:
     private, mock = ns_names()
     if any(owned.get(name) != namespace_identity(name) for name in (private, mock)):
         raise RuntimeError("namespace identity changed")
+    link = json.loads(ns(private, "ip", "-j", "link", "show", "wg-private"))
+    if len(link) != 1 or "UP" not in link[0].get("flags", []):
+        raise RuntimeError("WireGuard link is not up")
     if (
         ns(private, "wg", "show", "wg-private", "listen-port") != str(config["wireguard_port"])
         or ns(private, "wg", "show", "wg-private", "peers") != config["peer_key"]

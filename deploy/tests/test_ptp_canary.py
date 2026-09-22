@@ -235,6 +235,8 @@ def test_socket_ready_requires_live_configuration_but_never_a_handshake(
 
     def fake(*args, **kwargs):
         calls.append(args)
+        if "-j" in args:
+            return json.dumps([{"flags": ["UP"]}])
         if args[-1] == "listen-port":
             return str(config["wireguard_port"])
         if args[-1] == "peers":
@@ -244,6 +246,25 @@ def test_socket_ready_requires_live_configuration_but_never_a_handshake(
     monkeypatch.setattr(canary, "run", fake)
     assert canary.ready()["socket_configured"] is True
     assert not any("latest-handshakes" in c for c in calls)
-    monkeypatch.setattr(canary, "run", lambda *args, **kwargs: "")
+    monkeypatch.setattr(
+        canary,
+        "run",
+        lambda *args, **kwargs: json.dumps([{"flags": ["UP"]}]) if "-j" in args else "",
+    )
     with pytest.raises(RuntimeError, match="configuration changed"):
         canary.ready()
+    monkeypatch.setattr(canary, "run", lambda *args, **kwargs: json.dumps([{"flags": []}]))
+    with pytest.raises(RuntimeError, match="link is not up"):
+        canary.ready()
+
+
+def test_sysctls_use_only_disposable_private_child_mount_namespace(canary, monkeypatch):
+    calls = []
+    monkeypatch.setattr(canary, "run", lambda *args, **kwargs: calls.append(args) or "")
+    name = canary.ns_names()[0]
+    canary.configure_namespace(name)
+    assert len(calls) == 1
+    assert calls[0][:6] == ("ip", "netns", "exec", name, "python", "-c")
+    assert '"proc", "/proc"' in calls[0][6]
+    assert "ip_forward" in calls[0][6]
+    assert "disable_ipv6" in calls[0][6]

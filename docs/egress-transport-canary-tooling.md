@@ -12,6 +12,9 @@ with hostNetwork, hostPID, hostIPC, a Kubernetes API token, a runtime socket,
 host filesystem mounts or a shared host mount namespace. Mount `/run` as a
 Pod-local memory emptyDir; use read-only image root and a separate writable
 temporary directory. Neither capability is granted to an untrusted guest.
+The helper mounts a fresh procfs only inside each `ip netns exec` child's
+temporary mount namespace to set that private network namespace's sysctls;
+the parent Pod's read-only proc masks and host mounts remain unchanged.
 
 Supply exact Pod UID and manager/test-owned attachment generation UUID through
 environment. `keygen` creates a new protected per-generation directory and
@@ -42,7 +45,10 @@ compare node/runtime baseline; helper success alone is not a cleanup verdict.
 
 Unit tests verify command ordering, namespace ownership, topology validation
 and credential handling without claiming a kernel datapath test. CI verifies
-the built image's tools. The live acceptance matrix still requires real relay
+the built image's tools and performs real kernel setup/cleanup with the same
+read-only-root/capability constraints, including IPv6 disablement and readiness
+withdrawal when WireGuard is down. This is not a Service or link traffic proof.
+The live acceptance matrix still requires real relay
 Pods, the real UDP Service, captures with positive controls, Ethernet/TCP/UDP
 integrity, negative identity/bypass/loss cases, MTU/idle/backend replacement and
 complete cleanup. Cross-worker proof is explicitly deferred in the one-worker
