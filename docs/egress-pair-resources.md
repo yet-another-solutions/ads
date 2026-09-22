@@ -88,6 +88,27 @@ database already stamped at head will fail validation rather than invent empty
 ownership. A candidate rollout therefore still requires the authorized scoped
 fresh-schema/model-credential preservation and restoration procedure.
 
+`PairControlProvisioner.prepare` joins this repository to the real control
+adapter. It commits all eight intended resources before the first API call,
+revalidates the exact claim and captured configuration before each step, and
+commits each observed UID before proceeding. It never holds a SQL transaction
+across Kubernetes I/O. Repeated calls under the same claim are idempotent; missing
+bound objects or replacement UIDs fail instead of being recreated/adopted.
+The overall preparation deadline and each SQL-control step are bounded.
+
+Failures and cancellation propagate without fabricating success or forgetting
+partial ownership. In particular, cancelling an SDK thread does not cancel an
+API request already in flight. The adapter's new observation-only method can
+identify a later result under the exact generation without creating anything.
+Tests exercise a real delayed SDK thread that commits after coroutine cancellation:
+an earlier 404 is not retirement evidence, and the ledger remains retained.
+
+This internal provisioning step is not yet invoked by `SessionProvisioner`:
+enabling it without full compute/relay startup, retained-generation cleanup,
+runtime-release evidence and recovery would expose an incomplete pair. It
+returns captured controls, not execution readiness. Retirement and production
+activation remain explicit subsequent integration gates.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or

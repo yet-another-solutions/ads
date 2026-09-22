@@ -171,6 +171,22 @@ class PairIntentRepository:
         key = resource_key(kind, role)
         if not isinstance(uid, str) or not uid.strip():
             raise ValueError("an observed UID is required")
+        intent = await self.owned(db, expected, owner, generation)
+        previous = intent.control_uids[key]
+        if previous is not None and previous != uid:
+            raise RuntimeError("pair control UID replacement refused")
+        intent.control_uids = {**intent.control_uids, key: uid}
+        await db.flush()
+        return intent
+
+    async def owned(
+        self,
+        db: AsyncSession,
+        expected: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+    ) -> PairIntent:
+        """Revalidate an existing intent without ever allocating a replacement."""
         row = await self._owned(db, expected, owner)
         intent = await db.scalar(
             select(PairIntent)
@@ -182,11 +198,6 @@ class PairIntentRepository:
             raise PairClaimLost("pair intent missing")
         self._matches(intent, row, owner)
         self._validate(intent)
-        previous = intent.control_uids[key]
-        if previous is not None and previous != uid:
-            raise RuntimeError("pair control UID replacement refused")
-        intent.control_uids = {**intent.control_uids, key: uid}
-        await db.flush()
         return intent
 
     async def snapshot(self, db: AsyncSession, generation: UUID) -> PairIntent | None:

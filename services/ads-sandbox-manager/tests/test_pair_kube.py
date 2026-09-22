@@ -253,3 +253,26 @@ async def test_changed_required_spec_and_api_identity_are_rejected(controls, kin
     observed["apiVersion"] = "foreign/v1"
     with pytest.raises(RuntimeError, match="foreign"):
         await adapter.ensure(pair, kind, role)
+
+
+@pytest.mark.parametrize("kind,role", CASES)
+async def test_observe_only_can_capture_lost_response_without_create_or_delete(
+    controls, kind, role
+):
+    adapter, pair = controls
+    observed, read, create, delete = configure(controls, kind, role)
+    read.side_effect = ApiException(status=404)
+    assert await adapter.observe(pair, kind, role) is None
+    read.side_effect = None
+    # Even drifted/terminating owned objects remain exact cleanup obligations.
+    observed["spec"]["unexpected"] = True
+    observed["metadata"]["deletionTimestamp"] = "now"
+    assert await adapter.observe(pair, kind, role) == "owned-uid"
+    assert await adapter.observe(pair, kind, role, "owned-uid") == "owned-uid"
+    with pytest.raises(RuntimeError, match="replaced"):
+        await adapter.observe(pair, kind, role, "other-uid")
+    observed["metadata"]["labels"][GENERATION] = str(uuid4())
+    with pytest.raises(RuntimeError, match="foreign"):
+        await adapter.observe(pair, kind, role)
+    create.assert_not_called()
+    delete.assert_not_called()
