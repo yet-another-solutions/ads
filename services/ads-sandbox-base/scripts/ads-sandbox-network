@@ -152,6 +152,22 @@ def trusted_guest():
     )
 
 
+def disable_guest_ipv6():
+    # Kata recreates NICs inside a separate kernel; host CNI sysctls do not
+    # suppress its automatic link-local address. Tighten only our guest netns.
+    # A kernel without IPv6 needs no sysctl; topology validation still follows.
+    if (PROC / "sys/net/ipv6").exists():
+        execute(
+            [
+                "/usr/sbin/sysctl",
+                "-q",
+                "-w",
+                "net.ipv6.conf.all.disable_ipv6=1",
+                "net.ipv6.conf.default.disable_ipv6=1",
+            ]
+        )
+
+
 def inspect_container():
     raw = execute(
         [
@@ -333,6 +349,8 @@ def main():
     require(sys.argv[1:] in (["preflight"], ["attach"]), "expected preflight or attach")
     config = configuration(os.environ)
     trusted_guest()
+    if sys.argv[1] == "preflight":
+        disable_guest_ipv6()
     validate_network(inventory(), config, True)
     if sys.argv[1] == "attach":
         attach(config)

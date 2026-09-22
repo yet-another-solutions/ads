@@ -31,16 +31,21 @@ green2() {
 
 case ${ADS_SANDBOX_NETWORK_MODE:-none} in
   none) green2;;
-  private) /usr/local/sbin/ads-sandbox-network preflight;;
+  private) ;;
   *) fail "unsupported sandbox network mode";;
 esac
+# This validates and unmasks the guest-owned proc tree before private sysctls.
+# No workspace software or rootless process runs before network preflight.
+/usr/local/sbin/ads-sandbox-runtime prepare
+if [[ ${ADS_SANDBOX_NETWORK_MODE:-none} == private ]]; then
+  /usr/local/sbin/ads-sandbox-network preflight
+fi
 if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
   /usr/local/sbin/ads-sandbox-trust mount
 elif [[ -e /dev/ads-ca-public ]]; then
   fail "CA device without trusted attempt identity"
 fi
 /usr/local/sbin/ads-session-device-check
-/usr/local/sbin/ads-sandbox-runtime prepare
 
 mkdir -p /session
 mount "$ADS_SESSION_DEVICE" /session

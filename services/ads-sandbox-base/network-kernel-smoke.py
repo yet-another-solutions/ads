@@ -71,6 +71,23 @@ try:
     run("ip", "-n", peer, "address", "add", "10.10.30.1/24", "dev", "gateway")
     run("ip", "-n", peer, "link", "set", "gateway", "up")
     run("ip", "-n", peer, "link", "set", "lo", "up")
+    # Reproduce Kata's independently initialized kernel, not only the host CNI
+    # namespace. Strict validation must reject IPv6 until guest hardening runs.
+    run(
+        "sysctl",
+        "-q",
+        "-w",
+        "net.ipv6.conf.all.disable_ipv6=0",
+        "net.ipv6.conf.default.disable_ipv6=0",
+    )
+    run("ip", "-6", "address", "replace", "fe80::1234/64", "dev", "eth0")
+    try:
+        network.validate_network(network.inventory(), config, True)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("IPv6 topology was accepted before hardening")
+    network.disable_guest_ipv6()
     network.validate_network(network.inventory(), config, True)
     # uidmap helpers map the normal rootless account and its assigned sub-ID ranges.
     process = subprocess.Popen(
