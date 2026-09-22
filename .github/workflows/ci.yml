@@ -184,6 +184,16 @@ jobs:
       - name: Smoke image
         if: matrix.smoke != ''
         run: docker run --rm ${{ matrix.image }}:ci python -c "${{ matrix.smoke }}"
+      - name: Prove disposable transport kernel setup
+        if: matrix.image == 'ads-ptp-tools'
+        run: |
+          docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
+            --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add NET_RAW \
+            --cap-add SETUID --cap-add SETGID \
+            --security-opt no-new-privileges --security-opt apparmor=unconfined \
+            --security-opt seccomp=unconfined \
+            -v "$PWD/services/ads-ptp-tools/kernel-smoke.py:/kernel-smoke.py:ro" \
+            ads-ptp-tools:ci python /kernel-smoke.py
       - name: Smoke golden entrypoint
         if: matrix.pack == 'true'
         run: |
