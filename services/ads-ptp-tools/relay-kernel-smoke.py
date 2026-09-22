@@ -70,6 +70,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--child":
 
 relay = load("relay", "/usr/local/bin/ads-ptp-relay")
 plugin = load("attachment", "/usr/local/bin/ads-ptp")
+attestor = load("attestor", "/usr/local/bin/ads-ptp-attest")
 canary = load("canary", "/usr/local/bin/ads-ptp-canary")
 generation, sandbox = str(uuid4()), str(uuid4())
 prefix = generation[:8]
@@ -221,6 +222,9 @@ try:
         if side == "guest":
             await_health(["198.18.1.1"], 503)
     await_health(["198.18.1.1", "198.18.1.2"], 200)
+    # Actual pidfd_open and /proc start-time fencing against both live relays.
+    with attestor.processes(tuple(child.pid for child in children)) as check_processes:
+        check_processes()
     for index, side in enumerate(("guest", "egress")):
         config, child = configs[side], children[index]
         private_path = f"/proc/{child.pid}/root/run/netns/private-{generation}"
@@ -374,6 +378,7 @@ print(
             "guest_transport_bypass_denied": True,
             "peer_shutdown_unhealthy": True,
             "owned_namespaces_and_processes_cleaned": True,
+            "real_relay_process_identity_pinning": True,
             "kubernetes_service_node_attestation_kata_proven": False,
         }
     )
