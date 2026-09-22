@@ -49,9 +49,24 @@ peer connects. Kubernetes Pod Ready alone is never the IPC health verdict.
 
 ## Remaining integration
 
+`PairControlAdapter` now provides fixed-kind Kubernetes create/read/delete for
+these eight control objects using the existing verified in-cluster client.
+It verifies exact generation/session/sandbox/project labels, UID and resource
+version, rejects foreign ownership, terminating objects and incompatible specs,
+and permits only explicit Service allocation/defaulting fields. It never patches
+or adopts a replacement with a previously recorded name. Foreground deletion
+uses UID/resourceVersion preconditions and completes only on observed absence.
+PodGroup finalizers are never stripped; deletion lag remains incomplete.
+
+The lifecycle caller must durably commit pair/generation intent before creation
+and persist each returned UID before advancing. This adapter does not yet wire
+that ledger into session provisioning or broaden deployed RBAC. Its tests use
+simulated API responses; neither live manager integration nor readiness is
+claimed. Read/create errors are not successful absence or adoption.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
-namespaces, peer keys, persistent identity, node attachment, lifecycle CRUD or
+namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
 egress enforcement. Production provisioning remains on the existing path until
 those components are wired with mandatory runtime checks and exact cleanup
 ownership. Tests cover native API shape, grouping, generation separation,
