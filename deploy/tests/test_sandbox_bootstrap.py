@@ -139,6 +139,9 @@ podman_cmd() {{
         assert calls.index("exec -i dev-sandbox python3 -") < calls.index(
             "exec dev-sandbox python3 -c"
         )
+        assert BOOT.with_name("ads-agent-init").read_text().index(
+            "    reset_volatile_runtime()"
+        ) < BOOT.with_name("ads-agent-init").read_text().index('(CG / "agent").mkdir')
 
 
 @pytest.mark.parametrize("trust_status", [0, 1])

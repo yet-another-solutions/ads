@@ -3,10 +3,56 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import re
+import shutil
+import stat
 import sys
 from pathlib import Path
 
 CG = Path("/sys/fs/cgroup")
+RUN = Path("/run")
+MOUNTINFO = Path("/proc/self/mountinfo")
+
+
+def reset_volatile_runtime() -> None:
+    """A new VM has no surviving nested processes, but its disk may retain runroot."""
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise RuntimeError("descriptor-safe volatile cleanup is required")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    mounts = [
+        re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), line.split()[4])
+        for line in MOUNTINFO.read_text().splitlines()
+    ]
+    with contextlib.ExitStack() as stack:
+        run = os.open(RUN, flags)
+        stack.callback(os.close, run)
+        targets = []
+        # Open/validate the complete allowlist before deleting either subtree.
+        for parent, name in (("containers", "storage"), ("", "libpod")):
+            directory = run
+            if parent:
+                try:
+                    directory = os.open(parent, flags, dir_fd=run)
+                except FileNotFoundError:
+                    continue
+                stack.callback(os.close, directory)
+            path = str(RUN / parent / name)
+            if any(mount == path or mount.startswith(path + "/") for mount in mounts):
+                raise RuntimeError("mounted volatile runtime subtree is not safe to reset")
+            try:
+                entry = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(entry.st_mode) or entry.st_dev != os.fstat(directory).st_dev:
+                raise RuntimeError("volatile runtime target is not a local directory")
+            targets.append((directory, name, entry.st_dev, entry.st_ino))
+        for directory, name, device, inode in targets:
+            entry = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISDIR(entry.st_mode) or (entry.st_dev, entry.st_ino) != (device, inode):
+                raise RuntimeError("volatile runtime target changed")
+            shutil.rmtree(name, dir_fd=directory)
 
 
 def prepare() -> None:
@@ -18,6 +64,7 @@ def prepare() -> None:
         raise RuntimeError("agent seccomp filter is required")
     if not {"cpu", "memory", "pids"} <= set((CG / "cgroup.controllers").read_text().split()):
         raise RuntimeError("nested CPU/memory/PID delegation is missing")
+    reset_volatile_runtime()
     (CG / "agent").mkdir(exist_ok=True)
     for pid in (CG / "cgroup.procs").read_text().split():
         (CG / "agent/cgroup.procs").write_text(pid)

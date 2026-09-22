@@ -46,6 +46,10 @@ forwarding path is created. Inner IPv6 is disabled and IPv4 forwarding is off.
 Resolver configuration is written through rootless Podman exec, as is existing
 public CA trust installation and agent initialization. Readiness is written only
 after these steps succeed. Final pause drops `SYS_ADMIN`, `NET_ADMIN` and `SYS_PTRACE`.
+The base-owned initializer also resets nested Podman's two volatile runroot
+directories after a fresh VM boot. It prevalidates both as local unsymlinked
+directories with no mounted descendants before deleting either, and never
+touches nested graphroot, images, volumes, installed software or `/workspace`.
 The untrusted inner environment can subsequently change its private routes; the
 external relay/egress boundary remains the authority, not guest-side cooperation.
 

@@ -110,6 +110,11 @@ runtime also requires the corrected inner configuration and preinstalled Python
 and sleep in the golden rootfs, but no ADS initialization script there.
 Retained older sessions need a separately reviewed migration plan. Compatible
 resume does not recursively chown their rootfs, preserving nested storage ownership.
+It also clears only nested Podman's volatile `/run/containers/storage` and
+`/run/libpod` through the rootless inner initializer before readiness. The
+initializer validates both targets as unsymlinked local directories with no
+mounted descendants before deleting either one. Persistent graphroot, images,
+volumes, installed software and `/workspace` remain on the session disk.
 
 Unit tests simulate proc/cgroup files and verify fail-closed decisions,
 delegation ownership, placement order, configuration and namespace separation.
