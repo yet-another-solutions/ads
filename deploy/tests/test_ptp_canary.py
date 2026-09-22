@@ -88,7 +88,14 @@ def test_setup_preserves_birthplace_and_no_routing_or_transport_bridge(canary, c
         root / "identity.json", json.dumps({k: config[k] for k in ("pod_uid", "generation")})
     )
     calls = []
-    monkeypatch.setattr(canary, "run", lambda *args, **kw: calls.append((args, kw)) or "")
+
+    def configured(*args, **kw):
+        calls.append((args, kw))
+        if "bridge" in args and "-j" in args:
+            return json.dumps([{"mac": "00:00:00:00:00:00", "dst": "10.10.40.1"}])
+        return ""
+
+    monkeypatch.setattr(canary, "run", configured)
     result = canary.configure(config)
     private, mock = canary.ns_names()
     commands = [args for args, _ in calls]
@@ -106,6 +113,8 @@ def test_setup_preserves_birthplace_and_no_routing_or_transport_bridge(canary, c
     assert "table bridge" in canary.firewall(config)
     assert "policy drop" in canary.firewall(config)
     assert not any("showconf" in command or "dump" in command for command in commands)
+    assert not any("replace" in command and "00:00:00:00:00:00" in command for command in commands)
+    assert any("add" in command and "static" in command for command in commands)
     with pytest.raises(ValueError):
         canary.configure(config)
 
@@ -131,6 +140,36 @@ def test_namespace_collision_never_deletes_foreign_namespace(canary, config, mon
     )
     with pytest.raises(RuntimeError, match="foreign"):
         canary.cleanup()
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [],
+        [{"mac": "00:00:00:00:00:00", "dst": "10.10.40.99"}],
+        [
+            {"mac": "00:00:00:00:00:00", "dst": "10.10.40.1"},
+            {"mac": "00:00:00:00:00:00", "dst": "10.10.40.99"},
+        ],
+    ],
+)
+def test_flood_destination_must_be_the_sole_authorized_peer(canary, config, monkeypatch, entries):
+    root = canary.directory()
+    root.mkdir()
+    canary.private_file(
+        root / "identity.json", json.dumps({k: config[k] for k in ("pod_uid", "generation")})
+    )
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append(args)
+        return json.dumps(entries) if "bridge" in args and "-j" in args else ""
+
+    monkeypatch.setattr(canary, "run", fake)
+    with pytest.raises(RuntimeError, match="flood destination mismatch"):
+        canary.configure(config)
+    assert not (root / "ready.json").exists()
+    assert {c[-1] for c in calls if c[:3] == ("ip", "netns", "delete")} == set(canary.ns_names())
 
 
 def test_cleanup_cannot_follow_another_generation_or_live_diagnostic(canary, config, monkeypatch):

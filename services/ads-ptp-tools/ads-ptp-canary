@@ -316,20 +316,30 @@ def configure(config: dict) -> dict:
         for device in ("br-private", "veth-local", "vxlan-private"):
             ns(private, "ip", "link", "set", device, "mtu", str(mtu), "up")
         other = "egress" if config["side"] == "guest" else "guest"
-        for address in ("00:00:00:00:00:00", mac(config["generation"], other)):
-            ns(
-                private,
-                "bridge",
-                "fdb",
-                "replace",
-                address,
-                "dev",
-                "vxlan-private",
-                "dst",
-                peer,
-                "self",
-                "permanent",
+        # An explicit VXLAN remote creates the all-zero flood entry. Linux rejects
+        # NLM_F_REPLACE for non-unicast entries; verify the sole destination instead.
+        flood = [
+            item
+            for item in json.loads(
+                ns(private, "bridge", "-j", "fdb", "show", "dev", "vxlan-private")
             )
+            if item.get("mac") == "00:00:00:00:00:00"
+        ]
+        if len(flood) != 1 or flood[0].get("dst") != peer:
+            raise RuntimeError("fixed-peer VXLAN flood destination mismatch")
+        ns(
+            private,
+            "bridge",
+            "fdb",
+            "add",
+            mac(config["generation"], other),
+            "dev",
+            "vxlan-private",
+            "dst",
+            peer,
+            "self",
+            "static",
+        )
         ns(private, "bridge", "link", "set", "dev", "vxlan-private", "learning", "off")
         ns(
             mock,

@@ -6,8 +6,9 @@ enforcement image. Python, iproute2, WireGuard, nftables and bounded capture
 tools travel in the image; the lab does not install or build project tooling.
 
 The helper runs inside each disposable ordinary-runtime relay Pod. It needs
-NET_ADMIN for links/firewalls and SYS_ADMIN for its own named network namespace
-mounts, with seccomp/AppArmor allowances for those operations. It must not run
+NET_ADMIN for links/firewalls, SYS_ADMIN for its own named network namespace
+mounts, NET_RAW for diagnostics, and SETUID/SETGID for tcpdump's explicit
+identity-change path, with seccomp/AppArmor allowances for those operations. It must not run
 with hostNetwork, hostPID, hostIPC, a Kubernetes API token, a runtime socket,
 host filesystem mounts or a shared host mount namespace. Mount `/run` as a
 Pod-local memory emptyDir; use read-only image root and a separate writable
@@ -47,7 +48,10 @@ Unit tests verify command ordering, namespace ownership, topology validation
 and credential handling without claiming a kernel datapath test. CI verifies
 the built image's tools and performs real kernel setup/cleanup with the same
 read-only-root/capability constraints, including IPv6 disablement and readiness
-withdrawal when WireGuard is down. This is not a Service or link traffic proof.
+withdrawal when WireGuard is down, and an actual bounded ARP packet capture.
+The fixed remote creates the default all-zero VXLAN FDB entry; the helper
+verifies its sole destination rather than issuing Linux's unsupported
+non-unicast replace operation. This is not a Service or cross-link traffic proof.
 The live acceptance matrix still requires real relay
 Pods, the real UDP Service, captures with positive controls, Ethernet/TCP/UDP
 integrity, negative identity/bypass/loss cases, MTU/idle/backend replacement and

@@ -6,6 +6,8 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import subprocess
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -56,6 +58,65 @@ try:
     )
     assert canary.ns(mock, "sysctl", "-n", "net.ipv4.ip_forward") == "0"
     canary.ns(mock, "ping", "-c", "1", "-w", "2", "10.10.30.1")
+    with open("/tmp/capture.stderr", "w") as errors:
+        capture = subprocess.Popen(
+            [
+                "ip",
+                "netns",
+                "exec",
+                mock,
+                "tcpdump",
+                "-p",
+                "-Z",
+                "root",
+                "-n",
+                "-U",
+                "-i",
+                "eth-private",
+                "-s",
+                "0",
+                "-c",
+                "1",
+                "-w",
+                "/tmp/proof.pcap",
+                "arp",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=errors,
+            stderr=errors,
+        )
+        try:
+            end = time.monotonic() + 5
+            while "listening on" not in Path("/tmp/capture.stderr").read_text():
+                assert capture.poll() is None, Path("/tmp/capture.stderr").read_text()
+                assert time.monotonic() < end, "capture startup timed out"
+                time.sleep(0.1)
+            probe = subprocess.run(
+                [
+                    "ip",
+                    "netns",
+                    "exec",
+                    mock,
+                    "arping",
+                    "-I",
+                    "eth-private",
+                    "-c",
+                    "1",
+                    "-w",
+                    "2",
+                    "10.10.30.2",
+                ],
+                capture_output=True,
+                timeout=5,
+            )
+            assert probe.returncode in (0, 1)
+            assert capture.wait(timeout=5) == 0, Path("/tmp/capture.stderr").read_text()
+            assert Path("/tmp/proof.pcap").stat().st_size > 40
+            assert "0 packets dropped by kernel" in Path("/tmp/capture.stderr").read_text()
+        finally:
+            if capture.poll() is None:
+                capture.kill()
+            capture.wait(timeout=5)
     canary.ns(private, "ip", "link", "set", "wg-private", "down")
     try:
         canary.ready()
@@ -85,6 +146,7 @@ print(
             "parent_proc_mounts_unchanged": True,
             "handshake_independent_readiness": True,
             "down_link_not_ready": True,
+            "real_packet_capture": True,
             "service_transport_proven": False,
         }
     )
