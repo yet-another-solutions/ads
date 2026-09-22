@@ -4,8 +4,10 @@ The existing no-network boot remains the default. The private mode is opt-in
 through trusted Pod environment, not project policy or an inner-container input:
 `ADS_SANDBOX_NETWORK_MODE=private`, canonical `ADS_ATTACHMENT_GENERATION`, and
 explicit decimal `ADS_PRIVATE_MTU`. The paired manager integration must supply
-these and add `NET_ADMIN` for this guest bootstrap only. That integration is not
-part of this component.
+these and add `NET_ADMIN` and `SYS_PTRACE` for this guest bootstrap only.
+`SYS_PTRACE` permits opening `/proc/<pid>/ns/*` for the distinct mapped UID; it
+does not belong in the untrusted inner container. That integration is not part
+of this component.
 
 Before mounting workspace storage, the immutable base helper checks the sole
 non-loopback NIC, its generation-derived MAC, pair-local address, MTU, private
@@ -35,7 +37,7 @@ forwarding path is created. Inner IPv6 is disabled and IPv4 forwarding is off.
 
 Resolver configuration is written through rootless Podman exec, as is existing
 public CA trust installation and agent initialization. Readiness is written only
-after these steps succeed. Final pause drops both `SYS_ADMIN` and `NET_ADMIN`.
+after these steps succeed. Final pause drops `SYS_ADMIN`, `NET_ADMIN` and `SYS_PTRACE`.
 The untrusted inner environment can subsequently change its private routes; the
 external relay/egress boundary remains the authority, not guest-side cooperation.
 

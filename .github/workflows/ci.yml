@@ -239,7 +239,7 @@ jobs:
           docker run --rm --read-only --tmpfs /run --tmpfs /tmp \
             --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN \
             --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add DAC_OVERRIDE \
-            --cap-add KILL --cap-add SETPCAP \
+            --cap-add KILL --cap-add SETPCAP --cap-add SYS_PTRACE \
             --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
             --entrypoint unshare \
             -v "$PWD/services/ads-sandbox-base/network-kernel-smoke.py:/network-kernel-smoke.py:ro" \

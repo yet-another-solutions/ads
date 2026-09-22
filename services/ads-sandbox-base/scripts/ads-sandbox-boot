@@ -102,4 +102,4 @@ assert {"cpu", "memory", "pids"} <= set((cg / "cgroup.subtree_control").read_tex
 done
 [[ $ready == true ]] || fail "agent cgroup initialization failed"
 touch /run/ads-sandbox-ready
-exec capsh --drop=cap_sys_admin,cap_net_admin -- -c 'exec /usr/local/sbin/pause'
+exec capsh --drop=cap_sys_admin,cap_net_admin,cap_sys_ptrace -- -c 'exec /usr/local/sbin/pause'

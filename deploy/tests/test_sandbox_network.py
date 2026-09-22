@@ -369,5 +369,5 @@ def test_private_mode_handoff_precedes_trust_init_readiness():
     assert boot.index("podman_cmd start dev-sandbox") < boot.index("ads-sandbox-network attach")
     assert boot.index("ads-sandbox-network attach") < boot.index("ads-sandbox-trust certificate")
     assert boot.index("nameserver 10.10.30.1") < boot.index("ads-agent-init")
-    assert "cap_sys_admin,cap_net_admin" in boot
+    assert "cap_sys_admin,cap_net_admin,cap_sys_ptrace" in boot
     assert "unsupported sandbox network mode" in boot
