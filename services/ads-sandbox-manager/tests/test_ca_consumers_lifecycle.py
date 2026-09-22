@@ -36,7 +36,13 @@ pytestmark = pytest.mark.anyio
 
 
 def configure_ca(h):
-    h.settings = replace(h.settings, ca=CaSettings("registry.test/ca:v1", "signer", "extra"))
+    # These identity/lifecycle tests write to real PostgreSQL, not a timed fake.
+    # Allow failure-state commits to finish without masking the expected rejection.
+    h.settings = replace(
+        h.settings,
+        ca=CaSettings("registry.test/ca:v1", "signer", "extra"),
+        control_seconds=10,
+    )
     h.service.settings = h.settings
     attempt = uuid4()
     sources = {}
