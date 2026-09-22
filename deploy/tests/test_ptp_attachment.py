@@ -551,3 +551,32 @@ def test_partial_add_does_not_delete_untagged_link(plugin, inputs, kernel, monke
     with pytest.raises(ValueError):
         plugin.perform(config, env)
     assert "eth0" in kernel[3][10]
+
+
+@pytest.mark.parametrize("remaining", ["absent", "original", "replacement"])
+def test_del_racing_namespace_destruction_requires_positive_absence(
+    plugin, inputs, kernel, monkeypatch, remaining
+):
+    config, env, _ = inputs
+    plugin.perform(config, env)
+    kernel[4].pop(env["CNI_NETNS"])
+    original = plugin.execute
+
+    def racing(fd, *args, **kwargs):
+        if args[:3] == ("ip", "link", "delete"):
+            if remaining == "absent":
+                kernel[3][20].pop("veth-local")
+            elif remaining == "replacement":
+                kernel[3][20]["veth-local"]["ifalias"] = "foreign"
+            raise RuntimeError("kernel deletion raced or failed")
+        return original(fd, *args, **kwargs)
+
+    monkeypatch.setattr(plugin, "execute", racing)
+    env["CNI_COMMAND"] = "DEL"
+    if remaining == "absent":
+        assert plugin.perform(config, env) is None
+        assert not kernel[2].exists()
+    else:
+        with pytest.raises(RuntimeError):
+            plugin.perform(config, env)
+        assert kernel[2].exists()

@@ -507,7 +507,14 @@ def delete(saved, state_path):
         # Validate both sides before deleting either; never follow new binding data.
         if candidates:
             fd, name = candidates[0]
-            execute(fd, "ip", "link", "delete", name)
+            try:
+                execute(fd, "ip", "link", "delete", name)
+            except RuntimeError:
+                # The kernel can asynchronously remove the peer after its VM
+                # namespace vanishes. An error is harmless only if now absent;
+                # never suppress a failed deletion of a surviving/replaced link.
+                if name in links(fd):
+                    raise
         for fd, name in candidates:
             if name in links(fd):
                 raise RuntimeError("attachment link remains")

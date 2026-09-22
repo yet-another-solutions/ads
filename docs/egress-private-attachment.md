@@ -82,6 +82,9 @@ Absent original namespaces/interfaces are harmless, while a reused path or
 foreign alias/index fails closed. No namespace, bridge, VXLAN, WireGuard,
 upstream interface or unrelated link is deleted. Successful DEL removes the
 journal; repeated DEL succeeds. Tiny per-tuple lock files remain intentionally.
+Kernel peer removal after namespace destruction can race an explicit delete;
+an operation error is accepted only after positive interface-absence rechecks.
+A surviving original or replacement link retains the failure and journal.
 
 ## Proof boundary
 
