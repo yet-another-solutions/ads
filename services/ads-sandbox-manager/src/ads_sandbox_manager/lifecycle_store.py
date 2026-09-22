@@ -9,7 +9,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ads_sandbox_manager.session_objects import ipc_name, session_name
+from ads_sandbox_manager.session_objects import (
+    CA_CONSUMERS,
+    ca_consumer_name,
+    ipc_name,
+    session_name,
+)
 from ads_sandbox_manager.store import Base, PingProbe, SandboxSession, SessionPVC, advance
 
 
@@ -42,6 +47,15 @@ def sandbox_targets(row: SandboxSession, *, retain: bool) -> list[dict[str, Any]
         target("Deployment", session_name(row.sandbox_id), row.guest_deployment_uid),
         target("PersistentVolumeClaim", ipc_name(row.sandbox_id), row.ipc_pvc_uid),
     ]
+    if row.ca_attempt is not None:
+        objects.extend(
+            target(
+                "PersistentVolumeClaim",
+                ca_consumer_name(row.sandbox_id, role),
+                (row.ca_clones or {}).get(role),
+            )
+            for role in CA_CONSUMERS
+        )
     if row.pvc_id:
         objects.append(
             target("PersistentVolumeClaim", session_name(row.pvc_id), row.pvc_uid, retain=retain)
@@ -211,6 +225,7 @@ class LifecycleRepository:
                 row.status_changed_at = advance(row.status_changed_at, now)
                 row.service_deadline = None
                 row.guest_deployment_uid = row.ipc_deployment_uid = row.ipc_pvc_uid = None
+                row.ca_attempt = row.ca_sources = row.ca_clones = None
                 if work.kind == "idle":
                     assert pvc is not None
                     pvc.state = "detached"
@@ -265,6 +280,7 @@ class LifecycleRepository:
         row.claimed_by = None
         row.pvc_id = row.pvc_uid = None
         row.guest_deployment_uid = row.ipc_deployment_uid = row.ipc_pvc_uid = None
+        row.ca_attempt = row.ca_sources = row.ca_clones = None
         row.last_ping_at = row.last_ping_sent_at = None
         await db.execute(delete(PingProbe).where(PingProbe.sandbox_id == sandbox_id))
         if pvc:

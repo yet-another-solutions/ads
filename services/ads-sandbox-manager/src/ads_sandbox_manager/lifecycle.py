@@ -19,7 +19,15 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
-from ads_sandbox_manager.session_objects import SANDBOX, SESSION, ipc_name, session_name
+from ads_sandbox_manager.session_objects import (
+    CA_CONSUMER,
+    CA_CONSUMER_ROLE,
+    SANDBOX,
+    SESSION,
+    ca_consumer_name,
+    ipc_name,
+    session_name,
+)
 from ads_sandbox_manager.store import PingProbe, SandboxSession, SessionPVC
 
 log = logging.getLogger(__name__)
@@ -342,6 +350,12 @@ class LifecycleService:
                 return None
             if component == "ads-sandbox-ipc":
                 valid = name == ipc_name(sandbox)
+            elif component == CA_CONSUMER:
+                valid = (
+                    obj["kind"] == "PersistentVolumeClaim"
+                    and name == ca_consumer_name(sandbox, labels[CA_CONSUMER_ROLE])
+                    and not meta.get("ownerReferences")
+                )
             elif component == "ads-sandbox":
                 valid = (
                     name == session_name(sandbox)

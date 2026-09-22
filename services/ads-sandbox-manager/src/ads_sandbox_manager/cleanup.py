@@ -7,7 +7,7 @@ from kubernetes.client.exceptions import ApiException
 
 from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import COMPONENT, Object
-from ads_sandbox_manager.session_objects import SANDBOX, SESSION
+from ads_sandbox_manager.session_objects import CA_CONSUMER, SANDBOX, SESSION
 
 
 class CleanupKubernetes(Protocol):
@@ -34,7 +34,7 @@ class CleanupAdapter:
         ):
             for obj in await k._list(method, k.settings.namespace):
                 labels = obj.get("metadata", {}).get("labels", {})
-                if labels.get(COMPONENT) in ("ads-sandbox", "ads-sandbox-ipc") and all(
+                if labels.get(COMPONENT) in ("ads-sandbox", "ads-sandbox-ipc", CA_CONSUMER) and all(
                     labels.get(label) for label in (SANDBOX, SESSION)
                 ):
                     obj["kind"] = kind

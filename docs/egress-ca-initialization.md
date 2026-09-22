@@ -134,6 +134,38 @@ expiry. It is not signed by the trusted hierarchy and has no persistence path.
 Tests prove different keys across calls and unchanged files; full egress runtime
 bootstrap will own one instance and reuse it, not mint per failed request.
 
-Manager consumer-clone ownership and guest/egress pair wiring remain the next
-integration boundary. No CA Job has run in the lab and no integrated trust,
-kernel read-only or TLS defect-mirroring acceptance is claimed here.
+## Consumer clone lifecycle
+
+The manager commits the CA Job attempt and both source PVC UIDs before creating
+three Block clones: `ads-ca-guest-<sandbox-id>` and `ads-ca-egress-<sandbox-id>`
+from the public output, and `ads-ca-key-<sandbox-id>` from the private output.
+Each clone has its own durable UID binding, session/sandbox labels, source UID
+and attempt labels; none owner-references disposable compute. Destination size
+is at least the source's actual capacity. Pending clones are allowed because
+storage is WaitForFirstConsumer, not because Pending proves usable content.
+
+Source-pair safety is rechecked before and after each create. Name conflicts
+are adopted only with matching immutable policy and identity; lost responses
+leave durable cleanup intent. API quantity normalization and omitted core API
+group fields are accepted, not alternate/cross-namespace data sources. A
+committed clone disappearing or changing UID fails the run rather than silently
+recloning. All three binds are reread before each compute creation.
+
+The guest gets only its public clone via `volumeDevices` and a PVC
+`readOnly: true` attachment, plus the committed `ADS_CA_ATTEMPT`. Production
+guest construction without that attempt fails. The separate private clone is
+reserved for the later egress VM and is never attached to the guest or IPC.
+
+Idle shutdown keeps the existing drain acknowledgement and workspace retention
+contract. All disposable clones are removed only after compute teardown and
+positive storage release/reclamation. Resume reclones them from the same
+committed source pair while preserving workspace identity. Recovery captures
+all three names, including create-with-lost-response cases without committed
+UIDs, before sandbox identity rotation. Orphan inventory recognizes only exact
+consumer role/name/session identity; shared CA sources are not lifecycle targets.
+The fresh initial schema stores only attempt/source/clone identities, no key
+bytes, tokens or credentials. No legacy schema upgrade is added.
+
+Complete guest/egress pair deployment remains the next integration boundary.
+No CA Job has run in the lab and no integrated trust, kernel read-only or TLS
+defect-mirroring acceptance is claimed here.

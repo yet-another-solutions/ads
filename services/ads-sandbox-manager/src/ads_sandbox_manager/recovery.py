@@ -207,6 +207,7 @@ class RecoveryService:
                     await db.delete(stored)
             current.pvc_id = current.pvc_uid = None
             current.guest_deployment_uid = current.ipc_deployment_uid = current.ipc_pvc_uid = None
+            current.ca_attempt = current.ca_sources = current.ca_clones = None
             current.status = "stopped"
             current.status_changed_at = advance(current.status_changed_at, datetime.now(UTC))
             await db.flush()
