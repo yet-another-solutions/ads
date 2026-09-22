@@ -29,7 +29,11 @@ green2() {
   fi
 }
 
-green2
+case ${ADS_SANDBOX_NETWORK_MODE:-none} in
+  none) green2;;
+  private) /usr/local/sbin/ads-sandbox-network preflight;;
+  *) fail "unsupported sandbox network mode";;
+esac
 if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
   /usr/local/sbin/ads-sandbox-trust mount
 elif [[ -e /dev/ads-ca-public ]]; then
@@ -50,7 +54,8 @@ if podman_cmd container exists dev-sandbox; then
   podman_cmd start dev-sandbox
 else
   chown -R podman:podman /session/rootfs
-  # v1 has no uplink. Native overlay storage does not require a FUSE device.
+  # Start disconnected; private mode hands off the sole NIC after identity checks.
+  # Native overlay storage does not require a FUSE device.
   # Use separate options: a colon-joined value does not make cgroupfs writable.
   unmask=()
   for path in /sys/fs/cgroup /proc/acpi /proc/keys /proc/timer_list /proc/bus /proc/fs /proc/irq /proc/sys; do
@@ -58,6 +63,14 @@ else
   done
   podman_cmd create --name dev-sandbox --network=none --cgroupns=private --cgroup-parent=/ads-budget/podman --label ads.io/runtime-contract=nested-v1 "${unmask[@]}" --rootfs /session/rootfs /bin/sleep infinity
   podman_cmd start dev-sandbox
+fi
+
+if [[ ${ADS_SANDBOX_NETWORK_MODE:-none} == private ]]; then
+  /usr/local/sbin/ads-sandbox-network attach
+  # The only resolver is the paired egress. Mutable inner software still runs
+  # rootless; guest root never follows inner paths or executes inner binaries.
+  podman_cmd exec dev-sandbox /bin/sh -ec \
+    'printf "nameserver 10.10.30.1\n" > /etc/resolv.conf'
 fi
 
 if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
@@ -89,4 +102,4 @@ assert {"cpu", "memory", "pids"} <= set((cg / "cgroup.subtree_control").read_tex
 done
 [[ $ready == true ]] || fail "agent cgroup initialization failed"
 touch /run/ads-sandbox-ready
-exec capsh --drop=cap_sys_admin -- -c 'exec /usr/local/sbin/pause'
+exec capsh --drop=cap_sys_admin,cap_net_admin,cap_sys_ptrace -- -c 'exec /usr/local/sbin/pause'

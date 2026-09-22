@@ -1,0 +1,346 @@
+#!/usr/bin/python3
+"""One-shot, base-owned NIC handoff. Never enter an untrusted mount/user namespace."""
+
+from __future__ import annotations
+
+import array
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import pwd
+import re
+import select
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from uuid import UUID
+
+PROC = Path("/proc")
+STATE = Path("/run/ads-private-handoff")
+CLONE_NEWNET = 0x40000000
+NS_GET_NSTYPE = 0xB703
+NS_GET_USERNS = 0xB701
+NS_GET_OWNER_UID = 0xB704
+LIMIT = 65536
+ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root", "LANG": "C"}
+INSPECT = (
+    '{"id":{{json .Id}},"pid":{{json .State.Pid}},"running":{{json .State.Running}},'
+    '"network":{{json .HostConfig.NetworkMode}},'
+    '"contract":{{json (index .Config.Labels "ads.io/runtime-contract")}}}'
+)
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def execute(command, namespace=None, extra_fds=()):
+    """Only base-owned fixed commands; bounded output never logged on failure."""
+    fds = extra_fds
+    if namespace is not None:
+        command = ["/usr/bin/nsenter", f"--net=/proc/self/fd/{namespace}", "--", *command]
+        fds = (*fds, namespace)
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            env=ENV,
+            pass_fds=fds,
+        )
+        require(result.returncode == 0, "trusted network operation failed")
+        require(output.tell() <= LIMIT, "network operation output exceeds bound")
+        output.seek(0)
+        return output.read(LIMIT + 1)
+
+
+def ip(*arguments, namespace=None, extra_fds=()):
+    return execute(["/usr/sbin/ip", *arguments], namespace, extra_fds)
+
+
+def configuration(env):
+    require(env.get("ADS_SANDBOX_NETWORK_MODE") == "private", "private mode required")
+    generation = env.get("ADS_ATTACHMENT_GENERATION", "")
+    require(str(UUID(generation)) == generation, "canonical attachment generation required")
+    raw = env.get("ADS_PRIVATE_MTU", "")
+    require(raw.isascii() and raw.isdecimal(), "explicit private MTU required")
+    mtu = int(raw)
+    require(576 <= mtu <= 65425, "invalid private MTU")
+    octets = hashlib.sha256(f"{generation}/guest".encode()).digest()[:5]
+    return {
+        "generation": generation,
+        "mtu": mtu,
+        "mac": "02:" + ":".join(f"{value:02x}" for value in octets),
+    }
+
+
+def inventory(namespace=None):
+    return {
+        "links": json.loads(ip("-d", "-j", "link", namespace=namespace)),
+        "addresses": json.loads(ip("-j", "address", namespace=namespace)),
+        "routes": json.loads(ip("-4", "-j", "route", "show", "table", "all", namespace=namespace)),
+        "ipv6": json.loads(ip("-6", "-j", "route", "show", "table", "all", namespace=namespace)),
+    }
+
+
+def validate_network(observed, config, attached):
+    links = {entry["ifname"]: entry for entry in observed["links"]}
+    require(len(links) == len(observed["links"]), "duplicate interface")
+    require(set(links) == ({"lo", "eth0"} if attached else {"lo"}), "unexpected interface set")
+    require("UP" in links["lo"]["flags"], "loopback is not up")
+    addresses = {entry["ifname"]: entry["addr_info"] for entry in observed["addresses"]}
+    require(set(addresses) == set(links), "interface address inventory differs")
+    require(not any(r.get("dev") != "lo" for r in observed["ipv6"]), "unexpected IPv6 route")
+    if not attached:
+        require(not any(r.get("dev") != "lo" for r in observed["routes"]), "unexpected route")
+        return
+    nic = links["eth0"]
+    require(
+        nic["address"] == config["mac"]
+        and nic["mtu"] == config["mtu"]
+        and "UP" in nic["flags"]
+        and "master" not in nic,
+        "private NIC identity differs",
+    )
+    require(len(addresses["eth0"]) == 1, "unexpected private addresses")
+    address = addresses["eth0"][0]
+    require(
+        address.get("family") == "inet"
+        and address.get("local") == "10.10.30.2"
+        and address.get("prefixlen") == 24,
+        "private IPv4 differs",
+    )
+    routes = [r for r in observed["routes"] if r.get("table") != "local" and r.get("dev") != "lo"]
+    require(len(routes) == 2, "unexpected private routes")
+    require(
+        any(
+            r.get("dst") == "default"
+            and r.get("gateway") == "10.10.30.1"
+            and r.get("dev") == "eth0"
+            for r in routes
+        ),
+        "private default differs",
+    )
+    require(
+        any(
+            r.get("dst") == "10.10.30.0/24" and r.get("dev") == "eth0" and "gateway" not in r
+            for r in routes
+        ),
+        "private connected route differs",
+    )
+
+
+def trusted_guest():
+    require(os.geteuid() == 0, "guest root required")
+    for name in ("mnt", "user", "net"):
+        require(
+            Target.path_identity(PROC / f"self/ns/{name}")
+            == Target.path_identity(PROC / f"1/ns/{name}"),
+            "unexpected guest namespace",
+        )
+    require(
+        (PROC / "sys/net/ipv4/ip_forward").read_text().strip() == "0",
+        "guest forwarding must be disabled",
+    )
+
+
+def inspect_container():
+    raw = execute(
+        [
+            "/usr/local/sbin/ads-sandbox-runtime",
+            "podman",
+            "inspect",
+            "--format",
+            INSPECT,
+            "dev-sandbox",
+        ]
+    )
+    record = json.loads(raw)
+    require(
+        isinstance(record, dict) and set(record) == {"id", "pid", "running", "network", "contract"},
+        "unexpected container identity",
+    )
+    require(
+        isinstance(record["id"], str) and re.fullmatch("[0-9a-f]{64}", record["id"]),
+        "invalid container ID",
+    )
+    require(
+        type(record["pid"]) is int
+        and record["pid"] > 1
+        and record["running"] is True
+        and record["network"] == "none"
+        and record["contract"] == "nested-v1",
+        "unexpected rootless container contract",
+    )
+    return record
+
+
+def process_ticks(pid):
+    # comm is attacker-controlled and may contain whitespace or parentheses.
+    raw = (PROC / str(pid) / "stat").read_text()
+    return int(raw[raw.rindex(")") + 2 :].split()[19])
+
+
+def identity(fd):
+    value = os.fstat(fd)
+    return value.st_dev, value.st_ino
+
+
+class Target:
+    """Pin process, net and user namespaces; re-observe before and after effects."""
+
+    def __init__(self, record, stack):
+        self.record = record
+        self.pid = record["pid"]
+        self.uid = pwd.getpwnam("podman").pw_uid
+        self.gid = pwd.getpwnam("podman").pw_gid
+        self.ticks = process_ticks(self.pid)
+        self.pidfd = os.pidfd_open(self.pid)
+        stack.callback(os.close, self.pidfd)
+        self.poll = select.poll()
+        self.poll.register(self.pidfd, select.POLLIN)
+        self.net = os.open(PROC / str(self.pid) / "ns/net", os.O_RDONLY | os.O_CLOEXEC)
+        stack.callback(os.close, self.net)
+        self.user = os.open(PROC / str(self.pid) / "ns/user", os.O_RDONLY | os.O_CLOEXEC)
+        stack.callback(os.close, self.user)
+        require(fcntl.ioctl(self.net, NS_GET_NSTYPE) == CLONE_NEWNET, "network namespace required")
+        owner = fcntl.ioctl(self.net, NS_GET_USERNS)
+        try:
+            require(identity(owner) == identity(self.user), "network namespace ownership differs")
+            uid = array.array("I", [0])
+            fcntl.ioctl(owner, NS_GET_OWNER_UID, uid, True)
+            require(uid[0] == self.uid, "rootless namespace owner differs")
+        finally:
+            os.close(owner)
+        require(
+            identity(self.net) != self.path_identity(PROC / "self/ns/net")
+            and identity(self.user) != self.path_identity(PROC / "self/ns/user"),
+            "target must be isolated from guest root",
+        )
+        self.check()
+
+    @staticmethod
+    def path_identity(path):
+        value = path.stat()
+        return value.st_dev, value.st_ino
+
+    def check(self):
+        require(
+            not self.poll.poll(0) and process_ticks(self.pid) == self.ticks,
+            "target process exited or changed",
+        )
+        proc = PROC / str(self.pid)
+        require(
+            self.path_identity(proc / "ns/net") == identity(self.net)
+            and self.path_identity(proc / "ns/user") == identity(self.user),
+            "target namespace changed",
+        )
+        status = dict(line.split(":", 1) for line in (proc / "status").read_text().splitlines())
+        require(
+            [int(x) for x in status["Uid"].split()] == [self.uid] * 4
+            and [int(x) for x in status["Gid"].split()] == [self.gid] * 4,
+            "target is not rootless container root",
+        )
+        for name, first in (("uid", self.uid), ("gid", self.gid)):
+            allocations = [
+                line.split(":")
+                for line in Path(f"/etc/sub{name}").read_text().splitlines()
+                if line.startswith("podman:")
+            ]
+            require(len(allocations) == 1, "one rootless subordinate range required")
+            start, count = map(int, allocations[0][1:])
+            require(start > first and count == 65536, "unexpected subordinate range")
+            mapping = [
+                list(map(int, line.split()))
+                for line in (proc / f"{name}_map").read_text().splitlines()
+            ]
+            require(mapping == [[0, first, 1], [1, start, count]], "rootless ID map differs")
+        cgroup = (proc / "cgroup").read_text().strip()
+        require(
+            cgroup == f"0::/ads-budget/podman/libpod-{self.record['id']}",
+            "target is outside the exact delegated container cgroup",
+        )
+
+    def recheck(self):
+        self.check()
+        require(inspect_container() == self.record, "rootless container identity changed")
+
+
+def transfer(config, target):
+    """Only network namespace entry; all executable paths remain the immutable base."""
+    validate_network(inventory(), config, True)
+    validate_network(inventory(target.net), config, False)
+    target.recheck()
+    # Disable unused IPv6 and routing before connecting the sole private NIC.
+    execute(
+        [
+            "/usr/sbin/sysctl",
+            "-q",
+            "-w",
+            "net.ipv4.ip_forward=0",
+            "net.ipv6.conf.all.disable_ipv6=1",
+            "net.ipv6.conf.default.disable_ipv6=1",
+        ],
+        target.net,
+    )
+    target.check()
+    ip("link", "set", "dev", "eth0", "down")
+    # An inherited namespace FD, never a lookup by a reusable PID at mutation time.
+    ip(
+        "link",
+        "set",
+        "dev",
+        "eth0",
+        "netns",
+        f"/proc/self/fd/{target.net}",
+        extra_fds=(target.net,),
+    )
+    ip("link", "set", "dev", "eth0", "mtu", str(config["mtu"]), namespace=target.net)
+    ip("address", "replace", "10.10.30.2/24", "dev", "eth0", namespace=target.net)
+    ip("link", "set", "dev", "eth0", "up", namespace=target.net)
+    ip("route", "replace", "default", "via", "10.10.30.1", "dev", "eth0", namespace=target.net)
+    validate_network(inventory(), config, False)
+    validate_network(inventory(target.net), config, True)
+    target.recheck()
+
+
+def attach(config):
+    # A failed attempt is not retried or rolled back into a possibly replaced target.
+    # The Pod must restart; the outer CNI lifecycle releases the complete attachment.
+    fd = os.open(STATE, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        require(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), "invalid handoff state")
+        stream.write(json.dumps({"generation": config["generation"], "state": "started"}) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+        with contextlib.ExitStack() as stack:
+            target = Target(inspect_container(), stack)
+            transfer(config, target)
+        stream.write(json.dumps({"generation": config["generation"], "state": "complete"}) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def main():
+    require(sys.argv[1:] in (["preflight"], ["attach"]), "expected preflight or attach")
+    config = configuration(os.environ)
+    trusted_guest()
+    validate_network(inventory(), config, True)
+    if sys.argv[1] == "attach":
+        attach(config)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print(f"ads-sandbox-network: failed ({type(error).__name__})", file=sys.stderr)
+        raise SystemExit(1) from None
