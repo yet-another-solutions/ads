@@ -46,6 +46,7 @@ jobs:
           - services/ads-sandbox-ipc/Containerfile
           - services/ads-sandbox-manager/Containerfile
           - services/ads-sandbox-ca/Containerfile
+          - services/ads-ptp-tools/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
           - services/ads-sandbox-base/Containerfile
@@ -124,6 +125,11 @@ jobs:
             file: services/ads-sandbox-ca/Containerfile
             context: .
             smoke: "import ads_sandbox_ca; print(ads_sandbox_ca.__version__)"
+            pack: "false"
+          - image: ads-ptp-tools
+            file: services/ads-ptp-tools/Containerfile
+            context: .
+            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary'))"
             pack: "false"
     steps:
       - uses: actions/checkout@v7

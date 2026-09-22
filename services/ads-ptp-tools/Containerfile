@@ -1,0 +1,10 @@
+FROM python:3.12-slim-bookworm
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        iproute2 wireguard-tools nftables tcpdump iputils-ping iputils-arping \
+        procps util-linux ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY services/ads-ptp-tools/ads-ptp-canary /usr/local/bin/ads-ptp-canary
+RUN chmod 755 /usr/local/bin/ads-ptp-canary
+ENV PYTHONUNBUFFERED=1
+CMD ["python", "-c", "import time; time.sleep(86400)"]
