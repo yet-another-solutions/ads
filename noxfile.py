@@ -17,6 +17,8 @@ _SRC = (
     "services/ads-sandbox-base/scripts/ads-sandbox-network",
     "services/ads-sandbox-base/network-kernel-smoke.py",
     "services/ads-sandbox-base/scripts/ads-agent-init",
+    "services/ads-sandbox-base/scripts/ads-sandbox-shutdown",
+    "services/ads-sandbox-base/shutdown-kernel-smoke.py",
     "services/ads-sandbox-base/scripts/ads-sandbox-trust",
     "services/ads-ptp-tools/ads-ptp-canary",
     "services/ads-ptp-tools/ads-ptp",

@@ -1,0 +1,77 @@
+#!/usr/bin/python3
+"""Quiesce the private guest PID namespace and flush its session filesystem."""
+
+from __future__ import annotations
+
+import os
+import signal
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+READY = Path("/run/ads-sandbox-ready")
+
+
+def signal_children(sig: signal.Signals) -> None:
+    try:
+        os.kill(-1, sig)
+    except ProcessLookupError:
+        pass
+
+
+def reap_children(timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if pid:
+            continue
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def shutdown() -> None:
+    # kill(-1) is safe only inside the guest's private PID namespace.
+    # This helper is never an exec endpoint or a host shutdown command.
+    if os.getpid() != 1 or os.geteuid() != 0:
+        raise RuntimeError("shutdown requires guest root PID 1")
+    ready = READY.lstat()
+    if not stat.S_ISREG(ready.st_mode) or ready.st_uid != 0 or ready.st_mode & 0o022:
+        raise RuntimeError("invalid guest readiness marker")
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    READY.unlink()
+    signal_children(signal.SIGTERM)
+    reaped = reap_children(2.0)
+    if not reaped:
+        signal_children(signal.SIGKILL)
+        reaped = reap_children(2.0)
+    # Base-owned coreutils, never software from the mutable inner rootfs.
+    # -f uses syncfs for this filesystem, not a host-wide sync.
+    subprocess.run(
+        ["/usr/bin/sync", "-f", "/session"],
+        check=True,
+        timeout=10,
+        stdin=subprocess.DEVNULL,
+    )
+    if not reaped:
+        raise RuntimeError("guest processes did not quiesce")
+
+
+def main() -> int:
+    try:
+        shutdown()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"ads-sandbox-shutdown: {error}", file=sys.stderr)
+        return 1
+    print("ads-sandbox-shutdown: session filesystem flushed", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -244,6 +244,19 @@ jobs:
             --entrypoint unshare \
             -v "$PWD/services/ads-sandbox-base/network-kernel-smoke.py:/network-kernel-smoke.py:ro" \
             ads-sandbox-base:ci --mount --net --mount-proc -- python3 /network-kernel-smoke.py
+      - name: Quiesce private guest PID namespace and flush session disk
+        if: matrix.image == 'ads-sandbox-base'
+        run: |
+          session_dir=$(mktemp -d)
+          trap 'rm -rf "$session_dir"' EXIT
+          chmod 777 "$session_dir"
+          timeout 25 docker run --rm --read-only --network none --tmpfs /run \
+            --cap-drop ALL --cap-add KILL --cap-add SETUID --cap-add SETGID \
+            --entrypoint python3 \
+            -v "$session_dir:/session" \
+            -v "$PWD/services/ads-sandbox-base/shutdown-kernel-smoke.py:/shutdown-kernel-smoke.py:ro" \
+            ads-sandbox-base:ci -I /shutdown-kernel-smoke.py
+          test "$(cat "$session_dir/shutdown-marker")" = 'persistent shutdown proof'
       - name: Guest shared trust verifier import
         if: matrix.image == 'ads-sandbox-base'
         run: |

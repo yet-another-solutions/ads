@@ -46,6 +46,10 @@ forwarding path is created. Inner IPv6 is disabled and IPv4 forwarding is off.
 Resolver configuration is written through rootless Podman exec, as is existing
 public CA trust installation and agent initialization. Readiness is written only
 after these steps succeed. Final pause drops `SYS_ADMIN`, `NET_ADMIN` and `SYS_PTRACE`.
+On termination it closes readiness, quiesces its private PID namespace and
+flushes `/session` through the base-owned shutdown helper before exiting.
+Neither mutable inner software nor host-wide sync is used. Failure or timeout
+is nonzero; forced termination is not an orderly-shutdown durability proof.
 The base-owned initializer also resets four fixed volatile runtime directories:
 `/run/containers/storage`, `/run/libpod`, `/run/user/0/libpod` and `/run/crun`.
 This includes the rootless pause PID cache, which otherwise outlives its VM.
