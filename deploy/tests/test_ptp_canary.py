@@ -221,3 +221,29 @@ def test_private_files_are_exclusive_bounded_and_nofollow(canary, tmp_path):
     large.write_text("x" * 65537)
     with pytest.raises(ValueError):
         canary.read_file(large)
+
+
+def test_socket_ready_requires_live_configuration_but_never_a_handshake(
+    canary, config, monkeypatch
+):
+    root = canary.directory()
+    root.mkdir()
+    canary.private_file(root / "intent.json", json.dumps(config))
+    canary.private_file(root / "ready.json", json.dumps({"socket_configured": True}))
+    canary.save_namespaces(dict.fromkeys(canary.ns_names(), [1, 100]))
+    calls = []
+
+    def fake(*args, **kwargs):
+        calls.append(args)
+        if args[-1] == "listen-port":
+            return str(config["wireguard_port"])
+        if args[-1] == "peers":
+            return config["peer_key"]
+        raise AssertionError("readiness must not wait for a handshake")
+
+    monkeypatch.setattr(canary, "run", fake)
+    assert canary.ready()["socket_configured"] is True
+    assert not any("latest-handshakes" in c for c in calls)
+    monkeypatch.setattr(canary, "run", lambda *args, **kwargs: "")
+    with pytest.raises(RuntimeError, match="configuration changed"):
+        canary.ready()

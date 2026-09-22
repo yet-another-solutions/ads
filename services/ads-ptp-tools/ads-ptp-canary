@@ -383,6 +383,22 @@ def inspect() -> dict:
     }
 
 
+def ready() -> dict:
+    """Socket/configuration readiness is independent of peer handshake readiness."""
+    root = directory()
+    config = validate(json.loads(read_file(root / "intent.json")))
+    owned = json.loads(read_file(root / "namespaces.json"))
+    private, mock = ns_names()
+    if any(owned.get(name) != namespace_identity(name) for name in (private, mock)):
+        raise RuntimeError("namespace identity changed")
+    if (
+        ns(private, "wg", "show", "wg-private", "listen-port") != str(config["wireguard_port"])
+        or ns(private, "wg", "show", "wg-private", "peers") != config["peer_key"]
+    ):
+        raise RuntimeError("WireGuard socket or peer configuration changed")
+    return json.loads(read_file(root / "ready.json"))
+
+
 def cleanup() -> dict:
     root = directory()
     pod, generation = identity()
@@ -437,7 +453,7 @@ def main() -> None:
 
         result = configure(json.loads(sys.stdin.read(65537)))
     elif args.action == "ready":
-        result = json.loads(read_file(directory() / "ready.json"))
+        result = ready()
     else:
         result = {"keygen": keygen, "inspect": inspect, "cleanup": cleanup}[args.action]()
     print(json.dumps(result, sort_keys=True))
