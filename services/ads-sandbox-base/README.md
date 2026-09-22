@@ -118,6 +118,19 @@ a VM recreation. The initializer validates all targets as unsymlinked local
 directories with no mounted descendants before deleting any. Persistent graphroot, images,
 volumes, installed software and `/workspace` remain on the session disk.
 
+On SIGTERM/SIGINT, trusted PID 1 runs the base-owned Python shutdown helper
+with isolated interpreter settings. It removes readiness, sends SIGTERM to
+remaining processes in its private PID namespace, waits up to two seconds,
+then escalates to SIGKILL with another two-second reap allowance. Base-owned
+`sync -f /session` flushes the session filesystem before exit, with a ten-second
+timeout. It does not run mutable inner software as root or synchronize the
+entire host. Missing/untrusted readiness, incomplete quiescence or failed flush
+returns failure. GitHub CI exercises the actual PID-1 signal path with a
+different-UID, SIGTERM-resistant writer; published-image lab proof must still
+demonstrate persisted nested images/volumes across a full VM recreation.
+This is orderly-shutdown durability, not a guarantee against hard power loss,
+forced deletion or a storage backend that does not honor flushes.
+
 Unit tests simulate proc/cgroup files and verify fail-closed decisions,
 delegation ownership, placement order, configuration and namespace separation.
 They do not emulate kernel permission enforcement. After publishing and before
