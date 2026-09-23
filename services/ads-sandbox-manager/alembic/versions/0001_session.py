@@ -100,6 +100,8 @@ def upgrade() -> None:
         sa.Column("namespace", sa.String(), nullable=False),
         sa.Column("golden_version", sa.String(), nullable=False),
         sa.Column("control_uids", JSONB(), nullable=False),
+        sa.Column("creation_fenced", sa.Boolean(), nullable=False),
+        sa.Column("control_dispatch", JSONB(), nullable=False),
         sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
         sa.UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"

@@ -29,6 +29,9 @@ class PairControlKubernetes(Protocol):
     async def ensure(
         self, pair: PairBinding, kind: ControlKind, role: str, uid: str | None = None
     ) -> str: ...
+    async def observe(
+        self, pair: PairBinding, kind: ControlKind, role: str, uid: str | None = None
+    ) -> str | None: ...
 
 
 class PairControlProvisioner:
@@ -82,15 +85,46 @@ class PairControlProvisioner:
                     golden_version=self.settings.golden_version,
                 )
             generation = intent.generation
+            uid: str | None
             for kind, role in CONTROL_RESOURCES:
-                # Commit/close the transaction before entering the API adapter.
-                intent = await self._current(row, owner, generation)
-                uid = await self.kube.ensure(
-                    intent.binding(),
-                    cast(ControlKind, kind),
-                    role,
-                    intent.control_uids[resource_key(kind, role)],
-                )
+                while True:
+                    # Commit dispatch evidence before any create-capable call.
+                    async with (
+                        asyncio.timeout(self.settings.control_seconds),
+                        self.sessions.begin() as db,
+                    ):
+                        intent, dispatch = await self.repository.dispatch(
+                            db, row, owner, generation, kind, role
+                        )
+                        self._configuration(intent)
+                    known = intent.control_uids[resource_key(kind, role)]
+                    if dispatch or known is not None:
+                        # A known UID makes ensure observation-only, preserving
+                        # the adapter's strict spec/replacement checks.
+                        uid = await self.kube.ensure(
+                            intent.binding(), cast(ControlKind, kind), role, known
+                        )
+                    else:
+                        uid = await self.kube.observe(
+                            intent.binding(), cast(ControlKind, kind), role
+                        )
+                        if uid is not None:
+                            # Observation proves identity, not compatible spec.
+                            # Supplying its UID forbids ensure from recreating it.
+                            uid = await self.kube.ensure(
+                                intent.binding(), cast(ControlKind, kind), role, uid
+                            )
+                    if uid is not None:
+                        break
+                    # Another worker may still complete the sole dispatch.
+                    # Poll reads within the existing create deadline, never retry a write.
+                    await asyncio.sleep(0.05)
+                if dispatch:
+                    async with (
+                        asyncio.timeout(self.settings.control_seconds),
+                        self.sessions.begin() as db,
+                    ):
+                        await self.repository.settle(db, intent, kind, role)
                 async with (
                     asyncio.timeout(self.settings.control_seconds),
                     self.sessions.begin() as db,

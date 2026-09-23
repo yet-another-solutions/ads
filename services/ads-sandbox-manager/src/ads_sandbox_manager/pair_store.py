@@ -31,6 +31,23 @@ def resource_key(kind: str, role: str) -> str:
     return f"{kind}/{role}"
 
 
+def new_control_dispatch() -> dict[str, str]:
+    return {resource_key(*item): "unissued" for item in CONTROL_RESOURCES}
+
+
+def validate_control_dispatch(intent: PairIntent) -> None:
+    if (
+        type(intent.creation_fenced) is not bool
+        or not isinstance(intent.control_dispatch, dict)
+        or set(intent.control_dispatch) != set(new_control_dispatch())
+        or any(
+            value not in ("unissued", "inflight", "settled")
+            for value in intent.control_dispatch.values()
+        )
+    ):
+        raise RuntimeError("corrupt pair control dispatch evidence")
+
+
 class PairIntent(Base):
     """Captured ownership survives session replacement/deletion; no cascade.
 
@@ -55,6 +72,8 @@ class PairIntent(Base):
     namespace: Mapped[str]
     golden_version: Mapped[str]
     control_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB)
+    creation_fenced: Mapped[bool] = mapped_column(default=False)
+    control_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_control_dispatch)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -98,6 +117,7 @@ class PairIntentRepository:
 
     @staticmethod
     def _validate(intent: PairIntent) -> None:
+        validate_control_dispatch(intent)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
         if (
             not isinstance(intent.control_uids, dict)
@@ -119,6 +139,8 @@ class PairIntentRepository:
             or intent.claim_changed != row.status_changed_at
         ):
             raise PairClaimLost("prior pair requires fenced retirement")
+        if intent.creation_fenced:
+            raise PairClaimLost("pair control creation is fenced")
 
     async def begin(
         self,
@@ -210,3 +232,58 @@ class PairIntentRepository:
         if intent is not None:
             self._validate(intent)
         return intent
+
+    async def dispatch(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        kind: str,
+        role: str,
+    ) -> tuple[PairIntent, bool]:
+        """Reserve the only create-capable invocation for this control key.
+
+        Replays only observe. Neither a timeout nor a later 404 resets this
+        monotonic marker; there is no new claim epoch or retry generation.
+        """
+        key = resource_key(kind, role)
+        intent = await self.owned(db, row, owner, generation)
+        dispatch = intent.control_uids[key] is None and intent.control_dispatch[key] == "unissued"
+        if dispatch:
+            intent.control_dispatch = {**intent.control_dispatch, key: "inflight"}
+            await db.flush()
+        return intent, dispatch
+
+    async def settle(self, db: AsyncSession, expected: PairIntent, kind: str, role: str) -> None:
+        """Record normal return of the original invocation, even after fencing.
+
+        This does not bind a UID or revive provisioning authority. Exceptions,
+        cancellation, lost replies and observer retries cannot settle a write.
+        """
+        key = resource_key(kind, role)
+        identity = (
+            expected.binding(),
+            expected.namespace,
+            expected.golden_version,
+            expected.claim_owner,
+            expected.claim_changed,
+        )
+        intent = await db.get(
+            PairIntent, expected.generation, with_for_update=True, populate_existing=True
+        )
+        if intent is None:
+            raise PairClaimLost("pair intent missing")
+        self._validate(intent)
+        if (
+            intent.binding(),
+            intent.namespace,
+            intent.golden_version,
+            intent.claim_owner,
+            intent.claim_changed,
+        ) != identity:
+            raise PairClaimLost("pair dispatch identity changed")
+        if intent.control_dispatch[key] not in ("inflight", "settled"):
+            raise RuntimeError("pair control was never dispatched")
+        intent.control_dispatch = {**intent.control_dispatch, key: "settled"}
+        await db.flush()
