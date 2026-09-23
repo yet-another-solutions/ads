@@ -19,6 +19,24 @@ class EgressPair:
 
 
 @dataclass(frozen=True, slots=True)
+class PairedGuest:
+    name: str
+    uid: str
+    generation: UUID
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.name, str)
+            or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", self.name)
+            or not isinstance(self.uid, str)
+            or not self.uid.strip()
+            or self.uid != self.uid.strip()
+            or not isinstance(self.generation, UUID)
+        ):
+            raise ValueError("exact manager-provided guest identity is required")
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     sandbox_id: UUID
     pid_directory: Path
@@ -45,8 +63,11 @@ class Settings:
     kafka_sasl_username: str | None = None
     kafka_sasl_password: str | None = field(default=None, repr=False)
     egress: EgressPair | None = None
+    paired_guest: PairedGuest | None = None
 
     def __post_init__(self) -> None:
+        if self.paired_guest is not None and self.egress is None:
+            raise ValueError("paired guest requires the immutable egress association")
         for value in (
             self.startup_seconds,
             self.timeout_seconds,
@@ -90,7 +111,16 @@ class Settings:
 
     @property
     def selector(self) -> str:
-        return f"ads.io/sandbox-id={self.sandbox_id}"
+        base = f"ads.io/sandbox-id={self.sandbox_id}"
+        if self.paired_guest is None:
+            return base
+        assert self.egress is not None
+        return (
+            base
+            + f",ads.io/attachment-generation={self.paired_guest.generation}"
+            + f",ads.io/project-id={self.egress.project_id}"
+            + ",app.kubernetes.io/component=ads-sandbox"
+        )
 
 
 def load_tls_context(settings: Settings) -> ssl.SSLContext:
@@ -155,6 +185,20 @@ def load_settings() -> Settings:
             )
             else None
         ),
+        paired_guest=(
+            PairedGuest(
+                required("GUEST_POD_NAME"),
+                required("GUEST_POD_UID"),
+                UUID(required("ATTACHMENT_GENERATION")),
+            )
+            if any(
+                os.environ.get(prefix + key)
+                for key in ("GUEST_POD_NAME", "GUEST_POD_UID", "ATTACHMENT_GENERATION")
+            )
+            else None
+        ),
     )
+    if settings.egress is not None and settings.paired_guest is None:
+        raise ValueError("egress IPC requires exact manager-provided guest identity")
     load_tls_context(settings)
     return settings

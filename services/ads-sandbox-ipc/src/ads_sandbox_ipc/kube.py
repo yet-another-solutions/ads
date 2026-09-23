@@ -75,6 +75,8 @@ class KubeProcess:
 
 class KubeClient:
     def __init__(self, settings: Settings) -> None:
+        if settings.egress is not None and settings.paired_guest is None:
+            raise ValueError("egress IPC requires exact manager-provided guest identity")
         self.settings = settings
         self.configuration = client.Configuration()
         # Only the projected pod identity. No kubeconfig or ambient developer credentials.
@@ -86,6 +88,19 @@ class KubeClient:
         self.ssl = ssl.create_default_context(cafile=self.configuration.ssl_ca_cert)
 
     def _matches(self, item: Any) -> bool:
+        expected = self.settings.paired_guest
+        if expected is not None:
+            assert self.settings.egress is not None
+            labels = item.metadata.labels or {}
+            if (
+                item.metadata.name != expected.name
+                or item.metadata.uid != expected.uid
+                or item.metadata.namespace != self.settings.namespace
+                or labels.get("ads.io/attachment-generation") != str(expected.generation)
+                or labels.get("ads.io/project-id") != str(self.settings.egress.project_id)
+                or labels.get("app.kubernetes.io/component") != "ads-sandbox"
+            ):
+                return False
         return (
             item.metadata.deletion_timestamp is None
             and (item.metadata.labels or {}).get("ads.io/sandbox-id")
@@ -112,6 +127,9 @@ class KubeClient:
         return Pod(item.metadata.name, item.metadata.uid)
 
     async def start(self, pod: Pod, argv: list[str], stdin: bytes) -> Process:
+        expected = self.settings.paired_guest
+        if expected is not None and (pod.name, pod.uid) != (expected.name, expected.uid):
+            raise RuntimeError("sandbox pod identity changed")
         item = await asyncio.to_thread(
             self.api.read_namespaced_pod,
             pod.name,
