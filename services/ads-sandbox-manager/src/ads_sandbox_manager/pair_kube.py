@@ -1,4 +1,4 @@
-"""Fixed-scope Kubernetes operations for the manager's paired control resources."""
+"""Fixed control operations and read-only compute ownership observation."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_objects import (
     PairBinding,
+    compute_identity,
     control_ingress,
     control_service,
     pod_group,
@@ -95,14 +96,14 @@ class PairControlAdapter:
             or meta.get("name") != expected["name"]
             or meta.get("namespace") != expected["namespace"]
             or not isinstance(meta.get("uid"), str)
-            or not meta["uid"]
+            or not meta["uid"].strip()
             or not isinstance(meta.get("resourceVersion"), str)
-            or not meta["resourceVersion"]
+            or not meta["resourceVersion"].strip()
             or meta.get("ownerReferences")
             or any(meta.get("labels", {}).get(k) != v for k, v in expected["labels"].items())
             or (uid is not None and meta["uid"] != uid)
         ):
-            raise RuntimeError("foreign, replaced, or unfenced pair control resource")
+            raise RuntimeError("foreign, replaced, or unfenced pair resource")
         return cast(str, meta["uid"])
 
     @staticmethod
@@ -203,4 +204,21 @@ class PairControlAdapter:
         """
         desired = self._desired(pair, kind, role)
         observed = await self._read(desired)
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_compute(
+        self, pair: PairBinding, role: str, uid: str | None = None
+    ) -> str | None:
+        """Read exactly one fixed Pod name; never list, create, mutate or delete.
+
+        Owned terminating/spec-drifted Pods remain cleanup obligations. Neither
+        a captured UID nor 404 supplies runtime identity, readiness, dispatch
+        settlement or release evidence. Controller-owned Pods are not adopted.
+        """
+        desired = compute_identity(self.kube.settings, pair, role)
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid recorded pair compute UID")
+        observed = await self.kube._get(
+            self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+        )
         return None if observed is None else self._identity(observed, desired, uid)

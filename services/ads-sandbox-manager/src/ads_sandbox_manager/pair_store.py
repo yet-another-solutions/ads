@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_sandbox_manager.pair_objects import COMPUTE_ROLES as COMPUTE_ROLES
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.store import Base, SandboxSession
 
@@ -23,7 +24,6 @@ CONTROL_RESOURCES = (
     ("NetworkPolicy", "guest-relay"),
     ("NetworkPolicy", "egress-relay"),
 )
-COMPUTE_ROLES = ("guest", "egress", "guest-relay", "egress-relay")
 
 
 def compute_key(role: str) -> str:

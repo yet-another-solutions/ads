@@ -37,6 +37,7 @@ class MemoryControlApi:
         self.started, self.release, self.finished = Event(), Event(), Event()
         adapter.custom = Mock()
         adapter.networking = Mock()
+        adapter.kube.core.read_namespaced_pod.side_effect = partial(self.read, "Pod")
         for kind, sdk, name, verb in (
             ("PodGroup", adapter.custom, "custom_object", "get"),
             ("Service", adapter.kube.core, "service", "read"),

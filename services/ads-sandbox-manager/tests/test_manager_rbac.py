@@ -29,7 +29,7 @@ def test_manager_cleanup_is_namespace_scoped_and_cluster_observation_stays_read_
         ("batch", "jobs"): ["create", "delete", "get", "list", "watch"],
         ("apps", "deployments"): ["create", "delete", "get", "list", "watch"],
         ("", "persistentvolumeclaims"): ["create", "delete", "get", "list", "watch"],
-        ("", "pods"): ["list", "delete"],
+        ("", "pods"): ["get", "list", "delete"],
         ("", "services"): ["get"],
         ("networking.k8s.io", "networkpolicies"): ["get"],
         ("scheduling.k8s.io", "podgroups"): ["get"],
