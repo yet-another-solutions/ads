@@ -12,6 +12,7 @@ from ads_sandbox_manager.egress_state_objects import identity as egress_state_id
 from ads_sandbox_manager.egress_state_store import state_from_snapshot
 from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import Object
+from ads_sandbox_manager.pair_ipc_inputs import ipc_identity
 from ads_sandbox_manager.pair_objects import (
     PairBinding,
     compute_identity,
@@ -211,6 +212,20 @@ class PairControlAdapter:
         """
         desired = self._desired(pair, kind, role)
         observed = await self._read(desired)
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_ipc(self, pair: PairBinding, role: str, uid: str | None) -> str | None:
+        """Metadata-only ownership capture, never usability or runtime release."""
+        desired = ipc_identity(self.kube.settings, pair, role)
+        method = (
+            self.kube.core.read_namespaced_persistent_volume_claim
+            if role == "volume"
+            else self.kube.apps.read_namespaced_deployment
+        )
+        try:
+            observed = await self.kube._get(method, desired["metadata"]["name"])
+        except Exception:
+            raise RuntimeError("paired IPC cleanup read failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
 
     async def observe_compute(

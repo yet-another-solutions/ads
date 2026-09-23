@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
+from ads_sandbox_manager.pair_ipc_inputs import IPC_ROLES
 from ads_sandbox_manager.pair_kube import ControlKind
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import (
@@ -40,6 +41,7 @@ class PairCleanupKubernetes(Protocol):
     async def observe_egress_state(
         self, snapshot: dict[str, object], role: str, uid: str | None
     ) -> str | None: ...
+    async def observe_ipc(self, pair: PairBinding, role: str, uid: str | None) -> str | None: ...
 
 
 class PairCleanupCapture:
@@ -71,6 +73,39 @@ class PairCleanupCapture:
 
     async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> None:
         async with asyncio.timeout(self.settings.cleanup_seconds):
+            for role in IPC_ROLES:
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.owned_pair_cleanup(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+                    self._configuration(work)
+                    await self.repository.fence_pair_creators(db, work)
+                    pair = self.repository.cleanup_pair(work)
+                assert work.pair_snapshot is not None
+                entry = work.pair_snapshot["ipc_resources"][role]
+                if entry["dispatch"] == "unissued":
+                    continue
+                uid = await self.kube.observe_ipc(pair, role, entry["uid"])
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.record_ipc_resource(
+                        db,
+                        work,
+                        role,
+                        uid,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
             for kind, role in (*CONTROL_RESOURCES, *(("Pod", role) for role in COMPUTE_ROLES)):
                 async with (
                     asyncio.timeout(self.settings.control_seconds),
