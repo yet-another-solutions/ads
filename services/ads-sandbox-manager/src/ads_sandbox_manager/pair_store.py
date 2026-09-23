@@ -11,6 +11,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_sandbox_manager.pair_compute_inputs import (
+    new_compute_payloads,
+    validate_compute_payloads,
+)
+from ads_sandbox_manager.pair_compute_inputs import (
+    validate_payload as validate_compute_payload,
+)
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES as COMPUTE_ROLES
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.relay_inputs import (
@@ -139,6 +146,7 @@ class PairIntent(Base):
     control_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_control_dispatch)
     compute_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB, default=new_compute_uids)
     compute_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_compute_dispatch)
+    compute_payloads: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_compute_payloads)
     relay_custody: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_custody)
     relay_inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_inputs)
 
@@ -186,6 +194,7 @@ class PairIntentRepository:
     def _validate(intent: PairIntent) -> None:
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
+        validate_compute_payloads(intent.compute_payloads)
         validate_relay_custody(intent.relay_custody)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
@@ -384,6 +393,50 @@ class PairIntentRepository:
             await db.flush()
         return intent, dispatch
 
+    async def reserve_compute(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+        payload: dict[str, Any],
+    ) -> tuple[PairIntent, bool]:
+        """Commit exact constructor input with the sole Pod write reservation."""
+        key = compute_key(role)
+        validate_compute_payload(role, payload)
+        intent = await self.owned(db, row, owner, generation)
+        current = await db.get(SandboxSession, row.session_id)
+        assert current is not None
+        self._compute_dependencies(intent, current, role, payload)
+        previous = intent.compute_payloads[role]
+        if previous is not None and previous != payload:
+            raise RuntimeError("committed pair compute payload changed")
+        dispatch = intent.compute_uids[key] is None and intent.compute_dispatch[key] == "unissued"
+        if not dispatch and previous is None:
+            raise RuntimeError("compute reservation has no committed payload")
+        if dispatch:
+            intent.compute_payloads = {**intent.compute_payloads, role: payload}
+            intent.compute_dispatch = {**intent.compute_dispatch, key: "inflight"}
+            await db.flush()
+        return intent, dispatch
+
+    @staticmethod
+    def _compute_dependencies(
+        intent: PairIntent, current: SandboxSession, role: str, payload: dict[str, Any]
+    ) -> None:
+        if payload["control_uids"] != intent.control_uids:
+            raise PairClaimLost("compute control identities changed")
+        if role == "guest" and (
+            payload["pvc_id"] != str(current.pvc_id)
+            or payload["pvc_uid"] != current.pvc_uid
+            or payload["ca_attempt"] != str(current.ca_attempt)
+            or payload["ca_guest_uid"] != (current.ca_clones or {}).get("guest")
+            or payload["ca_source_uid"] != (current.ca_sources or {}).get("public")
+            or payload["golden_version"] != current.golden_version
+        ):
+            raise PairClaimLost("guest volume identity changed")
+
     async def bind_compute(
         self,
         db: AsyncSession,
@@ -397,6 +450,11 @@ class PairIntentRepository:
         if not isinstance(uid, str) or not uid.strip():
             raise ValueError("an observed compute UID is required")
         intent = await self.owned(db, row, owner, generation)
+        payload = intent.compute_payloads[role]
+        if payload is not None:
+            current = await db.get(SandboxSession, row.session_id)
+            assert current is not None
+            self._compute_dependencies(intent, current, role, payload)
         previous = intent.compute_uids[key]
         if previous is not None and previous != uid:
             raise RuntimeError("pair compute UID replacement refused")
@@ -407,7 +465,10 @@ class PairIntentRepository:
     async def settle_compute(self, db: AsyncSession, expected: PairIntent, role: str) -> None:
         """Only original invocation normal return may settle, never an observer."""
         key = compute_key(role)
+        payload = expected.compute_payloads[role]
         intent = await self._settlement_intent(db, expected)
+        if intent.compute_payloads[role] != payload:
+            raise PairClaimLost("compute settlement payload changed")
         if intent.compute_dispatch[key] not in ("inflight", "settled"):
             raise RuntimeError("pair compute was never dispatched")
         intent.compute_dispatch = {**intent.compute_dispatch, key: "settled"}

@@ -104,6 +104,7 @@ def upgrade() -> None:
         sa.Column("control_dispatch", JSONB(), nullable=False),
         sa.Column("compute_uids", JSONB(), nullable=False),
         sa.Column("compute_dispatch", JSONB(), nullable=False),
+        sa.Column("compute_payloads", JSONB(), nullable=False),
         sa.Column("relay_custody", JSONB(), nullable=False),
         sa.Column("relay_inputs", JSONB(), nullable=False),
         sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
