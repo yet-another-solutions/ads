@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
@@ -107,6 +108,7 @@ class LifecycleRepository:
         if intent.session_id != session_id:
             raise RuntimeError("pair cleanup session identity mismatch")
         validate_relay_custody(intent.relay_custody)
+        validate_compute_payloads(intent.compute_payloads)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         return {
             "generation": str(intent.generation),
@@ -117,6 +119,7 @@ class LifecycleRepository:
             "golden_version": intent.golden_version,
             "control_uids": dict(intent.control_uids),
             "compute_uids": dict(intent.compute_uids),
+            "compute_payloads": dict(intent.compute_payloads),
             "relay_custody": dict(intent.relay_custody),
             "relay_inputs": dict(intent.relay_inputs),
         }
@@ -269,6 +272,7 @@ class LifecycleRepository:
             "compute_uids",
             "relay_custody",
             "relay_inputs",
+            "compute_payloads",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
@@ -281,6 +285,7 @@ class LifecycleRepository:
             identities[field] = UUID(value)
         pair = PairBinding(**identities)
         validate_relay_inputs(pair, snapshot["relay_inputs"])
+        validate_compute_payloads(snapshot["compute_payloads"])
         controls = snapshot["control_uids"]
         compute = snapshot["compute_uids"]
         if (
@@ -504,6 +509,9 @@ class LifecycleRepository:
         validate_compute_evidence(intent)
         validate_relay_custody(intent.relay_custody)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
+        validate_compute_payloads(intent.compute_payloads)
+        if intent.compute_payloads != work.pair_snapshot["compute_payloads"]:
+            raise PairClaimLost("pair compute cleanup payload changed")
         if any(
             intent.relay_inputs[role]["payload"] != entry["payload"]
             for role, entry in work.pair_snapshot["relay_inputs"].items()

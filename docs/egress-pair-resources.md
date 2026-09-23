@@ -493,3 +493,43 @@ still needs its own committed immutable payload, dispatch/UID ownership,
 actual Pod/Service binding and cleanup coverage. Egress construction, runtime
 activation, ordered key deletion after proven release, retirement and protected
 credential-preserving reset remain open.
+
+## Committed fixed-Pod publication
+
+`PairComputePublication` is an internal step, not yet called by production
+provisioning. It publishes the existing private guest and two ordinary-runtime
+relay constructors only. The egress VM slot remains explicitly unissued;
+returning this partial intent is not a pair readiness or lifecycle verdict.
+No caller-supplied Pod manifest, exec, patch, replacement controller or delete
+operation is accepted.
+
+Each role's exact nonsecret runtime inputs, rendered trusted manifest and eight
+recorded control UIDs commit atomically with its sole dispatch reservation.
+Guest inputs additionally retain workspace ID/UID, CA attempt/public clone UID,
+public source UID and golden version. The adapter verifies all recorded controls
+read-only, plus exact guest Block/RWO volume identities, before and after the
+Pod write. A known missing dependency is not recreated. Claim and dependency
+identity are rechecked before binding the resulting Pod UID.
+
+Replay rebuilds the manifest from trusted constructors and requires equality
+with the committed payload. Exact Pod metadata/spec verification permits only
+explicit harmless API defaults, quantity canonicalization and scheduler-set
+nodeName. Added execution authority, annotations, owners, deleting objects,
+replacements and configuration drift fail closed. RuntimeClass admission that
+adds uncommitted spec fields remains rejected, not silently adopted.
+
+The original create-capable invocation is retained after caller cancellation.
+Only its normal return and successful settlement commit settle dispatch;
+read-only retry may recover the exact UID without settling an ambiguous write.
+Absence, timeout, actual operation cancellation and process loss never clear
+inflight state or authorize another POST. Cleanup snapshots preserve committed
+payloads, and the permanent creator fence rejects changed cleanup scope.
+Metadata-only cleanup capture can own a late Pod even when provisioning can
+no longer bind it; existing retirement/deletion guards remain unchanged.
+
+This adds one JSONB column to the fresh initial schema, not a migration or
+legacy adoption path. No runtime activation, RBAC expansion, paired-ready
+path, generation retirement, publication, reset or live proof is included.
+Egress VM state/key delivery, complete lifecycle integration, node delivery,
+positive release, ordered teardown and credential-preserving reset remain
+slice-19 work; full data-plane/live acceptance remains separately tracked.
