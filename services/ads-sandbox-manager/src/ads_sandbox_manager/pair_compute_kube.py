@@ -9,6 +9,8 @@ from uuid import UUID
 from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
 
+from ads_sandbox_manager.egress_state_kube import EgressStateAdapter
+from ads_sandbox_manager.egress_state_store import state_from_snapshot
 from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import COMPONENT, JOB_UID, VERSION, Object
 from ads_sandbox_manager.pair_compute_inputs import compute_manifest, validate_payload
@@ -60,27 +62,42 @@ class PairComputeAdapter:
                 raise RuntimeError("complete recorded control identities required")
             # A supplied UID makes ensure strictly read-only, including on 404.
             await self.controls.ensure(pair, cast(ControlKind, kind), member, uid)
-        if role != "guest":
+        if role == "egress":
+            state = state_from_snapshot(payload["state"])
+            await EgressStateAdapter(self.kube).observe_volume(state)
+            expected = tuple(
+                (
+                    ca_consumer_name(pair.sandbox_id, member),
+                    payload["ca_clones"][member],
+                    {
+                        COMPONENT: CA_CONSUMER,
+                        CA_CONSUMER_ROLE: member,
+                        CA_SOURCE_UID: payload["ca_sources"][source],
+                        JOB_UID: payload["ca_attempt"],
+                    },
+                )
+                for member, source in (("egress", "public"), ("key", "private"))
+            )
+        elif role == "guest":
+            expected = (
+                (
+                    session_name(UUID(payload["pvc_id"])),
+                    payload["pvc_uid"],
+                    {COMPONENT: "ads-sandbox"},
+                ),
+                (
+                    ca_consumer_name(pair.sandbox_id, "guest"),
+                    payload["ca_guest_uid"],
+                    {
+                        COMPONENT: CA_CONSUMER,
+                        CA_CONSUMER_ROLE: "guest",
+                        CA_SOURCE_UID: payload["ca_source_uid"],
+                        JOB_UID: payload["ca_attempt"],
+                    },
+                ),
+            )
+        else:
             return
-        expected = (
-            (
-                session_name(UUID(payload["pvc_id"])),
-                payload["pvc_uid"],
-                {
-                    COMPONENT: "ads-sandbox",
-                },
-            ),
-            (
-                ca_consumer_name(pair.sandbox_id, "guest"),
-                payload["ca_guest_uid"],
-                {
-                    COMPONENT: CA_CONSUMER,
-                    CA_CONSUMER_ROLE: "guest",
-                    CA_SOURCE_UID: payload["ca_source_uid"],
-                    JOB_UID: payload["ca_attempt"],
-                },
-            ),
-        )
         for name, uid, labels in expected:
             desired = {
                 "apiVersion": "v1",
@@ -98,7 +115,7 @@ class PairComputeAdapter:
             }
             observed = await self.kube.named_pvc(name)
             if observed is None:
-                raise RuntimeError("bound guest volume disappeared")
+                raise RuntimeError("bound compute volume disappeared")
             PairControlAdapter._identity(observed, desired, uid)
             spec = observed.get("spec", {})
             if (
@@ -108,7 +125,7 @@ class PairComputeAdapter:
                 or spec.get("storageClassName") != "sandbox-block"
                 or spec.get("accessModes") != ["ReadWriteOnce"]
             ):
-                raise RuntimeError("deleting or incompatible guest volume")
+                raise RuntimeError("deleting or incompatible compute volume")
 
     @staticmethod
     def _spec_matches(observed: Object, desired: Object) -> bool:
@@ -230,6 +247,10 @@ class PairComputeAdapter:
             or not self._spec_matches(observed, desired)
         ):
             raise RuntimeError("deleting or incompatible pair Pod")
+        if role == "egress":
+            # Stateful custody and both CA clones must still be the committed
+            # dependencies after the Pod read, not only before it.
+            await self._dependencies(pair, role, payload, controls)
         return result
 
     async def create(

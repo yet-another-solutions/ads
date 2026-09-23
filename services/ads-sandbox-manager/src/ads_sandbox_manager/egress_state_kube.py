@@ -125,7 +125,9 @@ class EgressStateAdapter:
             ):
                 raise RuntimeError("incompatible persistent wrapping custody")
             decode_key(observed.get("data"), state.key_fingerprint)
-        elif not volume_matches(observed, desired):
+        elif observed.get("status", {}).get("phase") == "Lost" or not volume_matches(
+            observed, desired
+        ):
             raise RuntimeError("incompatible persistent state volume")
         return observed
 

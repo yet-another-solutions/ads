@@ -411,7 +411,7 @@ class PairIntentRepository:
         intent = await self.owned(db, row, owner, generation)
         current = await db.get(SandboxSession, row.session_id)
         assert current is not None
-        self._compute_dependencies(intent, current, role, payload)
+        await self._compute_dependencies(db, intent, current, role, payload)
         previous = intent.compute_payloads[role]
         if previous is not None and previous != payload:
             raise RuntimeError("committed pair compute payload changed")
@@ -425,11 +425,24 @@ class PairIntentRepository:
         return intent, dispatch
 
     @staticmethod
-    def _compute_dependencies(
-        intent: PairIntent, current: SandboxSession, role: str, payload: dict[str, Any]
+    async def _compute_dependencies(
+        db: AsyncSession,
+        intent: PairIntent,
+        current: SandboxSession,
+        role: str,
+        payload: dict[str, Any],
     ) -> None:
         if payload["control_uids"] != intent.control_uids:
             raise PairClaimLost("compute control identities changed")
+        for member, previous in intent.compute_payloads.items():
+            if previous is None:
+                continue
+            if previous["runtime"]["transport_mtu"] != payload["runtime"]["transport_mtu"]:
+                raise PairClaimLost("paired compute transport MTU changed")
+            if {member, role} == {"guest", "egress"} and (
+                previous["runtime"]["runtime_class"] == payload["runtime"]["runtime_class"]
+            ):
+                raise PairClaimLost("guest and egress RuntimeClasses must differ")
         if role == "guest" and (
             payload["pvc_id"] != str(current.pvc_id)
             or payload["pvc_uid"] != current.pvc_uid
@@ -439,6 +452,10 @@ class PairIntentRepository:
             or payload["golden_version"] != current.golden_version
         ):
             raise PairClaimLost("guest volume identity changed")
+        if role == "egress":
+            from ads_sandbox_manager.egress_compute_inputs import require_egress_dependencies
+
+            await require_egress_dependencies(db, intent, current, payload)
 
     async def bind_compute(
         self,
@@ -457,7 +474,7 @@ class PairIntentRepository:
         if payload is not None:
             current = await db.get(SandboxSession, row.session_id)
             assert current is not None
-            self._compute_dependencies(intent, current, role, payload)
+            await self._compute_dependencies(db, intent, current, role, payload)
         previous = intent.compute_uids[key]
         if previous is not None and previous != uid:
             raise RuntimeError("pair compute UID replacement refused")

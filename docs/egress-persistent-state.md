@@ -74,9 +74,30 @@ two read-only CA consumer clones. TLS uses separate named SecretKeyRefs. It emit
 no private values, Kubernetes token, guest workspace, shared volume, fake health,
 restart/adoption permission or arbitrary Pod customization. A distinct explicit
 Kata RuntimeClass, digest-pinned image and bounded resources are required.
-This is a pure specification, not a runnable egress bootstrap or publication.
+The constructor is a pure specification, not a runnable egress bootstrap.
 The eventual runtime must decode and verify the key fingerprint, validate block
 identity, safely mount existing state, preload TLS, enforce private/upstream
 separation and prove actual health before admission.
+
+The internal egress publisher now commits that exact nonsecret specification
+and all inputs in the existing pair compute ledger before one Pod write. The
+payload includes full public state evidence, both CA clone/source UIDs, the CA
+attempt, platform runtime inputs and all eight control UIDs. Reservation and
+binding validate the live SQL anchor/state/CA scope under existing locks; no
+transaction spans API I/O. All committed compute roles share one transport MTU
+and guest/egress RuntimeClasses differ.
+
+API publication verifies every exact control identity, wrapping custody and
+state volume plus both CA clone identities before and after Pod publication,
+including after the observed Pod read. Lost/deleting/incompatible dependencies
+cannot be repaired or adopted. Exact Pod shape accepts only existing narrow API
+defaults. One retained original writer can settle on normal completion after
+caller cancellation; lost replies or cancelled original operations remain
+inflight even after UID observation. The cleanup snapshot retains the committed
+payload and captures late Pod UIDs without releasing or retiring the pair.
+
+This publisher has no production creation/ready caller yet. It does not validate
+live egress enforcement or mount state, and adds no deletion, retirement,
+ownership-transfer, credential reset or absence-based release.
 Actual encrypted SQLite use, DNSSEC/ECH records and data-plane behavior belong to
 their later component; this ledger does not claim those features or live acceptance.

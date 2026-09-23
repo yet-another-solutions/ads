@@ -47,8 +47,10 @@ class PairComputePublication:
 
     async def _dispatch(self, intent: PairIntent, role: str) -> str:
         self._configuration(intent)
-        # Two complete dependency checks, the Pod write/read and guest volume reads.
-        async with asyncio.timeout(24 * self.settings.control_seconds):
+        # Egress also repeats custody, two CA clones and all controls after the
+        # Pod observation. Every SDK call retains its own timeout.
+        calls = 45 if role == "egress" else 24
+        async with asyncio.timeout(calls * self.settings.control_seconds):
             uid = await self.kube.create(
                 intent.binding(), role, intent.compute_payloads[role], intent.control_uids
             )
@@ -61,6 +63,19 @@ class PairComputePublication:
         if self._dispatches:
             async with asyncio.timeout(self.settings.control_seconds):
                 await asyncio.wait(tuple(self._dispatches))
+
+    async def dispatch_reserved(self, intent: PairIntent, role: str) -> str:
+        """Only the caller holding the just-committed sole reservation calls this."""
+        if (
+            intent.compute_dispatch[f"Pod/{role}"] != "inflight"
+            or intent.compute_uids[f"Pod/{role}"]
+        ):
+            raise RuntimeError("original unbound compute reservation required")
+        operation = asyncio.create_task(self._dispatch(intent, role), name="pair-compute-dispatch")
+        self._dispatches.add(operation)
+        operation.add_done_callback(self._finished)
+        await asyncio.wait((operation,))
+        return operation.result()
 
     async def prepare(
         self,
@@ -96,13 +111,7 @@ class PairComputePublication:
                         db, row, owner, generation, role, payload
                     )
                 if dispatch:
-                    operation = asyncio.create_task(
-                        self._dispatch(intent, role), name="pair-compute-dispatch"
-                    )
-                    self._dispatches.add(operation)
-                    operation.add_done_callback(self._finished)
-                    await asyncio.wait((operation,))
-                    uid = operation.result()
+                    uid = await self.dispatch_reserved(intent, role)
                 else:
                     uid = None
                     while uid is None:

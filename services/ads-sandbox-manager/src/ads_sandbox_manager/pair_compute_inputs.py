@@ -77,6 +77,12 @@ def validate_payload(role: str, payload: object) -> None:
             if set(payload) != {"runtime", "manifest", "control_uids"}:
                 raise ValueError
             RelayRuntime(**payload["runtime"])
+        elif role == "egress":
+            # The egress reservation model depends on PairIntent. Resolve this
+            # extension at validation time, after model registration, not import.
+            from ads_sandbox_manager.egress_compute_inputs import validate_egress_payload
+
+            validate_egress_payload(payload)
         else:
             raise ValueError
         if not isinstance(payload["manifest"], dict):
@@ -111,6 +117,10 @@ def compute_manifest(
         )
     elif role in ("guest-relay", "egress-relay"):
         desired = relay_pod(settings, pair, role, RelayRuntime(**payload["runtime"]))
+    elif role == "egress":
+        from ads_sandbox_manager.egress_compute_inputs import egress_manifest
+
+        desired = egress_manifest(settings, pair, payload)
     else:
         raise ValueError("compute role has no published constructor")
     if "manifest" in payload:
@@ -123,8 +133,6 @@ def compute_manifest(
 def validate_compute_payloads(value: object) -> None:
     if not isinstance(value, dict) or set(value) != set(new_compute_payloads()):
         raise RuntimeError("corrupt pair compute payloads")
-    if value["egress"] is not None:
-        raise RuntimeError("egress compute constructor is not implemented")
-    for role in PUBLISHED_COMPUTE_ROLES:
+    for role in new_compute_payloads():
         if value[role] is not None:
             validate_payload(role, value[role])
