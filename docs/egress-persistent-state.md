@@ -34,9 +34,25 @@ adopt the record without the subsequent fenced lifecycle implementation.
 ## Integration boundary
 
 The fresh-install initial schema and startup table verification include the ledger.
-There is no migration or adoption of an existing installation. Before activation,
-implement exact immutable Secret/Block-PVC publication and observation, retained
-writer settlement, immutable cleanup snapshots and positive single-owner transfer.
+There is no migration or adoption of an existing installation. A committed pair
+anchor distinguishes first reservation from loss of an already-reserved state row;
+cleanup snapshots retain that anchor and creator fencing rejects any drift.
+
+The internal publisher creates the immutable wrapping Secret and separate fresh
+Block/RWO/sandbox-block PVC exactly once after their reservations commit. Resource
+names depend on the persistent state UUID, not a new attachment/process identity.
+Exact labels bind session/project/sandbox, initial creator, state format and role;
+the volume additionally binds the observed wrapping-custody UID. No controller
+owner references, clone source, selected foreign disk or secret material in the
+volume specification is permitted. Observation checks custody before and after
+volume reads, accepts only exact capacity with API quantity canonicalization,
+and never recreates a missing bound resource. Original writer tasks survive
+caller cancellation to record normal-return settlement. Lost/failed replies stay
+inflight, even if restart binds an observed UID. A custody settlement race can
+fail a concurrent caller closed; a later attempt may observe committed completion.
+
+No production caller, ready transition or teardown is enabled. Before activation,
+complete immutable cleanup resource snapshots and positive single-owner transfer.
 The wrapping-key delivery into Kata must not assume shared filesystem Secret mounts.
 Actual encrypted SQLite use, DNSSEC/ECH records and data-plane behavior belong to
 their later component; this ledger does not claim those features or live acceptance.
