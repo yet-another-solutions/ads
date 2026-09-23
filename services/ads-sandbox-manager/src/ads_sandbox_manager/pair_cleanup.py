@@ -37,6 +37,9 @@ class PairCleanupKubernetes(Protocol):
     async def observe_relay_input(
         self, pair: PairBinding, role: str, uid: str | None
     ) -> str | None: ...
+    async def observe_egress_state(
+        self, snapshot: dict[str, object], role: str, uid: str | None
+    ) -> str | None: ...
 
 
 class PairCleanupCapture:
@@ -182,6 +185,44 @@ class PairCleanupCapture:
                 ):
                     self._configuration(work)
                     work = await self.repository.record_relay_input(
+                        db,
+                        work,
+                        role,
+                        uid,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+            for role in ("key", "volume"):
+                assert work.pair_snapshot is not None
+                persistent = work.pair_snapshot["egress_state"]
+                if persistent is None or persistent[f"{role}_dispatch"] == "unissued":
+                    continue
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.owned_pair_cleanup(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+                    self._configuration(work)
+                    await self.repository.fence_pair_creators(db, work)
+                assert work.pair_snapshot is not None
+                persistent = work.pair_snapshot["egress_state"]
+                assert persistent is not None
+                uid = await self.kube.observe_egress_state(
+                    persistent, role, persistent[f"{role}_uid"]
+                )
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    self._configuration(work)
+                    work = await self.repository.record_egress_state(
                         db,
                         work,
                         role,

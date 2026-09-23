@@ -9,36 +9,11 @@ from copy import deepcopy
 from kubernetes.client.exceptions import ApiException
 from kubernetes.utils.quantity import parse_quantity
 
+from ads_sandbox_manager.egress_state_objects import identity as identity
 from ads_sandbox_manager.egress_state_store import EgressState, WrappingKey, validate
 from ads_sandbox_manager.kube import KubeClient
-from ads_sandbox_manager.objects import COMPONENT, Object
+from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_kube import PairControlAdapter
-from ads_sandbox_manager.pair_objects import PROJECT
-from ads_sandbox_manager.session_objects import SANDBOX, SESSION
-
-
-def identity(state: EgressState, role: str) -> Object:
-    validate(state)
-    if role not in ("key", "volume"):
-        raise ValueError("unsupported egress state resource")
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret" if role == "key" else "PersistentVolumeClaim",
-        "metadata": {
-            "name": f"ads-egress-{role}-{state.state_id}",
-            "namespace": state.namespace,
-            "labels": {
-                COMPONENT: "ads-egress-state",
-                SESSION: str(state.session_id),
-                SANDBOX: str(state.sandbox_id),
-                PROJECT: str(state.project_id),
-                "ads.io/egress-state-id": str(state.state_id),
-                "ads.io/egress-state-role": role,
-                "ads.io/egress-state-format": "v1",
-                "ads.io/creator-generation": str(state.creator_generation),
-            },
-        },
-    }
 
 
 def key_secret(state: EgressState, key: WrappingKey) -> Object:

@@ -9,6 +9,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_sandbox_manager.egress_state_store import (
+    EgressState,
+    require_cleanup_state,
+    state_from_snapshot,
+    state_snapshot,
+)
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import (
@@ -110,6 +116,18 @@ class LifecycleRepository:
         validate_relay_custody(intent.relay_custody)
         validate_compute_payloads(intent.compute_payloads)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
+        persistent = None
+        if intent.egress_state_id is not None:
+            state = await db.get(
+                EgressState,
+                intent.egress_state_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if state is None or state.sandbox_id != intent.sandbox_id:
+                raise RuntimeError("anchored persistent egress state missing")
+            require_cleanup_state(state, intent)
+            persistent = state_snapshot(state)
         return {
             "generation": str(intent.generation),
             "session_id": str(intent.session_id),
@@ -123,6 +141,7 @@ class LifecycleRepository:
             "relay_custody": dict(intent.relay_custody),
             "relay_inputs": dict(intent.relay_inputs),
             "egress_state_id": str(intent.egress_state_id) if intent.egress_state_id else None,
+            "egress_state": persistent,
         }
 
     async def work(
@@ -275,6 +294,7 @@ class LifecycleRepository:
             "relay_inputs",
             "compute_payloads",
             "egress_state_id",
+            "egress_state",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
@@ -284,6 +304,21 @@ class LifecycleRepository:
             not isinstance(state_id, str) or str(UUID(state_id)) != state_id
         ):
             raise RuntimeError("invalid persistent egress cleanup anchor")
+        persistent = snapshot["egress_state"]
+        if (state_id is None) != (persistent is None):
+            raise RuntimeError("persistent egress cleanup anchor and snapshot disagree")
+        if persistent is not None:
+            state = state_from_snapshot(persistent)
+            if (
+                str(state.state_id) != state_id
+                or str(state.sandbox_id) != snapshot["sandbox_id"]
+                or str(state.session_id) != snapshot["session_id"]
+                or str(state.project_id) != snapshot["project_id"]
+                or str(state.creator_generation) != snapshot["generation"]
+                or state.namespace != snapshot["namespace"]
+                or state.sandbox_id != work.sandbox_id
+            ):
+                raise RuntimeError("persistent egress cleanup state identity changed")
         identities = {}
         for field in ("session_id", "sandbox_id", "project_id", "generation"):
             value = snapshot[field]
@@ -520,6 +555,18 @@ class LifecycleRepository:
         state_id = str(intent.egress_state_id) if intent.egress_state_id else None
         if state_id != work.pair_snapshot["egress_state_id"]:
             raise PairClaimLost("persistent egress cleanup anchor changed")
+        if intent.egress_state_id is not None:
+            state = await db.get(
+                EgressState,
+                intent.egress_state_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if state is None:
+                raise PairClaimLost("persistent egress cleanup reservation missing")
+            require_cleanup_state(
+                state, intent, state_from_snapshot(work.pair_snapshot["egress_state"])
+            )
         if intent.compute_payloads != work.pair_snapshot["compute_payloads"]:
             raise PairClaimLost("pair compute cleanup payload changed")
         if any(
@@ -535,6 +582,43 @@ class LifecycleRepository:
         intent.creation_fenced = True
         await db.flush()
         return intent
+
+    async def record_egress_state(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        uid: str | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        """Capture only named Secret/PVC metadata; never key data or absence."""
+        if role not in ("key", "volume"):
+            raise ValueError("unsupported persistent egress cleanup role")
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid persistent egress cleanup UID")
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        await self.fence_pair_creators(db, work)
+        assert work.pair_snapshot is not None
+        persistent = work.pair_snapshot["egress_state"]
+        if persistent is None:
+            raise RuntimeError("persistent egress state was never reserved")
+        state = state_from_snapshot(persistent)
+        if getattr(state, f"{role}_dispatch") == "unissued":
+            raise RuntimeError("persistent egress resource was never dispatched")
+        if uid is not None:
+            previous = getattr(state, f"{role}_uid")
+            if previous is not None and previous != uid:
+                raise RuntimeError("persistent egress cleanup UID replacement refused")
+            persistent = {**persistent, f"{role}_uid": uid}
+            state_from_snapshot(persistent)
+            work.pair_snapshot = {**work.pair_snapshot, "egress_state": persistent}
+            await db.flush()
+        return work
 
     async def record_relay_custody(
         self,

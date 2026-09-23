@@ -8,6 +8,8 @@ from typing import Literal, cast
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
+from ads_sandbox_manager.egress_state_objects import identity as egress_state_identity
+from ads_sandbox_manager.egress_state_store import state_from_snapshot
 from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_objects import (
@@ -257,4 +259,29 @@ class PairControlAdapter:
             )
         except Exception:
             raise RuntimeError("relay input observation failed") from None
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_egress_state(
+        self, snapshot: dict[str, object], role: str, uid: str | None
+    ) -> str | None:
+        """Observe metadata only; never load key data, PVC contents or create."""
+        state = state_from_snapshot(snapshot)
+        if state.namespace != self.namespace:
+            raise RuntimeError("persistent egress cleanup namespace changed")
+        if role not in ("key", "volume"):
+            raise ValueError("unsupported persistent egress cleanup role")
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid persistent egress cleanup UID")
+        desired = egress_state_identity(state, role)
+        if role == "volume":
+            desired["metadata"]["labels"]["ads.io/wrapping-custody-uid"] = state.key_uid
+        method = (
+            self.kube.core.read_namespaced_secret
+            if role == "key"
+            else self.kube.core.read_namespaced_persistent_volume_claim
+        )
+        try:
+            observed = await self.kube._get(method, desired["metadata"]["name"])
+        except Exception:
+            raise RuntimeError("persistent egress cleanup observation failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
