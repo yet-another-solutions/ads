@@ -13,6 +13,7 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.pair_kube import ControlKind
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import CONTROL_RESOURCES, resource_key
+from ads_sandbox_manager.store import SandboxSession
 
 
 class PairCleanupKubernetes(Protocol):
@@ -52,14 +53,20 @@ class PairCleanupCapture:
         ) != wanted:
             raise RuntimeError("pair cleanup builder configuration changed")
 
-    async def capture(self, work: CleanupWork) -> None:
+    async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> None:
         async with asyncio.timeout(self.settings.cleanup_seconds):
             for kind, role in CONTROL_RESOURCES:
                 async with (
                     asyncio.timeout(self.settings.control_seconds),
                     self.sessions.begin() as db,
                 ):
-                    work = await self.repository.owned_pair_cleanup(db, work, datetime.now(UTC))
+                    work = await self.repository.owned_pair_cleanup(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
                     self._configuration(work)
                     pair = self.repository.cleanup_pair(work)
                 assert work.pair_snapshot is not None
@@ -81,4 +88,6 @@ class PairCleanupCapture:
                         role,
                         uid,
                         datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
                     )

@@ -151,10 +151,27 @@ failed commit preserves earlier evidence and cannot advance cleanup.
 
 The lifecycle remains blocked after this observation step even when every
 control UID is known. It performs no compute, node, policy, volume or topic
-deletion and never marks the generation retired. Recovery and orphan work keep
-their existing fail-closed guards; their rotated/missing-session ownership is
-not reinterpreted as a normal cleanup claim. Their observation path, stale
-creator fencing, node delivery and complete teardown remain integration work.
+deletion and never marks the generation retired.
+
+Recovery capture uses the current recovering session's exact sandbox, project
+and transition timestamp, rather than treating an old work deadline or old
+sandbox ID as the active claim. Each old pair snapshot is retained unchanged
+except for newly observed control UIDs. Old PVCs must still belong to the
+session and be failed; retained targets are refused. Repeated recovery can
+resume capture of older generations, but a stale recovery worker cannot write
+after the active boundary changes.
+
+True-orphan capture requires no current session under either captured session
+or sandbox identity, no retained session PVC and no competing recovery intent.
+It also validates the surviving pair ledger's immutable identity and scope.
+A replacement session conservatively blocks this path. The old orphan work
+deadline does not discard evidence or prevent a bounded retry. These absence
+checks are not an insertion fence and confer no destructive authority.
+
+Both paths perform only read-only Kubernetes observations, revalidate around
+every read and keep the existing teardown guards. They do not resolve late
+Kubernetes creates, fence stale creators, deliver node commands or complete
+retirement; those remain integration gates before any control policy deletion.
 
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, delete, select
+from sqlalchemy import DateTime, ForeignKey, delete, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -268,7 +268,8 @@ class LifecycleRepository:
         controls = snapshot["control_uids"]
         if (
             pair.sandbox_id != work.sandbox_id
-            or pair.session_id != work.session_id
+            or (work.kind != "orphan" and pair.session_id != work.session_id)
+            or (work.kind == "orphan" and work.session_id is not None)
             or any(
                 not isinstance(snapshot[k], str) or not snapshot[k].strip()
                 for k in ("namespace", "golden_version")
@@ -284,9 +285,15 @@ class LifecycleRepository:
         return pair
 
     async def owned_pair_cleanup(
-        self, db: AsyncSession, expected: CleanupWork, now: datetime
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
     ) -> CleanupWork:
-        """Normal lifecycle claim only; recovery/orphan authority is not inferred."""
+        """Read-only capture authority; never authorizes deletion or retirement."""
         fields = (
             "work_id",
             "session_id",
@@ -298,7 +305,76 @@ class LifecycleRepository:
         )
         identity = tuple(getattr(expected, key) for key in fields)
         snapshot = expected.pair_snapshot
-        if expected.kind not in ("idle", "service", "reap") or not await self.owns(db, expected):
+        targets = expected.targets
+        if expected.kind == "orphan" and expected.session_id is not None:
+            raise PairClaimLost("invalid pair orphan claim")
+        if expected.kind == "recovery" and recovery is None:
+            raise PairClaimLost("pair recovery claim required")
+        pair = self.cleanup_pair(expected)
+        assert snapshot is not None
+        if expected.kind == "recovery":
+            if recovery is None or recovery.session_id != pair.session_id:
+                raise PairClaimLost("pair recovery claim required")
+            row = await db.get(SandboxSession, recovery.session_id, with_for_update=True)
+            if (
+                row is None
+                or (row.sandbox_id, row.project_id, row.status_changed_at)
+                != (recovery.sandbox_id, recovery.project_id, recovery.status_changed_at)
+                or row.status != "recovering"
+                or row.project_id != pair.project_id
+                or row.pvc_id is not None
+                or row.claimed_by is not None
+                or row.status_changed_at + timedelta(seconds=recovery_seconds) <= now
+                or any(obj.get("retain") for obj in targets)
+            ):
+                raise PairClaimLost("pair recovery claim changed")
+            if expected.pvc_id is not None:
+                pvc = await db.get(SessionPVC, expected.pvc_id, with_for_update=True)
+                if pvc is None or pvc.session_id != pair.session_id or pvc.state != "failed":
+                    raise PairClaimLost("pair recovery PVC ownership changed")
+        elif expected.kind == "orphan":
+            if recovery is not None or expected.pvc_id is not None:
+                raise PairClaimLost("invalid pair orphan claim")
+            # Deliberately conservative: a replacement session or retained PVC
+            # blocks this read-only path too. Absent-row checks are not a fence
+            # against future insertion and must never become delete authority.
+            owner = await db.scalar(
+                select(SandboxSession.session_id)
+                .where(
+                    or_(
+                        SandboxSession.session_id == pair.session_id,
+                        SandboxSession.sandbox_id == pair.sandbox_id,
+                    )
+                )
+                .with_for_update()
+            )
+            pvc_owner = await db.scalar(
+                select(SessionPVC.pvc_id).where(SessionPVC.session_id == pair.session_id)
+            )
+            recovery_owner = await db.scalar(
+                select(CleanupWork.work_id).where(
+                    CleanupWork.kind == "recovery",
+                    or_(
+                        CleanupWork.session_id == pair.session_id,
+                        CleanupWork.sandbox_id == pair.sandbox_id,
+                    ),
+                )
+            )
+            if owner is not None or pvc_owner is not None or recovery_owner is not None:
+                raise PairClaimLost("pair orphan acquired an owner")
+            intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+            if (
+                intent is None
+                or intent.binding() != pair
+                or intent.namespace != snapshot["namespace"]
+                or intent.golden_version != snapshot["golden_version"]
+            ):
+                raise PairClaimLost("pair orphan durable identity changed")
+        elif (
+            recovery is not None
+            or expected.kind not in ("idle", "service", "reap")
+            or not await self.owns(db, expected)
+        ):
             raise PairClaimLost("pair cleanup claim changed")
         # Preserve session/PVC -> work lock order; no external call in this transaction.
         stored = await db.get(
@@ -308,14 +384,16 @@ class LifecycleRepository:
             stored is None
             or tuple(getattr(stored, key) for key in fields) != identity
             or stored.pair_snapshot != snapshot
-            or stored.deadline <= now
+            or stored.targets != targets
+            or (stored.kind in ("idle", "service", "reap") and stored.deadline <= now)
             or (stored.kind == "idle" and not stored.acknowledged)
         ):
             raise PairClaimLost("pair cleanup work changed or not drained")
         pair = self.cleanup_pair(stored)
-        row = await db.get(SandboxSession, pair.session_id)
-        if row is None or row.project_id != pair.project_id:
-            raise PairClaimLost("pair cleanup project identity changed")
+        if stored.kind != "orphan":
+            row = await db.get(SandboxSession, pair.session_id)
+            if row is None or row.project_id != pair.project_id:
+                raise PairClaimLost("pair cleanup project identity changed")
         return stored
 
     async def record_pair_control(
@@ -326,12 +404,17 @@ class LifecycleRepository:
         role: str,
         uid: str | None,
         now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
     ) -> CleanupWork:
         """Capture an observed UID, never turn one absent read into retirement."""
         key = resource_key(kind, role)
         if uid is not None and (not isinstance(uid, str) or not uid.strip()):
             raise ValueError("invalid observed pair control UID")
-        work = await self.owned_pair_cleanup(db, expected, now)
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
         assert work.pair_snapshot is not None
         controls = work.pair_snapshot["control_uids"]
         previous = controls[key]

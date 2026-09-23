@@ -13,6 +13,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle import RECOVER, LifecycleService, Signal
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import Object
+from ads_sandbox_manager.pair_store import PairClaimLost
 from ads_sandbox_manager.session_objects import session_name
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
 from ads_sandbox_manager.store import SandboxSession, SessionPVC, SessionRepository, advance
@@ -79,6 +80,10 @@ class RecoveryService:
                 raise TimeoutError
             async with asyncio.timeout(remaining):
                 await self._execute(row, works)
+        except PairClaimLost:
+            # Capture is read-only. Losing its claim must not fail a replacement
+            # session or reinterpret stale evidence as a recovery verdict.
+            log.warning("paired recovery capture claim lost; evidence retained")
         except Exception:
             # A failed executor leaves all targets/evidence intact. The next authenticated
             # signal rotates the boundary again; stale workers cannot fail the replacement.
@@ -95,6 +100,9 @@ class RecoveryService:
         if not works:
             raise RuntimeError("recovery has no durable intent")
         if any(work.pair_snapshot is not None for work in works):
+            for work in works:
+                if work.pair_snapshot is not None:
+                    await self.lifecycle.pair_capture.capture(work, recovery=row)
             # Do not delete control policies, storage or old-generation evidence
             # through the legacy guest/IPC-only recovery path.
             log.warning("paired recovery requires runtime-release proof: %s", row.session_id)
