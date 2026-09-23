@@ -327,7 +327,7 @@ async def test_wrapping_custody_identity_and_contents_are_exact(publication, fau
     elif fault == "data":
         obj["data"] = {"unexpected": "secret"}
     elif fault == "fingerprint":
-        obj["data"] = {"wrapping.key": base64.b64encode(b"x" * 32).decode()}
+        obj["data"] = {"wrapping.b64": base64.b64encode(base64.b64encode(b"x" * 32)).decode()}
     elif fault == "stringData":
         obj["stringData"] = {"wrapping.key": "secret"}
     else:
@@ -513,7 +513,7 @@ async def test_already_exists_requires_the_exact_reserved_key_and_identity(publi
     body["metadata"].update(uid=str(uuid4()), resourceVersion="1")
     h.remote.objects[body["metadata"]["name"]] = body
     assert await h.adapter.create_key(state, key) == body["metadata"]["uid"]
-    body["data"]["wrapping.key"] = base64.b64encode(b"z" * 32).decode()
+    body["data"]["wrapping.b64"] = base64.b64encode(base64.b64encode(b"z" * 32)).decode()
     with pytest.raises(ValueError, match="wrapping custody"):
         await h.adapter.create_key(state, key)
     assert not h.remote.created

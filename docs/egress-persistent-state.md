@@ -64,6 +64,19 @@ does not rewrite the earlier cleanup snapshot. No absence/ready/release/retireme
 verdict, deletes or ownership transfer are introduced by capture.
 
 Before activation, complete positive single-owner transfer and ordered teardown.
-The wrapping-key delivery into Kata must not assume shared filesystem Secret mounts.
+The fixed egress Pod constructor uses named required SecretKeyRefs, not shared
+filesystem Secret mounts. Wrapping custody format v2 stores canonical ASCII base64
+in `wrapping.b64` (inside Kubernetes' outer data encoding), preserving the exact
+original 256-bit key. The volume format stays v1. Raw v1 custody is rejected, not
+converted or regenerated; no production publisher has been activated.
+The constructor has only three block devices: writable persistent state and the
+two read-only CA consumer clones. TLS uses separate named SecretKeyRefs. It emits
+no private values, Kubernetes token, guest workspace, shared volume, fake health,
+restart/adoption permission or arbitrary Pod customization. A distinct explicit
+Kata RuntimeClass, digest-pinned image and bounded resources are required.
+This is a pure specification, not a runnable egress bootstrap or publication.
+The eventual runtime must decode and verify the key fingerprint, validate block
+identity, safely mount existing state, preload TLS, enforce private/upstream
+separation and prove actual health before admission.
 Actual encrypted SQLite use, DNSSEC/ECH records and data-plane behavior belong to
 their later component; this ledger does not claim those features or live acceptance.
