@@ -77,6 +77,7 @@ def upgrade() -> None:
         sa.Column("deadline", sa.DateTime(timezone=True), nullable=False),
         sa.Column("acknowledged", sa.Boolean(), nullable=False),
         sa.Column("targets", JSONB(), nullable=False),
+        sa.Column("pair_snapshot", JSONB(), nullable=True),
     )
     op.create_index("ix_cleanup_work_session_id", "cleanup_work", ["session_id"])
     op.create_table(

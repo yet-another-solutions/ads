@@ -109,6 +109,24 @@ runtime-release evidence and recovery would expose an incomplete pair. It
 returns captured controls, not execution readiness. Retirement and production
 activation remain explicit subsequent integration gates.
 
+Existing lifecycle admission now captures the pair generation, original
+session/sandbox/project IDs, namespace/version and all control UID observations
+inside `CleanupWork`, in the same transaction that claims idle, service, reap
+or recovery. Recovery carries every earlier generation and never overwrites a
+previous captured snapshot. True-orphan work can capture retained pair ownership
+even after the mutable session row is gone.
+
+The existing guest/IPC-only cleanup and recovery executors explicitly stop on
+any captured pair snapshot, including an empty/malformed one. Idle still waits
+for the authenticated drain acknowledgment. They do not remove policies,
+volumes, records or topics and then pretend the four-component runtime is gone.
+The repository independently refuses ordinary completion for paired work, so a
+stale in-memory work object cannot erase a newly captured snapshot. This is a
+fail-closed integration guard, not a working paired retirement implementation:
+node/runtime release evidence and exact control cleanup remain required before
+activation. The additional nullable field is fresh bootstrap only, not an
+upgrade/adoption path for deployed databases.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
