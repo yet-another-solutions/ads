@@ -14,7 +14,10 @@ from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
     PairClaimLost,
     PairIntent,
+    compute_key,
+    new_compute_uids,
     resource_key,
+    validate_compute_evidence,
     validate_control_dispatch,
 )
 from ads_sandbox_manager.session_objects import (
@@ -109,6 +112,7 @@ class LifecycleRepository:
             "namespace": intent.namespace,
             "golden_version": intent.golden_version,
             "control_uids": dict(intent.control_uids),
+            "compute_uids": dict(intent.compute_uids),
         }
 
     async def work(
@@ -256,6 +260,7 @@ class LifecycleRepository:
             "namespace",
             "golden_version",
             "control_uids",
+            "compute_uids",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
@@ -267,6 +272,7 @@ class LifecycleRepository:
             identities[field] = UUID(value)
         pair = PairBinding(**identities)
         controls = snapshot["control_uids"]
+        compute = snapshot["compute_uids"]
         if (
             pair.sandbox_id != work.sandbox_id
             or (work.kind != "orphan" and pair.session_id != work.session_id)
@@ -280,6 +286,12 @@ class LifecycleRepository:
             or any(
                 uid is not None and (not isinstance(uid, str) or not uid.strip())
                 for uid in controls.values()
+            )
+            or not isinstance(compute, dict)
+            or set(compute) != set(new_compute_uids())
+            or any(
+                uid is not None and (not isinstance(uid, str) or not uid.strip())
+                for uid in compute.values()
             )
         ):
             raise RuntimeError("pair cleanup scope or controls changed")
@@ -429,7 +441,38 @@ class LifecycleRepository:
             await db.flush()
         return work
 
-    async def fence_pair_controls(self, db: AsyncSession, work: CleanupWork) -> PairIntent:
+    async def record_pair_compute(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        uid: str | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        """Capture observed compute ownership, never settlement or absence."""
+        key = compute_key(role)
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid observed pair compute UID")
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        assert work.pair_snapshot is not None
+        compute = work.pair_snapshot["compute_uids"]
+        if uid is not None:
+            previous = compute[key]
+            if previous is not None and previous != uid:
+                raise RuntimeError("pair cleanup compute UID replacement refused")
+            work.pair_snapshot = {
+                **work.pair_snapshot,
+                "compute_uids": {**compute, key: uid},
+            }
+            await db.flush()
+        return work
+
+    async def fence_pair_creators(self, db: AsyncSession, work: CleanupWork) -> PairIntent:
         """Caller must own this cleanup claim in the same short transaction.
 
         Fence future dispatch, not already reserved work. Inflight markers
@@ -446,8 +489,9 @@ class LifecycleRepository:
             or intent.namespace != work.pair_snapshot["namespace"]
             or intent.golden_version != work.pair_snapshot["golden_version"]
         ):
-            raise PairClaimLost("pair control fence identity changed")
+            raise PairClaimLost("pair creator fence identity changed")
         validate_control_dispatch(intent)
+        validate_compute_evidence(intent)
         intent.creation_fenced = True
         await db.flush()
         return intent

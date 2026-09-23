@@ -23,6 +23,40 @@ CONTROL_RESOURCES = (
     ("NetworkPolicy", "guest-relay"),
     ("NetworkPolicy", "egress-relay"),
 )
+COMPUTE_ROLES = ("guest", "egress", "guest-relay", "egress-relay")
+
+
+def compute_key(role: str) -> str:
+    if role not in COMPUTE_ROLES:
+        raise ValueError("unsupported pair compute role")
+    return f"Pod/{role}"
+
+
+def new_compute_uids() -> dict[str, str | None]:
+    return {compute_key(role): None for role in COMPUTE_ROLES}
+
+
+def new_compute_dispatch() -> dict[str, str]:
+    return {compute_key(role): "unissued" for role in COMPUTE_ROLES}
+
+
+def validate_compute_evidence(intent: PairIntent) -> None:
+    expected = set(new_compute_uids())
+    if (
+        not isinstance(intent.compute_uids, dict)
+        or set(intent.compute_uids) != expected
+        or any(
+            uid is not None and (not isinstance(uid, str) or not uid.strip())
+            for uid in intent.compute_uids.values()
+        )
+        or not isinstance(intent.compute_dispatch, dict)
+        or set(intent.compute_dispatch) != expected
+        or any(
+            value not in ("unissued", "inflight", "settled")
+            for value in intent.compute_dispatch.values()
+        )
+    ):
+        raise RuntimeError("corrupt pair compute evidence")
 
 
 def resource_key(kind: str, role: str) -> str:
@@ -74,6 +108,8 @@ class PairIntent(Base):
     control_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB)
     creation_fenced: Mapped[bool] = mapped_column(default=False)
     control_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_control_dispatch)
+    compute_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB, default=new_compute_uids)
+    compute_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_compute_dispatch)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -118,6 +154,7 @@ class PairIntentRepository:
     @staticmethod
     def _validate(intent: PairIntent) -> None:
         validate_control_dispatch(intent)
+        validate_compute_evidence(intent)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
         if (
             not isinstance(intent.control_uids, dict)
@@ -140,7 +177,7 @@ class PairIntentRepository:
         ):
             raise PairClaimLost("prior pair requires fenced retirement")
         if intent.creation_fenced:
-            raise PairClaimLost("pair control creation is fenced")
+            raise PairClaimLost("pair creation is fenced")
 
     async def begin(
         self,
@@ -262,6 +299,14 @@ class PairIntentRepository:
         cancellation, lost replies and observer retries cannot settle a write.
         """
         key = resource_key(kind, role)
+        intent = await self._settlement_intent(db, expected)
+        if intent.control_dispatch[key] not in ("inflight", "settled"):
+            raise RuntimeError("pair control was never dispatched")
+        intent.control_dispatch = {**intent.control_dispatch, key: "settled"}
+        await db.flush()
+
+    async def _settlement_intent(self, db: AsyncSession, expected: PairIntent) -> PairIntent:
+        """Original immutable scope only; no claim revival or UID binding."""
         identity = (
             expected.binding(),
             expected.namespace,
@@ -283,7 +328,54 @@ class PairIntentRepository:
             intent.claim_changed,
         ) != identity:
             raise PairClaimLost("pair dispatch identity changed")
-        if intent.control_dispatch[key] not in ("inflight", "settled"):
-            raise RuntimeError("pair control was never dispatched")
-        intent.control_dispatch = {**intent.control_dispatch, key: "settled"}
+        return intent
+
+    async def dispatch_compute(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+    ) -> tuple[PairIntent, bool]:
+        """Reserve one Pod create-capable invocation; commit before external I/O.
+
+        This does not create a Pod, choose a runtime or authorize controllers
+        to replace it. Unresolved reservations never expire or become retries.
+        """
+        key = compute_key(role)
+        intent = await self.owned(db, row, owner, generation)
+        dispatch = intent.compute_uids[key] is None and intent.compute_dispatch[key] == "unissued"
+        if dispatch:
+            intent.compute_dispatch = {**intent.compute_dispatch, key: "inflight"}
+            await db.flush()
+        return intent, dispatch
+
+    async def bind_compute(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+        uid: str,
+    ) -> PairIntent:
+        key = compute_key(role)
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("an observed compute UID is required")
+        intent = await self.owned(db, row, owner, generation)
+        previous = intent.compute_uids[key]
+        if previous is not None and previous != uid:
+            raise RuntimeError("pair compute UID replacement refused")
+        intent.compute_uids = {**intent.compute_uids, key: uid}
+        await db.flush()
+        return intent
+
+    async def settle_compute(self, db: AsyncSession, expected: PairIntent, role: str) -> None:
+        """Only original invocation normal return may settle, never an observer."""
+        key = compute_key(role)
+        intent = await self._settlement_intent(db, expected)
+        if intent.compute_dispatch[key] not in ("inflight", "settled"):
+            raise RuntimeError("pair compute was never dispatched")
+        intent.compute_dispatch = {**intent.compute_dispatch, key: "settled"}
         await db.flush()
