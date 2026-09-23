@@ -68,7 +68,7 @@ class PairCleanupCapture:
                         recovery_seconds=self.settings.recovery_seconds,
                     )
                     self._configuration(work)
-                    await self.repository.fence_pair_controls(db, work)
+                    await self.repository.fence_pair_creators(db, work)
                     pair = self.repository.cleanup_pair(work)
                 assert work.pair_snapshot is not None
                 uid = await self.kube.observe(

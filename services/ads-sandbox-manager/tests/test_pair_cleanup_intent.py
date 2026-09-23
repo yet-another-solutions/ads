@@ -11,7 +11,12 @@ from sqlalchemy import delete, inspect
 
 from ads_sandbox_manager.lifecycle import IDLE, ORPHAN, RECOVER, Signal
 from ads_sandbox_manager.lifecycle_store import CleanupWork, sandbox_targets
-from ads_sandbox_manager.pair_store import CONTROL_RESOURCES, PairIntent, resource_key
+from ads_sandbox_manager.pair_store import (
+    CONTROL_RESOURCES,
+    PairIntent,
+    new_compute_uids,
+    resource_key,
+)
 from ads_sandbox_manager.store import SandboxSession, SessionPVC
 from test_lifecycle import life, works  # noqa: F401
 from test_ping_recovery import recovery
@@ -39,6 +44,7 @@ async def paired(life):
             resource_key(kind, role): "captured-uid" if index == 0 else None
             for index, (kind, role) in enumerate(CONTROL_RESOURCES)
         },
+        compute_uids={**new_compute_uids(), "Pod/guest": "captured-guest-pod"},
     )
     async with h.sessions.begin() as db:
         await db.execute(delete(PairIntent))
@@ -58,9 +64,11 @@ def assert_capture(work, h):
         "namespace": h.pair.namespace,
         "golden_version": h.pair.golden_version,
         "control_uids": h.pair.control_uids,
+        "compute_uids": h.pair.compute_uids,
     }
     assert len(work.pair_snapshot["control_uids"]) == 8
     assert list(work.pair_snapshot["control_uids"].values()).count(None) == 7
+    assert work.pair_snapshot["compute_uids"]["Pod/guest"] == "captured-guest-pod"
 
 
 async def idle_work(h):

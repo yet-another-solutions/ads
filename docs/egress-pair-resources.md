@@ -251,6 +251,46 @@ session identity; it does not fence arbitrary database writers, resolve old
 external creates, stop existing runtimes or authorize cleanup. Whole-pair
 resume/retirement integration must supply the eventual positive admission path.
 
+### Four-member compute intent
+
+The same `PairIntent` now records `compute_uids` and `compute_dispatch` for
+exactly `Pod/guest`, `Pod/egress`, `Pod/guest-relay` and `Pod/egress-relay`.
+These are Pod UID bindings, not Deployment/controller identities or readiness
+verdicts. All four slots exist with the control intent before any compute
+dispatch. No new generation, claim epoch, resource registry or lifecycle
+controller is introduced.
+
+`dispatch_compute` reserves the sole create-capable invocation under the exact
+existing creating claim; its caller must commit before external I/O. Concurrent
+reservations have one winner. Retries and restarts never reset `inflight`.
+`bind_compute` records an observed UID under the still-current claim and rejects
+replacement. Binding is not settlement. Only normal return of the original
+invocation may call `settle_compute`, which validates immutable ledger scope
+and may commit after claim loss/fencing without reviving authority.
+
+Cleanup's permanent creator fence now checks both evidence sets and blocks
+both compute and control reservations/bindings. Pre-fence reservations can
+still finish late, so fencing alone is not quiescence. Compute reservations,
+UID bindings and unresolved dispatches survive session-row loss. The two new
+nonnullable columns belong to fresh bootstrap only; no old-schema backfill or
+legacy-object adoption is provided.
+
+Lifecycle admission snapshots all four compute UIDs alongside the controls for
+normal, recovery and orphan work. The repository can commit later exact-scope
+compute observations under the current cleanup claim, preserving known UIDs
+through absence, rejecting replacements and refusing stale claims. This does
+not settle a dispatch or prove absence. Earlier captured mappings survive
+later ledger changes; existing completion guards remain unconditional for
+paired work.
+
+This is a durable ownership prerequisite, not an active compute provisioner or
+compute observer. No Kubernetes compute create/read/delete adapter, runtime
+builder, controller replacement permission, RBAC change, node delivery or
+retirement is added here. Future compute callers must use these transactions,
+retain original-operation completion and supply their separate runtime proof.
+Any workload controllers require their own exact ownership/fencing coverage;
+these Pod UID slots must never be treated as controller UIDs.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
