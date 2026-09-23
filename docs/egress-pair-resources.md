@@ -319,6 +319,39 @@ stand in for captured node/runtime identities or authorize destructive cleanup.
 This is source wiring, not a live deployment, partial-startup release proof or
 full egress acceptance.
 
+### Trusted private guest Pod
+
+`pair_compute.private_guest_pod` is the first runtime member constructor. It
+reuses the existing immutable guest boot, budget and block-device contract,
+but emits a fixed-name bare Pod with exact pair labels and guest-side PodGroup
+placement. It emits no Deployment/controller or replacement policy. Restart is
+`Never`; the 30-second termination allowance covers the existing bounded
+orderly shutdown path, but does not prove a particular shutdown succeeded.
+
+`PrivateGuestRuntime` requires an explicit DNS-label RuntimeClass distinct from
+the legacy guest setting and an observed integer transport MTU. This is a
+platform-owned input, not project policy or a guessed path MTU. The builder
+passes private MTU as transport MTU minus 110, matching the node attestor and
+relay encapsulation contract. The guest DNS endpoint is the adopted pair-local
+egress address, not Kubernetes DNS. The normal image entrypoint receives
+private mode, the exact generation and the committed CA attempt.
+
+The guest retains its workspace block device and read-only public CA consumer
+only. It receives no CA private-key volume, hostPath, runtime socket, API token,
+config Secret, command override or arbitrary caller manifest. Bootstrap adds
+only the previously kernel/live-proved `NET_ADMIN` and `SYS_PTRACE` alongside
+`SYS_ADMIN`; the immutable boot path remains responsible for dropping them
+before normal inner execution. A nonprivileged outer Pod and existing rootless
+budgets are preserved.
+
+This pure constructor does not verify the installed RuntimeClass/CNI, prove
+workspace/CA PVC UID ownership, create a Pod or claim readiness. Its eventual
+caller must commit the immutable inputs, verify exact retained volume ownership,
+use the existing single-dispatch ledger and await real component health.
+Egress/relay builders, persistent runtime configuration/key delivery and full
+creation/retirement integration remain open. No production caller or Helm
+activation is added by this constructor.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
