@@ -69,6 +69,7 @@ def assert_capture(work, h):
         "relay_inputs": h.pair.relay_inputs,
         "compute_payloads": h.pair.compute_payloads,
         "egress_state_id": None,
+        "egress_state": None,
     }
     assert len(work.pair_snapshot["control_uids"]) == 8
     assert list(work.pair_snapshot["control_uids"].values()).count(None) == 7

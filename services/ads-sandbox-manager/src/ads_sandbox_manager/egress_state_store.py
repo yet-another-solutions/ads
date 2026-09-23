@@ -16,6 +16,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
 from ads_sandbox_manager.store import Base, SandboxSession
 
+STATE_SNAPSHOT_FIELDS = {
+    "state_id",
+    "session_id",
+    "sandbox_id",
+    "project_id",
+    "creator_generation",
+    "claim_owner",
+    "claim_changed",
+    "namespace",
+    "storage_bytes",
+    "key_fingerprint",
+    "key_dispatch",
+    "key_uid",
+    "volume_dispatch",
+    "volume_uid",
+}
+
 
 @dataclass(frozen=True)
 class WrappingKey:
@@ -97,6 +114,50 @@ def _scope(state: EgressState) -> tuple[object, ...]:
     )
 
 
+def state_snapshot(state: EgressState) -> dict[str, object]:
+    validate(state)
+    result: dict[str, object] = {}
+    for name in STATE_SNAPSHOT_FIELDS:
+        value = getattr(state, name)
+        result[name] = (
+            value.isoformat()
+            if isinstance(value, datetime)
+            else (str(value) if isinstance(value, UUID) else value)
+        )
+    return result
+
+
+def state_from_snapshot(value: object) -> EgressState:
+    if not isinstance(value, dict) or set(value) != STATE_SNAPSHOT_FIELDS:
+        raise RuntimeError("incomplete persistent egress state snapshot")
+    parsed = dict(value)
+    try:
+        for name in (
+            "state_id",
+            "session_id",
+            "sandbox_id",
+            "project_id",
+            "creator_generation",
+            "claim_owner",
+        ):
+            if not isinstance(parsed[name], str):
+                raise ValueError
+            parsed[name] = UUID(parsed[name])
+            if str(parsed[name]) != value[name]:
+                raise ValueError
+        parsed["claim_changed"] = datetime.fromisoformat(parsed["claim_changed"])
+        if (
+            parsed["claim_changed"].tzinfo is None
+            or parsed["claim_changed"].isoformat() != value["claim_changed"]
+        ):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise RuntimeError("invalid persistent egress state snapshot identity") from None
+    state = EgressState(**parsed)
+    validate(state)
+    return state
+
+
 def _matches(state: EgressState, pair: PairIntent) -> None:
     if (
         state.session_id,
@@ -116,6 +177,29 @@ def _matches(state: EgressState, pair: PairIntent) -> None:
         pair.namespace,
     ):
         raise PairClaimLost("persistent egress state ownership changed")
+
+
+def require_cleanup_state(
+    state: EgressState, pair: PairIntent, captured: EgressState | None = None
+) -> None:
+    validate(state)
+    _matches(state, pair)
+    if state.state_id != pair.egress_state_id:
+        raise PairClaimLost("persistent egress cleanup anchor changed")
+    if captured is None:
+        return
+    validate(captured)
+    if _scope(state) != _scope(captured):
+        raise PairClaimLost("persistent egress cleanup reservation changed")
+    for role in ("key", "volume"):
+        before, current = getattr(captured, f"{role}_dispatch"), getattr(state, f"{role}_dispatch")
+        if current != before and (before, current) != ("inflight", "settled"):
+            raise PairClaimLost("persistent egress cleanup dispatch changed")
+        before_uid, current_uid = getattr(captured, f"{role}_uid"), getattr(state, f"{role}_uid")
+        # Creator binding is impossible after the cleanup transition's session
+        # lock. Metadata capture may add a UID only to the cleanup snapshot.
+        if current_uid is not None and before_uid != current_uid:
+            raise PairClaimLost("persistent egress cleanup UID changed")
 
 
 def _role(role: str) -> None:

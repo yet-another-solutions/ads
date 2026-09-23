@@ -51,8 +51,19 @@ caller cancellation to record normal-return settlement. Lost/failed replies stay
 inflight, even if restart binds an observed UID. A custody settlement race can
 fail a concurrent caller closed; a later attempt may observe committed completion.
 
-No production caller, ready transition or teardown is enabled. Before activation,
-complete immutable cleanup resource snapshots and positive single-owner transfer.
+No production publisher caller, ready transition or teardown is enabled.
+Cleanup now captures the full nonsecret persistent reservation under the existing
+lifecycle claim and retains it independently of subsequent API observations.
+Before each named Secret/PVC metadata read, the permanent pair creator fence and
+exact immutable state scope are revalidated. Every observed UID commits separately
+after another claim/scope check. Missing observations never erase known UIDs or
+settle dispatch. Deleting or content-drifted owned resources remain cleanup
+obligations; this path does not decode Secret data or inspect PVC contents.
+Only original writer settlement may advance live SQL inflight evidence, and it
+does not rewrite the earlier cleanup snapshot. No absence/ready/release/retirement
+verdict, deletes or ownership transfer are introduced by capture.
+
+Before activation, complete positive single-owner transfer and ordered teardown.
 The wrapping-key delivery into Kata must not assume shared filesystem Secret mounts.
 Actual encrypted SQLite use, DNSSEC/ECH records and data-plane behavior belong to
 their later component; this ledger does not claim those features or live acceptance.
