@@ -61,6 +61,12 @@ class MemorySecrets:
 @pytest.fixture
 def custody(ledger, api):
     f = ledger
+    # This fixture uses real PostgreSQL transactions, including eight competing
+    # callers. The shared fake-I/O 100 ms budget is not a commit-latency contract.
+    # Use the same bounded budget as the control orchestration DB fixture;
+    # individual timeout tests override it explicitly below.
+    f.h.settings = replace(f.h.settings, control_seconds=10)
+    api.settings = f.h.settings
     f.adapter = RelayKeyAdapter(api)
     f.remote = MemorySecrets(f.adapter)
     f.service = RelayKeyCustody(f.h.settings, f.h.sessions, f.repo, f.adapter)
@@ -126,6 +132,34 @@ async def test_concurrent_prepare_has_one_key_pair_and_one_create(custody):
     results = await asyncio.gather(*(f.service.prepare(f.row, intent.generation) for _ in range(8)))
     assert {str(r.relay_custody) for r in results} == {str(results[0].relay_custody)}
     assert f.remote.created == 1
+    assert len(results) == 8
+    stored = await snapshot(f, intent.generation)
+    assert stored.relay_custody["dispatch"] == "settled"
+    assert stored.relay_custody["uid"] == f.remote.object["metadata"]["uid"]
+    assert all(
+        result.relay_custody["public_keys"] == stored.relay_custody["public_keys"]
+        for result in results
+    )
+
+
+async def test_control_deadline_stops_blocked_reservation_before_key_publication(custody):
+    f = custody
+    intent = await begin(f)
+    service = RelayKeyCustody(
+        replace(f.h.settings, control_seconds=0.05), f.h.sessions, f.repo, f.adapter
+    )
+    # Deterministic lock contention, not a race against CI commit speed. The
+    # configured transaction deadline must still cancel before any external I/O.
+    async with f.h.sessions.begin() as db:
+        await db.get(SandboxSession, f.row.session_id, with_for_update=True)
+        with pytest.raises(TimeoutError):
+            await service.prepare(f.row, intent.generation)
+    assert (await snapshot(f, intent.generation)).relay_custody == {
+        "public_keys": None,
+        "uid": None,
+        "dispatch": "unissued",
+    }
+    assert f.remote.object is None and f.remote.created == 0
 
 
 async def test_lost_create_reply_remains_inflight_and_restart_observes_without_retry(custody):
