@@ -106,8 +106,31 @@ def validate_snapshot(value, scope):
     return value
 
 
-def capture(plugin, attestor, observer, root, scope):
-    """Only a complete live pair can establish this first capture format."""
+def startup_namespace(plugin, saved):
+    """Verify journaled pre-effect ownership without requiring a completed link."""
+    req = saved["request"]
+    require(req["command"] == "ADD", "startup capture requires the original ADD journal")
+    indices = saved["indices"]
+    require(
+        indices is None
+        or (
+            isinstance(indices, dict)
+            and set(indices) == {"vm", "peer"}
+            and all(type(x) is int and x > 0 for x in indices.values())
+        ),
+        "invalid recorded attachment progress",
+    )
+    with plugin.namespace(req["netns"], saved["vm_identity"]) as vm:
+        require(plugin.ns_identity(vm) == saved["vm_identity"], "VM namespace identity changed")
+
+
+def capture(plugin, attestor, observer, root, scope, *, startup=False):
+    """Capture the exact four runtimes, not a verdict on attachment usability.
+
+    Normal capture still requires successful CNI CHECK. Startup capture may
+    inventory interrupted ADDs, but never substitutes absence for any identity.
+    Both protected pre-effect journals and fresh live attestation are required.
+    """
     records = [
         record
         for record in journals(plugin, root)
@@ -137,11 +160,17 @@ def capture(plugin, attestor, observer, root, scope):
             attestor.observe_binding(observer, plugin, req) == binding,
             "live attachment changed",
         )
-        plugin.check(req, binding, saved, saved["result"])
+        if startup:
+            # Even before the first link effect, the journal pins the actual
+            # VM namespace. Never turn a vanished/reused path into capture.
+            startup_namespace(plugin, saved)
+        else:
+            plugin.check(req, binding, saved, saved["result"])
         sandbox = observer.cri("inspectp", "-o", "json", req["container_id"])["status"]
         require(
             sandbox["id"] == req["container_id"]
-            and sandbox["state"] == "SANDBOX_READY"
+            and sandbox["state"]
+            in (("SANDBOX_READY", "SANDBOX_NOTREADY") if startup else ("SANDBOX_READY",))
             and sandbox["metadata"]["uid"] == req["pod_uid"]
             and sandbox["metadata"]["namespace"] == scope["namespace"],
             "VM runtime ownership changed",
@@ -157,6 +186,40 @@ def capture(plugin, attestor, observer, root, scope):
         value["namespaces"].extend(
             (saved["vm_identity"], binding["private"]["identity"], binding["transport"]["identity"])
         )
+    if startup:
+        # DEL can run concurrently under its own journal lock. Require all
+        # saved identities and runtime evidence to remain intact at the end,
+        # without holding a namespace FD through persistence/observation.
+        current_host_links = observer.command("ip", "-j", "link")
+        for saved, peer in zip(records, value["links"], strict=True):
+            req = saved["request"]
+            require(
+                plugin.read_record(root / (req["key"] + ".json")) == saved,
+                "attachment journal changed during startup capture",
+            )
+            require(
+                attestor.observe_binding(observer, plugin, req) == saved["binding"],
+                "live attachment changed during startup capture",
+            )
+            current = observer.cri("inspectp", "-o", "json", req["container_id"])["status"]
+            require(
+                current["id"] == req["container_id"]
+                and current["state"] in ("SANDBOX_READY", "SANDBOX_NOTREADY")
+                and current["metadata"]["uid"] == req["pod_uid"]
+                and current["metadata"]["namespace"] == scope["namespace"],
+                "VM runtime changed during startup capture",
+            )
+            startup_namespace(plugin, saved)
+            transport = saved["binding"]["transport"]
+            with plugin.namespace(transport["path"], transport["identity"]) as fd:
+                require(
+                    plugin.links(fd)["eth0"]["link_index"] == peer["ifindex"]
+                    and any(
+                        link["ifname"] == peer["ifname"] and link["ifindex"] == peer["ifindex"]
+                        for link in current_host_links
+                    ),
+                    "host peer changed during startup capture",
+                )
     require(boot_id() == value["boot_id"], "node boot changed during capture")
     return validate_snapshot(value, scope)
 
@@ -285,7 +348,7 @@ def perform(request):
     require(
         isinstance(request, dict)
         and set(request) == {"action", "attestorConfig", "stateDir", "generation", "sandbox_id"}
-        and request["action"] in ("capture", "observe"),
+        and request["action"] in ("capture", "capture-startup", "observe"),
         "exact release request required",
     )
     for key in ("generation", "sandbox_id"):
@@ -304,12 +367,15 @@ def perform(request):
             == {key: scope[key] for key in ("network", "generation", "sandbox_id")},
             "exact durable admission fence required",
         )
-        if request["action"] == "capture":
+        if request["action"] in ("capture", "capture-startup"):
             if path.exists() or path.is_symlink():
                 value = validate_snapshot(plugin.read_record(path), scope)
                 require(value["boot_id"] == boot_id(), "captured node boot changed")
             else:
-                value = capture(plugin, attestor, observer, root, scope)
+                if request["action"] == "capture-startup":
+                    value = capture(plugin, attestor, observer, root, scope, startup=True)
+                else:
+                    value = capture(plugin, attestor, observer, root, scope)
             # Reassert durability after a lost reply or failed directory fsync,
             # without replacing the captured identities with a later runtime.
             plugin.save_record(path, value)
