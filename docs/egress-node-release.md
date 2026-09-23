@@ -7,7 +7,7 @@ healthy node/empty Kubernetes watch into proof of runtime release.
 
 ## Protected inputs and ordering
 
-Stdin is one bounded JSON object with exactly `action` (`capture` or `observe`),
+Stdin is one bounded JSON object with exactly `action` (`capture`, `capture-startup` or `observe`),
 `attestorConfig`, `stateDir`, `generation` and `sandbox_id`. The configuration
 is the protected existing node attestor configuration. All CNI calls, the
 retirement command and this observer must use matched CI-built files and the
@@ -55,9 +55,29 @@ host-root adversary hiding kernel references or running the tool in a false
 namespace. The captured node boot must be unchanged; reboot requires a separate
 explicit recovery proof rather than treating stale inode values as authority.
 
-The full-pair capture path is implemented first. An incomplete startup that
-never produced both complete attachment journals remains blocked, not accepted
-through a missing-inventory fallback. Manager-to-node delivery, partial-create
+### Interrupted attachment startup
+
+`capture-startup` uses the same durable fence and immutable snapshot format,
+but can capture interrupted ADDs whose pre-effect journals already exist.
+It does not require operational links or successful CNI CHECK. Instead it
+verifies both original ADD journals, their namespace identities and valid
+progress fields, fresh exact Kubernetes/relay/process attestation, both VM CRI
+identities in a known Ready/NotReady state, and exact host peers. After the
+inventory it rereads both journals and repeats live binding, VM runtime,
+namespace and exact host-peer identity checks. Missing/replaced/unknown state
+fails closed.
+
+This still captures all four Pods/runtimes, six distinct namespaces and both
+host peer links. It neither claims ADD succeeded nor erases a partial journal.
+Existing snapshot retries retain the first capture across both actions and
+only reassert durability; startup capture cannot overwrite earlier evidence.
+The unchanged `observe` path checks all references, including incomplete CNI
+journals, before reporting runtime release. Capture itself always reports
+release false. There is no API-absence or synthetic empty-inventory fallback.
+
+Earlier startup failures that never produced both journals, lost runtime
+evidence and relay-only startup remain blocked pending separate comprehensive
+inventory support. Manager-to-node delivery, general partial-create
 recovery, late Kubernetes creator fencing, compute/controller and storage
 release, policy cleanup and final generation retirement remain integration
 work. This observer is not invoked by the manager yet and does not bypass its

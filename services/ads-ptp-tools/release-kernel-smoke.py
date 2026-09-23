@@ -15,6 +15,7 @@ loader = importlib.machinery.SourceFileLoader("release", "/usr/local/bin/ads-ptp
 spec = importlib.util.spec_from_loader(loader.name, loader)
 release = importlib.util.module_from_spec(spec)
 loader.exec_module(release)
+plugin = release.load("ads-ptp")
 name = "release-" + str(uuid4())
 path = Path("/run/netns") / name
 child = None
@@ -30,6 +31,21 @@ try:
     run("ip", "netns", "add", name)
     created = True
     info = path.stat()
+    journal = {
+        "request": {"command": "ADD", "netns": str(path)},
+        "vm_identity": [info.st_dev, info.st_ino],
+        "indices": None,
+    }
+    # A real pre-effect namespace can be captured without an operational link.
+    release.startup_namespace(plugin, journal)
+    try:
+        release.startup_namespace(
+            plugin, {**journal, "vm_identity": [info.st_dev, info.st_ino + 1]}
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("replaced startup namespace accepted")
     snapshot = {"namespaces": [[info.st_dev, info.st_ino]], "runtime_ids": []}
     assert release.process_references(snapshot, time.monotonic() + 10) > 0  # Bind mount.
     child = subprocess.Popen(
@@ -44,6 +60,12 @@ try:
     held = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
     run("ip", "netns", "delete", name)
     created = False
+    try:
+        release.startup_namespace(plugin, journal)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing startup namespace accepted")
     assert release.process_references(snapshot, time.monotonic() + 10) > 0  # Process + FD.
     child.terminate()
     child.wait(timeout=5)
@@ -68,6 +90,7 @@ print(
             "held_namespace_descriptor_blocks_release": True,
             "namespace_mount_blocks_release": True,
             "reference_removal_observed": True,
+            "interrupted_add_namespace_identity_verified": True,
             "manager_live_integration_proven": False,
         }
     )
