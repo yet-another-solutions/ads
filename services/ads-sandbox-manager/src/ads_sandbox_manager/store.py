@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, select, update
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -89,6 +89,19 @@ def advance(previous: datetime, now: datetime) -> datetime:
 
 class SessionRepository:
     """Data methods require a caller-owned transaction; never call Kubernetes here."""
+
+    async def _require_unpaired(self, db: AsyncSession, session_id: UUID, sandbox_id: UUID) -> None:
+        # PairIntent depends on this module's Base/session model. Import only at
+        # call time to avoid a model import cycle, not to bypass the repository.
+        from ads_sandbox_manager.pair_store import PairIntent
+
+        retained = await db.scalar(
+            select(PairIntent.generation)
+            .where(or_(PairIntent.session_id == session_id, PairIntent.sandbox_id == sandbox_id))
+            .limit(1)
+        )
+        if retained is not None:
+            raise RuntimeError("retained pair ownership blocks legacy session admission")
 
     async def by_sandbox(self, db: AsyncSession, sandbox_id: UUID) -> SandboxSession | None:
         result: SandboxSession | None = await db.scalar(
@@ -198,6 +211,13 @@ class SessionRepository:
                 SandboxSession.session_id,
             )
         )
+        if result is not None:
+            # Check AFTER the INSERT's unique-key wait, in a fresh READ COMMITTED
+            # statement. A concurrent old-row deletion may have committed pair
+            # intent while we waited. Caller must roll back on rejection.
+            # Our new row lock prevents a legitimate pair creator from passing
+            # its session-claim check until this transaction ends.
+            await self._require_unpaired(db, session_id, sandbox_id)
         return result is not None
 
     async def claim(
@@ -224,6 +244,10 @@ class SessionRepository:
             current.pvc_id,
         ) != expected:
             return None
+        # A stopped/pending mapping is not authority to route a retained pair
+        # through the legacy guest/IPC builder. Positive paired resume/retirement
+        # must be integrated before this boundary can be opened.
+        await self._require_unpaired(db, current.session_id, current.sandbox_id)
         pvc = (
             await db.get(SessionPVC, current.pvc_id, with_for_update=True)
             if current.pvc_id
