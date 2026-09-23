@@ -25,7 +25,7 @@ def identity(state: EgressState, role: str) -> Object:
                 PROJECT: str(state.project_id),
                 "ads.io/egress-state-id": str(state.state_id),
                 "ads.io/egress-state-role": role,
-                "ads.io/egress-state-format": "v1",
+                "ads.io/egress-state-format": "v2" if role == "key" else "v1",
                 "ads.io/creator-generation": str(state.creator_generation),
             },
         },

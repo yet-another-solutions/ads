@@ -23,7 +23,9 @@ def key_secret(state: EgressState, key: WrappingKey) -> Object:
         **identity(state, "key"),
         "type": "Opaque",
         "immutable": True,
-        "data": {"wrapping.key": base64.b64encode(key.value).decode("ascii")},
+        # SecretKeyRef delivers UTF-8 environment text without a filesystem
+        # volume, unlike arbitrary raw bytes. Kubernetes data adds its own base64.
+        "data": {"wrapping.b64": base64.b64encode(base64.b64encode(key.value)).decode("ascii")},
     }
 
 
@@ -43,11 +45,14 @@ def state_volume(state: EgressState) -> Object:
 
 def decode_key(data: object, fingerprint: str) -> WrappingKey:
     try:
-        if not isinstance(data, dict) or set(data) != {"wrapping.key"}:
+        if not isinstance(data, dict) or set(data) != {"wrapping.b64"}:
             raise ValueError
-        encoded = data["wrapping.key"]
-        raw = base64.b64decode(encoded, validate=True)
-        if base64.b64encode(raw).decode("ascii") != encoded:
+        encoded = data["wrapping.b64"]
+        text = base64.b64decode(encoded, validate=True)
+        if base64.b64encode(text).decode("ascii") != encoded:
+            raise ValueError
+        raw = base64.b64decode(text, validate=True)
+        if base64.b64encode(raw) != text:
             raise ValueError
         key = WrappingKey(raw)
         if key.fingerprint != fingerprint:
