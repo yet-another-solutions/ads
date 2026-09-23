@@ -410,3 +410,52 @@ those components are wired with mandatory runtime checks and exact cleanup
 ownership. Tests cover native API shape, grouping, generation separation,
 same-project foreign-pair control denial selectors and distinct direct URLs.
 Live CNI control isolation, transport and application acceptance remain open.
+
+## Durable paired transport-key custody
+
+`RelayKeyCustody` is an internal, not-yet-production-called step under the
+existing exact creating claim and pair generation. Under the existing
+session/intent locks it generates two distinct canonical WireGuard/X25519
+private keys and atomically commits their **public keys only** with the sole
+custody-create reservation. SQL holds neither private key nor a Secret body.
+The winning invocation publishes both keys in one immutable `Opaque` Secret
+named `ads-relay-keys-<sandbox UUID>.<generation UUID>`. No relay or guest mounts
+that combined custody Secret. Later per-relay publication must take only the
+appropriate private key plus the opposite peer's public key.
+
+The original operation is strongly retained across caller cancellation. Only
+its normal return and successful settlement commit can mark dispatch settled;
+UID observation is separate. Process loss, SDK cancellation, lost replies and
+failed settlement leave an inflight obligation indefinitely. A restart reads
+the original named Secret and verifies immutable type, exact labels, UID,
+resource version, lack of ownership/deletion, canonical paired private data,
+and correspondence to the two committed public keys. It never generates keys
+after reservation, overwrites an object, recreates a missing bound object or
+expires unresolved dispatch. A reservation lost before its POST may therefore
+block forever; recovery authority to resolve that ambiguity is not invented.
+
+The adapter has no list, patch, delete, namespace discovery or platform-Secret
+copy operation. Read/create SDK exceptions are replaced with generic errors,
+and the private-key container's repr omits its fields. Python memory is not a
+securely erased key vault: deployment must retain the platform's encryption at
+rest, restrictive Secret access, safe audit policy and log/debug configuration.
+No transport private key belongs in SQL, snapshots, API replies, traces or
+exception bodies. This does not touch the interception CA or TLS signing keys.
+
+Cleanup snapshots retain only public keys, dispatch snapshot and custody UID.
+After the permanent creator fence, normal/recovery/orphan capture observes the
+fixed custody name only if there was a reservation, commits each UID under the
+same revalidated cleanup claim, and preserves old UIDs after absence.
+Terminating or data-drifted owned Secrets are still cleanup obligations.
+Snapshot dispatch is historical, never authority to settle the live ledger.
+Late creation can be captured on a later pass; neither it nor 404 is retirement.
+
+One nonnullable JSONB field is added to the **fresh** schema bootstrap; no
+migration, adoption or automatic upgrade is provided. No live reset is done.
+No production provisioning call, new RBAC/Helm activation or release is added.
+Activation will require narrowly reviewed namespaced Secret permissions for
+the manager only, not IPC/guests/relays. Per-relay config/private-key publication
+still needs its own committed immutable payload, dispatch/UID ownership,
+actual Pod/Service binding and cleanup coverage. Egress construction, runtime
+activation, ordered key deletion after proven release, retirement and protected
+credential-preserving reset remain open.

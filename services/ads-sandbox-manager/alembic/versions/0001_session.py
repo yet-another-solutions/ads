@@ -104,6 +104,7 @@ def upgrade() -> None:
         sa.Column("control_dispatch", JSONB(), nullable=False),
         sa.Column("compute_uids", JSONB(), nullable=False),
         sa.Column("compute_dispatch", JSONB(), nullable=False),
+        sa.Column("relay_custody", JSONB(), nullable=False),
         sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
         sa.UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, UniqueConstraint, select
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES as COMPUTE_ROLES
 from ads_sandbox_manager.pair_objects import PairBinding
+from ads_sandbox_manager.relay_keys import validate_public_keys
 from ads_sandbox_manager.store import Base, SandboxSession
 
 CONTROL_RESOURCES = (
@@ -24,6 +26,27 @@ CONTROL_RESOURCES = (
     ("NetworkPolicy", "guest-relay"),
     ("NetworkPolicy", "egress-relay"),
 )
+
+
+def new_relay_custody() -> dict[str, Any]:
+    return {"public_keys": None, "uid": None, "dispatch": "unissued"}
+
+
+def validate_relay_custody(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != {"public_keys", "uid", "dispatch"}:
+        raise RuntimeError("corrupt relay custody evidence")
+    if value["dispatch"] == "unissued":
+        if value != new_relay_custody():
+            raise RuntimeError("corrupt relay custody evidence")
+        return
+    if value["dispatch"] not in ("inflight", "settled") or (
+        value["uid"] is not None and (not isinstance(value["uid"], str) or not value["uid"].strip())
+    ):
+        raise RuntimeError("corrupt relay custody evidence")
+    try:
+        validate_public_keys(value["public_keys"])
+    except ValueError:
+        raise RuntimeError("corrupt relay custody evidence") from None
 
 
 def compute_key(role: str) -> str:
@@ -110,6 +133,7 @@ class PairIntent(Base):
     control_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_control_dispatch)
     compute_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB, default=new_compute_uids)
     compute_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_compute_dispatch)
+    relay_custody: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_custody)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -155,6 +179,7 @@ class PairIntentRepository:
     def _validate(intent: PairIntent) -> None:
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
+        validate_relay_custody(intent.relay_custody)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
         if (
             not isinstance(intent.control_uids, dict)
@@ -378,4 +403,56 @@ class PairIntentRepository:
         if intent.compute_dispatch[key] not in ("inflight", "settled"):
             raise RuntimeError("pair compute was never dispatched")
         intent.compute_dispatch = {**intent.compute_dispatch, key: "settled"}
+        await db.flush()
+
+    async def reserve_relay_keys(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        public_keys: dict[str, str],
+    ) -> tuple[PairIntent, bool]:
+        """Commit both public keys and one custody create reservation atomically.
+
+        Caller keeps the matching private keys only for the winning invocation.
+        A loser/restart may only read the originally committed custody object.
+        No transient private material may escape to I/O before this commits.
+        """
+        validate_public_keys(public_keys)
+        intent = await self.owned(db, row, owner, generation)
+        dispatch = intent.relay_custody["dispatch"] == "unissued"
+        if dispatch:
+            intent.relay_custody = {
+                "public_keys": dict(public_keys),
+                "uid": None,
+                "dispatch": "inflight",
+            }
+            await db.flush()
+        return intent, dispatch
+
+    async def bind_relay_keys(
+        self, db: AsyncSession, row: SandboxSession, owner: UUID, generation: UUID, uid: str
+    ) -> PairIntent:
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("an observed relay custody UID is required")
+        intent = await self.owned(db, row, owner, generation)
+        custody = intent.relay_custody
+        if custody["dispatch"] == "unissued":
+            raise RuntimeError("relay custody was never dispatched")
+        if custody["uid"] is not None and custody["uid"] != uid:
+            raise RuntimeError("relay custody UID replacement refused")
+        intent.relay_custody = {**custody, "uid": uid}
+        await db.flush()
+        return intent
+
+    async def settle_relay_keys(self, db: AsyncSession, expected: PairIntent) -> None:
+        """Only the original invocation's normal return, even after fencing."""
+        public_keys = expected.relay_custody["public_keys"]
+        intent = await self._settlement_intent(db, expected)
+        if intent.relay_custody["public_keys"] != public_keys:
+            raise PairClaimLost("relay custody identity changed")
+        if intent.relay_custody["dispatch"] not in ("inflight", "settled"):
+            raise RuntimeError("relay custody was never dispatched")
+        intent.relay_custody = {**intent.relay_custody, "dispatch": "settled"}
         await db.flush()
