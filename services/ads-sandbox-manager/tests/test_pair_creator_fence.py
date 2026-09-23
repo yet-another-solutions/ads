@@ -131,6 +131,12 @@ async def test_cancelled_sdk_completion_and_late_capture_never_settle_dispatch(c
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        # Cancellation of the actual original operation (for example loop
+        # shutdown), not merely its waiting caller, must remain ambiguous.
+        operations = tuple(f.service._dispatches)
+        assert len(operations) == 1
+        operations[0].cancel()
+        await asyncio.gather(*operations, return_exceptions=True)
         intent = await intent_for(f)
         capture, work, claim = await cleanup_claim(f)
         await capture.capture(work, recovery=claim)

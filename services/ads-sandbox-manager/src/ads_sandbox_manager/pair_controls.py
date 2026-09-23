@@ -52,6 +52,36 @@ class PairControlProvisioner:
     ) -> None:
         self.settings, self.sessions = settings, sessions
         self.repository, self.kube = repository, kube
+        self._dispatches: set[asyncio.Task[str]] = set()
+
+    def _finished(self, task: asyncio.Task[str]) -> None:
+        self._dispatches.discard(task)
+        if not task.cancelled():
+            # The caller may already have timed out. Retrieve exceptions without
+            # logging API/SQL bodies; durable inflight evidence remains authoritative.
+            task.exception()
+
+    async def _dispatch(self, intent: PairIntent, kind: ControlKind, role: str) -> str:
+        self._configuration(intent)
+        # ensure performs at most read/create/read. Bound the retained coroutine
+        # too; cancelling it cannot prove that an underlying SDK thread stopped.
+        async with asyncio.timeout(3 * self.settings.control_seconds):
+            uid = await self.kube.ensure(intent.binding(), kind, role)
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            self._configuration(intent)
+            await self.repository.settle(db, intent, kind, role)
+        return uid
+
+    async def drain(self) -> None:
+        """Bounded lifecycle join, not a quiescence or settlement verdict.
+
+        Timeout/cancellation of the join does not cancel original operations.
+        The eventual runtime owner must drain before closing SQL/Kubernetes.
+        Process loss still leaves unresolved durable evidence.
+        """
+        if self._dispatches:
+            async with asyncio.timeout(self.settings.control_seconds):
+                await asyncio.wait(tuple(self._dispatches))
 
     def _configuration(self, intent: PairIntent | None = None) -> None:
         wanted = (self.settings.namespace, self.settings.golden_version)
@@ -98,7 +128,21 @@ class PairControlProvisioner:
                         )
                         self._configuration(intent)
                     known = intent.control_uids[resource_key(kind, role)]
-                    if dispatch or known is not None:
+                    if dispatch:
+                        operation = asyncio.create_task(
+                            self._dispatch(intent, cast(ControlKind, kind), role),
+                            name="pair-control-dispatch",
+                        )
+                        self._dispatches.add(operation)
+                        operation.add_done_callback(self._finished)
+                        # Only the original reservation runs here. Caller death
+                        # cannot discard its normal-return settlement evidence.
+                        # wait does not forward caller cancellation to the task.
+                        # Unlike a cancelled shield in Python 3.14, it does not
+                        # log a later exception outside our completion handler.
+                        await asyncio.wait((operation,))
+                        uid = operation.result()
+                    elif known is not None:
                         # A known UID makes ensure observation-only, preserving
                         # the adapter's strict spec/replacement checks.
                         uid = await self.kube.ensure(
@@ -119,12 +163,6 @@ class PairControlProvisioner:
                     # Another worker may still complete the sole dispatch.
                     # Poll reads within the existing create deadline, never retry a write.
                     await asyncio.sleep(0.05)
-                if dispatch:
-                    async with (
-                        asyncio.timeout(self.settings.control_seconds),
-                        self.sessions.begin() as db,
-                    ):
-                        await self.repository.settle(db, intent, kind, role)
                 async with (
                     asyncio.timeout(self.settings.control_seconds),
                     self.sessions.begin() as db,
