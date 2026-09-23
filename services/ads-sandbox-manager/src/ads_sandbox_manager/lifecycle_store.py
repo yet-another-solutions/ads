@@ -122,6 +122,7 @@ class LifecycleRepository:
             "compute_payloads": dict(intent.compute_payloads),
             "relay_custody": dict(intent.relay_custody),
             "relay_inputs": dict(intent.relay_inputs),
+            "egress_state_id": str(intent.egress_state_id) if intent.egress_state_id else None,
         }
 
     async def work(
@@ -273,10 +274,16 @@ class LifecycleRepository:
             "relay_custody",
             "relay_inputs",
             "compute_payloads",
+            "egress_state_id",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
         validate_relay_custody(snapshot["relay_custody"])
+        state_id = snapshot["egress_state_id"]
+        if state_id is not None and (
+            not isinstance(state_id, str) or str(UUID(state_id)) != state_id
+        ):
+            raise RuntimeError("invalid persistent egress cleanup anchor")
         identities = {}
         for field in ("session_id", "sandbox_id", "project_id", "generation"):
             value = snapshot[field]
@@ -510,6 +517,9 @@ class LifecycleRepository:
         validate_relay_custody(intent.relay_custody)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         validate_compute_payloads(intent.compute_payloads)
+        state_id = str(intent.egress_state_id) if intent.egress_state_id else None
+        if state_id != work.pair_snapshot["egress_state_id"]:
+            raise PairClaimLost("persistent egress cleanup anchor changed")
         if intent.compute_payloads != work.pair_snapshot["compute_payloads"]:
             raise PairClaimLost("pair compute cleanup payload changed")
         if any(

@@ -149,6 +149,7 @@ class PairIntent(Base):
     compute_payloads: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_compute_payloads)
     relay_custody: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_custody)
     relay_inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_inputs)
+    egress_state_id: Mapped[UUID | None]
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -192,6 +193,8 @@ class PairIntentRepository:
 
     @staticmethod
     def _validate(intent: PairIntent) -> None:
+        if intent.egress_state_id is not None and not isinstance(intent.egress_state_id, UUID):
+            raise RuntimeError("corrupt persistent egress state anchor")
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
         validate_compute_payloads(intent.compute_payloads)

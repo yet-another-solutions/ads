@@ -154,6 +154,8 @@ class EgressStateRepository:
         )
         key = None
         if state is None:
+            if pair.egress_state_id is not None:
+                raise RuntimeError("reserved persistent egress state disappeared")
             key = WrappingKey(secrets.token_bytes(32))
             state = EgressState(
                 state_id=uuid4(),
@@ -172,9 +174,12 @@ class EgressStateRepository:
                 volume_uid=None,
             )
             db.add(state)
+            pair.egress_state_id = state.state_id
             await db.flush()
         validate(state)
         _matches(state, pair)
+        if pair.egress_state_id != state.state_id:
+            raise RuntimeError("persistent egress state anchor changed")
         if state.storage_bytes != storage_bytes:
             raise RuntimeError("egress state storage reservation changed")
         return state, key
@@ -198,6 +203,8 @@ class EgressStateRepository:
             raise PairClaimLost("persistent egress state reservation missing")
         validate(state)
         _matches(state, pair)
+        if pair.egress_state_id != state.state_id:
+            raise RuntimeError("persistent egress state anchor changed")
         return state
 
     async def reserve_volume(
