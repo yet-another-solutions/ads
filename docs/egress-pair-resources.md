@@ -170,8 +170,48 @@ checks are not an insertion fence and confer no destructive authority.
 
 Both paths perform only read-only Kubernetes observations, revalidate around
 every read and keep the existing teardown guards. They do not resolve late
-Kubernetes creates, fence stale creators, deliver node commands or complete
-retirement; those remain integration gates before any control policy deletion.
+Kubernetes creates, deliver node commands or complete retirement.
+
+### Control creator fence and dispatch evidence
+
+The existing generation ledger now carries a permanent `creation_fenced` bit
+and one monotonic dispatch state per fixed control key: `unissued`, `inflight`
+or `settled`. No new claim epoch, retry generation or credential is introduced.
+The new columns belong to the fresh initial schema only; an existing stamped
+database must not be upgraded by silently adopting old rows.
+
+Provisioning commits `inflight` before its sole create-capable adapter call.
+Concurrent preparations and retries may observe an outstanding key, but cannot
+dispatch another create. A found UID is checked through the strict adapter with
+that UID supplied, which forbids recreation and validates the desired spec.
+A missing observation only polls within the existing creation deadline.
+
+Only normal return of the original create-capable invocation can mark that
+dispatch `settled`, in a separate short transaction before UID binding. This
+settlement validates the original immutable ledger scope even after the
+provisioning claim is lost or fenced. It does not bind a UID, revive a claim or
+advance provisioning. Thus a successful API operation with a lost binding
+transaction remains safely observable, without dispatching another create.
+
+Cleanup commits the permanent fence under its validated normal, recovery or
+true-orphan claim before reading controls. The fence prevents later dispatch
+reservations and prevents stale preparation from advancing. An invocation
+reserved before the fence can still reach Kubernetes afterwards; the durable
+`inflight` marker makes that uncertainty explicit. No SQL transaction spans
+external I/O.
+
+Cancellation, API exceptions, lost replies and interrupted settlement leave
+the marker `inflight`, even if a later read captures the object's UID. Neither
+404, elapsed time, restart, successful observation nor a complete UID set
+settles that marker. There is deliberately no automatic reset or force-clear.
+Resolving ambiguous abandoned dispatches requires a separately proved
+quiescence mechanism; this component may safely block retirement indefinitely.
+
+A fenced ledger without inflight entries describes only the recorded control
+dispatches. It does not fence legacy compute creation, prove node/runtime
+release or authorize deleting control policies. Whole-pair creator fencing,
+ambiguous-dispatch recovery, manager-to-node delivery and final retirement
+remain integration gates. Production pair provisioning is still not enabled.
 
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private

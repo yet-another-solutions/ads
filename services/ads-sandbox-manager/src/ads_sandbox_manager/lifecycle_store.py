@@ -15,6 +15,7 @@ from ads_sandbox_manager.pair_store import (
     PairClaimLost,
     PairIntent,
     resource_key,
+    validate_control_dispatch,
 )
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
@@ -427,6 +428,29 @@ class LifecycleRepository:
             }
             await db.flush()
         return work
+
+    async def fence_pair_controls(self, db: AsyncSession, work: CleanupWork) -> PairIntent:
+        """Caller must own this cleanup claim in the same short transaction.
+
+        Fence future dispatch, not already reserved work. Inflight markers
+        survive capture/absence and are not runtime-release evidence.
+        """
+        pair = self.cleanup_pair(work)
+        assert work.pair_snapshot is not None
+        intent = await db.get(
+            PairIntent, pair.generation, with_for_update=True, populate_existing=True
+        )
+        if (
+            intent is None
+            or intent.binding() != pair
+            or intent.namespace != work.pair_snapshot["namespace"]
+            or intent.golden_version != work.pair_snapshot["golden_version"]
+        ):
+            raise PairClaimLost("pair control fence identity changed")
+        validate_control_dispatch(intent)
+        intent.creation_fenced = True
+        await db.flush()
+        return intent
 
     async def complete(self, db: AsyncSession, work: CleanupWork, now: datetime) -> bool:
         if not await self.owns(db, work):
