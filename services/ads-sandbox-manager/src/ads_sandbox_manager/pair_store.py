@@ -13,6 +13,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES as COMPUTE_ROLES
 from ads_sandbox_manager.pair_objects import PairBinding
+from ads_sandbox_manager.relay_inputs import (
+    input_role,
+    new_relay_inputs,
+    validate_payload,
+    validate_relay_inputs,
+)
 from ads_sandbox_manager.relay_keys import validate_public_keys
 from ads_sandbox_manager.store import Base, SandboxSession
 
@@ -134,6 +140,7 @@ class PairIntent(Base):
     compute_uids: Mapped[dict[str, str | None]] = mapped_column(JSONB, default=new_compute_uids)
     compute_dispatch: Mapped[dict[str, str]] = mapped_column(JSONB, default=new_compute_dispatch)
     relay_custody: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_custody)
+    relay_inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_inputs)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -180,6 +187,7 @@ class PairIntentRepository:
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
         validate_relay_custody(intent.relay_custody)
+        validate_relay_inputs(intent.binding(), intent.relay_inputs)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
         if (
             not isinstance(intent.control_uids, dict)
@@ -455,4 +463,77 @@ class PairIntentRepository:
         if intent.relay_custody["dispatch"] not in ("inflight", "settled"):
             raise RuntimeError("relay custody was never dispatched")
         intent.relay_custody = {**intent.relay_custody, "dispatch": "settled"}
+        await db.flush()
+
+    async def reserve_relay_input(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+        payload: dict[str, Any],
+    ) -> tuple[PairIntent, bool]:
+        """Commit the exact nonsecret payload and sole create reservation together."""
+        input_role(role)
+        intent = await self.owned(db, row, owner, generation)
+        validate_payload(intent.binding(), role, payload)
+        if (
+            payload["public_keys"] != intent.relay_custody["public_keys"]
+            or payload["custody_uid"] != intent.relay_custody["uid"]
+            or payload["pod_uids"]
+            != {r: intent.compute_uids[compute_key(r)] for r in ("guest-relay", "egress-relay")}
+            or payload["service_uid"] != intent.control_uids["Service/egress-relay"]
+        ):
+            raise PairClaimLost("relay input dependency identity changed")
+        entry = intent.relay_inputs[role]
+        if entry["payload"] is not None and entry["payload"] != payload:
+            raise RuntimeError("committed relay input payload changed")
+        dispatch = entry["dispatch"] == "unissued"
+        if dispatch:
+            intent.relay_inputs = {
+                **intent.relay_inputs,
+                role: {"payload": payload, "uid": None, "dispatch": "inflight"},
+            }
+            await db.flush()
+        return intent, dispatch
+
+    async def bind_relay_input(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+        uid: str,
+    ) -> PairIntent:
+        input_role(role)
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("observed relay input UID required")
+        intent = await self.owned(db, row, owner, generation)
+        entry = intent.relay_inputs[role]
+        if entry["dispatch"] == "unissued":
+            raise RuntimeError("relay input was never dispatched")
+        if entry["uid"] is not None and entry["uid"] != uid:
+            raise RuntimeError("relay input UID replacement refused")
+        intent.relay_inputs = {**intent.relay_inputs, role: {**entry, "uid": uid}}
+        await db.flush()
+        return intent
+
+    async def settle_relay_input(
+        self,
+        db: AsyncSession,
+        expected: PairIntent,
+        role: str,
+    ) -> None:
+        """Original normal return only; observations never settle ambiguous writes."""
+        input_role(role)
+        payload = expected.relay_inputs[role]["payload"]
+        intent = await self._settlement_intent(db, expected)
+        entry = intent.relay_inputs[role]
+        if entry["payload"] != payload:
+            raise PairClaimLost("relay input settlement payload changed")
+        if entry["dispatch"] not in ("inflight", "settled"):
+            raise RuntimeError("relay input was never dispatched")
+        intent.relay_inputs = {**intent.relay_inputs, role: {**entry, "dispatch": "settled"}}
         await db.flush()

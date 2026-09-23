@@ -226,10 +226,18 @@ async def test_failure_before_and_after_insert(harness: Harness, failure: str) -
 
 
 @pytest.mark.anyio
-async def test_manager_not_ready_is_tool_error_and_row_removed(harness: Harness) -> None:
-    h = harness
+async def test_manager_not_ready_is_tool_error_and_row_removed(
+    long_harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = long_harness
+    # Error mapping is not a 400 ms PostgreSQL latency test. Keep the durable
+    # deadline clock fixed; the actual watchdog and result transaction still run.
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(UTC)
+    monkeypatch.setattr("ads_sandbox_mcp.service.datetime", clock)
     h.publisher.mode = "error"
-    result = await start(h)
+    async with asyncio.timeout(5):
+        result = await start(h)
     assert result.is_error and result.text == "not ready"
     assert await row(h, result.execution_id) is None
     assert [type(x) for x in h.publisher.messages] == [SandboxRequest]
