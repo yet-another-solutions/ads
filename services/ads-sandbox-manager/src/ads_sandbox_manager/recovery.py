@@ -94,6 +94,11 @@ class RecoveryService:
     async def _execute(self, row: SandboxSession, works: list[CleanupWork]) -> None:
         if not works:
             raise RuntimeError("recovery has no durable intent")
+        if any(work.pair_snapshot is not None for work in works):
+            # Do not delete control policies, storage or old-generation evidence
+            # through the legacy guest/IPC-only recovery path.
+            log.warning("paired recovery requires runtime-release proof: %s", row.session_id)
+            return
         if any(obj.get("retain") for work in works for obj in work.targets):
             # Older versions converted idle timeouts into destructive recovery.
             # Do not silently turn their retained workspace into a delete target.

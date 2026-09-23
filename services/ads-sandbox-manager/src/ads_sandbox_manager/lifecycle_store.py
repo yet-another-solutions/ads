@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_sandbox_manager.pair_store import PairIntent
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
     ca_consumer_name,
@@ -35,6 +36,7 @@ class CleanupWork(Base):
     deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     acknowledged: Mapped[bool] = mapped_column(default=False)
     targets: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    pair_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 def target(kind: str, name: str, uid: str | None, *, retain: bool = False) -> dict[str, Any]:
@@ -78,7 +80,31 @@ class LifecycleRepository:
         pvc = await db.get(SessionPVC, row.pvc_id, with_for_update=True) if row.pvc_id else None
         return row, pvc
 
-    def work(
+    async def pair_snapshot(
+        self, db: AsyncSession, session_id: UUID, sandbox_id: UUID
+    ) -> dict[str, Any] | None:
+        """Capture the original pair, never follow a replacement session mapping."""
+        intent = await db.scalar(
+            select(PairIntent)
+            .where(PairIntent.sandbox_id == sandbox_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if intent is None:
+            return None
+        if intent.session_id != session_id:
+            raise RuntimeError("pair cleanup session identity mismatch")
+        return {
+            "generation": str(intent.generation),
+            "session_id": str(intent.session_id),
+            "sandbox_id": str(intent.sandbox_id),
+            "project_id": str(intent.project_id),
+            "namespace": intent.namespace,
+            "golden_version": intent.golden_version,
+            "control_uids": dict(intent.control_uids),
+        }
+
+    async def work(
         self,
         db: AsyncSession,
         row: SandboxSession,
@@ -99,6 +125,7 @@ class LifecycleRepository:
             deadline=now + timedelta(seconds=timeout),
             targets=targets,
             acknowledged=False,
+            pair_snapshot=await self.pair_snapshot(db, row.session_id, row.sandbox_id),
         )
         db.add(work)
         return work
@@ -127,7 +154,9 @@ class LifecycleRepository:
         row.status_changed_at = advance(row.status_changed_at, now)
         pvc.state = "detaching"
         pvc.last_state_change = advance(pvc.last_state_change, now)
-        return self.work(db, row, pvc, "idle", now, timeout, sandbox_targets(row, retain=True))
+        return await self.work(
+            db, row, pvc, "idle", now, timeout, sandbox_targets(row, retain=True)
+        )
 
     async def reap(
         self,
@@ -154,7 +183,7 @@ class LifecycleRepository:
             return None
         pvc.state = "destroying"
         pvc.last_state_change = advance(pvc.last_state_change, now)
-        return self.work(
+        return await self.work(
             db,
             row,
             pvc,
@@ -184,7 +213,7 @@ class LifecycleRepository:
         row.status = "service"
         row.status_changed_at = advance(row.status_changed_at, now)
         row.service_deadline = now + timedelta(seconds=timeout)
-        return self.work(db, row, pvc, "service", now, timeout, targets)
+        return await self.work(db, row, pvc, "service", now, timeout, targets)
 
     async def owns(self, db: AsyncSession, work: CleanupWork) -> bool:
         if work.kind == "orphan":
@@ -212,6 +241,11 @@ class LifecycleRepository:
     async def complete(self, db: AsyncSession, work: CleanupWork, now: datetime) -> bool:
         if not await self.owns(db, work):
             return False
+        stored = await db.get(CleanupWork, work.work_id, populate_existing=True)
+        if stored is None or stored.pair_snapshot is not None:
+            # Guest/IPC deletion alone cannot retire paired runtime ownership.
+            # Preserve even malformed/empty snapshots rather than erase evidence.
+            return False
         if work.session_id is not None:
             row, pvc = await self.locked(db, work.session_id, work.sandbox_id)
             assert row is not None
@@ -231,9 +265,7 @@ class LifecycleRepository:
                     pvc.state = "detached"
                     pvc.last_state_change = advance(pvc.last_state_change, now)
                     pvc.release_evidence = next(t for t in work.targets if t.get("retain"))
-        stored = await db.get(CleanupWork, work.work_id)
-        if stored is not None:
-            await db.delete(stored)
+        await db.delete(stored)
         return True
 
     async def recover(
@@ -263,7 +295,9 @@ class LifecycleRepository:
             if row.status_changed_at > now - timedelta(seconds=timeout):
                 return False
             row.status = "failed"
-        old = self.work(db, row, pvc, "recovery", now, timeout, sandbox_targets(row, retain=False))
+        old = await self.work(
+            db, row, pvc, "recovery", now, timeout, sandbox_targets(row, retain=False)
+        )
         if pvc and pvc.release_evidence:
             old.targets = [
                 {**pvc.release_evidence, **obj} if obj["name"] == session_name(pvc.pvc_id) else obj
@@ -272,6 +306,8 @@ class LifecycleRepository:
         # Preserve prior evidence and every unfinished generation, rather than replace it.
         for work in previous:
             work.kind = "recovery"
+            if work.pair_snapshot is None:
+                work.pair_snapshot = await self.pair_snapshot(db, session_id, work.sandbox_id)
         old.kind = "recovery"
         row.sandbox_id = uuid4()
         row.status = "recovering"

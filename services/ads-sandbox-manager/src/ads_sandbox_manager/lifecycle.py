@@ -335,6 +335,9 @@ class LifecycleService:
                         deadline=now + timedelta(seconds=self.settings.cleanup_seconds),
                         targets=objects,
                         acknowledged=True,
+                        pair_snapshot=await self.repository.pair_snapshot(
+                            db, message.session_id, message.sandbox_id
+                        ),
                     )
                 )
 
@@ -516,6 +519,11 @@ class LifecycleService:
                         context.access_token,
                     )
                 return  # Teardown is impossible before the authenticated IPC drain ack.
+            if work.pair_snapshot is not None:
+                # Keep pair control policies in force until the complete runtime
+                # release path is installed. The old two-Deployment path lacks it.
+                log.warning("pair retirement requires runtime-release proof: %s", work_id)
+                return
             targets = []
             for obj in work.targets:
                 # Retention keeps the idle release evidence after all Pods are gone.
