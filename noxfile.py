@@ -25,6 +25,8 @@ _SRC = (
     "services/ads-ptp-tools/ads-ptp-relay",
     "services/ads-ptp-tools/ads-ptp-attest",
     "services/ads-ptp-tools/ads-ptp-retire",
+    "services/ads-ptp-tools/ads-ptp-release",
+    "services/ads-ptp-tools/release-kernel-smoke.py",
     "services/ads-ptp-tools/relay-kernel-smoke.py",
     "services/ads-ptp-tools/attachment-kernel-smoke.py",
     "services/ads-ptp-tools/kernel-smoke.py",
