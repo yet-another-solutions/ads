@@ -200,8 +200,22 @@ reserved before the fence can still reach Kubernetes afterwards; the durable
 `inflight` marker makes that uncertainty explicit. No SQL transaction spans
 external I/O.
 
-Cancellation, API exceptions, lost replies and interrupted settlement leave
-the marker `inflight`, even if a later read captures the object's UID. Neither
+The provisioner strongly retains the original reserved operation if its waiting
+caller is cancelled or reaches its creation deadline. Only that operation may
+finish the create-capable invocation and commit settlement; it cannot bind a UID,
+advance to another resource or revive the cancelled claim. Its adapter invocation
+has a separate bound of three control timeouts (read/create/read), followed by
+one bounded settlement transaction. Caller cancellation still propagates promptly.
+
+The internal `drain` operation is a bounded join for the eventual runtime owner,
+which must join retained work before closing SQL/Kubernetes. Cancelling or timing
+out that join does not cancel original operations. A successful join is not a
+settlement verdict: failed operations can be finished with durable uncertainty.
+This lifecycle hook is not production runtime wiring.
+
+Cancellation of the original operation itself, process loss, API exceptions,
+lost replies and interrupted settlement leave the marker `inflight`, even if a
+later read captures the object's UID. Neither
 404, elapsed time, restart, successful observation nor a complete UID set
 settles that marker. There is deliberately no automatic reset or force-clear.
 Resolving ambiguous abandoned dispatches requires a separately proved
