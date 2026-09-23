@@ -140,6 +140,10 @@ def capture(plugin, attestor, observer, root, scope, *, startup=False):
         len(records) == 2 and {r["binding"]["role"] for r in records} == {"guest", "egress"},
         "both live attachment journals required before teardown",
     )
+    # Directory iteration is deliberately unordered. Snapshot list positions
+    # are a durable wire format, so canonicalize them independently of inode,
+    # hash-derived filename and filesystem enumeration order.
+    records.sort(key=lambda record: ("guest", "egress").index(record["binding"]["role"]))
     value = {
         **scope,
         "boot_id": boot_id(),

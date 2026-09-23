@@ -113,9 +113,30 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_sandbox_pair_intent_session_id", "sandbox_pair_intent", ["session_id"])
+    # Persistent sandbox identity and key commitment survive all attachment rows.
+    op.create_table(
+        "sandbox_egress_state",
+        sa.Column("state_id", sa.Uuid(), primary_key=True),
+        sa.Column("session_id", sa.Uuid(), nullable=False),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("creator_generation", sa.Uuid(), nullable=False),
+        sa.Column("claim_owner", sa.Uuid(), nullable=False),
+        sa.Column("claim_changed", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("namespace", sa.String(), nullable=False),
+        sa.Column("storage_bytes", sa.BigInteger(), nullable=False),
+        sa.Column("key_fingerprint", sa.String(), nullable=False),
+        sa.Column("key_dispatch", sa.String(), nullable=False),
+        sa.Column("key_uid", sa.String(), nullable=True),
+        sa.Column("volume_dispatch", sa.String(), nullable=False),
+        sa.Column("volume_uid", sa.String(), nullable=True),
+        sa.UniqueConstraint("sandbox_id", name="sandbox_egress_state_sandbox"),
+    )
+    op.create_index("ix_sandbox_egress_state_session_id", "sandbox_egress_state", ["session_id"])
 
 
 def downgrade() -> None:
+    op.drop_table("sandbox_egress_state")
     op.drop_table("sandbox_pair_intent")
     op.drop_table("ping_probe")
     op.drop_table("cleanup_work")

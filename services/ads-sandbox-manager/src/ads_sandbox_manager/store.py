@@ -93,6 +93,7 @@ class SessionRepository:
     async def _require_unpaired(self, db: AsyncSession, session_id: UUID, sandbox_id: UUID) -> None:
         # PairIntent depends on this module's Base/session model. Import only at
         # call time to avoid a model import cycle, not to bypass the repository.
+        from ads_sandbox_manager.egress_state_store import EgressState
         from ads_sandbox_manager.pair_store import PairIntent
 
         retained = await db.scalar(
@@ -102,6 +103,13 @@ class SessionRepository:
         )
         if retained is not None:
             raise RuntimeError("retained pair ownership blocks legacy session admission")
+        state = await db.scalar(
+            select(EgressState.state_id)
+            .where(or_(EgressState.session_id == session_id, EgressState.sandbox_id == sandbox_id))
+            .limit(1)
+        )
+        if state is not None:
+            raise RuntimeError("retained egress state blocks legacy session admission")
 
     async def by_sandbox(self, db: AsyncSession, sandbox_id: UUID) -> SandboxSession | None:
         result: SandboxSession | None = await db.scalar(
