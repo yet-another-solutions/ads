@@ -190,9 +190,16 @@ async def test_kafka_runtime_start_stop_and_failure(harness: Harness) -> None:
     assert producer.stop.await_count == 2
 
 
-async def test_gc_age_not_deadline_and_advisory_leader_exclusion(harness: Harness) -> None:
+async def test_gc_age_not_deadline_and_advisory_leader_exclusion(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
     h = harness
     now = datetime.now(UTC)
+    # Keep DB/runner latency out of the short fixture's retention-age boundary.
+    # Advisory locking, scheduler sleeps and PostgreSQL collection remain real.
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = now
+    monkeypatch.setattr("ads_sandbox_mcp.scheduler.datetime", clock)
     old, recent = uuid4(), uuid4()
     async with h.sessions.begin() as session:
         for execution_id, created_at in [(old, now - timedelta(seconds=10)), (recent, now)]:
@@ -224,6 +231,11 @@ async def test_gc_age_not_deadline_and_advisory_leader_exclusion(harness: Harnes
         await scheduler.tick(session)
     assert await row(h, old) is None
     assert await row(h, recent) is not None
+    clock.now.return_value = now + timedelta(seconds=2 * h.settings.timeout_seconds)
+    async with h.sessions.begin() as session:
+        await scheduler.tick(session)
+    assert await row(h, recent) is not None  # Strict creation-age cutoff, not deadline.
+    clock.now.return_value += timedelta(microseconds=1)
     # Stopping the actual leader releases its session lock (not a transaction lock).
     await scheduler.start()
     async with asyncio.timeout(5):

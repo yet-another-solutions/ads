@@ -30,6 +30,7 @@ from ads_sandbox_manager.pair_store import (
     validate_control_dispatch,
     validate_relay_custody,
 )
+from ads_sandbox_manager.pair_volume_inputs import validate_volume_resources, volume_role
 from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
@@ -118,6 +119,7 @@ class LifecycleRepository:
         validate_relay_custody(intent.relay_custody)
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
+        validate_volume_resources(intent.volume_resources)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         persistent = None
         if intent.egress_state_id is not None:
@@ -146,6 +148,7 @@ class LifecycleRepository:
             "egress_state_id": str(intent.egress_state_id) if intent.egress_state_id else None,
             "egress_state": persistent,
             "ipc_resources": deepcopy(intent.ipc_resources),
+            "volume_resources": deepcopy(intent.volume_resources),
         }
 
     async def work(
@@ -300,11 +303,13 @@ class LifecycleRepository:
             "egress_state_id",
             "egress_state",
             "ipc_resources",
+            "volume_resources",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
         validate_relay_custody(snapshot["relay_custody"])
         validate_ipc_resources(snapshot["ipc_resources"])
+        validate_volume_resources(snapshot["volume_resources"])
         state_id = snapshot["egress_state_id"]
         if state_id is not None and (
             not isinstance(state_id, str) or str(UUID(state_id)) != state_id
@@ -559,6 +564,18 @@ class LifecycleRepository:
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
+        validate_volume_resources(intent.volume_resources)
+        for role, entry in intent.volume_resources.items():
+            captured = work.pair_snapshot["volume_resources"][role]
+            if (
+                entry["payload"] != captured["payload"]
+                or (entry["uid"] is not None and entry["uid"] != captured["uid"])
+                or (
+                    entry["dispatch"] != captured["dispatch"]
+                    and (captured["dispatch"], entry["dispatch"]) != ("inflight", "settled")
+                )
+            ):
+                raise PairClaimLost("paired clone cleanup ownership changed")
         for role, entry in intent.ipc_resources.items():
             captured = work.pair_snapshot["ipc_resources"][role]
             if (
@@ -600,6 +617,42 @@ class LifecycleRepository:
         intent.creation_fenced = True
         await db.flush()
         return intent
+
+    async def record_clone(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        uid: str | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        volume_role(role)
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid paired clone cleanup UID")
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        await self.fence_pair_creators(db, work)
+        assert work.pair_snapshot is not None
+        resources = work.pair_snapshot["volume_resources"]
+        entry = resources[role]
+        if entry["dispatch"] == "unissued":
+            raise RuntimeError("paired clone was never dispatched")
+        if uid is not None:
+            if entry["uid"] is not None and entry["uid"] != uid:
+                raise RuntimeError("paired clone cleanup UID replacement refused")
+            work.pair_snapshot = {
+                **work.pair_snapshot,
+                "volume_resources": {
+                    **resources,
+                    role: {**entry, "uid": uid},
+                },
+            }
+            await db.flush()
+        return work
 
     async def record_ipc_resource(
         self,

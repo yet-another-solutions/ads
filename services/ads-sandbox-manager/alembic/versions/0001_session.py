@@ -109,6 +109,7 @@ def upgrade() -> None:
         sa.Column("relay_inputs", JSONB(), nullable=False),
         sa.Column("egress_state_id", sa.Uuid(), nullable=True),
         sa.Column("ipc_resources", JSONB(), nullable=False),
+        sa.Column("volume_resources", JSONB(), nullable=False),
         sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
         sa.UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"

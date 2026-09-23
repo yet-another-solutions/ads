@@ -21,6 +21,7 @@ from ads_sandbox_manager.pair_compute_inputs import (
 from ads_sandbox_manager.pair_ipc_inputs import new_ipc_resources, validate_ipc_resources
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES as COMPUTE_ROLES
 from ads_sandbox_manager.pair_objects import PairBinding
+from ads_sandbox_manager.pair_volume_inputs import new_volume_resources, validate_volume_resources
 from ads_sandbox_manager.relay_inputs import (
     input_role,
     new_relay_inputs,
@@ -152,6 +153,7 @@ class PairIntent(Base):
     relay_inputs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_relay_inputs)
     egress_state_id: Mapped[UUID | None]
     ipc_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_ipc_resources)
+    volume_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_volume_resources)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -203,6 +205,7 @@ class PairIntentRepository:
         validate_relay_custody(intent.relay_custody)
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         validate_ipc_resources(intent.ipc_resources)
+        validate_volume_resources(intent.volume_resources)
         expected = {resource_key(kind, role) for kind, role in CONTROL_RESOURCES}
         if (
             not isinstance(intent.control_uids, dict)
