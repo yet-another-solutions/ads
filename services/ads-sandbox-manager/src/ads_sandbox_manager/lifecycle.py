@@ -523,7 +523,7 @@ class LifecycleService:
                     )
                 return  # Teardown is impossible before the authenticated IPC drain ack.
             if work.pair_snapshot is not None:
-                if work.kind in ("idle", "service", "reap"):
+                if work.kind in ("idle", "service", "reap", "orphan"):
                     await self.pair_capture.capture(work)
                 # Keep pair control policies in force until the complete runtime
                 # release path is installed. The old two-Deployment path lacks it.
