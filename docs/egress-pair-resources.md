@@ -352,6 +352,56 @@ Egress/relay builders, persistent runtime configuration/key delivery and full
 creation/retirement integration remain open. No production caller or Helm
 activation is added by this constructor.
 
+### Trusted relay Pods and configuration
+
+`pair_compute.relay_pod` builds either fixed relay member in the ordinary
+container runtime, sharing the appropriate VM's PodGroup placement and exact
+pair labels. `RelayRuntime` requires a digest-pinned image, a separate
+platform-provisioned TLS Secret reference, observed transport MTU and bounded
+packet/resource/startup inputs. The caller must match that image and MTU to the
+installed node attestor; syntactic validation is not installation proof.
+
+The fixed container invokes `ads-ptp-relay` with file paths only. It receives
+its actual Pod UID through the downward API and the committed generation
+through trusted environment. Config/WireGuard-key and TLS files mount as
+required root-readable 0400 single-file read-only subPaths. The config input
+name is role/sandbox/generation-specific; TLS and transport input references
+cannot alias. No host namespace/path/runtime socket, service-account token,
+CA signing key, mutable rootfs or arbitrary command is supplied. The explicit
+SYS_ADMIN/NET_ADMIN/NET_RAW and Unconfined profiles match the existing trusted
+relay proof, not permissions for the untrusted guest.
+
+There is no readiness probe, startup probe or readiness gate. The HTTPS
+`/health` liveness probe has a bounded startup allowance and a timeout exceeding
+the runtime's six-second connection deadline. IPC remains responsible for
+calling actual session health directly. Bare relay Pods use `Always` so kubelet
+owns liveness-triggered container restarts, as designed; this does not authorize
+Pod replacement or private-attachment adoption. The runtime still refuses
+existing state on a container restart, leaving the pair unhealthy until
+manager-owned recovery. Do not erase its journal to make a restart succeed.
+
+`relay_configuration` accepts only the observed canonical Pod UID, exact pair,
+peer public key and platform inputs. It emits the runtime's exact nonsecret
+configuration shape with the adopted isolated addresses, ports and VNI. Guest
+relay needs the observed numeric egress-relay Service IPv4; egress learns only
+the authenticated endpoint. Tests pass the resulting JSON through the actual
+runtime parser and prove mismatched UID/generation rejection.
+
+Bootstrap must create and capture the Pod UID before publishing its immutable
+input. Required, nonoptional Secret keys hold container startup until that input
+exists; there is no placeholder configuration or optional empty-key fallback.
+The future publisher must generate and retain two distinct per-generation
+private keys, verify peer/public-key relationships, commit input intent and
+exact Secret ownership, and deliver immutable payloads after validating the
+recorded Pod/Service identities. It must cover late Secret creates and preserve
+input ownership through cleanup/recovery. These pure builders neither publish
+Secrets nor claim those ordering/immutability/ownership checks are implemented.
+
+No production caller, new RBAC, Secret read/copy, key generation, schema/Helm
+activation or lab deployment is added here. Egress construction, committed
+runtime inputs, exact volume verification and actual create/retirement wiring
+remain required before activation.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
