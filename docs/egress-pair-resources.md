@@ -227,6 +227,30 @@ release or authorize deleting control policies. Whole-pair creator fencing,
 ambiguous-dispatch recovery, manager-to-node delivery and final retirement
 remain integration gates. Production pair provisioning is still not enabled.
 
+### Retained ownership blocks legacy admission
+
+The ordinary session repository now refuses a newly inserted session mapping if
+any retained pair ledger uses its session ID or sandbox ID. It also rejects a
+pending/stopped claim before changing PVC or claim state, so a retained pair
+cannot enter the legacy guest/IPC-only resume builder. Existing creating rows
+may still be observed without claiming or creating anything; unrelated sessions
+in the same project are unaffected.
+
+The insertion check is deliberately after the unique-key wait, in a fresh
+READ COMMITTED statement within the same caller-owned transaction. A concurrent
+old-session deletion can commit previously invisible pair intent while INSERT
+waits. Rejection rolls back the new row before any disk, topic or compute work.
+The inserted/locked session row also serializes legitimate pair intent creation,
+whose repository must validate that exact locked provisioning claim.
+
+Ledger presence is blocking even with unknown UIDs, all dispatches settled, a
+permanent creator fence or corrupt control evidence. None proves retirement.
+There is no ledger deletion, expiry, new lifecycle epoch or adoption path here.
+This prevents the normal manager admission path from resurrecting an orphan's
+session identity; it does not fence arbitrary database writers, resolve old
+external creates, stop existing runtimes or authorize cleanup. Whole-pair
+resume/retirement integration must supply the eventual positive admission path.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or
