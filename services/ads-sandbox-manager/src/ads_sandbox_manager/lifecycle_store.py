@@ -19,6 +19,7 @@ from ads_sandbox_manager.pair_store import (
     resource_key,
     validate_compute_evidence,
     validate_control_dispatch,
+    validate_relay_custody,
 )
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
@@ -104,6 +105,7 @@ class LifecycleRepository:
             return None
         if intent.session_id != session_id:
             raise RuntimeError("pair cleanup session identity mismatch")
+        validate_relay_custody(intent.relay_custody)
         return {
             "generation": str(intent.generation),
             "session_id": str(intent.session_id),
@@ -113,6 +115,7 @@ class LifecycleRepository:
             "golden_version": intent.golden_version,
             "control_uids": dict(intent.control_uids),
             "compute_uids": dict(intent.compute_uids),
+            "relay_custody": dict(intent.relay_custody),
         }
 
     async def work(
@@ -261,9 +264,11 @@ class LifecycleRepository:
             "golden_version",
             "control_uids",
             "compute_uids",
+            "relay_custody",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
+        validate_relay_custody(snapshot["relay_custody"])
         identities = {}
         for field in ("session_id", "sandbox_id", "project_id", "generation"):
             value = snapshot[field]
@@ -492,9 +497,45 @@ class LifecycleRepository:
             raise PairClaimLost("pair creator fence identity changed")
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
+        validate_relay_custody(intent.relay_custody)
+        if (
+            intent.relay_custody["public_keys"]
+            != work.pair_snapshot["relay_custody"]["public_keys"]
+        ):
+            raise PairClaimLost("relay custody cleanup identity changed")
         intent.creation_fenced = True
         await db.flush()
         return intent
+
+    async def record_relay_custody(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        uid: str | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        """Capture only a UID; never copy key material or settle a dispatch."""
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid relay custody UID")
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        assert work.pair_snapshot is not None
+        custody = work.pair_snapshot["relay_custody"]
+        if custody["public_keys"] is None:
+            raise RuntimeError("relay custody was never dispatched")
+        if uid is not None:
+            if custody["uid"] is not None and custody["uid"] != uid:
+                raise RuntimeError("relay custody cleanup UID replacement refused")
+            work.pair_snapshot = {
+                **work.pair_snapshot,
+                "relay_custody": {**custody, "uid": uid},
+            }
+            await db.flush()
+        return work
 
     async def complete(self, db: AsyncSession, work: CleanupWork, now: datetime) -> bool:
         if not await self.owns(db, work):

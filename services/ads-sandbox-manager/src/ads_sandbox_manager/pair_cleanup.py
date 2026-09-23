@@ -32,6 +32,7 @@ class PairCleanupKubernetes(Protocol):
     async def observe_compute(
         self, pair: PairBinding, role: str, uid: str | None = None
     ) -> str | None: ...
+    async def observe_relay_custody(self, pair: PairBinding, uid: str | None) -> str | None: ...
 
 
 class PairCleanupCapture:
@@ -116,3 +117,36 @@ class PairCleanupCapture:
                             recovery=recovery,
                             recovery_seconds=self.settings.recovery_seconds,
                         )
+            assert work.pair_snapshot is not None
+            if work.pair_snapshot["relay_custody"]["public_keys"] is not None:
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.owned_pair_cleanup(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+                    self._configuration(work)
+                    await self.repository.fence_pair_creators(db, work)
+                    pair = self.repository.cleanup_pair(work)
+                assert work.pair_snapshot is not None
+                uid = await self.kube.observe_relay_custody(
+                    pair, work.pair_snapshot["relay_custody"]["uid"]
+                )
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    self._configuration(work)
+                    await self.repository.record_relay_custody(
+                        db,
+                        work,
+                        uid,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )

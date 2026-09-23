@@ -17,12 +17,16 @@ from ads_sandbox_manager.pair_objects import (
     control_service,
     pod_group,
 )
+from ads_sandbox_manager.relay_keys import custody_identity
 
 ControlKind = Literal["PodGroup", "Service", "NetworkPolicy"]
 
 
 class PairControlAdapter:
-    """No readiness verdict, namespace discovery, patch, exec, or Secret access.
+    """No readiness verdict, namespace discovery, patch or exec.
+
+    Custody cleanup reads one captured Secret name for metadata only. It neither
+    returns key material nor discovers, copies or reads platform signing Secrets.
 
     The lifecycle caller must commit pair/generation intent before ensure(), then
     persist the returned UID before advancing. A recorded UID never authorizes
@@ -221,4 +225,17 @@ class PairControlAdapter:
         observed = await self.kube._get(
             self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
         )
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_relay_custody(self, pair: PairBinding, uid: str | None) -> str | None:
+        """Owned deleting/drifted Secrets remain obligations, not usable custody."""
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid relay custody UID")
+        desired = custody_identity(self.kube.settings, pair)
+        try:
+            observed = await self.kube._get(
+                self.kube.core.read_namespaced_secret, desired["metadata"]["name"]
+            )
+        except Exception:
+            raise RuntimeError("relay custody observation failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
