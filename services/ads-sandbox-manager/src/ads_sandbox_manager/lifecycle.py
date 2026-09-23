@@ -18,6 +18,7 @@ from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
+from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMER,
@@ -65,6 +66,7 @@ class LifecycleService:
         publisher: Publisher,
         credentials: ClientCredentials,
         tokens: TokenMinter,
+        pair_capture: PairCleanupCapture,
     ) -> None:
         self.settings, self.sessions, self.repository = settings, sessions, repository
         self.kube, self.publisher, self.credentials, self.tokens = (
@@ -74,6 +76,7 @@ class LifecycleService:
             tokens,
         )
         self._task: asyncio.Task[None] | None = None
+        self.pair_capture = pair_capture
         self._ping_task: asyncio.Task[None] | None = None
 
     async def emit(self, topic: str, message: Signal) -> None:
@@ -520,6 +523,8 @@ class LifecycleService:
                     )
                 return  # Teardown is impossible before the authenticated IPC drain ack.
             if work.pair_snapshot is not None:
+                if work.kind in ("idle", "service", "reap"):
+                    await self.pair_capture.capture(work)
                 # Keep pair control policies in force until the complete runtime
                 # release path is installed. The old two-Deployment path lacks it.
                 log.warning("pair retirement requires runtime-release proof: %s", work_id)

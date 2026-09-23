@@ -237,6 +237,7 @@ async def test_idle_removes_all_clones_after_release_retains_workspace_and_resum
         AsyncMock(),
         Mock(mint=Mock(return_value="subject")),
         Mock(mint=Mock(return_value=SimpleNamespace(access_token="token"))),
+        AsyncMock(),
     )
     await service.admit(IDLE, Signal(row.session_id, row.sandbox_id))
     async with h.sessions.begin() as db:

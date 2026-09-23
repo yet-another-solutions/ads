@@ -127,6 +127,35 @@ node/runtime release evidence and exact control cleanup remain required before
 activation. The additional nullable field is fresh bootstrap only, not an
 upgrade/adoption path for deployed databases.
 
+### Cleanup-side control observation
+
+For an acknowledged idle claim, or a current service/reap claim,
+`PairCleanupCapture` now runs before the paired-retirement guard. It uses the
+real control adapter's read-only observation path; it cannot call ensure or
+delete. Before and after every API read, short transactions revalidate the
+existing session/PVC transition, work identity, deadline, original pair scope,
+snapshot and builder configuration. Each newly observed UID commits before the
+next read. No database transaction spans Kubernetes I/O, and no new claim epoch
+or schema column is introduced.
+
+The manager's sandbox-namespace Role adds only `get` for Services,
+NetworkPolicies and PodGroups. It gains no control-resource writes, no Secrets
+or exec, and no cluster-wide control access. These chart permissions are not
+applied to the live lab by a source merge.
+
+Missing UIDs still mean potentially late/lost-response creation. A 404 does
+not write an absence or completion bit; previously captured UIDs survive absent
+reads, and a different UID is rejected. A later pass can capture an object that
+appeared after an earlier 404. Cancellation, API failure, lost ownership or a
+failed commit preserves earlier evidence and cannot advance cleanup.
+
+The lifecycle remains blocked after this observation step even when every
+control UID is known. It performs no compute, node, policy, volume or topic
+deletion and never marks the generation retired. Recovery and orphan work keep
+their existing fail-closed guards; their rotated/missing-session ownership is
+not reinterpreted as a normal cleanup claim. Their observation path, stale
+creator fencing, node delivery and complete teardown remain integration work.
+
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private
 namespaces, peer keys, persistent identity, node attachment, lifecycle orchestration or

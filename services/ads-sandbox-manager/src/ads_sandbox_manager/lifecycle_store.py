@@ -9,7 +9,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ads_sandbox_manager.pair_store import PairIntent
+from ads_sandbox_manager.pair_objects import PairBinding
+from ads_sandbox_manager.pair_store import (
+    CONTROL_RESOURCES,
+    PairClaimLost,
+    PairIntent,
+    resource_key,
+)
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
     ca_consumer_name,
@@ -237,6 +243,107 @@ class LifecycleRepository:
                 )
             )
         )
+
+    @staticmethod
+    def cleanup_pair(work: CleanupWork) -> PairBinding:
+        snapshot = work.pair_snapshot
+        fields = {
+            "generation",
+            "session_id",
+            "sandbox_id",
+            "project_id",
+            "namespace",
+            "golden_version",
+            "control_uids",
+        }
+        if not isinstance(snapshot, dict) or set(snapshot) != fields:
+            raise RuntimeError("incomplete pair cleanup snapshot")
+        identities = {}
+        for field in ("session_id", "sandbox_id", "project_id", "generation"):
+            value = snapshot[field]
+            if not isinstance(value, str) or str(UUID(value)) != value:
+                raise RuntimeError("invalid pair cleanup identity")
+            identities[field] = UUID(value)
+        pair = PairBinding(**identities)
+        controls = snapshot["control_uids"]
+        if (
+            pair.sandbox_id != work.sandbox_id
+            or pair.session_id != work.session_id
+            or any(
+                not isinstance(snapshot[k], str) or not snapshot[k].strip()
+                for k in ("namespace", "golden_version")
+            )
+            or not isinstance(controls, dict)
+            or set(controls) != {resource_key(*item) for item in CONTROL_RESOURCES}
+            or any(
+                uid is not None and (not isinstance(uid, str) or not uid.strip())
+                for uid in controls.values()
+            )
+        ):
+            raise RuntimeError("pair cleanup scope or controls changed")
+        return pair
+
+    async def owned_pair_cleanup(
+        self, db: AsyncSession, expected: CleanupWork, now: datetime
+    ) -> CleanupWork:
+        """Normal lifecycle claim only; recovery/orphan authority is not inferred."""
+        fields = (
+            "work_id",
+            "session_id",
+            "sandbox_id",
+            "pvc_id",
+            "kind",
+            "state_changed",
+            "pvc_changed",
+        )
+        identity = tuple(getattr(expected, key) for key in fields)
+        snapshot = expected.pair_snapshot
+        if expected.kind not in ("idle", "service", "reap") or not await self.owns(db, expected):
+            raise PairClaimLost("pair cleanup claim changed")
+        # Preserve session/PVC -> work lock order; no external call in this transaction.
+        stored = await db.get(
+            CleanupWork, expected.work_id, with_for_update=True, populate_existing=True
+        )
+        if (
+            stored is None
+            or tuple(getattr(stored, key) for key in fields) != identity
+            or stored.pair_snapshot != snapshot
+            or stored.deadline <= now
+            or (stored.kind == "idle" and not stored.acknowledged)
+        ):
+            raise PairClaimLost("pair cleanup work changed or not drained")
+        pair = self.cleanup_pair(stored)
+        row = await db.get(SandboxSession, pair.session_id)
+        if row is None or row.project_id != pair.project_id:
+            raise PairClaimLost("pair cleanup project identity changed")
+        return stored
+
+    async def record_pair_control(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        kind: str,
+        role: str,
+        uid: str | None,
+        now: datetime,
+    ) -> CleanupWork:
+        """Capture an observed UID, never turn one absent read into retirement."""
+        key = resource_key(kind, role)
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid observed pair control UID")
+        work = await self.owned_pair_cleanup(db, expected, now)
+        assert work.pair_snapshot is not None
+        controls = work.pair_snapshot["control_uids"]
+        previous = controls[key]
+        if uid is not None:
+            if previous is not None and previous != uid:
+                raise RuntimeError("pair cleanup UID replacement refused")
+            work.pair_snapshot = {
+                **work.pair_snapshot,
+                "control_uids": {**controls, key: uid},
+            }
+            await db.flush()
+        return work
 
     async def complete(self, db: AsyncSession, work: CleanupWork, now: datetime) -> bool:
         if not await self.owns(db, work):

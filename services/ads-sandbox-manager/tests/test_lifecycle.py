@@ -72,6 +72,7 @@ async def life(sessions_harness):
         h.publisher,
         Mock(mint=Mock(return_value="manager-token")),
         Mock(mint=Mock(return_value=SimpleNamespace(access_token="ipc-token"))),
+        AsyncMock(),
     )
     row = await h.service.provision(uuid4())
     async with h.sessions.begin() as db:
@@ -449,6 +450,7 @@ async def test_overdue_idle_survives_restart_and_delayed_recovery_without_losing
         h.publisher,
         h.lifecycle.credentials,
         h.lifecycle.tokens,
+        h.lifecycle.pair_capture,
     )
     await restarted.execute(work.work_id)
     await restarted.admit(RECOVER, Signal(h.row.session_id, h.row.sandbox_id))
