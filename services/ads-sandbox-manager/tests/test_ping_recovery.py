@@ -75,6 +75,7 @@ async def test_ping_uses_fresh_service_ste_and_correlates_once_across_replicas(l
         h.publisher,
         h.lifecycle.credentials,
         h.lifecycle.tokens,
+        h.lifecycle.pair_capture,
     )
     await replica.ping_reply(ping)
     after = await row_for(h, h.row.session_id)
@@ -216,6 +217,7 @@ async def test_restart_ignores_unconfirmed_probe_and_times_out_confirmed_send(li
         h.publisher,
         h.lifecycle.credentials,
         h.lifecycle.tokens,
+        h.lifecycle.pair_capture,
     )
     await restarted.ping_scan()
     assert h.publisher.send.call_args.args[0] == RECOVER

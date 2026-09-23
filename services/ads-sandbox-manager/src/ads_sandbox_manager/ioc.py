@@ -28,6 +28,8 @@ from ads_sandbox_manager.kafka import KafkaRuntime, KafkaTopics, KafkaTransport
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
 from ads_sandbox_manager.lifecycle import LifecycleService
 from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
+from ads_sandbox_manager.pair_kube import PairControlAdapter
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
 from ads_sandbox_manager.service import Maintenance, Publisher, TransitService
@@ -100,6 +102,8 @@ class AppProvider(Provider):
     kafka = provide(KafkaRuntime, scope=Scope.APP)
     cleanup = provide(CleanupAdapter, scope=Scope.APP, provides=CleanupKubernetes)
     lifecycle_repository = provide(LifecycleRepository, scope=Scope.APP)
+    pair_cleanup_kube = provide(PairControlAdapter, scope=Scope.APP, provides=PairCleanupKubernetes)
+    pair_capture = provide(PairCleanupCapture, scope=Scope.APP)
     lifecycle = provide(LifecycleService, scope=Scope.APP)
     recovery = provide(RecoveryService, scope=Scope.APP)
 

@@ -33,6 +33,15 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [list, delete]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get]
+  - apiGroups: [scheduling.k8s.io]
+    resources: [podgroups]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

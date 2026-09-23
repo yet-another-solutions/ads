@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -116,6 +117,7 @@ async def test_ipc_loss_recovers_fresh_disk_then_next_execution_works(handshake)
         h.transit.publisher,
         ClientCredentials(h.identity.settings(MANAGER), h.identity.verifier(MANAGER)),
         h.identity.exchange(MANAGER),
+        AsyncMock(),
     )
     h.manager_controller.lifecycle = lifecycle
     h.transit.maintenance = lifecycle

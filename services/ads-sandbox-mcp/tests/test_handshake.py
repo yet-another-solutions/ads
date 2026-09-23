@@ -97,11 +97,28 @@ async def test_preack_timeout_late_ack_reset_then_unknown_ack_ignored(harness: H
 
 
 @pytest.mark.anyio
-async def test_postack_timeout_aborts_and_late_ack_resets(harness: Harness) -> None:
-    h = harness
-    h.publisher.mode = "ack"
-    result = await start(h)
-    assert result.is_error
+async def test_postack_timeout_aborts_and_late_ack_resets(
+    long_harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    h = long_harness
+    # Expire the persisted deadline without making database I/O race a 400 ms
+    # wall-clock budget. The real watchdog still expires the PostgreSQL row.
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(UTC)
+    monkeypatch.setattr("ads_sandbox_mcp.service.datetime", clock)
+    h.publisher.mode = "none"
+    task = start(h)
+    request = await wait_for_message(h, SandboxRequest)
+    assert isinstance(request, SandboxRequest)
+    await h.publisher.reply(
+        SandboxAcknowledge(request.execution_id, request.session_id, request.message_id)
+    )
+    acknowledged = await row(h, request.execution_id)
+    assert acknowledged and acknowledged.ack_replied and not acknowledged.timed_out
+    clock.now.return_value = acknowledged.deadline
+    async with asyncio.timeout(5):
+        result = await task
+    assert result.is_error and "timed out" in result.text
     assert [type(x) for x in h.publisher.messages] == [
         SandboxRequest,
         SandboxAckReply,
