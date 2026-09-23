@@ -136,6 +136,17 @@ def test_interrupted_add_captures_same_complete_identity_inventory(
     assert all(plugin.read_record(f.root / (r["request"]["key"] + ".json")) == r for r in f.records)
 
 
+def test_snapshot_order_is_role_canonical_when_journals_are_enumerated_in_reverse(
+    release, plugin, snapshot, journaled, monkeypatch
+):
+    f = journaled
+    original = release.journals
+    monkeypatch.setattr(
+        release, "journals", lambda loaded, root: iter(reversed(list(original(loaded, root))))
+    )
+    assert capture(release, plugin, snapshot, f) == snapshot
+
+
 @pytest.mark.parametrize(
     "fault",
     [
