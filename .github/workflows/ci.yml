@@ -129,7 +129,7 @@ jobs:
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
             context: .
-            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire'))"
+            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire','ads-ptp-release'))"
             pack: "false"
     steps:
       - uses: actions/checkout@v7
@@ -212,6 +212,12 @@ jobs:
             --security-opt seccomp=unconfined \
             -v "$PWD/services/ads-ptp-tools/relay-kernel-smoke.py:/relay-kernel-smoke.py:ro" \
             ads-ptp-tools:ci python /relay-kernel-smoke.py
+      - name: Prove node release namespace reference observation
+        if: matrix.image == 'ads-ptp-tools'
+        run: |
+          docker run --rm --privileged --network none \
+            -v "$PWD/services/ads-ptp-tools/release-kernel-smoke.py:/release-kernel-smoke.py:ro" \
+            ads-ptp-tools:ci python /release-kernel-smoke.py
       - name: Smoke golden entrypoint
         if: matrix.pack == 'true'
         run: |

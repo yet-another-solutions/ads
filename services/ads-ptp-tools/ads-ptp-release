@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Protected node capture and bounded release observation; never delete resources."""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+from uuid import UUID
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name.replace("-", "_"), str(Path(__file__).with_name(name))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def bounded_text(path, limit=1048576):
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    require(len(data) <= limit, "observation exceeds bound")
+    return data.decode(errors="replace")
+
+
+def boot_id():
+    value = bounded_text(Path("/proc/sys/kernel/random/boot_id"), 64).strip()
+    require(str(UUID(value)) == value, "canonical node boot identity required")
+    return value
+
+
+def journals(plugin, root):
+    for index, path in enumerate(root.iterdir()):
+        require(index < 16384, "attachment inventory exceeds bound")
+        if re.fullmatch(r"[0-9a-f]{64}\.json", path.name):
+            record = plugin.read_record(path)
+            req = record["request"]
+            require(req["key"] + ".json" == path.name, "journal identity mismatch")
+            plugin.binding(record["binding"], req)
+            yield record
+
+
+def validate_snapshot(value, scope):
+    require(
+        isinstance(value, dict)
+        and set(value)
+        == set(scope) | {"boot_id", "pod_uids", "runtime_ids", "namespaces", "links"},
+        "exact release snapshot required",
+    )
+    require(all(value[k] == v for k, v in scope.items()), "release scope changed")
+    require(str(UUID(value["boot_id"])) == value["boot_id"], "invalid snapshot boot identity")
+    for key, count, pattern in (
+        ("pod_uids", 4, r"[0-9a-f-]{36}"),
+        ("runtime_ids", 4, r"[0-9a-f]{64}"),
+    ):
+        values = value[key]
+        require(
+            isinstance(values, list)
+            and len(values) == count
+            and all(isinstance(x, str) and re.fullmatch(pattern, x) for x in values)
+            and len(set(values)) == count,
+            "incomplete runtime identities",
+        )
+    require(all(str(UUID(x)) == x for x in value["pod_uids"]), "invalid captured Pod UID")
+    identities = value["namespaces"]
+    require(
+        isinstance(identities, list)
+        and len(identities) == 6
+        and all(
+            isinstance(ns, list) and len(ns) == 2 and all(type(x) is int and x > 0 for x in ns)
+            for ns in identities
+        )
+        and len({tuple(ns) for ns in identities}) == 6,
+        "six distinct captured namespaces required",
+    )
+    links = value["links"]
+    require(
+        isinstance(links, list)
+        and len(links) == 2
+        and all(
+            isinstance(link, dict)
+            and set(link) == {"ifname", "ifindex"}
+            and isinstance(link["ifname"], str)
+            and re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", link["ifname"])
+            and type(link["ifindex"]) is int
+            and link["ifindex"] > 0
+            for link in links
+        )
+        and len({link["ifindex"] for link in links}) == 2
+        and len({link["ifname"] for link in links}) == 2,
+        "exact host peer identities required",
+    )
+    return value
+
+
+def capture(plugin, attestor, observer, root, scope):
+    """Only a complete live pair can establish this first capture format."""
+    records = [
+        record
+        for record in journals(plugin, root)
+        if record["binding"]["generation"] == scope["generation"]
+    ]
+    require(
+        len(records) == 2 and {r["binding"]["role"] for r in records} == {"guest", "egress"},
+        "both live attachment journals required before teardown",
+    )
+    value = {
+        **scope,
+        "boot_id": boot_id(),
+        "pod_uids": [],
+        "runtime_ids": [],
+        "namespaces": [],
+        "links": [],
+    }
+    host_links = observer.command("ip", "-j", "link")
+    for saved in records:
+        req, binding = saved["request"], saved["binding"]
+        require(
+            binding["sandbox_id"] == scope["sandbox_id"] and binding["network"] == scope["network"],
+            "journal scope changed",
+        )
+        # Real current Kubernetes/CRI/process attestation, not a copied root-authored file.
+        require(
+            attestor.observe_binding(observer, plugin, req) == binding,
+            "live attachment changed",
+        )
+        plugin.check(req, binding, saved, saved["result"])
+        sandbox = observer.cri("inspectp", "-o", "json", req["container_id"])["status"]
+        require(
+            sandbox["id"] == req["container_id"]
+            and sandbox["state"] == "SANDBOX_READY"
+            and sandbox["metadata"]["uid"] == req["pod_uid"]
+            and sandbox["metadata"]["namespace"] == scope["namespace"],
+            "VM runtime ownership changed",
+        )
+        with plugin.namespace(binding["transport"]["path"], binding["transport"]["identity"]) as fd:
+            links = plugin.links(fd)
+            upstream = links["eth0"]
+            matches = [x for x in host_links if x["ifindex"] == upstream["link_index"]]
+            require(len(matches) == 1, "exact host peer missing")
+            value["links"].append({key: matches[0][key] for key in ("ifname", "ifindex")})
+        value["pod_uids"].extend((binding["pod_uid"], binding["relay_pod_uid"]))
+        value["runtime_ids"].extend((req["container_id"], binding["relay_runtime_id"]))
+        value["namespaces"].extend(
+            (saved["vm_identity"], binding["private"]["identity"], binding["transport"]["identity"])
+        )
+    require(boot_id() == value["boot_id"], "node boot changed during capture")
+    return validate_snapshot(value, scope)
+
+
+def process_references(snapshot, deadline, proc=Path("/proc")):
+    """Observe tasks, held namespace FDs, mount roots and runtime command identities."""
+    namespaces = {tuple(ns) for ns in snapshot["namespaces"]}
+    inodes = {ns[1] for ns in namespaces}
+    refs = 0
+    visited = 0
+
+    def budget():
+        nonlocal visited
+        visited += 1
+        require(visited <= 131072 and time.monotonic() < deadline, "process scan exceeded bound")
+
+    for process in proc.iterdir():
+        budget()
+        if not process.name.isdigit():
+            continue
+        try:
+            command = bounded_text(process / "cmdline", 65536)
+            if any(identity in command for identity in snapshot["runtime_ids"]):
+                refs += 1
+            for task in (process / "task").iterdir():
+                budget()
+                try:
+                    info = (task / "ns/net").stat()
+                    refs += (info.st_dev, info.st_ino) in namespaces
+                    for fd in (task / "fd").iterdir():
+                        budget()
+                        try:
+                            target = os.readlink(fd)
+                        except FileNotFoundError:
+                            continue  # This descriptor closed before observation.
+                        match = re.fullmatch(r"net:\[(\d+)\]", target)
+                        refs += bool(match and int(match[1]) in inodes)
+                        try:
+                            info = fd.stat()
+                        except FileNotFoundError:
+                            continue
+                        # FDs opened through a namespace bind mount can display
+                        # its path (including "(deleted)"), not "net:[inode]".
+                        # procfs magic-link stat still resolves the held object.
+                        if not match:
+                            refs += (info.st_dev, info.st_ino) in namespaces
+                    for mount in bounded_text(task / "mountinfo").splitlines():
+                        budget()
+                        fields = mount.split()
+                        require(len(fields) >= 10 and "-" in fields, "invalid mount observation")
+                        match = re.fullmatch(r"net:\[(\d+)\]", fields[3])
+                        refs += bool(match and int(match[1]) in inodes)
+                except FileNotFoundError:
+                    if task.exists():
+                        # Zombies have no live namespace or descriptor table.
+                        state = bounded_text(task / "stat", 65536).rsplit(")", 1)[1].split()[0]
+                        require(state in ("Z", "X"), "task observation disappeared")
+        except FileNotFoundError:
+            require(not process.exists(), "process observation incomplete")
+    return refs
+
+
+def observe(plugin, observer, root, snapshot):
+    require(boot_id() == snapshot["boot_id"], "captured node boot changed")
+    uids, runtimes = set(snapshot["pod_uids"]), set(snapshot["runtime_ids"])
+    leftovers = {}
+
+    def api_runtime():
+        pods = observer.pods()
+        leftovers["pods"] = sum(
+            pod["metadata"]["uid"] in uids
+            or pod["metadata"].get("labels", {}).get("ads.io/attachment-generation")
+            == snapshot["generation"]
+            for pod in pods
+        )
+        sandboxes = observer.cri("pods", "-o", "json")["items"]
+        leftovers["ready_sandboxes"] = sum(
+            (item["id"] in runtimes or item["metadata"]["uid"] in uids)
+            and item["state"] != "SANDBOX_NOTREADY"
+            for item in sandboxes
+        )
+        containers = observer.cri("ps", "-a", "-o", "json")["containers"]
+        leftovers["live_containers"] = sum(
+            (
+                item["podSandboxId"] in runtimes
+                or item.get("labels", {}).get("io.kubernetes.pod.uid") in uids
+            )
+            and item["state"] != "CONTAINER_EXITED"
+            for item in containers
+        )
+
+    api_runtime()
+    leftovers["journals"] = sum(
+        record["binding"]["generation"] == snapshot["generation"]
+        or record["request"]["pod_uid"] in uids
+        for record in journals(plugin, root)
+    )
+    links = observer.command("ip", "-j", "link")
+    leftovers["host_links"] = sum(
+        any(
+            link["ifname"] == old["ifname"] or link["ifindex"] == old["ifindex"]
+            for old in snapshot["links"]
+        )
+        for link in links
+    )
+    leftovers["process_namespace_references"] = process_references(snapshot, observer.deadline)
+    # Re-query after the potentially long scan; do not trust a cached watch.
+    before = dict(leftovers)
+    api_runtime()
+    for name in ("pods", "ready_sandboxes", "live_containers"):
+        leftovers[name] = max(before[name], leftovers[name])
+    require(boot_id() == snapshot["boot_id"], "node boot changed during observation")
+    return {
+        **{
+            key: snapshot[key]
+            for key in ("node", "namespace", "generation", "sandbox_id", "boot_id")
+        },
+        "observed_runtime_released": not any(leftovers.values()),
+        "generation_retired": False,
+        "leftovers": leftovers,
+    }
+
+
+def perform(request):
+    require(os.geteuid() == 0, "trusted node-root observer required")
+    require(
+        isinstance(request, dict)
+        and set(request) == {"action", "attestorConfig", "stateDir", "generation", "sandbox_id"}
+        and request["action"] in ("capture", "observe"),
+        "exact release request required",
+    )
+    for key in ("generation", "sandbox_id"):
+        require(str(UUID(request[key])) == request[key], "canonical pair identity required")
+    plugin, attestor = load("ads-ptp"), load("ads-ptp-attest")
+    config = attestor.validate(plugin.read_record(Path(request["attestorConfig"])))
+    observer = attestor.Observer(config)
+    observer.deadline = time.monotonic() + 60
+    root = plugin.private_directory(request["stateDir"])
+    scope = {key: config[key] for key in ("node", "namespace", "network")}
+    scope.update({key: request[key] for key in ("generation", "sandbox_id")})
+    path = root / ("release-" + request["generation"] + ".json")
+    with plugin.generation_lock(root, request["generation"]) as fence:
+        require(
+            plugin.read_record(fence)
+            == {key: scope[key] for key in ("network", "generation", "sandbox_id")},
+            "exact durable admission fence required",
+        )
+        if request["action"] == "capture":
+            if path.exists() or path.is_symlink():
+                value = validate_snapshot(plugin.read_record(path), scope)
+                require(value["boot_id"] == boot_id(), "captured node boot changed")
+            else:
+                value = capture(plugin, attestor, observer, root, scope)
+            # Reassert durability after a lost reply or failed directory fsync,
+            # without replacing the captured identities with a later runtime.
+            plugin.save_record(path, value)
+            return {**scope, "release_inventory_captured": True, "observed_runtime_released": False}
+        value = validate_snapshot(plugin.read_record(path), scope)
+        return observe(plugin, observer, root, value)
+
+
+def main():
+    try:
+        request = load("ads-ptp").decode(sys.stdin.buffer.read(65537))
+        print(json.dumps(perform(request)))
+    except Exception as error:
+        print(
+            json.dumps(
+                {"error": "runtime release observation failed", "details": type(error).__name__}
+            )
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
