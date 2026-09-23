@@ -29,6 +29,8 @@ pytestmark = pytest.mark.anyio
 class HookedObserve(PairControlAdapter):
     before = None
     after = None
+    before_compute = None
+    after_compute = None
 
     async def observe(self, pair, kind, role, uid=None):
         if self.before:
@@ -36,6 +38,14 @@ class HookedObserve(PairControlAdapter):
         result = await super().observe(pair, kind, role, uid)
         if self.after:
             await self.after(pair, kind, role, result)
+        return result
+
+    async def observe_compute(self, pair, role, uid=None):
+        if self.before_compute:
+            await self.before_compute(pair, role, uid)
+        result = await super().observe_compute(pair, role, uid)
+        if self.after_compute:
+            await self.after_compute(pair, role, result)
         return result
 
 

@@ -283,13 +283,41 @@ not settle a dispatch or prove absence. Earlier captured mappings survive
 later ledger changes; existing completion guards remain unconditional for
 paired work.
 
-This is a durable ownership prerequisite, not an active compute provisioner or
-compute observer. No Kubernetes compute create/read/delete adapter, runtime
-builder, controller replacement permission, RBAC change, node delivery or
-retirement is added here. Future compute callers must use these transactions,
-retain original-operation completion and supply their separate runtime proof.
+This ledger is a durable ownership prerequisite, not an active compute
+provisioner. The read-only integration below uses these snapshots, but no
+compute create/delete adapter, runtime builder, controller replacement
+permission, node delivery or retirement is supplied. Future compute creators
+must use these transactions, retain original-operation completion and supply
+their separate runtime proof.
 Any workload controllers require their own exact ownership/fencing coverage;
 these Pod UID slots must never be treated as controller UIDs.
+
+### Cleanup-side compute observation
+
+The existing `PairControlAdapter.observe_compute` reads the four fixed Pod
+names through the verified in-cluster client. `compute_identity` constructs
+only API identity and manager-owned metadata, deliberately not a create-capable
+Pod specification. The read verifies kind/API version, namespace/name, all
+session/sandbox/project/generation/component/version labels, nonempty UID and
+resourceVersion, and any previously captured UID. Owner references are refused;
+this does not adopt a Deployment's replacement Pod. Terminating or spec-drifted
+owned Pods remain cleanup obligations, not readiness or safe-execution proof.
+
+`PairCleanupCapture` now observes all four compute members after the eight
+controls in the existing normal/recovery/orphan lifecycle paths. Before each
+read it validates the current claim and commits the permanent creator fence;
+after each read it revalidates and commits that UID before advancing. There is
+no SQL transaction across SDK I/O. A failed read/commit or lost claim cannot
+advance capture or erase earlier evidence. Restart repeats observation only,
+never creation. A 404 preserves known UIDs and never records absence as release.
+
+The sandbox-namespace Role adds only Pod `get` to its existing Pod permissions;
+no compute create, patch, Secret, exec or cluster-wide Pod permission is added.
+The observer never lists, creates, patches or deletes. All paired-retirement
+guards remain: even four known Pod UIDs cannot settle outstanding dispatches,
+stand in for captured node/runtime identities or authorize destructive cleanup.
+This is source wiring, not a live deployment, partial-startup release proof or
+full egress acceptance.
 
 This component builds two PodGroups, three Services and three ingress policies.
 It does not yet provide egress/relay images, compute Pods, upstream/private

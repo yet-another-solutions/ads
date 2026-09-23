@@ -11,7 +11,8 @@ from ads_sandbox_manager.session_objects import SANDBOX, labels
 
 GENERATION = "ads.io/attachment-generation"
 PROJECT = "ads.io/project-id"
-ROLES = ("guest", "egress", "guest-relay", "egress-relay", "ipc")
+COMPUTE_ROLES = ("guest", "egress", "guest-relay", "egress-relay")
+ROLES = (*COMPUTE_ROLES, "ipc")
 COMPONENTS = {
     "guest": "ads-sandbox",
     "egress": "ads-sandbox-egress",
@@ -76,6 +77,17 @@ def metadata(settings: Settings, pair: PairBinding, role: str) -> Object:
     }
 
 
+def compute_identity(settings: Settings, pair: PairBinding, role: str) -> Object:
+    """Observation identity only; deliberately not a create-capable Pod body."""
+    if role not in COMPUTE_ROLES:
+        raise ValueError("invalid pair compute role")
+    return {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": metadata(settings, pair, role),
+    }
+
+
 def pod_group(settings: Settings, pair: PairBinding, side: str) -> Object:
     if side not in ("guest", "egress"):
         raise ValueError("PodGroup must bind a VM and its local relay")
@@ -91,7 +103,7 @@ def pod_group(settings: Settings, pair: PairBinding, side: str) -> Object:
 
 
 def placement(pair: PairBinding, role: str) -> Object:
-    if role not in ("guest", "egress", "guest-relay", "egress-relay"):
+    if role not in COMPUTE_ROLES:
         raise ValueError("only VMs and their local relays join PodGroups")
     side = role.removesuffix("-relay")
     return {"schedulingGroup": {"podGroupName": pair_name(pair, side)}}

@@ -32,7 +32,7 @@ rules:
     verbs: [create, delete, get, list, watch]
   - apiGroups: [""]
     resources: [pods]
-    verbs: [list, delete]
+    verbs: [get, list, delete]
   - apiGroups: [""]
     resources: [services]
     verbs: [get]
