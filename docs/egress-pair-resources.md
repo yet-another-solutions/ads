@@ -1,5 +1,39 @@
 # Paired placement and control resource contract
 
+## Immutable per-relay input publication
+
+`RelayInputPublication` is an internal, claim-bound step, not a production
+activation path. It uses existing paired custody; it cannot generate keys.
+Both relay Pod UIDs, the egress relay Service UID and allocated numeric IPv4,
+the custody UID/public keys, trusted runtime parameters and exact nonsecret
+configuration are committed before each input Secret create reservation.
+`PairIntent.relay_inputs` is fresh-bootstrap JSONB, not a migration/adoption path.
+
+The fixed-name API adapter checks both recorded Pod identities and the exact
+Service identity/spec, including generation, namespace and ownership labels.
+It loads only the recorded custody UID and verifies its original public keys.
+Each immutable Opaque input Secret contains canonical `config.json` and only
+that relay's `wg.key`. Neither the peer private key nor the combined custody
+Secret is mounted. SQL and cleanup snapshots contain no private material.
+The adapter never patches, rotates or silently repairs incompatible input.
+
+Each role has monotonic `unissued/inflight/settled` dispatch evidence and a
+separate immutable UID binding. Reservation and payload commit atomically under
+the existing claim before external I/O. Replays only observe and verify the
+original payload, never recalculate or recreate reserved inputs. Only normal
+completion of the original retained invocation may settle its write, even after
+claim loss/fencing. Caller cancellation does not cancel that invocation or allow
+it to advance provisioning. Original-operation timeout, process loss, lost
+reply and failed settlement remain inflight, regardless of later UID capture.
+
+Cleanup captures the two input obligations in its existing ownership snapshot
+and permanently fences creation before observing their exact names. Each UID
+commits under the still-current normal/recovery/orphan claim. Metadata-only
+cleanup observation can capture drifted/deleting Secrets; absence never erases
+a known UID or proves release. No deletion, dispatch force-clear or retirement
+authority is added. Both production provisioning and full paired teardown remain
+unactivated until their separate integration gates are implemented and proved.
+
 The manager's `pair_objects` builders define the native Kubernetes placement
 and control-plane resources for the upcoming four-component pair. These
 builders are not yet called by session provisioning. They neither create a

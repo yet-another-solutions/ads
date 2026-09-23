@@ -21,6 +21,7 @@ from ads_sandbox_manager.pair_store import (
     validate_control_dispatch,
     validate_relay_custody,
 )
+from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
     ca_consumer_name,
@@ -106,6 +107,7 @@ class LifecycleRepository:
         if intent.session_id != session_id:
             raise RuntimeError("pair cleanup session identity mismatch")
         validate_relay_custody(intent.relay_custody)
+        validate_relay_inputs(intent.binding(), intent.relay_inputs)
         return {
             "generation": str(intent.generation),
             "session_id": str(intent.session_id),
@@ -116,6 +118,7 @@ class LifecycleRepository:
             "control_uids": dict(intent.control_uids),
             "compute_uids": dict(intent.compute_uids),
             "relay_custody": dict(intent.relay_custody),
+            "relay_inputs": dict(intent.relay_inputs),
         }
 
     async def work(
@@ -265,6 +268,7 @@ class LifecycleRepository:
             "control_uids",
             "compute_uids",
             "relay_custody",
+            "relay_inputs",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
@@ -276,6 +280,7 @@ class LifecycleRepository:
                 raise RuntimeError("invalid pair cleanup identity")
             identities[field] = UUID(value)
         pair = PairBinding(**identities)
+        validate_relay_inputs(pair, snapshot["relay_inputs"])
         controls = snapshot["control_uids"]
         compute = snapshot["compute_uids"]
         if (
@@ -498,6 +503,12 @@ class LifecycleRepository:
         validate_control_dispatch(intent)
         validate_compute_evidence(intent)
         validate_relay_custody(intent.relay_custody)
+        validate_relay_inputs(intent.binding(), intent.relay_inputs)
+        if any(
+            intent.relay_inputs[role]["payload"] != entry["payload"]
+            for role, entry in work.pair_snapshot["relay_inputs"].items()
+        ):
+            raise PairClaimLost("relay input cleanup payload changed")
         if (
             intent.relay_custody["public_keys"]
             != work.pair_snapshot["relay_custody"]["public_keys"]
@@ -533,6 +544,38 @@ class LifecycleRepository:
             work.pair_snapshot = {
                 **work.pair_snapshot,
                 "relay_custody": {**custody, "uid": uid},
+            }
+            await db.flush()
+        return work
+
+    async def record_relay_input(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        uid: str | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        input_role(role)
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid relay input UID")
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        assert work.pair_snapshot is not None
+        inputs = work.pair_snapshot["relay_inputs"]
+        entry = inputs[role]
+        if entry["payload"] is None:
+            raise RuntimeError("relay input was never dispatched")
+        if uid is not None:
+            if entry["uid"] is not None and entry["uid"] != uid:
+                raise RuntimeError("relay input cleanup UID replacement refused")
+            work.pair_snapshot = {
+                **work.pair_snapshot,
+                "relay_inputs": {**inputs, role: {**entry, "uid": uid}},
             }
             await db.flush()
         return work

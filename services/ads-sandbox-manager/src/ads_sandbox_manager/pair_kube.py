@@ -17,6 +17,7 @@ from ads_sandbox_manager.pair_objects import (
     control_service,
     pod_group,
 )
+from ads_sandbox_manager.relay_inputs import input_identity
 from ads_sandbox_manager.relay_keys import custody_identity
 
 ControlKind = Literal["PodGroup", "Service", "NetworkPolicy"]
@@ -238,4 +239,22 @@ class PairControlAdapter:
             )
         except Exception:
             raise RuntimeError("relay custody observation failed") from None
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_relay_input(
+        self,
+        pair: PairBinding,
+        role: str,
+        uid: str | None,
+    ) -> str | None:
+        """Capture deleting/drifted inputs by metadata, never return secret data."""
+        if uid is not None and (not isinstance(uid, str) or not uid.strip()):
+            raise ValueError("invalid relay input UID")
+        desired = input_identity(self.kube.settings, pair, role)
+        try:
+            observed = await self.kube._get(
+                self.kube.core.read_namespaced_secret, desired["metadata"]["name"]
+            )
+        except Exception:
+            raise RuntimeError("relay input observation failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
