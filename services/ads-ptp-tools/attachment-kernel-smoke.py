@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -166,13 +167,42 @@ try:
     assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
     # Missing runtime namespace after successful ADD remains an idempotent DEL.
     env["CNI_COMMAND"] = "ADD"
-    plugin.perform(config, env)
+    output = plugin.perform(config, env)
+    # Use the packaged node-root command against the same CNI state directory.
+    # The fence deliberately does not stop or delete the existing interface.
+    request = {
+        "stateDir": config["stateDir"],
+        **{key: record[key] for key in ("network", "sandbox_id", "generation")},
+    }
+    fenced = subprocess.run(
+        ["ads-ptp-retire"],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    verdict = json.loads(fenced.stdout)
+    assert verdict["attachment_admission_fenced"] and not verdict["runtime_release_proven"]
+    assert json.loads(canary.ns(names[0], "ip", "-j", "link", "show", "eth0"))
+    config["prevResult"] = output
+    for command in ("ADD", "CHECK"):
+        env["CNI_COMMAND"] = command
+        try:
+            plugin.perform(config, env)
+        except ValueError as error:
+            assert str(error) == "attachment generation retired"
+        else:
+            raise AssertionError("retired admission succeeded")
     canary.run("ip", "netns", "delete", names[0])
     created.remove(names[0])
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     assert plugin.perform(config, env) is None
     assert plugin.perform(config, env) is None
-    assert not list((root / "state").glob("*.json"))
+    # DEL removes the attachment journal, never its durable generation fence.
+    assert list((root / "state").glob("*.json")) == [
+        root / "state" / ("retired-" + generation + ".json")
+    ]
 finally:
     for name in reversed(created):
         canary.run("ip", "netns", "delete", name)
@@ -185,6 +215,8 @@ print(
             "replacement_cleanup_refused": True,
             "interrupted_alias_update_cleanup": True,
             "missing_namespace_del_idempotent": True,
+            "persistent_generation_admission_fence": True,
+            "fence_is_not_runtime_release": True,
             "node_attestation_and_kata_handoff_proven": False,
         }
     )

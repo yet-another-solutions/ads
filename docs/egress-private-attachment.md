@@ -89,6 +89,44 @@ Kernel peer removal after namespace destruction can race an explicit delete;
 an operation error is accepted only after positive interface-absence rechecks.
 A surviving original or replacement link retains the failure and journal.
 
+## Generation retirement fence
+
+The packaged `ads-ptp-retire` command is a trusted node-root operation, not a
+relay/guest API. It reads one bounded JSON object from stdin with exactly
+`stateDir`, `network`, `sandbox_id` and `generation`. The IDs are canonical UUIDs
+from the existing manager-owned pair, not a new claim epoch. `stateDir` must be
+the exact persistent, protected directory used by every CNI invocation for that
+pair on the node. A separate/ephemeral directory does not fence those calls.
+Do not mount this directory, executable authority or host runtime sockets into
+untrusted workloads.
+
+The command takes a nonblocking generation lock shared with ADD/CHECK and
+atomically fsyncs a mode-0600 `retired-<generation>.json` record. Contention or
+any write/sync failure is an error, never a completed fence. An in-flight ADD
+holds that lock across its kernel effects and journal commit. An attestation
+that finishes after fencing must still acquire the lock and check the record;
+it cannot authorize a late ADD. Changed runtime/Pod IDs for that generation do
+not bypass the fence. No new ADD/CHECK succeeds after acknowledged fencing,
+including after CNI process restart. Busy callers must retry through their
+existing bounded lifecycle, not treat contention as absence.
+
+Fencing does not remove existing links, halt traffic, stop relay/VM processes,
+reclaim storage or authorize control-policy deletion. The response explicitly
+reports `attachment_admission_fenced: true` and `runtime_release_proven: false`.
+DEL remains available using the original per-attachment journal and does not
+need the generation lock, Kubernetes API or current attestation. It never
+removes the retirement record. Idempotent retirement reasserts fsync durability;
+a conflicting, corrupt, symlinked or unprotected record fails closed. There is
+no automatic unretire/expiry or generation reuse.
+
+The node-root command is implemented and kernel-CI tested, but manager-to-node
+delivery, persistent installation on the worker, positive runtime release
+observation and complete paired retirement are subsequent integration gates.
+All creators must first lose their existing manager claim. Keep ingress
+policies and ownership records until compute/controller cleanup, node fencing
+and positive attachment/runtime release are established; this command alone
+does not close that boundary or prevent late Kubernetes control-object writes.
+
 ## Proof boundary
 
 Unit tests use a fake kernel to cover input rejection, protected records,

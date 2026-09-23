@@ -111,6 +111,59 @@ def sync_directory(path):
         os.close(fd)
 
 
+@contextlib.contextmanager
+def generation_lock(root, generation):
+    """Serialize admission and irreversible fencing of an existing generation."""
+    if not isinstance(generation, str) or str(UUID(generation)) != generation:
+        raise ValueError("canonical attachment generation required")
+    root = private_directory(root)
+    fd = os.open(
+        root / ("generation-" + generation + ".lock"),
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+        0o600,
+    )
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+            raise ValueError("invalid generation lock")
+        # Busy is not a successful fence. The trusted caller must retry later;
+        # no timeout or cancellation can pretend an in-flight ADD was stopped.
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield root / ("retired-" + generation + ".json")
+    finally:
+        os.close(fd)
+
+
+def retire(config):
+    """Persist an admission fence, not a cleanup or runtime-release verdict."""
+    if not isinstance(config, dict) or set(config) != {
+        "stateDir",
+        "network",
+        "sandbox_id",
+        "generation",
+    }:
+        raise ValueError("exact retirement identity required")
+    if (
+        not isinstance(config["network"], str)
+        or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", config["network"])
+        or not isinstance(config["sandbox_id"], str)
+        or str(UUID(config["sandbox_id"])) != config["sandbox_id"]
+    ):
+        raise ValueError("invalid retirement identity")
+    record = {key: config[key] for key in ("network", "sandbox_id", "generation")}
+    with generation_lock(config["stateDir"], config["generation"]) as path:
+        if (path.exists() or path.is_symlink()) and read_record(path) != record:
+            raise ValueError("retirement identity changed")
+        # Re-fsync on an idempotent retry too: an earlier directory fsync may
+        # have failed after rename. Never erase a fence, even after all DELs.
+        save_record(path, record)
+    return {
+        **record,
+        "attachment_admission_fenced": True,
+        "runtime_release_proven": False,
+    }
+
+
 def request(config, env):
     if config.get("cniVersion") != VERSION or config.get("type") != "ads-ptp":
         raise ValueError("unsupported CNI version or plugin type")
@@ -529,10 +582,12 @@ def delete(saved, state_path):
 
 def perform(config, env):
     req = request(config, env)
-    root = private_directory(config["stateDir"])
-    state_path = root / (req["key"] + ".json")
+    state_root = private_directory(config["stateDir"])
+    state_path = state_root / (req["key"] + ".json")
     lock = os.open(
-        root / (req["key"] + ".lock"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600
+        state_root / (req["key"] + ".lock"),
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
     )
     try:
         info = os.fstat(lock)
@@ -567,13 +622,19 @@ def perform(config, env):
             # In-process native kernel fixtures only. CLI requires live attestation.
             observed = read_record(root / (req["pod_uid"] + ".json"))
         attestation = binding(observed, req)
-        if req["command"] == "ADD":
-            return add(req, attestation, state_path, config.get("prevResult"))
-        saved = read_record(state_path)
-        if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
-            raise ValueError("CHECK identity changed")
-        check(req, attestation, saved, config.get("prevResult"))
-        return None
+        # Attestation can finish late, after retirement started. Only the
+        # protected generation lock plus persistent fence authorizes effects.
+        with generation_lock(state_root, attestation["generation"]) as retired:
+            if retired.exists() or retired.is_symlink():
+                read_record(retired)  # Corrupt/unreadable records also fail closed.
+                raise ValueError("attachment generation retired")
+            if req["command"] == "ADD":
+                return add(req, attestation, state_path, config.get("prevResult"))
+            saved = read_record(state_path)
+            if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
+                raise ValueError("CHECK identity changed")
+            check(req, attestation, saved, config.get("prevResult"))
+            return None
     finally:
         os.close(lock)
 

@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Trusted node-root admission fence. Does not delete or prove runtime release."""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main():
+    try:
+        if os.geteuid() != 0:
+            raise PermissionError("node-root execution required")
+        loader = importlib.machinery.SourceFileLoader(
+            "ads_ptp_retirement_cni", str(Path(__file__).with_name("ads-ptp"))
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        plugin = importlib.util.module_from_spec(spec)
+        loader.exec_module(plugin)
+        config = plugin.decode(sys.stdin.buffer.read(plugin.LIMIT + 1))
+        print(json.dumps(plugin.retire(config)))
+    except Exception as error:
+        print(json.dumps({"error": "attachment fence failed", "details": type(error).__name__}))
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
