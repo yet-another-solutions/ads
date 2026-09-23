@@ -194,6 +194,15 @@ def process_references(snapshot, deadline, proc=Path("/proc")):
                             continue  # This descriptor closed before observation.
                         match = re.fullmatch(r"net:\[(\d+)\]", target)
                         refs += bool(match and int(match[1]) in inodes)
+                        try:
+                            info = fd.stat()
+                        except FileNotFoundError:
+                            continue
+                        # FDs opened through a namespace bind mount can display
+                        # its path (including "(deleted)"), not "net:[inode]".
+                        # procfs magic-link stat still resolves the held object.
+                        if not match:
+                            refs += (info.st_dev, info.st_ino) in namespaces
                     for mount in bounded_text(task / "mountinfo").splitlines():
                         budget()
                         fields = mount.split()

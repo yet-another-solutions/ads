@@ -199,7 +199,7 @@ def fake_proc(tmp_path):
     return proc, task
 
 
-@pytest.mark.parametrize("kind", ["task", "fd", "mount", "runtime"])
+@pytest.mark.parametrize("kind", ["task", "fd", "mounted-fd", "mount", "runtime"])
 def test_process_scan_checks_nonleader_tasks_fds_mount_roots_and_runtime_ids(
     release, snapshot, tmp_path, kind
 ):
@@ -209,6 +209,14 @@ def test_process_scan_checks_nonleader_tasks_fds_mount_roots_and_runtime_ids(
         snapshot["namespaces"][0] = [info.st_dev, info.st_ino]
     elif kind == "fd":
         (task / "fd/5").symlink_to("net:[100]")
+    elif kind == "mounted-fd":
+        # A namespace FD need not render as net:[inode]; bind-mount opens
+        # retain a pathname. Real unmounted-path behavior is kernel-CI tested.
+        target = tmp_path / "namespace-mount"
+        target.touch()
+        info = target.stat()
+        snapshot["namespaces"][0] = [info.st_dev, info.st_ino]
+        (task / "fd/5").symlink_to(target)
     elif kind == "mount":
         (task / "mountinfo").write_text("12 1 0:4 net:[100] /other rw - nsfs nsfs rw\n")
     else:
