@@ -301,6 +301,71 @@ def test_capture_is_immutable_and_observe_requires_exact_durable_fence(
     assert plugin.read_record(snapshot_file) == snapshot
 
 
+def test_node_output_roundtrips_common_contract_and_keeps_exact_inventory_binding(
+    release, snapshot, operation
+):
+    import json
+
+    from ads_commons.sandbox.node_release import decode_node_release
+
+    request, observer = operation
+    captured = decode_node_release(json.dumps(release.perform(request)).encode())
+    assert captured.leftovers is None and not captured.observed_runtime_released
+    assert {str(uid) for uid in captured.pod_uids} == set(snapshot["pod_uids"])
+    observed = decode_node_release(
+        json.dumps(release.perform({**request, "action": "observe"})).encode()
+    )
+    assert observed.observed_runtime_released and not observed.generation_retired
+    assert observed.inventory_sha256 == captured.inventory_sha256
+    assert observed.boot_id == captured.boot_id and observed.pod_uids == captured.pod_uids
+    assert observer.reads == 2
+
+
+@pytest.mark.parametrize("field", ["runtime_ids", "namespaces", "links", "pod_uids", "boot_id"])
+def test_inventory_digest_covers_private_runtime_identity_without_exposing_it(
+    release, snapshot, field
+):
+    before = release.report(snapshot)
+    value = deepcopy(snapshot)
+    if field == "runtime_ids":
+        value[field][0] = "e" * 64
+    elif field == "namespaces":
+        value[field][0][1] += 1000
+    elif field == "links":
+        value[field][0]["ifindex"] += 1000
+    elif field == "pod_uids":
+        value[field][0] = str(uuid4())
+    else:
+        value[field] = str(uuid4())
+    after = release.report(value)
+    assert before["inventory_sha256"] != after["inventory_sha256"]
+    assert not {"runtime_ids", "namespaces", "links"} & set(after)
+    assert not after["observed_runtime_released"] and not after["generation_retired"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "extra", "negative", "bool", "overflow"])
+def test_report_cannot_promote_incomplete_observations(release, snapshot, fault):
+    counters = dict.fromkeys(
+        (
+            "pods",
+            "ready_sandboxes",
+            "live_containers",
+            "journals",
+            "host_links",
+            "process_namespace_references",
+        ),
+        0,
+    )
+    if fault == "missing":
+        del counters["journals"]
+    elif fault == "extra":
+        counters["extra"] = 0
+    else:
+        counters["pods"] = {"negative": -1, "bool": False, "overflow": 2147483648}[fault]
+    with pytest.raises(ValueError, match="observations"):
+        release.report(snapshot, leftovers=counters)
+
+
 def test_capture_cannot_start_without_retirement(release, plugin, snapshot, operation):
     request, _ = operation
     fence = Path(request["stateDir"]) / ("retired-" + request["generation"] + ".json")

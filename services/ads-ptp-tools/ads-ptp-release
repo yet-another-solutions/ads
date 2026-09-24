@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -104,6 +105,45 @@ def validate_snapshot(value, scope):
         "exact host peer identities required",
     )
     return value
+
+
+def report(snapshot, *, leftovers=None):
+    """Nonsecret binding to the exact protected inventory, never authentication."""
+    scope = {
+        key: snapshot[key] for key in ("node", "namespace", "network", "generation", "sandbox_id")
+    }
+    validate_snapshot(snapshot, scope)
+    if leftovers is not None:
+        require(
+            isinstance(leftovers, dict)
+            and set(leftovers)
+            == {
+                "pods",
+                "ready_sandboxes",
+                "live_containers",
+                "journals",
+                "host_links",
+                "process_namespace_references",
+            }
+            and all(
+                type(value) is int and 0 <= value <= 2147483647 for value in leftovers.values()
+            ),
+            "complete bounded release observations required",
+        )
+    return {
+        "schema": "ads-node-release-v1",
+        **scope,
+        "boot_id": snapshot["boot_id"],
+        "pod_uids": sorted(snapshot["pod_uids"]),
+        "inventory_sha256": hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "attachment_admission_fenced": True,
+        "release_inventory_captured": True,
+        "observed_runtime_released": leftovers is not None and not any(leftovers.values()),
+        "generation_retired": False,
+        "leftovers": leftovers,
+    }
 
 
 def startup_namespace(plugin, saved):
@@ -336,15 +376,7 @@ def observe(plugin, observer, root, snapshot):
     for name in ("pods", "ready_sandboxes", "live_containers"):
         leftovers[name] = max(before[name], leftovers[name])
     require(boot_id() == snapshot["boot_id"], "node boot changed during observation")
-    return {
-        **{
-            key: snapshot[key]
-            for key in ("node", "namespace", "generation", "sandbox_id", "boot_id")
-        },
-        "observed_runtime_released": not any(leftovers.values()),
-        "generation_retired": False,
-        "leftovers": leftovers,
-    }
+    return report(snapshot, leftovers=leftovers)
 
 
 def perform(request):
@@ -383,7 +415,7 @@ def perform(request):
             # Reassert durability after a lost reply or failed directory fsync,
             # without replacing the captured identities with a later runtime.
             plugin.save_record(path, value)
-            return {**scope, "release_inventory_captured": True, "observed_runtime_released": False}
+            return report(value)
         value = validate_snapshot(plugin.read_record(path), scope)
         return observe(plugin, observer, root, value)
 
