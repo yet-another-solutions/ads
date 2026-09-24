@@ -55,6 +55,30 @@ host-root adversary hiding kernel references or running the tool in a false
 namespace. The captured node boot must be unchanged; reboot requires a separate
 explicit recovery proof rather than treating stale inode values as authority.
 
+### Exact manager evidence binding
+
+Capture and observation now emit the `ads-node-release-v1` report with the exact
+four Pod UIDs, node boot ID and a SHA-256 digest of the canonical complete
+protected inventory. Capture includes `leftovers: null` and release false;
+observation includes every bounded counter and a consistent release boolean.
+Both retain the durable admission-fence and inventory-captured assertions.
+The runtime IDs, namespace inode/device pairs and host-link identities remain
+in the protected node record, not in the report.
+
+The common strict DTO rejects unknown/duplicate fields, duplicate/missing Pod
+identities, unbounded or malformed counters and inconsistent verdicts. The
+manager comparison requires exact original sandbox/generation, namespace,
+network, freshly observed single-node placement and all four captured Pod UIDs.
+An observation must then match the original boot and inventory digest as well.
+Capture responses, other generations, reboots and incomplete reports cannot
+be used as release observations.
+
+The digest is a content binding, not a signature, freshness proof or authority.
+Reports must arrive over a separately trusted node-owner channel in response to
+the current cleanup operation. This component does not implement that channel,
+persist manager teardown progress, authorize a delete or bypass the existing
+runtime-release guard. Unsupported partial inventories remain blocked.
+
 ### Interrupted attachment startup
 
 `capture-startup` uses the same durable fence and immutable snapshot format,
