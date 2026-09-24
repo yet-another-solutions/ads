@@ -16,6 +16,7 @@ from uuid import uuid4
 import httpx2
 import msgspec
 
+from ads_commons.sandbox.block_release import BlockReleaseReport, decode_block_release
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
 from ads_commons.sandbox.ipc_storage import IpcStorageReport, decode_ipc_storage
 from ads_commons.sandbox.node_release import NodeReleaseReport, _unique, decode_node_release
@@ -139,6 +140,8 @@ class HttpsNodeOwner:
         inventory_sha256: str | None = None,
         boot_id: str | None = None,
         pod_uids: dict[str, str] | None = None,
+        volumes: dict[str, dict[str, str]] | None = None,
+        runtime_sha256: str | None = None,
     ) -> bytes:
         endpoint = self.settings.endpoints.get(node)
         if endpoint is None:
@@ -159,6 +162,11 @@ class HttpsNodeOwner:
                 "inventory_sha256": inventory_sha256,
                 "boot_id": boot_id,
                 **({"pod_uids": pod_uids} if operation.startswith("partial-") else {}),
+                **(
+                    {"volumes": volumes, "runtime_sha256": runtime_sha256}
+                    if operation.startswith("block-")
+                    else {}
+                ),
             }
         )
         async with asyncio.timeout(self.settings.timeout):
@@ -190,8 +198,16 @@ class HttpsNodeOwner:
         ):
             raise ValueError("node-owner response correlation failed")
         report = msgspec.json.encode(result["report"])
-        decoded: IpcReleaseReport | NodeReleaseReport | PartialReleaseReport | IpcStorageReport
-        if operation.startswith("ipc-storage-"):
+        decoded: (
+            IpcReleaseReport
+            | NodeReleaseReport
+            | PartialReleaseReport
+            | IpcStorageReport
+            | BlockReleaseReport
+        )
+        if operation.startswith("block-"):
+            decoded = decode_block_release(report)
+        elif operation.startswith("ipc-storage-"):
             decoded = decode_ipc_storage(report)
         elif operation.startswith("ipc-"):
             decoded = decode_ipc_release(report)
@@ -216,7 +232,7 @@ class HttpsNodeOwner:
             )
         ):
             raise ValueError("node-owner returned a different original inventory")
-        if isinstance(decoded, (NodeReleaseReport, PartialReleaseReport)):
+        if isinstance(decoded, (NodeReleaseReport, PartialReleaseReport, BlockReleaseReport)):
             if decoded.network != self.network:
                 raise ValueError("node-owner network mismatch")
             if (
@@ -224,6 +240,19 @@ class HttpsNodeOwner:
                 and {key: str(uid) for key, uid in decoded.pod_uids.items()} != pod_uids
             ):
                 raise ValueError("node-owner partial identity mismatch")
+            if isinstance(decoded, BlockReleaseReport) and (
+                decoded.runtime_sha256 != runtime_sha256
+                or {
+                    role: {
+                        "name": v.name,
+                        "volume_uid": str(v.volume_uid),
+                        "pod_uid": str(v.pod_uid),
+                    }
+                    for role, v in decoded.volumes.items()
+                }
+                != volumes
+            ):
+                raise ValueError("node-owner original Block identity mismatch")
         elif str(decoded.pod_uid) != pod_uid or str(decoded.volume_uid) != volume_uid:
             raise ValueError("node-owner IPC identity mismatch")
         return report
@@ -323,4 +352,39 @@ class HttpsNodeOwner:
         proof = decode_ipc_storage(raw)
         if proof.pv_uid != captured.pv_uid or proof.runtime_sha256 != captured.runtime_sha256:
             raise ValueError("storage observation differs from original backing")
+        return raw
+
+    async def capture_block(
+        self,
+        captured: NodeReleaseReport | PartialReleaseReport,
+        volumes: dict[str, dict[str, str]],
+    ) -> bytes:
+        raw = await self._call(
+            "block-capture",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            runtime_sha256=captured.inventory_sha256,
+            volumes=volumes,
+        )
+        if decode_block_release(raw).boot_id != captured.boot_id:
+            raise ValueError("Block capture boot differs from original runtime")
+        return raw
+
+    async def observe_block(self, captured: BlockReleaseReport) -> bytes:
+        raw = await self._call(
+            "block-observe",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            runtime_sha256=captured.runtime_sha256,
+            volumes={
+                role: {"name": v.name, "volume_uid": str(v.volume_uid), "pod_uid": str(v.pod_uid)}
+                for role, v in captured.volumes.items()
+            },
+            boot_id=str(captured.boot_id),
+            inventory_sha256=captured.inventory_sha256,
+        )
+        if decode_block_release(raw).volumes != captured.volumes:
+            raise ValueError("Block observation changed original backing identity")
         return raw

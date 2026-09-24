@@ -295,3 +295,45 @@ def test_nonpartial_request_cannot_supply_partial_map(service, node_request, con
     node_request["pod_uids"] = {"guest": str(uuid4())}
     with pytest.raises(ValueError):
         service.request(json.dumps(node_request).encode(), config)
+
+
+@pytest.mark.parametrize("action", ["capture", "observe"])
+def test_block_operations_use_only_original_scope_and_configured_kubelet_root(
+    service, node_request, config, monkeypatch, action
+):
+    config["pair"]["kubeletRoot"] = "/platform/kubelet"
+    node_request.update(
+        operation="block-" + action,
+        runtime_sha256="a" * 64,
+        volumes={
+            "workspace": {"name": "claim", "volume_uid": str(uuid4()), "pod_uid": str(uuid4())}
+        },
+    )
+    if action == "observe":
+        node_request.update(boot_id=str(uuid4()), inventory_sha256="b" * 64)
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return dict(node_request)
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-block-release"
+    assert calls[0][1] == {
+        **config["pair"],
+        "action": action,
+        **{
+            key: node_request[key]
+            for key in (
+                "generation",
+                "sandbox_id",
+                "volumes",
+                "runtime_sha256",
+                "inventory_sha256",
+            )
+        },
+    }
+    node_request["kubeletRoot"] = "/caller-path"
+    with pytest.raises(ValueError):
+        service.request(json.dumps(node_request).encode(), config)

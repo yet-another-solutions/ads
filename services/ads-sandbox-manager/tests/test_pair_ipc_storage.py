@@ -30,7 +30,10 @@ pytestmark = pytest.mark.anyio
 
 @pytest.fixture
 async def ipc_storage(teardown):
-    f = teardown
+    return await configure_ipc_storage(teardown)
+
+
+async def configure_ipc_storage(f):
     original = f.adapter.kube.core.read_persistent_volume.side_effect
 
     def filesystem(name, **kwargs):

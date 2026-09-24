@@ -32,6 +32,7 @@ from ads_sandbox_manager.node_owner import HttpsNodeOwner, NodeOwnerSettings
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
+from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
 from ads_sandbox_manager.pair_runtime_teardown import PairNodeOwner, PairRuntimeTeardown
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
@@ -109,6 +110,17 @@ class AppProvider(Provider):
     pair_capture = provide(PairCleanupCapture, scope=Scope.APP)
     lifecycle = provide(LifecycleService, scope=Scope.APP)
     recovery = provide(RecoveryService, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def pair_resources(
+        self,
+        pair_runtime: PairRuntimeTeardown | None,
+        pair_cleanup_kube: PairCleanupKubernetes,
+        topics: TopicPreparation,
+    ) -> PairResourceTeardown | None:
+        if pair_runtime is None:
+            return None
+        return PairResourceTeardown(pair_runtime, pair_cleanup_kube, topics)
 
     @provide(scope=Scope.APP)
     async def node_owner(self, settings: Settings) -> AsyncIterator[PairNodeOwner | None]:

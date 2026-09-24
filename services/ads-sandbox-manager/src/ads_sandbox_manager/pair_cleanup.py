@@ -46,6 +46,16 @@ class PairCleanupKubernetes(Protocol):
     async def observe_clone(
         self, pair: PairBinding, role: str, payload: dict[str, object], uid: str | None
     ) -> str | None: ...
+    async def delete(self, pair: PairBinding, kind: ControlKind, role: str, uid: str) -> bool: ...
+    async def dispose_secret(
+        self,
+        pair: PairBinding,
+        key: str,
+        uid: str,
+        *,
+        persistent: dict[str, object] | None = None,
+        retain: bool = False,
+    ) -> bool: ...
 
 
 class PairCleanupCapture:

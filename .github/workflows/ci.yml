@@ -129,7 +129,7 @@ jobs:
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
             context: .
-            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire','ads-ptp-release','ads-ptp-partial','ads-ipc-release','ads-ipc-storage','ads-node-owner'))"
+            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire','ads-ptp-release','ads-ptp-partial','ads-ipc-release','ads-ipc-storage','ads-block-release','ads-node-owner'))"
             pack: "false"
     steps:
       - uses: actions/checkout@v7
@@ -230,6 +230,12 @@ jobs:
           docker run --rm --privileged --network none \
             -v "$PWD/services/ads-ptp-tools/ipc-storage-kernel-smoke.py:/ipc-storage-kernel-smoke.py:ro" \
             ads-ptp-tools:ci python /ipc-storage-kernel-smoke.py
+      - name: Original Block kernel-reference release
+        if: matrix.image == 'ads-ptp-tools'
+        run: |
+          docker run --rm --privileged --network none \
+            -v "$PWD/services/ads-ptp-tools/block-release-kernel-smoke.py:/block-release-kernel-smoke.py:ro" \
+            ads-ptp-tools:ci python /block-release-kernel-smoke.py
       - name: Smoke golden entrypoint
         if: matrix.pack == 'true'
         run: |

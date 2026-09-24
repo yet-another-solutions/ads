@@ -523,6 +523,76 @@ class PairControlAdapter:
             raise RuntimeError("relay custody observation failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
 
+    async def dispose_secret(
+        self,
+        pair: PairBinding,
+        key: str,
+        uid: str,
+        *,
+        persistent: Object | None = None,
+        retain: bool = False,
+    ) -> bool:
+        """Fixed original metadata only; never return key bytes or force finalizers."""
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("original custody UID required")
+        if key == "relay-custody" and not retain:
+            desired = custody_identity(self.kube.settings, pair)
+        elif key.startswith("relay-input/") and not retain:
+            desired = input_identity(self.kube.settings, pair, key.removeprefix("relay-input/"))
+        elif key == "state-key":
+            state = state_from_snapshot(persistent)
+            if (state.namespace, state.session_id, state.sandbox_id, state.project_id) != (
+                self.namespace,
+                pair.session_id,
+                pair.sandbox_id,
+                pair.project_id,
+            ):
+                raise RuntimeError("persistent custody disposition scope changed")
+            if state.key_uid != uid:
+                raise RuntimeError("persistent custody UID changed")
+            desired = egress_state_identity(state, "key")
+        else:
+            raise ValueError("unsupported per-pair credential disposition")
+        name = desired["metadata"]["name"]
+        try:
+            observed = await self.kube._get(self.kube.core.read_namespaced_secret, name)
+            if observed is None:
+                if retain:
+                    raise RuntimeError("retained custody disappeared")
+                return True
+            self._identity(observed, desired, uid)
+            if retain:
+                if observed["metadata"].get("deletionTimestamp"):
+                    raise RuntimeError("retained custody is terminating")
+                return True
+            if not observed["metadata"].get("deletionTimestamp"):
+                try:
+                    await self.kube._call(
+                        self.kube.core.delete_namespaced_secret,
+                        name,
+                        self.namespace,
+                        body={
+                            "apiVersion": "v1",
+                            "kind": "DeleteOptions",
+                            "preconditions": {
+                                "uid": uid,
+                                "resourceVersion": observed["metadata"]["resourceVersion"],
+                            },
+                        },
+                    )
+                except ApiException as exc:
+                    if exc.status == 409:
+                        return False
+                    if exc.status != 404:
+                        raise
+            remaining = await self.kube._get(self.kube.core.read_namespaced_secret, name)
+            if remaining is None:
+                return True
+            self._identity(remaining, desired, uid)
+            return False
+        except Exception:
+            raise RuntimeError("original credential disposition failed") from None
+
     async def observe_relay_input(
         self,
         pair: PairBinding,

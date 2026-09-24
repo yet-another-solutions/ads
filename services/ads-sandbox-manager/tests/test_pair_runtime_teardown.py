@@ -150,6 +150,44 @@ async def teardown(journal):
     class NodeOwner:
         network = f.report["network"]
 
+        async def capture_block(self, captured, volumes):
+            original = await state(f)
+            assert original["node_capture"]["inventory_sha256"] == captured.inventory_sha256
+            return msgspec.json.encode(
+                {
+                    "schema": "ads-block-release-v1",
+                    **{
+                        key: f.report[key]
+                        for key in (
+                            "node",
+                            "namespace",
+                            "network",
+                            "generation",
+                            "sandbox_id",
+                            "boot_id",
+                        )
+                    },
+                    "runtime_sha256": captured.inventory_sha256,
+                    "inventory_sha256": "f" * 64,
+                    "volumes": {
+                        role: {
+                            **entry,
+                            **{
+                                key: original["storage_capture"][role][key]
+                                for key in (
+                                    "pv_name",
+                                    "pv_uid",
+                                    "volume_key",
+                                )
+                            },
+                        }
+                        for role, entry in volumes.items()
+                    },
+                    "leftovers": None,
+                    "released": False,
+                }
+            )
+
         async def capture_ipc_storage(self, captured):
             original = await state(f)
             assert original["ipc_capture"]["inventory_sha256"] == captured.inventory_sha256

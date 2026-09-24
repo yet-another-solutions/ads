@@ -18,8 +18,10 @@ from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
+from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
 from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
+from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
 from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
@@ -70,6 +72,7 @@ class LifecycleService:
         tokens: TokenMinter,
         pair_capture: PairCleanupCapture,
         pair_runtime: PairRuntimeTeardown | None = None,
+        pair_resources: PairResourceTeardown | None = None,
     ) -> None:
         self.settings, self.sessions, self.repository = settings, sessions, repository
         self.kube, self.publisher, self.credentials, self.tokens = (
@@ -81,6 +84,7 @@ class LifecycleService:
         self._task: asyncio.Task[None] | None = None
         self.pair_capture = pair_capture
         self.pair_runtime = pair_runtime
+        self.pair_resources = pair_resources
         self._ping_task: asyncio.Task[None] | None = None
 
     async def emit(self, topic: str, message: Signal) -> None:
@@ -534,7 +538,10 @@ class LifecycleService:
                 if self.pair_runtime is None or not await self.pair_runtime.release(work):
                     log.warning("pair retirement requires runtime-release proof: %s", work_id)
                     return
-                await PairIpcStorageTeardown(self.pair_runtime).dispose(work)
+                if await PairIpcStorageTeardown(self.pair_runtime).dispose(work):
+                    await PairBlockStorageTeardown(self.pair_runtime).dispose(work)
+                if self.pair_resources is not None:
+                    await self.pair_resources.dispose(work)
                 # Positive private-runtime release does not retire IPC, storage,
                 # control policies, credentials or the generation ledger.
                 log.warning("paired resource retirement remains pending: %s", work_id)

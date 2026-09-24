@@ -11,6 +11,7 @@ import msgspec
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ads_commons.sandbox.block_release import BlockReleaseReport
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
 from ads_commons.sandbox.ipc_storage import IpcStorageReport
 from ads_commons.sandbox.node_release import NodeReleaseReport, decode_node_release
@@ -19,6 +20,7 @@ from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import Object
+from ads_sandbox_manager.pair_block_proof import block_volumes
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES, PairBinding
 from ads_sandbox_manager.pair_partial_proof import remaining_private
 from ads_sandbox_manager.pair_storage_capture import storage_targets
@@ -67,6 +69,10 @@ class PairNodeOwner(Protocol):
         self, pair: PairBinding, *, node: str, pod_uids: dict[str, str]
     ) -> bytes: ...
     async def observe_partial(self, captured: PartialReleaseReport) -> bytes: ...
+    async def capture_block(
+        self, captured: NodeReleaseReport | PartialReleaseReport, volumes: dict[str, dict[str, str]]
+    ) -> bytes: ...
+    async def observe_block(self, captured: BlockReleaseReport) -> bytes: ...
 
 
 class PairRuntimeTeardown:
@@ -257,6 +263,8 @@ class PairRuntimeTeardown:
                     recovery=recovery,
                     recovery_seconds=self.settings.recovery_seconds,
                 )
+        if not await self._capture_block(work, recovery):
+            return False
         if not await self._release_ipc(work, recovery):
             return False
         for role in COMPUTE_ROLES:
@@ -436,6 +444,8 @@ class PairRuntimeTeardown:
                     recovery_seconds=self.settings.recovery_seconds,
                 ):
                     return False
+        if not await self._capture_block(work, recovery):
+            return False
         if not self._never_started(journal, "ipc") and not await self._release_ipc(work, recovery):
             return False
         if not uids:
@@ -465,6 +475,34 @@ class PairRuntimeTeardown:
                 work,
                 raw,
                 datetime.now(UTC),
+                recovery=recovery,
+                recovery_seconds=self.settings.recovery_seconds,
+            )
+
+    async def _capture_block(self, work: CleanupWork, recovery: SandboxSession | None) -> bool:
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        volumes = block_volumes(journal)
+        if not volumes or journal["block_capture"] is not None:
+            return True
+        assert self.node_owner is not None
+        captured = (
+            decode_node_release(msgspec.json.encode(journal["node_capture"]))
+            if journal["node_capture"] is not None
+            else decode_partial_release(msgspec.json.encode(journal["partial_capture"]))
+        )
+        async with asyncio.timeout(self.settings.control_seconds):
+            raw = await self.node_owner.capture_block(captured, volumes)
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            work = await self._owned(db, work, recovery)
+            return await self.repository.record_pair_block_proof(
+                db,
+                work,
+                raw,
+                datetime.now(UTC),
+                capture=True,
                 recovery=recovery,
                 recovery_seconds=self.settings.recovery_seconds,
             )

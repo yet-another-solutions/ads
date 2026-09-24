@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_commons.sandbox.block_release import decode_block_release
 from ads_commons.sandbox.ipc_release import decode_ipc_release
 from ads_commons.sandbox.ipc_storage import decode_ipc_storage
 from ads_commons.sandbox.node_release import decode_node_release
@@ -21,6 +22,7 @@ from ads_sandbox_manager.egress_state_store import (
     state_from_snapshot,
     state_snapshot,
 )
+from ads_sandbox_manager.pair_block_proof import validate_block_journal
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
 from ads_sandbox_manager.pair_ipc_proof import ipc_capture_report, ipc_release_report
@@ -32,6 +34,7 @@ from ads_sandbox_manager.pair_partial_proof import (
     remaining_private,
     validate_partial_journal,
 )
+from ads_sandbox_manager.pair_resource_proof import resource_targets, validate_resource_journal
 from ads_sandbox_manager.pair_storage_capture import (
     storage_targets,
     validate_storage_capture,
@@ -216,6 +219,11 @@ class LifecycleRepository:
                 "partial_storage",
                 "partial_capture",
                 "partial_release",
+                "block_capture",
+                "block_release",
+                "block_disposition",
+                "resource_disposition",
+                "topic_disposition",
             }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
@@ -308,6 +316,8 @@ class LifecycleRepository:
                 decode_node_release(msgspec.json.encode(journal["node_capture"])),
             ):
                 raise RuntimeError("retained runtime report does not prove release")
+        validate_block_journal(journal)
+        validate_resource_journal(journal)
         return deepcopy(saved)
 
     @staticmethod
@@ -456,6 +466,11 @@ class LifecycleRepository:
                 "partial_storage": {},
                 "partial_capture": None,
                 "partial_release": None,
+                "block_capture": None,
+                "block_release": None,
+                "block_disposition": {},
+                "resource_disposition": {},
+                "topic_disposition": None,
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
@@ -853,6 +868,102 @@ class LifecycleRepository:
             return True
         journal[key] = value
         self.validate_ipc_journal(journal, pair)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
+    async def record_pair_block_proof(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        capture: bool = False,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        report = decode_block_release(raw)
+        value = msgspec.to_builtins(report)
+        key = "block_capture" if capture else "block_release"
+        if not capture:
+            original = journal["block_capture"]
+            if original is None or any(
+                value[k] != original[k] for k in original if k not in ("leftovers", "released")
+            ):
+                raise PairClaimLost("original Block observation binding changed")
+            if not report.released:
+                return False
+        if journal[key] is not None and journal[key] != value:
+            raise PairClaimLost("original Block receipt cannot be replaced")
+        journal[key] = value
+        validate_block_journal(journal)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
+    async def record_pair_block_disposition(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        target = {**journal["storage_capture"], **journal["partial_storage"]}[role]
+        journal["block_disposition"][role] = "retained" if target["retain"] else "reclaimed"
+        validate_block_journal(journal)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
+    async def record_pair_resource_disposition(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        key: str,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        if key == "topics":
+            journal["topic_disposition"] = (
+                "unissued"
+                if journal["snapshot"]["topics_dispatch"] == "unissued"
+                else "retained"
+                if journal["retain_workspace"]
+                else "deleted"
+            )
+        else:
+            journal["resource_disposition"][key] = resource_targets(journal)[key]
+        validate_resource_journal(journal)
         intent.cleanup_journal = journal
         await db.flush()
         return True
