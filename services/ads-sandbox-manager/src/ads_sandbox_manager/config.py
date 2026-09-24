@@ -175,6 +175,7 @@ class Settings:
     ads_base_url: str = "https://ads.invalid"
     ads_service_subject: UUID | None = None
     ca: CaSettings | None = None
+    pair_inputs: dict[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if (
@@ -239,6 +240,10 @@ class Settings:
             self.kafka_sasl_username and self.kafka_sasl_password
         ):
             raise ValueError("Kafka SASL username and password are required")
+        if self.pair_inputs is not None:
+            from ads_sandbox_manager.pair_runtime import pair_runtime
+
+            pair_runtime(self)
 
     @property
     def golden_name(self) -> str:
@@ -273,6 +278,13 @@ def load_settings() -> Settings:
     session_size = os.environ.get("ADS_SESSION_SIZE", "").strip()
     if not session_size:
         raise RuntimeError("ADS_SESSION_SIZE is required from the published release")
+    for name in (
+        "SESSION_OBJECTS",
+        "KEYCLOAK_ISSUER",
+        "KEYCLOAK_WELL_KNOWN_URL",
+        "KEYCLOAK_CLIENT_SECRET",
+    ):
+        required(name)
     settings = Settings(
         golden_version=required("GOLDEN_VERSION"),
         golden_image=required("GOLDEN_IMAGE"),
@@ -326,7 +338,11 @@ def load_settings() -> Settings:
         ads_base_url=required("ADS_BASE_URL").rstrip("/"),
         ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
         ca=CaSettings(**json.loads(required("CA"))),
+        pair_inputs=json.loads(required("PAIR_INPUTS")),
     )
+    from ads_sandbox_manager.pair_runtime import pair_runtime
+
+    pair_runtime(settings)  # JSON null is not permission to select the unpaired fixture path.
     load_tls_context(settings)
     if settings.session_objects is None:
         raise RuntimeError("ADS_SANDBOX_MANAGER_SESSION_OBJECTS is required")

@@ -17,6 +17,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.kube import SessionKubernetes
 from ads_sandbox_manager.objects import COMPONENT, JOB_UID, VERSION, Object
+from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
     SANDBOX,
@@ -91,6 +92,7 @@ class SessionProvisioner:
         topics: TopicPreparation,
         projects: SessionProjectsApi,
         ca: CaEnsure | None = None,
+        pair_creation: PairCreation | None = None,
     ) -> None:
         self.settings = settings
         self.kube = kube
@@ -100,6 +102,11 @@ class SessionProvisioner:
         self.topics = topics
         self.projects = projects
         self.ca = ca
+        self.pair_creation = pair_creation
+
+    async def drain(self) -> None:
+        if self.pair_creation is not None:
+            await self.pair_creation.drain()
 
     async def provision(self, session_id: UUID) -> SandboxSession:
         if not isinstance(session_id, UUID):
@@ -148,6 +155,10 @@ class SessionProvisioner:
         # creating row; only the later watchdog/recover may take it over.
         try:
             async with asyncio.timeout(config.create_seconds):
+                if self.pair_creation is not None:
+                    return await self.pair_creation.build(row, resume=resume)
+                if self.settings.pair_inputs is not None:
+                    raise RuntimeError("configured paired runtime has no creation service")
                 row = await self._disk(row, owner, resume=resume)
                 row = await self._ca_disks(row, owner)
                 await self.topics.prepare(row.sandbox_id)

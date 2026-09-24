@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, or_, select, update
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, or_, select, true, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -128,6 +128,11 @@ class SessionRepository:
         )
         if row is None or row.pvc_id is None or row.status_changed_at != expected:
             return False
+        from ads_sandbox_manager.pair_ready import paired_ready
+
+        pair_ready = await paired_ready(db, row)
+        if pair_ready is False:
+            return False
         if row.ca_attempt is not None and (
             set(row.ca_sources or {}) != {"public", "private"}
             or set(row.ca_clones or {}) != {"guest", "egress", "key"}
@@ -144,7 +149,7 @@ class SessionRepository:
                 SandboxSession.status == "creating",
                 SandboxSession.pvc_uid.is_not(None),
                 SandboxSession.ipc_pvc_uid.is_not(None),
-                SandboxSession.guest_deployment_uid.is_not(None),
+                true() if pair_ready is True else SandboxSession.guest_deployment_uid.is_not(None),
                 SandboxSession.ipc_deployment_uid.is_not(None),
             )
             .values(
