@@ -73,6 +73,7 @@ def test_capture_and_positive_negative_observation_roundtrip(node_report):
         ("pod_uids", []),
         ("inventory_sha256", "A" * 64),
         ("inventory_sha256", "b" * 63),
+        ("inventory_sha256", "b" * 64 + "\n"),
         ("attachment_admission_fenced", False),
         ("attachment_admission_fenced", 1),
         ("release_inventory_captured", False),

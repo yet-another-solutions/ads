@@ -33,7 +33,9 @@ class NodeReleaseReport(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     sandbox_id: UUID
     boot_id: UUID
     pod_uids: tuple[UUID, UUID, UUID, UUID]
-    inventory_sha256: Annotated[str, msgspec.Meta(pattern="^[0-9a-f]{64}$")]
+    inventory_sha256: Annotated[
+        str, msgspec.Meta(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")
+    ]
     attachment_admission_fenced: bool
     release_inventory_captured: bool
     observed_runtime_released: bool
