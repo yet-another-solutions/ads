@@ -10,7 +10,7 @@ from kubernetes.client.exceptions import ApiException
 
 from ads_sandbox_manager.egress_state_objects import identity as egress_state_identity
 from ads_sandbox_manager.egress_state_store import state_from_snapshot
-from ads_sandbox_manager.kube import KubeClient
+from ads_sandbox_manager.kube import KubeClient, timestamp
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_ipc_inputs import ipc_identity
 from ads_sandbox_manager.pair_objects import (
@@ -334,6 +334,109 @@ class PairControlAdapter:
         """Remove only the captured IPC Pod; API absence is not runtime release."""
         desired = ipc_identity(self.kube.settings, pair, "pod")
         return await self._delete_pod(desired, uid, node=node)
+
+    def _runtime_identity(self, pair: PairBinding, role: str) -> Object:
+        return (
+            ipc_identity(self.kube.settings, pair, "pod")
+            if role == "ipc"
+            else compute_identity(self.kube.settings, pair, role)
+        )
+
+    def _unscheduled(self, observed: Object, desired: Object, uid: str) -> Object | None:
+        self._identity(observed, desired, uid)
+        spec = observed.get("spec")
+        if not isinstance(spec, dict) or not isinstance(spec.get("nodeName", ""), str):
+            raise RuntimeError("invalid original Pod scheduling state")
+        node = spec.get("nodeName", "")
+        if node:
+            if not node.strip():
+                raise RuntimeError("invalid original Pod node")
+            return None  # Scheduled: requires the real node inventory, not this path.
+        status = observed.get("status", {})
+        if (
+            not isinstance(status, dict)
+            or status.get("phase", "") not in ("", "Pending")
+            or any(
+                status.get(key)
+                for key in (
+                    "containerStatuses",
+                    "initContainerStatuses",
+                    "ephemeralContainerStatuses",
+                )
+            )
+            or any(
+                condition.get("type") == "PodScheduled" and condition.get("status") == "True"
+                for condition in status.get("conditions", [])
+            )
+        ):
+            raise RuntimeError("unscheduled Pod has contradictory runtime status")
+        deleted = observed["metadata"].get("deletionTimestamp")
+        if deleted is not None and (not isinstance(deleted, str) or timestamp(deleted) is None):
+            raise RuntimeError("invalid original Pod deletion timestamp")
+        return {
+            "uid": uid,
+            "resource_version": observed["metadata"]["resourceVersion"],
+            "node": "",
+            "deletion_timestamp": deleted,
+        }
+
+    async def unscheduled_pod(self, pair: PairBinding, role: str, uid: str) -> Object | None:
+        """Positive original scheduling state, never a 404/phase-only shortcut.
+
+        A non-deleting observation can race binding; persist it before a
+        UID/resource-version conditional DELETE, then require the actual delete
+        response. A deleting unscheduled Pod cannot subsequently be bound.
+        """
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("original runtime Pod UID required")
+        desired = self._runtime_identity(pair, role)
+        observed = await self.kube._get(
+            self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+        )
+        if observed is None:
+            raise RuntimeError("missing Pod is not never-scheduled evidence")
+        return self._unscheduled(observed, desired, uid)
+
+    async def delete_unscheduled(self, pair: PairBinding, role: str, captured: Object) -> Object:
+        """Return only an actual original unscheduled DELETE response.
+
+        Caller must commit a claim-fenced dispatch first and retain its original
+        invocation through cancellation. Conflicts, 404 and lost replies are
+        not success; this method does not retry or infer a response from reads.
+        No force deletion, finalizer stripping, creation or node mutation.
+        """
+        if (
+            not isinstance(captured, dict)
+            or set(captured) != {"uid", "resource_version", "node", "deletion_timestamp"}
+            or captured["node"] != ""
+            or captured["deletion_timestamp"] is not None
+            or any(
+                not isinstance(captured[key], str) or not captured[key].strip()
+                for key in ("uid", "resource_version")
+            )
+        ):
+            raise ValueError("original non-deleting unscheduled capture required")
+        desired = self._runtime_identity(pair, role)
+        response = await self.kube._call(
+            self.kube.core.delete_namespaced_pod,
+            desired["metadata"]["name"],
+            self.namespace,
+            body={
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Foreground",
+                "preconditions": {
+                    "uid": captured["uid"],
+                    "resourceVersion": captured["resource_version"],
+                },
+            },
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("original unscheduled DELETE response unavailable")
+        result = self._unscheduled(response, desired, captured["uid"])
+        if result is None:
+            raise RuntimeError("DELETE response does not prove an unscheduled Pod")
+        return result
 
     async def _delete_pod(self, desired: Object, uid: str, *, node: str) -> bool:
         if (

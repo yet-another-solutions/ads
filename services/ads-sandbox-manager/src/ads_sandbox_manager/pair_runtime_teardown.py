@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import msgspec
+from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
@@ -19,6 +20,7 @@ from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES, PairBinding
 from ads_sandbox_manager.pair_storage_capture import storage_targets
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
+from ads_sandbox_manager.pair_unscheduled_proof import RUNTIME_ROLES, never_scheduled, pod_uid
 from ads_sandbox_manager.store import SandboxSession
 
 
@@ -33,6 +35,10 @@ class PairRuntimeKubernetes(Protocol):
     ) -> bool: ...
     async def ipc_placement(self, pair: PairBinding, uid: str) -> Object: ...
     async def delete_ipc(self, pair: PairBinding, uid: str, *, node: str) -> bool: ...
+    async def unscheduled_pod(self, pair: PairBinding, role: str, uid: str) -> Object | None: ...
+    async def delete_unscheduled(
+        self, pair: PairBinding, role: str, captured: Object
+    ) -> Object: ...
 
 
 class PairNodeOwner(Protocol):
@@ -65,6 +71,17 @@ class PairRuntimeTeardown:
     ) -> None:
         self.settings, self.sessions, self.repository = settings, sessions, repository
         self.kube, self.storage, self.node_owner = kube, storage, node_owner
+        self._dispatches: set[asyncio.Task[None]] = set()
+
+    def _finished(self, task: asyncio.Task[None]) -> None:
+        self._dispatches.discard(task)
+        if not task.cancelled():
+            task.exception()  # Retrieve without logging private API/error bodies.
+
+    async def drain(self) -> None:
+        if self._dispatches:
+            async with asyncio.timeout(self.settings.control_seconds):
+                await asyncio.wait(tuple(self._dispatches))
 
     async def _owned(
         self, db: AsyncSession, expected: CleanupWork, recovery: SandboxSession | None
@@ -162,8 +179,14 @@ class PairRuntimeTeardown:
             # generation created no runtime. It is not an empty node report,
             # volume-release proof, deletion permit or retirement decision.
             return True
+        if (
+            journal["node_capture"] is None
+            and journal["ipc_capture"] is None
+            and await self._release_unscheduled(work, recovery)
+        ):
+            return True
         if self.node_owner is None:
-            return False  # Unconfigured node delivery never authorizes deletion.
+            return False  # Unconfigured node delivery never authorizes runtime deletion.
         if journal["runtime_release"] is not None and journal["ipc_release"] is not None:
             return True  # Validated retained proof, not a fresh API-absence guess.
         pair = self.repository.cleanup_pair(work)
@@ -249,6 +272,83 @@ class PairRuntimeTeardown:
                 recovery=recovery,
                 recovery_seconds=self.settings.recovery_seconds,
             )
+
+    @staticmethod
+    def _never_started(journal: Object, role: str) -> bool:
+        return f"Pod/{role}" in journal["runtime_unissued"] or never_scheduled(journal, role)
+
+    async def _unscheduled_write(
+        self, pair: PairBinding, role: str, index: int, captured: Object
+    ) -> None:
+        conflict, response = False, None
+        try:
+            async with asyncio.timeout(self.settings.control_seconds):
+                response = await self.kube.delete_unscheduled(pair, role, captured)
+        except ApiException as error:
+            if error.status != 409:
+                raise
+            conflict = True  # Definitive rejection, not timeout/404/unknown completion.
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            await self.repository.settle_pair_unscheduled(
+                db, pair, role, index, captured, response, conflict=conflict
+            )
+
+    async def _release_unscheduled(
+        self, work: CleanupWork, recovery: SandboxSession | None
+    ) -> bool:
+        """Handle a prefix with no admitted runtime, preserving original writes."""
+        candidates = {}
+        pair = self.repository.cleanup_pair(work)
+        for role in RUNTIME_ROLES:
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            if self._never_started(journal, role):
+                continue
+            attempts = journal["unscheduled"].get(role, [])
+            if attempts and attempts[-1]["dispatch"] == "inflight":
+                return False  # Original invocation may still be running; never replay.
+            uid = pod_uid(journal["snapshot"], role)
+            assert uid is not None  # A sealed dispatched writer has an exact original UID.
+            async with asyncio.timeout(self.settings.control_seconds):
+                observed = await self.kube.unscheduled_pod(pair, role, uid)
+            if observed is None:
+                return False  # Mixed/live prefixes need node capture, not guessed absence.
+            candidates[role] = observed
+        # All remaining issued Pods were positively observed unassigned. Each
+        # binding race is still fenced by its own original UID/resourceVersion.
+        for role, captured in candidates.items():
+            async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+                work = await self._owned(db, work, recovery)
+                index = await self.repository.reserve_pair_unscheduled(
+                    db,
+                    work,
+                    role,
+                    captured,
+                    datetime.now(UTC),
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                )
+            if index is not None:
+                task = asyncio.create_task(
+                    self._unscheduled_write(pair, role, index, captured),
+                    name="pair-unscheduled-delete",
+                )
+                self._dispatches.add(task)
+                task.add_done_callback(self._finished)
+                await asyncio.wait((task,))  # Caller cancellation does not cancel the original.
+                task.result()
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            if not self._never_started(journal, role):
+                return False
+        checkpoint = await self._checkpoint(work, recovery)
+        return checkpoint is not None and all(
+            self._never_started(checkpoint[1], role) for role in RUNTIME_ROLES
+        )
 
     async def _release_ipc(self, work: CleanupWork, recovery: SandboxSession | None) -> bool:
         assert self.node_owner is not None

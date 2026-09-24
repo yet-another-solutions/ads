@@ -277,14 +277,18 @@ async def test_real_ordered_teardown_preserves_storage_and_waits_for_positive_ru
 
 async def test_production_provider_without_node_transport_never_deletes(teardown):
     f = teardown
-    f.runtime = AppProvider(f.runtime.settings).pair_runtime(
+    provider = AppProvider(f.runtime.settings).pair_runtime(
         f.runtime.settings, f.h.sessions, f.capture.repository, f.adapter.kube, f.storage, None
     )
-    assert f.runtime.node_owner is None
-    assert not await release(f)
-    assert not f.events
-    assert (await state(f))["node_capture"] is None
-    f.adapter.kube.core.delete_namespaced_pod.assert_not_called()
+    f.runtime = await anext(provider)
+    try:
+        assert f.runtime.node_owner is None
+        assert not await release(f)
+        assert not f.events
+        assert (await state(f))["node_capture"] is None
+        f.adapter.kube.core.delete_namespaced_pod.assert_not_called()
+    finally:
+        await provider.aclose()
 
 
 @pytest.mark.parametrize("stage", ["storage", "capture", "delete", "observe"])

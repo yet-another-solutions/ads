@@ -36,6 +36,11 @@ from ads_sandbox_manager.pair_store import (
     validate_control_dispatch,
     validate_relay_custody,
 )
+from ads_sandbox_manager.pair_unscheduled_proof import (
+    pod_uid,
+    validate_observation,
+    validate_unscheduled,
+)
 from ads_sandbox_manager.pair_volume_inputs import validate_volume_resources, volume_role
 from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
 from ads_sandbox_manager.session_objects import (
@@ -192,6 +197,7 @@ class LifecycleRepository:
                 "ipc_placement",
                 "ipc_capture",
                 "ipc_release",
+                "unscheduled",
             }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
@@ -252,6 +258,7 @@ class LifecycleRepository:
             raise RuntimeError("retained never-dispatched runtime proof changed")
         if journal["runtime_unissued"] != self.unissued_runtime(current):
             raise PairClaimLost("creator never-dispatched runtime proof changed")
+        validate_unscheduled(saved, journal["unscheduled"])
         if not isinstance(journal["storage_capture"], dict):
             raise RuntimeError("invalid retained storage capture")
         if journal["storage_capture"]:
@@ -371,12 +378,101 @@ class LifecycleRepository:
                 "ipc_placement": None,
                 "ipc_capture": None,
                 "ipc_release": None,
+                "unscheduled": {},
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
         if retained != expected.pair_snapshot:
             raise PairClaimLost("cleanup claim differs from retained ownership")
         return True
+
+    async def reserve_pair_unscheduled(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        captured: dict[str, Any],
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> int | None:
+        """Commit original conditional deletion before its only invocation.
+
+        A direct deleting/unscheduled observation excludes future admission.
+        Otherwise only the original DELETE response can settle this operation.
+        Neither a 404 nor expiry is permission to replay an inflight DELETE.
+        """
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            raise PairClaimLost("pair writers have not settled")
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        validate_observation(captured, pod_uid(journal["snapshot"], role))
+        attempts = journal["unscheduled"].setdefault(role, [])
+        if attempts and attempts[-1]["dispatch"] != "conflict":
+            return None  # Existing original invocation or positive terminal proof.
+        if len(attempts) >= 128:
+            raise PairClaimLost("unscheduled conflict history exhausted; intent retained")
+        observed = captured["deletion_timestamp"] is not None
+        attempts.append(
+            {
+                "capture": deepcopy(captured),
+                "dispatch": "observed" if observed else "inflight",
+                "response": None,
+            }
+        )
+        validate_unscheduled(journal["snapshot"], journal["unscheduled"])
+        intent.cleanup_journal = journal
+        await db.flush()
+        return None if observed else len(attempts) - 1
+
+    async def settle_pair_unscheduled(
+        self,
+        db: AsyncSession,
+        pair: PairBinding,
+        role: str,
+        index: int,
+        captured: dict[str, Any],
+        response: dict[str, Any] | None,
+        *,
+        conflict: bool = False,
+    ) -> None:
+        """Save the original call's outcome even after caller/claim loss.
+
+        No new deletion is authorized here. The retained exact reservation is
+        required and cannot be recreated, replaced or reassigned to a new pair.
+        A normal HTTP 409 is a rejected operation; other failures stay inflight.
+        """
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        if intent is None or intent.binding() != pair or intent.cleanup_journal is None:
+            raise PairClaimLost("original unscheduled cleanup intent missing")
+        # Validate the permanent fence, creator seal and entire prior proof.
+        await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
+        journal = deepcopy(intent.cleanup_journal)
+        attempts = journal["unscheduled"].get(role, [])
+        if type(index) is not int or index != len(attempts) - 1 or index < 0:
+            raise PairClaimLost("original unscheduled dispatch missing")
+        original = attempts[index]
+        outcome = {
+            "capture": deepcopy(captured),
+            "dispatch": "conflict" if conflict else "settled",
+            "response": deepcopy(response),
+        }
+        if original["capture"] != captured or original["dispatch"] not in (
+            "inflight",
+            outcome["dispatch"],
+        ):
+            raise PairClaimLost("original unscheduled dispatch changed")
+        if original["dispatch"] != "inflight" and original != outcome:
+            raise PairClaimLost("original unscheduled outcome cannot be replaced")
+        attempts[index] = outcome
+        validate_unscheduled(journal["snapshot"], journal["unscheduled"])
+        intent.cleanup_journal = journal
+        await db.flush()
 
     async def record_pair_node_capture(
         self,

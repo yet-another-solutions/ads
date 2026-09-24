@@ -123,7 +123,7 @@ class AppProvider(Provider):
             await owner.close()
 
     @provide(scope=Scope.APP)
-    def pair_runtime(
+    async def pair_runtime(
         self,
         settings: Settings,
         sessions: async_sessionmaker[AsyncSession],
@@ -131,10 +131,14 @@ class AppProvider(Provider):
         kube: KubeClient,
         storage: CleanupKubernetes,
         node_owner: PairNodeOwner | None,
-    ) -> PairRuntimeTeardown | None:
-        return PairRuntimeTeardown(
+    ) -> AsyncIterator[PairRuntimeTeardown | None]:
+        runtime = PairRuntimeTeardown(
             settings, sessions, repository, PairControlAdapter(kube), storage, node_owner
         )
+        try:
+            yield runtime
+        finally:
+            await runtime.drain()
 
     @provide(scope=Scope.APP)
     def pair_creation(

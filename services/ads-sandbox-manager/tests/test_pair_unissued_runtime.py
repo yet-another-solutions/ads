@@ -33,7 +33,7 @@ async def runtime(f):
     f.capture, f.work, f.claim = capture, work, claim
     storage, node = AsyncMock(), AsyncMock()
     service = PairRuntimeTeardown(
-        replace(f.h.settings, cleanup_seconds=60, recovery_seconds=120),
+        replace(f.service.settings, cleanup_seconds=60, recovery_seconds=120),
         f.h.sessions,
         capture.repository,
         f.adapter,
