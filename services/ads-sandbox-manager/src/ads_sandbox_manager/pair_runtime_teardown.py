@@ -10,6 +10,7 @@ from typing import Protocol
 import msgspec
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
 from ads_commons.sandbox.node_release import NodeReleaseReport, decode_node_release
 from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
@@ -30,6 +31,8 @@ class PairRuntimeKubernetes(Protocol):
     async def delete_compute(
         self, pair: PairBinding, role: str, uid: str, *, node: str
     ) -> bool: ...
+    async def ipc_placement(self, pair: PairBinding, uid: str) -> Object: ...
+    async def delete_ipc(self, pair: PairBinding, uid: str, *, node: str) -> bool: ...
 
 
 class PairNodeOwner(Protocol):
@@ -44,6 +47,10 @@ class PairNodeOwner(Protocol):
     def network(self) -> str: ...
     async def fence_and_capture(self, pair: PairBinding, *, node: str) -> bytes: ...
     async def observe(self, captured: NodeReleaseReport) -> bytes: ...
+    async def capture_ipc(
+        self, pair: PairBinding, *, node: str, pod_uid: str, volume_uid: str
+    ) -> bytes: ...
+    async def observe_ipc(self, captured: IpcReleaseReport) -> bytes: ...
 
 
 class PairRuntimeTeardown:
@@ -106,6 +113,8 @@ class PairRuntimeTeardown:
             recovery=recovery,
             recovery_seconds=self.settings.recovery_seconds,
         )
+        if current.kind == "idle" and not current.acknowledged:
+            raise PairClaimLost("IPC drain acknowledgement required before idle teardown")
         snapshot = current.pair_snapshot
         assert snapshot is not None
         wanted = self.settings.namespace, self.settings.golden_version
@@ -145,7 +154,7 @@ class PairRuntimeTeardown:
         if checkpoint is None or self.node_owner is None:
             return False  # Unconfigured node delivery never authorizes deletion.
         work, journal = checkpoint
-        if journal["runtime_release"] is not None:
+        if journal["runtime_release"] is not None and journal["ipc_release"] is not None:
             return True  # Validated retained proof, not a fresh API-absence guess.
         pair = self.repository.cleanup_pair(work)
         for role, target in storage_targets(
@@ -196,6 +205,8 @@ class PairRuntimeTeardown:
                     recovery=recovery,
                     recovery_seconds=self.settings.recovery_seconds,
                 )
+        if not await self._release_ipc(work, recovery):
+            return False
         for role in COMPUTE_ROLES:
             checkpoint = await self._checkpoint(work, recovery)
             if checkpoint is None:
@@ -221,6 +232,68 @@ class PairRuntimeTeardown:
         async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
             work = await self._owned(db, work, recovery)
             return await self.repository.record_pair_runtime_release(
+                db,
+                work,
+                raw,
+                datetime.now(UTC),
+                recovery=recovery,
+                recovery_seconds=self.settings.recovery_seconds,
+            )
+
+    async def _release_ipc(self, work: CleanupWork, recovery: SandboxSession | None) -> bool:
+        assert self.node_owner is not None
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        if journal["ipc_release"] is not None:
+            return True
+        pair = self.repository.cleanup_pair(work)
+        if journal["ipc_capture"] is None:
+            resources = journal["snapshot"]["ipc_resources"]
+            async with asyncio.timeout(self.settings.control_seconds):
+                placement = await self.kube.ipc_placement(pair, resources["pod"]["uid"])
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            async with asyncio.timeout(self.settings.control_seconds):
+                raw = await self.node_owner.capture_ipc(
+                    pair,
+                    node=placement["node"],
+                    pod_uid=placement["uid"],
+                    volume_uid=resources["volume"]["uid"],
+                )
+            async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+                work = await self._owned(db, work, recovery)
+                if not await self.repository.record_pair_ipc_proof(
+                    db,
+                    work,
+                    raw,
+                    datetime.now(UTC),
+                    placement=placement,
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                ):
+                    return False
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        captured = decode_ipc_release(msgspec.json.encode(journal["ipc_capture"]))
+        async with asyncio.timeout(self.settings.control_seconds):
+            absent = await self.kube.delete_ipc(pair, str(captured.pod_uid), node=captured.node)
+        if not absent:
+            return False
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        async with asyncio.timeout(self.settings.control_seconds):
+            raw = await self.node_owner.observe_ipc(captured)
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            work = await self._owned(db, work, recovery)
+            return await self.repository.record_pair_ipc_proof(
                 db,
                 work,
                 raw,
