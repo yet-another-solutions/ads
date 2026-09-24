@@ -155,6 +155,7 @@ class PairIntent(Base):
     ipc_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_ipc_resources)
     volume_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_volume_resources)
     topics_dispatch: Mapped[str] = mapped_column(default="unissued")
+    cleanup_journal: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
