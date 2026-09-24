@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_commons.sandbox.ipc_release import decode_ipc_release
+from ads_commons.sandbox.ipc_storage import decode_ipc_storage
 from ads_commons.sandbox.node_release import decode_node_release
 from ads_commons.sandbox.partial_release import decode_partial_release
 from ads_sandbox_manager.egress_state_store import (
@@ -208,6 +209,9 @@ class LifecycleRepository:
                 "ipc_placement",
                 "ipc_capture",
                 "ipc_release",
+                "ipc_storage_capture",
+                "ipc_storage_release",
+                "ipc_storage_reclaimed",
                 "unscheduled",
                 "partial_storage",
                 "partial_capture",
@@ -356,6 +360,57 @@ class LifecycleRepository:
                 decode_ipc_release(msgspec.json.encode(captured)),
             ):
                 raise RuntimeError("retained IPC report does not prove release")
+        backing = journal["ipc_storage_capture"]
+        storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
+        if (
+            storage is not None
+            and "filesystem_backing" in storage
+            and journal["ipc_release"] is not None
+            and backing is None
+        ):
+            raise RuntimeError("IPC release lacks original backing capture")
+        if backing is not None:
+            report = decode_ipc_storage(msgspec.json.encode(backing))
+            storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
+            if captured is None or storage is None or "filesystem_backing" not in storage:
+                raise RuntimeError("IPC backing capture lacks original runtime/storage")
+            if (
+                report.observed
+                or str(report.pv_uid) != storage["pv_uid"]
+                or report.runtime_sha256 != captured["inventory_sha256"]
+                or any(
+                    backing[key] != captured[key]
+                    for key in (
+                        "node",
+                        "namespace",
+                        "generation",
+                        "sandbox_id",
+                        "boot_id",
+                        "pod_uid",
+                        "volume_uid",
+                    )
+                )
+            ):
+                raise RuntimeError("IPC backing capture identity changed")
+        for phase in ("release", "reclaimed"):
+            proof = journal[f"ipc_storage_{phase}"]
+            if proof is None:
+                continue
+            report = decode_ipc_storage(msgspec.json.encode(proof))
+            if (
+                backing is None
+                or journal["ipc_release"] is None
+                or not report.observed
+                or not report.released
+                or (phase == "reclaimed" and not report.reclaimed)
+                or any(
+                    proof[key] != backing[key]
+                    for key in backing
+                    if key not in ("observed", "released", "reclaimed")
+                )
+                or (phase == "reclaimed" and journal["ipc_storage_release"] is None)
+            ):
+                raise RuntimeError("IPC storage observation lacks original positive proof")
 
     async def seal_pair_cleanup(
         self,
@@ -394,6 +449,9 @@ class LifecycleRepository:
                 "ipc_placement": None,
                 "ipc_capture": None,
                 "ipc_release": None,
+                "ipc_storage_capture": None,
+                "ipc_storage_release": None,
+                "ipc_storage_reclaimed": None,
                 "unscheduled": {},
                 "partial_storage": {},
                 "partial_capture": None,
@@ -720,6 +778,80 @@ class LifecycleRepository:
             if journal["ipc_release"] is not None and journal["ipc_release"] != value:
                 raise PairClaimLost("original IPC release cannot be replaced")
             journal["ipc_release"] = value
+        self.validate_ipc_journal(journal, pair)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
+    async def record_pair_ipc_storage_capture(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        value = msgspec.to_builtins(decode_ipc_storage(raw))
+        if journal["ipc_storage_capture"] is not None and journal["ipc_storage_capture"] != value:
+            raise PairClaimLost("original IPC backing capture cannot be replaced")
+        journal["ipc_storage_capture"] = value
+        self.validate_ipc_journal(journal, pair)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
+    async def record_pair_ipc_storage_observation(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        reclaimed: bool = False,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        report = decode_ipc_storage(raw)
+        # Validate scope before accepting even a blocked observer response.
+        value = msgspec.to_builtins(report)
+        captured = journal["ipc_storage_capture"]
+        if (
+            captured is None
+            or any(
+                value[key] != captured[key]
+                for key in captured
+                if key not in ("observed", "released", "reclaimed")
+            )
+            or not report.observed
+        ):
+            raise PairClaimLost("original IPC backing observation required")
+        if not report.released or (reclaimed and not report.reclaimed):
+            return False
+        key = "ipc_storage_reclaimed" if reclaimed else "ipc_storage_release"
+        if journal[key] is not None:
+            # A later observation may progress from released to reclaimed.
+            # Keep the original positive receipt; never rewrite its identity.
+            self.validate_ipc_journal(journal, pair)
+            return True
+        journal[key] = value
         self.validate_ipc_journal(journal, pair)
         intent.cleanup_journal = journal
         await db.flush()

@@ -17,6 +17,7 @@ import httpx2
 import msgspec
 
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
+from ads_commons.sandbox.ipc_storage import IpcStorageReport, decode_ipc_storage
 from ads_commons.sandbox.node_release import NodeReleaseReport, _unique, decode_node_release
 from ads_commons.sandbox.partial_release import PartialReleaseReport, decode_partial_release
 from ads_sandbox_manager.pair_objects import PairBinding
@@ -189,8 +190,10 @@ class HttpsNodeOwner:
         ):
             raise ValueError("node-owner response correlation failed")
         report = msgspec.json.encode(result["report"])
-        decoded: IpcReleaseReport | NodeReleaseReport | PartialReleaseReport
-        if operation.startswith("ipc-"):
+        decoded: IpcReleaseReport | NodeReleaseReport | PartialReleaseReport | IpcStorageReport
+        if operation.startswith("ipc-storage-"):
+            decoded = decode_ipc_storage(report)
+        elif operation.startswith("ipc-"):
             decoded = decode_ipc_release(report)
         elif operation.startswith("partial-"):
             decoded = decode_partial_release(report)
@@ -203,7 +206,14 @@ class HttpsNodeOwner:
             or str(decoded.sandbox_id) != sandbox_id
             or (boot_id is not None and str(decoded.boot_id) != boot_id)
             or (inventory_sha256 is not None and decoded.inventory_sha256 != inventory_sha256)
-            or (decoded.leftovers is None) != operation.endswith("capture")
+            or (
+                (
+                    not decoded.observed
+                    if isinstance(decoded, IpcStorageReport)
+                    else decoded.leftovers is None
+                )
+                != operation.endswith("capture")
+            )
         ):
             raise ValueError("node-owner returned a different original inventory")
         if isinstance(decoded, (NodeReleaseReport, PartialReleaseReport)):
@@ -284,3 +294,33 @@ class HttpsNodeOwner:
             boot_id=str(captured.boot_id),
             inventory_sha256=captured.inventory_sha256,
         )
+
+    async def capture_ipc_storage(self, captured: IpcReleaseReport) -> bytes:
+        raw = await self._call(
+            "ipc-storage-capture",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            pod_uid=str(captured.pod_uid),
+            volume_uid=str(captured.volume_uid),
+        )
+        proof = decode_ipc_storage(raw)
+        if proof.boot_id != captured.boot_id or proof.runtime_sha256 != captured.inventory_sha256:
+            raise ValueError("storage capture differs from original IPC runtime")
+        return raw
+
+    async def observe_ipc_storage(self, captured: IpcStorageReport) -> bytes:
+        raw = await self._call(
+            "ipc-storage-observe",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            pod_uid=str(captured.pod_uid),
+            volume_uid=str(captured.volume_uid),
+            boot_id=str(captured.boot_id),
+            inventory_sha256=captured.inventory_sha256,
+        )
+        proof = decode_ipc_storage(raw)
+        if proof.pv_uid != captured.pv_uid or proof.runtime_sha256 != captured.runtime_sha256:
+            raise ValueError("storage observation differs from original backing")
+        return raw

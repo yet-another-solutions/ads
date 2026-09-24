@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import os
+from copy import deepcopy
+from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
+
+import msgspec
+import pytest
+from test_ipc_node_release import captured, ipc, observer, wanted  # noqa: F401
+
+from ads_commons.sandbox.ipc_storage import decode_ipc_storage
+
+
+@pytest.fixture
+def backing(ipc, captured, observer, tmp_path, monkeypatch):  # noqa: F811
+    path = Path(__file__).parents[2] / "services/ads-ptp-tools/ads-ipc-storage"
+    loader = importlib.machinery.SourceFileLoader("ipc_storage", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    folder = tmp_path / "volume"
+    folder.mkdir()
+    info = folder.stat()
+    captured["filesystem"].update(
+        root=str(folder),
+        device=f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}",
+        root_identity=[info.st_dev, info.st_ino],
+    )
+    name = "ads-sandbox-ipc-" + captured["sandbox_id"]
+    pvc = {
+        "metadata": {"uid": captured["volume_uid"]},
+        "status": {"phase": "Bound"},
+        "spec": {"volumeName": "original-pv"},
+    }
+    pv = {
+        "metadata": {"uid": str(uuid4())},
+        "spec": {
+            "claimRef": {
+                "uid": captured["volume_uid"],
+                "name": name,
+                "namespace": captured["namespace"],
+            },
+            "persistentVolumeReclaimPolicy": "Delete",
+            "hostPath": {"path": str(folder)},
+        },
+    }
+    monkeypatch.setattr(ipc, "exact_pod", lambda *a: None)
+    monkeypatch.setattr(module, "filesystem_handle", lambda path: {"type": 1, "bytes": "aabb"})
+    # External kernel handle calls are faked here; real inode/rename proof is
+    # exercised separately by the privileged CI kernel smoke.
+    monkeypatch.setattr(
+        module,
+        "handle_exists",
+        lambda parent, handle, identity: any(
+            p.is_dir() and [p.stat().st_dev, p.stat().st_ino] == identity
+            for p in Path(parent).iterdir()
+        ),
+    )
+    observer.command = lambda *args: deepcopy(pvc if "pvc" in args else pv)
+    return SimpleNamespace(
+        module=module,
+        ipc=ipc,
+        runtime=captured,
+        observer=observer,
+        folder=folder,
+        pvc=pvc,
+        pv=pv,
+        release=ipc.load("ads-ptp-release"),
+    )
+
+
+def snapshot(f):
+    return f.module.capture(f.observer, f.runtime, f.ipc)
+
+
+def test_backing_capture_and_actual_path_reclamation_are_distinct(backing, monkeypatch):
+    f = backing
+    saved = snapshot(f)
+    assert f.module.validate(saved, wanted(f.runtime), f.ipc) == saved
+    report = decode_ipc_storage(msgspec.json.encode(f.module.report(saved)))
+    assert not report.observed and not report.released and not report.reclaimed
+    assert str(report.pv_uid) == f.pv["metadata"]["uid"]
+    monkeypatch.setattr(f.ipc, "references", lambda *a: (0, 0))
+    observed = f.module.observe(f.observer, saved, f.ipc, f.release)
+    assert observed["released"] and not observed["reclaimed"]
+    f.folder.rmdir()
+    observed = f.module.observe(f.observer, saved, f.ipc, f.release)
+    assert decode_ipc_storage(msgspec.json.encode(observed)).reclaimed
+    assert observed["inventory_sha256"] == report.inventory_sha256
+    assert "path" not in observed  # Host inventory stays at the node.
+
+
+@pytest.mark.parametrize(
+    "fault", ["uid", "claim", "policy", "csi", "source", "symlink", "identity"]
+)
+def test_capture_rejects_unknown_or_foreign_backing(backing, fault, tmp_path):
+    f = backing
+    if fault == "uid":
+        f.pvc["metadata"]["uid"] = str(uuid4())
+    elif fault == "claim":
+        f.pv["spec"]["claimRef"]["uid"] = str(uuid4())
+    elif fault == "policy":
+        f.pv["spec"]["persistentVolumeReclaimPolicy"] = "Retain"
+    elif fault == "csi":
+        f.pv["spec"]["csi"] = {"driver": "foreign"}
+    elif fault == "source":
+        f.pv["spec"]["local"] = {"path": str(f.folder)}
+    elif fault == "symlink":
+        alias = tmp_path / "alias"
+        alias.symlink_to(f.folder)
+        f.pv["spec"]["hostPath"]["path"] = str(alias)
+    else:
+        f.runtime["filesystem"]["root_identity"][1] += 1
+    with pytest.raises(ValueError):
+        snapshot(f)
+
+
+@pytest.mark.parametrize("fault", ["boot", "replacement", "parent", "missing-parent", "symlink"])
+def test_observe_never_equates_missing_api_with_reclaimed_storage(backing, monkeypatch, fault):
+    f = backing
+    saved = snapshot(f)
+    monkeypatch.setattr(f.ipc, "references", lambda *a: (0, 0))
+    if fault == "boot":
+        monkeypatch.setattr(f.release, "boot_id", lambda: str(uuid4()))
+    elif fault == "replacement":
+        f.folder.rename(f.folder.with_name("old"))
+        f.folder.mkdir()
+    elif fault == "parent":
+        saved["parent"][1] += 1
+    elif fault == "missing-parent":
+        f.folder.rmdir()
+        f.folder.parent.rmdir()
+    else:
+        f.folder.rename(f.folder.with_name("old"))
+        f.folder.symlink_to(f.folder.with_name("old"))
+    with pytest.raises((ValueError, FileNotFoundError)):
+        f.module.observe(f.observer, saved, f.ipc, f.release)
+
+
+def test_held_runtime_or_mount_prevents_reclamation(backing, monkeypatch):
+    f = backing
+    saved = snapshot(f)
+    f.folder.rmdir()
+    monkeypatch.setattr(f.ipc, "references", lambda *a: (0, 1))
+    observed = f.module.observe(f.observer, saved, f.ipc, f.release)
+    assert observed["observed"] and not observed["released"] and not observed["reclaimed"]
+
+
+def test_renamed_original_inode_is_not_reclaimed(backing, monkeypatch):
+    f = backing
+    saved = snapshot(f)
+    f.folder.rename(f.folder.with_name("moved-original"))
+    monkeypatch.setattr(f.ipc, "references", lambda *a: (0, 0))
+    observed = f.module.observe(f.observer, saved, f.ipc, f.release)
+    assert observed["released"] and not observed["reclaimed"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("pv_uid", "bad"),
+        ("runtime_sha256", "a"),
+        ("inventory_sha256", "F" * 64),
+        ("observed", 1),
+        ("released", True),
+        ("reclaimed", True),
+        ("extra", False),
+    ],
+)
+def test_malformed_or_inconsistent_storage_wire_refused(backing, field, value):
+    raw = {**backing.module.report(snapshot(backing)), field: value}
+    with pytest.raises(ValueError):
+        decode_ipc_storage(msgspec.json.encode(raw))

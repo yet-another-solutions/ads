@@ -29,6 +29,8 @@ OPERATIONS = {
     "ipc-observe",
     "partial-capture",
     "partial-observe",
+    "ipc-storage-capture",
+    "ipc-storage-observe",
 }
 
 
@@ -76,6 +78,7 @@ def settings(path):
         "ads-ptp-release",
         "ads-ptp-partial",
         "ads-ipc-release",
+        "ads-ipc-storage",
         "ads-node-owner",
     ):
         protected(Path(__file__).with_name(name), executable=True)
@@ -236,7 +239,9 @@ def perform(raw, config):
     capture = value["operation"].endswith("capture")
     if value["operation"].startswith("ipc-"):
         report = helper(
-            "ads-ipc-release",
+            "ads-ipc-storage"
+            if value["operation"].startswith("ipc-storage-")
+            else "ads-ipc-release",
             {
                 **identity,
                 "action": "capture" if capture else "observe",

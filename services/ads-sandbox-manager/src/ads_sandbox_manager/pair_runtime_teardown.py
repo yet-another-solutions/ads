@@ -12,6 +12,7 @@ from kubernetes.client.exceptions import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
+from ads_commons.sandbox.ipc_storage import IpcStorageReport
 from ads_commons.sandbox.node_release import NodeReleaseReport, decode_node_release
 from ads_commons.sandbox.partial_release import PartialReleaseReport, decode_partial_release
 from ads_sandbox_manager.cleanup import CleanupKubernetes
@@ -60,6 +61,8 @@ class PairNodeOwner(Protocol):
         self, pair: PairBinding, *, node: str, pod_uid: str, volume_uid: str
     ) -> bytes: ...
     async def observe_ipc(self, captured: IpcReleaseReport) -> bytes: ...
+    async def capture_ipc_storage(self, captured: IpcReleaseReport) -> bytes: ...
+    async def observe_ipc_storage(self, captured: IpcStorageReport) -> bytes: ...
     async def capture_partial(
         self, pair: PairBinding, *, node: str, pod_uids: dict[str, str]
     ) -> bytes: ...
@@ -507,6 +510,25 @@ class PairRuntimeTeardown:
             return False
         work, journal = checkpoint
         captured = decode_ipc_release(msgspec.json.encode(journal["ipc_capture"]))
+        storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
+        if storage and "filesystem_backing" in storage and journal["ipc_storage_capture"] is None:
+            async with asyncio.timeout(self.settings.control_seconds):
+                raw = await self.node_owner.capture_ipc_storage(captured)
+            async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+                work = await self._owned(db, work, recovery)
+                if not await self.repository.record_pair_ipc_storage_capture(
+                    db,
+                    work,
+                    raw,
+                    datetime.now(UTC),
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                ):
+                    return False
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
         async with asyncio.timeout(self.settings.control_seconds):
             absent = await self.kube.delete_ipc(pair, str(captured.pod_uid), node=captured.node)
         if not absent:

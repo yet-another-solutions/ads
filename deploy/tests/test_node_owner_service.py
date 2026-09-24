@@ -102,6 +102,34 @@ def test_observe_requires_original_boot_and_digest(service, node_request, config
             service.request(json.dumps({**node_request, field: None}).encode(), config)
 
 
+@pytest.mark.parametrize("action", ["capture", "observe"])
+def test_storage_calls_only_fixed_ipc_backing_observer(
+    service, node_request, config, monkeypatch, action
+):
+    config["ipc"] = "/platform/ipc"
+    node_request.update(
+        operation="ipc-storage-" + action,
+        pod_uid=str(uuid4()),
+        volume_uid=str(uuid4()),
+        boot_id=str(uuid4()) if action == "observe" else None,
+        inventory_sha256="a" * 64 if action == "observe" else None,
+    )
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return {**node_request}
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-ipc-storage"
+    assert calls[0][1]["config"] == config["ipc"]
+    assert calls[0][1]["action"] == action
+    config["ipc"] = None
+    with pytest.raises(ValueError):
+        service.perform(json.dumps(node_request).encode(), config)
+
+
 @pytest.mark.parametrize(
     "fault", ["owner", "write", "private", "executable", "directory", "symlink", "parent"]
 )

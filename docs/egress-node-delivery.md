@@ -65,7 +65,7 @@ Run the service as an actual host systemd service, not in a private PID or mount
 namespace. Extract the scripts from the reviewed immutable CI-built
 `ads-ptp-tools` image. Do not build an image on a lab host. Install the
 `ads-ptp`, `ads-ptp-attest`, `ads-ptp-retire`, `ads-ptp-release`,
-`ads-ptp-partial`, `ads-ipc-release` and `ads-node-owner` scripts together in `/usr/local/bin`,
+`ads-ptp-partial`, `ads-ipc-release`, `ads-ipc-storage` and `ads-node-owner` scripts together in `/usr/local/bin`,
 root-owned mode 0755, including protected parent directories.
 
 Use `deploy/node-owner/ads-node-owner.service`. The host must already have the

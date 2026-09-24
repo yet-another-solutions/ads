@@ -19,6 +19,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
+from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
 from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
@@ -533,6 +534,7 @@ class LifecycleService:
                 if self.pair_runtime is None or not await self.pair_runtime.release(work):
                     log.warning("pair retirement requires runtime-release proof: %s", work_id)
                     return
+                await PairIpcStorageTeardown(self.pair_runtime).dispose(work)
                 # Positive private-runtime release does not retire IPC, storage,
                 # control policies, credentials or the generation ledger.
                 log.warning("paired resource retirement remains pending: %s", work_id)

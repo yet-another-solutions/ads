@@ -13,6 +13,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle import RECOVER, LifecycleService, Signal
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import Object
+from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
 from ads_sandbox_manager.pair_store import PairClaimLost
 from ads_sandbox_manager.session_objects import session_name
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
@@ -109,6 +110,7 @@ class RecoveryService:
                     if runtime is None or not await runtime.release(work, recovery=row):
                         log.warning("paired recovery requires runtime-release proof")
                         return
+                    await PairIpcStorageTeardown(runtime).dispose(work, recovery=row)
             # Do not delete control policies, storage or old-generation evidence
             # through the legacy guest/IPC-only recovery path.
             log.warning("paired recovery resource retirement pending: %s", row.session_id)

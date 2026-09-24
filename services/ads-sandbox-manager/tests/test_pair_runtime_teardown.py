@@ -150,6 +150,35 @@ async def teardown(journal):
     class NodeOwner:
         network = f.report["network"]
 
+        async def capture_ipc_storage(self, captured):
+            original = await state(f)
+            assert original["ipc_capture"]["inventory_sha256"] == captured.inventory_sha256
+            backing = original["storage_capture"]["ipc"]
+            assert "filesystem_backing" in backing
+            return msgspec.json.encode(
+                {
+                    "schema": "ads-ipc-storage-v1",
+                    **{
+                        key: f.ipc_report[key]
+                        for key in (
+                            "node",
+                            "namespace",
+                            "generation",
+                            "sandbox_id",
+                            "boot_id",
+                            "pod_uid",
+                            "volume_uid",
+                        )
+                    },
+                    "pv_uid": backing["pv_uid"],
+                    "runtime_sha256": captured.inventory_sha256,
+                    "inventory_sha256": "d" * 64,
+                    "observed": False,
+                    "released": False,
+                    "reclaimed": False,
+                }
+            )
+
         async def fence_and_capture(self, pair, *, node):
             f.events.append(("node", "capture"))
             assert pair == f.intent.binding() and node == f.report["node"]
@@ -296,6 +325,7 @@ async def test_original_ipc_filesystem_backing_is_retained_before_runtime_remova
     assert ipc["volume_key"] is None and not ipc["reclaim_guard"]
     assert ipc["filesystem_backing"] == {"source": source, "path": "/storage/original-ipc"}
     assert ipc["nodes"] == ["application"]
+    assert saved["ipc_storage_capture"]["pv_uid"] == ipc["pv_uid"]
     assert saved["ipc_release"]["observed_runtime_released"]
     async with f.h.sessions.begin() as db:
         assert not await f.capture.repository.complete(db, f.work, datetime.now(UTC))
