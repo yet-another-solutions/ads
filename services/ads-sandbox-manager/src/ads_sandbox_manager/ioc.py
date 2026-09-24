@@ -28,10 +28,11 @@ from ads_sandbox_manager.kafka import KafkaRuntime, KafkaTopics, KafkaTransport
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
 from ads_sandbox_manager.lifecycle import LifecycleService
 from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+from ads_sandbox_manager.node_owner import HttpsNodeOwner, NodeOwnerSettings
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
-from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
+from ads_sandbox_manager.pair_runtime_teardown import PairNodeOwner, PairRuntimeTeardown
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
 from ads_sandbox_manager.service import Maintenance, Publisher, TransitService
@@ -110,6 +111,18 @@ class AppProvider(Provider):
     recovery = provide(RecoveryService, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
+    async def node_owner(self, settings: Settings) -> AsyncIterator[PairNodeOwner | None]:
+        if settings.node_owner is None:
+            yield None  # Isolated fixtures only; environment startup requires it.
+            return
+        config = NodeOwnerSettings.parse(settings.node_owner)
+        owner = HttpsNodeOwner(config, config.context())
+        try:
+            yield owner
+        finally:
+            await owner.close()
+
+    @provide(scope=Scope.APP)
     def pair_runtime(
         self,
         settings: Settings,
@@ -117,11 +130,10 @@ class AppProvider(Provider):
         repository: LifecycleRepository,
         kube: KubeClient,
         storage: CleanupKubernetes,
+        node_owner: PairNodeOwner | None,
     ) -> PairRuntimeTeardown | None:
-        # Node-owner delivery is not installed by this component. The service
-        # returns blocked without it, never a production success-returning fake.
         return PairRuntimeTeardown(
-            settings, sessions, repository, PairControlAdapter(kube), storage
+            settings, sessions, repository, PairControlAdapter(kube), storage, node_owner
         )
 
     @provide(scope=Scope.APP)

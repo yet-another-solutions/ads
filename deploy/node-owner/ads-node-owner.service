@@ -1,0 +1,25 @@
+[Unit]
+Description=ADS authenticated node lifecycle observer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/local/bin/ads-node-owner /etc/ads-node-owner/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=75
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+LimitNOFILE=4096
+TasksMax=32
+# Must observe the actual host PID/mount environment, not a private namespace.
+# A private mount view or ProtectProc would invalidate the release proof.
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

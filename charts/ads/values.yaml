@@ -289,6 +289,13 @@ sandbox:
     # inline credentials. Exact guest/relay/egress/state_bytes shape is documented
     # in docs/egress-pair-creation.md. Empty fails closed, like the CA signer input.
     pairInputs: {}
+    # Dedicated mTLS node-owner trust and manager identity, installed separately
+    # from service TLS and sandbox CA signer custody. Empty fails at startup.
+    nodeOwner:
+      endpoints: {}
+      network: ""
+      tlsSecretName: ""
+      timeoutSeconds: 60
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-manager
       tag: ""
@@ -300,7 +307,7 @@ sandbox:
     tlsSecretName: ""
     resources: {}
     pollSeconds: 10
-    controlSeconds: 10
+    controlSeconds: 75
     bakeSeconds: 1800
     createSeconds: 120
     readySeconds: 120

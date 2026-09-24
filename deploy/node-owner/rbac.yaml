@@ -1,0 +1,29 @@
+# Render NAMESPACE and NODE_OWNER_SERVICE_ACCOUNT using trusted installer values.
+# Issue the node's kubeconfig for only this identity. Never grant pods/exec,
+# mutations, general Secrets, signer access or cluster-admin to this service.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ads-node-owner-observer
+  namespace: NAMESPACE
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ads-node-owner-observer
+  namespace: NAMESPACE
+subjects:
+  - kind: ServiceAccount
+    name: NODE_OWNER_SERVICE_ACCOUNT
+    namespace: NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ads-node-owner-observer

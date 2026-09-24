@@ -119,6 +119,44 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_node_owner_client_identity_is_only_mounted_by_manager(self):
+        docs = self.documents(
+            "--set",
+            "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
+            "--set",
+            "sandbox.manager.nodeOwner.network=private",
+            "--set-json",
+            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test"}',
+        )
+        for (kind, name), document in docs.items():
+            if kind != "Deployment":
+                continue
+            spec = document["spec"]["template"]["spec"]
+            volumes = [v for v in spec.get("volumes", []) if v["name"] == "node-owner"]
+            mounts = [
+                v
+                for c in spec["containers"]
+                for v in c.get("volumeMounts", [])
+                if v["name"] == "node-owner"
+            ]
+            if name == "ads-sandbox-manager":
+                self.assertEqual(volumes[0]["secret"]["secretName"], "dedicated-node-client")
+                self.assertEqual(volumes[0]["secret"]["defaultMode"], 0o440)
+                self.assertEqual(
+                    mounts,
+                    [
+                        {
+                            "name": "node-owner",
+                            "mountPath": "/node-owner",
+                            "readOnly": True,
+                        }
+                    ],
+                )
+            else:
+                self.assertEqual(volumes, [])
+                self.assertEqual(mounts, [])
+        self.assertNotIn(("Secret", "dedicated-node-client"), docs)
+
     def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
         from ads_sandbox_manager.config import load_settings
 
@@ -729,6 +767,12 @@ class ChartTests(unittest.TestCase):
             "sandbox.ca.signingSecret=dedicated-egress-signer",
             "--set-json",
             "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
+            "--set-json",
+            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test:9443"}',
+            "--set",
+            "sandbox.manager.nodeOwner.network=private",
+            "--set",
+            "sandbox.manager.nodeOwner.tlsSecretName=node-owner-client",
         )
 
         def environment(component):
@@ -738,10 +782,13 @@ class ChartTests(unittest.TestCase):
         with (
             patch.dict(os.environ, environment("manager"), clear=True),
             patch("ads_sandbox_manager.config.load_tls_context"),
+            patch("ads_sandbox_manager.node_owner.NodeOwnerSettings.context"),
         ):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
         self.assertEqual(settings.pair_inputs, paired_runtime_fixture())
+        self.assertEqual(settings.node_owner["endpoints"], {"worker": "https://worker.test:9443"})
+        self.assertEqual(settings.node_owner["certificate"], "/node-owner/tls.crt")
         self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
         self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")
         self.assertEqual(settings.ca.source_size, "256Mi")
