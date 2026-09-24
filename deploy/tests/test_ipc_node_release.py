@@ -529,7 +529,7 @@ def process_tree(tmp_path):
     (task / "ns").mkdir(parents=True)
     (task / "fd").mkdir()
     (task / "fdinfo").mkdir()
-    (task / "map_files").mkdir()
+    (process / "map_files").mkdir()
     (task / "stat").write_text("20 (fixture) S 0 0 0 0 0 0\n")
     (process / "cmdline").write_text("native fixture")
     (task / "cgroup").write_text("0::/unrelated")
@@ -603,7 +603,7 @@ def test_scan_limits_and_unreadable_or_incomplete_state_are_errors(
 def test_scanner_keeps_mapped_or_executable_file_without_original_fd(
     ipc, captured, process_tree, tmp_path, kind
 ):
-    proc, _, task = process_tree
+    proc, process, task = process_tree
     held = tmp_path / "mapped"
     held.write_text("synthetic")
     info = held.stat()
@@ -612,7 +612,7 @@ def test_scanner_keeps_mapped_or_executable_file_without_original_fd(
     captured["filesystem"]["device"] = device
     (task / "mountinfo").write_text(f"1 2 {device} / / rw - ext4 /dev/x rw\n")
     if kind == "map":
-        (task / "map_files/100-200").symlink_to(held)
+        (process / "map_files/100-200").symlink_to(held)
     else:
         (task / "exe").unlink()
         (task / "exe").symlink_to(held)

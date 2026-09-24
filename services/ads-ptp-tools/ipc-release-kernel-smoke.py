@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib.machinery
 import importlib.util
 import json
-import mmap
 import os
 import subprocess
 import tempfile
@@ -18,6 +18,17 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 ipc = importlib.util.module_from_spec(spec)
 loader.exec_module(ipc)
 release = ipc.load("ads-ptp-release")
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mmap.restype = ctypes.c_void_p
+libc.mmap.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_long,
+]
+libc.munmap.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
 
 
 def run(*args):
@@ -78,11 +89,14 @@ with tempfile.TemporaryDirectory(prefix="ipc-release-") as directory:
         run("mount", "--bind", str(source), str(target))
         mounted = True
         with (target / "held").open("rb") as stream:
-            mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ, trackfd=False)
+            # Python 3.12 duplicates mmap descriptors. Use the kernel call
+            # directly so this proof has no FD once the with-block closes.
+            mapping = libc.mmap(None, 9, 1, 2, stream.fileno(), 0)
+            assert mapping != ctypes.c_void_p(-1).value, "mmap must succeed"
         run("umount", "-l", str(target))
         mounted = False
         assert count() > 0, "mapping outlives its closed file descriptor"
-        mapping.close()
+        assert libc.munmap(mapping, 9) == 0
         mapping = None
         assert count() == 0, "released mapping must permit release"
     finally:
@@ -92,7 +106,7 @@ with tempfile.TemporaryDirectory(prefix="ipc-release-") as directory:
         if held is not None:
             os.close(held)
         if mapping is not None:
-            mapping.close()
+            assert libc.munmap(mapping, 9) == 0
         if mounted:
             run("umount", "-l", str(target))
 print(

@@ -381,7 +381,7 @@ def references(snapshot, deadline, release, proc=Path("/proc")):
                     for link in chain(
                         (task / "cwd", task / "root", task / "exe"),
                         (task / "fd").iterdir(),
-                        (task / "map_files").iterdir(),
+                        (process / "map_files").iterdir(),
                     ):
                         budget()
                         try:
