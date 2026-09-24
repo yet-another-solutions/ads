@@ -52,7 +52,9 @@ def test_fence_keeps_existing_attachment_and_del_available(plugin, inputs, kerne
 
 
 @pytest.mark.parametrize("role", ["guest", "egress"])
-def test_fence_covers_late_runtime_and_pod_ids_on_both_sides(plugin, inputs, monkeypatch, role):
+def test_fence_covers_late_runtime_and_pod_ids_on_both_sides(
+    plugin, inputs, kernel, monkeypatch, role
+):
     config, env, record = inputs
     plugin.retire(retirement(config, record))
     monkeypatch.setattr(plugin, "add", lambda *args: pytest.fail("retired ADD reached kernel"))
@@ -65,7 +67,7 @@ def test_fence_covers_late_runtime_and_pod_ids_on_both_sides(plugin, inputs, mon
         plugin.perform(config, env)
 
 
-def test_another_generation_is_not_fenced(plugin, inputs, monkeypatch):
+def test_another_generation_is_not_fenced(plugin, inputs, kernel, monkeypatch):
     config, env, record = inputs
     other = {**record, "generation": str(uuid4())}
     plugin.retire(retirement(config, other))
@@ -74,7 +76,9 @@ def test_another_generation_is_not_fenced(plugin, inputs, monkeypatch):
     assert not fence_path(config, record).exists()
 
 
-def test_fence_cannot_report_success_during_actual_inflight_add(plugin, inputs, monkeypatch):
+def test_fence_cannot_report_success_during_actual_inflight_add(
+    plugin, inputs, kernel, monkeypatch
+):
     config, env, record = inputs
     entered, finish = Event(), Event()
 
@@ -99,7 +103,7 @@ def test_fence_cannot_report_success_during_actual_inflight_add(plugin, inputs, 
         plugin.perform(config, env)
 
 
-def test_delayed_attestation_cannot_cross_completed_fence(plugin, inputs, monkeypatch):
+def test_delayed_attestation_cannot_cross_completed_fence(plugin, inputs, kernel, monkeypatch):
     config, env, record = inputs
     entered, finish = Event(), Event()
     read = plugin.read_record
@@ -124,7 +128,9 @@ def test_delayed_attestation_cannot_cross_completed_fence(plugin, inputs, monkey
             future.result(5)
 
 
-def test_busy_retirement_lock_blocks_add_and_releases_on_exception(plugin, inputs, monkeypatch):
+def test_busy_retirement_lock_blocks_add_and_releases_on_exception(
+    plugin, inputs, kernel, monkeypatch
+):
     config, env, record = inputs
     monkeypatch.setattr(plugin, "add", lambda *args: {"test_kernel_called": True})
     with plugin.generation_lock(config["stateDir"], record["generation"]):
@@ -166,7 +172,9 @@ def test_fence_identity_cannot_be_reassigned(plugin, inputs, field):
 
 
 @pytest.mark.parametrize("fault", ["symlink", "dangling", "permissions", "corrupt", "empty"])
-def test_invalid_fence_never_allows_admission_or_overwrite(plugin, inputs, monkeypatch, fault):
+def test_invalid_fence_never_allows_admission_or_overwrite(
+    plugin, inputs, kernel, monkeypatch, fault
+):
     config, env, record = inputs
     request = retirement(config, record)
     plugin.retire(request)
@@ -194,7 +202,7 @@ def test_invalid_fence_never_allows_admission_or_overwrite(plugin, inputs, monke
 
 
 @pytest.mark.parametrize("fault", ["lock-symlink", "lock-permissions", "lock-fifo", "directory"])
-def test_generation_lock_and_directory_protections(plugin, inputs, fault):
+def test_generation_lock_and_directory_protections(plugin, inputs, kernel, fault):
     config, env, record = inputs
     root = Path(config["stateDir"])
     path = root / ("generation-" + record["generation"] + ".lock")
@@ -216,7 +224,7 @@ def test_generation_lock_and_directory_protections(plugin, inputs, fault):
 
 
 def test_failed_directory_sync_is_not_success_and_retry_reasserts_durability(
-    plugin, inputs, monkeypatch
+    plugin, inputs, kernel, monkeypatch
 ):
     config, env, record = inputs
     original = plugin.sync_directory
@@ -228,6 +236,9 @@ def test_failed_directory_sync_is_not_success_and_retry_reasserts_durability(
     with pytest.raises(OSError, match="fsync"):
         plugin.retire(retirement(config, record))
     assert fence_path(config, record).exists()
+    # ADD now durably records the pre-attestation attempt first. Restore fsync
+    # to isolate the existing fence refusal, rather than failing that new write.
+    monkeypatch.setattr(plugin, "sync_directory", original)
     with pytest.raises(ValueError, match="generation retired"):
         plugin.perform(config, env)
     synced = []
