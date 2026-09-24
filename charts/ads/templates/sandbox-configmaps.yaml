@@ -33,6 +33,7 @@ data:
   {{- if eq $component "manager" }}
   {{ $prefix }}ADS_BASE_URL: {{ printf "https://%s:%v" (include "ads.fullname" $root) $root.Values.service.port | quote }}
   {{ $prefix }}ADS_SERVICE_SUBJECT: {{ $root.Values.keycloak.serviceSubjects.ads | quote }}
+  {{ $prefix }}PAIR_INPUTS: {{ $settings.pairInputs | toJson | quote }}
   ADS_SESSION_SIZE: {{ ($root.Files.Get "files/sandbox-release.yaml" | fromYaml).sessionSize | quote }}
   {{ $prefix }}GOLDEN_VERSION: {{ printf "v%s" $root.Chart.AppVersion | quote }}
   {{ $prefix }}GOLDEN_IMAGE: {{ include "ads.sandboxImage" (dict "root" $root "image" $sb.golden.image) | quote }}

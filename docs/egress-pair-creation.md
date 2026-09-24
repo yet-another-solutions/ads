@@ -17,8 +17,10 @@ The egress issuer and discovery URL come from manager Keycloak configuration,
 not a second override inside the JSON. Malformed, missing or null inputs fail
 before client startup. Direct isolated Settings fixtures can remain unpaired;
 configured paired input with no creation service cannot fall back to legacy
-guest/IPC Deployments. Helm must supply reviewed platform values before any
-candidate rollout; this change does not invent deployable later-slice images.
+guest/IPC Deployments. Helm `sandbox.manager.pairInputs` renders the same JSON
+into only the manager ConfigMap. Its empty default fails closed at manager
+startup, like the unset CA signer input. Supply reviewed platform values before
+any candidate rollout; this change does not invent deployable later-slice images.
 
 ## Ordered publication
 
