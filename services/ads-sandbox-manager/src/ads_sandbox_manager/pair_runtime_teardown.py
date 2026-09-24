@@ -151,9 +151,19 @@ class PairRuntimeTeardown:
 
     async def _release(self, expected: CleanupWork, recovery: SandboxSession | None) -> bool:
         checkpoint = await self._checkpoint(expected, recovery)
-        if checkpoint is None or self.node_owner is None:
-            return False  # Unconfigured node delivery never authorizes deletion.
+        if checkpoint is None:
+            return False
         work, journal = checkpoint
+        if set(journal["runtime_unissued"]) == {
+            *(f"Pod/{role}" for role in COMPUTE_ROLES),
+            "Pod/ipc",
+        }:
+            # A sealed never-dispatched ledger is positive evidence that this
+            # generation created no runtime. It is not an empty node report,
+            # volume-release proof, deletion permit or retirement decision.
+            return True
+        if self.node_owner is None:
+            return False  # Unconfigured node delivery never authorizes deletion.
         if journal["runtime_release"] is not None and journal["ipc_release"] is not None:
             return True  # Validated retained proof, not a fresh API-absence guess.
         pair = self.repository.cleanup_pair(work)
