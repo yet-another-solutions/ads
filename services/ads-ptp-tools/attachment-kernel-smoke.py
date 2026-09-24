@@ -111,8 +111,23 @@ try:
     canary.ns(private, "ip", "link", "set", "vxlan-private", "master", "br-private")
     canary.ns(private, "ip", "link", "set", "vxlan-private", "up")
     print("private bridge preflight: " + canary.ns(private, "ip", "-d", "-j", "link"), flush=True)
+    req = plugin.request(config, env)
+    attempt = root / "state" / ("attempt-" + req["key"] + ".json")
+    try:
+        plugin.perform(config, env)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing attestation accepted")
+    original_attempt = plugin.read_record(attempt)
+    assert original_attempt["request"] == req
+    assert original_attempt["vm_identity"] == canary.namespace_identity(names[0])
+    assert original_attempt["binding"] is None
+    assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
     plugin.save_record(root / "bindings" / (uid + ".json"), record)
     output = plugin.perform(config, env)
+    admitted_attempt = plugin.read_record(attempt)
+    assert admitted_attempt == {**original_attempt, "binding": record}
     assert output["ips"] == [{"interface": 0, "address": "10.10.30.2/24", "gateway": "10.10.30.1"}]
     assert output["routes"] == [{"dst": "0.0.0.0/0", "gw": "10.10.30.1"}]
     assert output["dns"] == {"nameservers": ["10.10.30.1"]}
@@ -199,10 +214,13 @@ try:
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     assert plugin.perform(config, env) is None
     assert plugin.perform(config, env) is None
-    # DEL removes the attachment journal, never its durable generation fence.
-    assert list((root / "state").glob("*.json")) == [
-        root / "state" / ("retired-" + generation + ".json")
-    ]
+    # DEL removes only the active attachment journal, not original history or
+    # the durable generation fence. Neither retained record means runtime release.
+    assert set((root / "state").glob("*.json")) == {
+        root / "state" / ("retired-" + generation + ".json"),
+        attempt,
+    }
+    assert plugin.read_record(attempt) == admitted_attempt
 finally:
     for name in reversed(created):
         canary.run("ip", "netns", "delete", name)
