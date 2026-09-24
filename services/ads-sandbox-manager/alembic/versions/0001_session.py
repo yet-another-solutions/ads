@@ -111,6 +111,7 @@ def upgrade() -> None:
         sa.Column("ipc_resources", JSONB(), nullable=False),
         sa.Column("volume_resources", JSONB(), nullable=False),
         sa.Column("topics_dispatch", sa.String(), nullable=False),
+        sa.Column("cleanup_journal", JSONB(), nullable=True),
         sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
         sa.UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"

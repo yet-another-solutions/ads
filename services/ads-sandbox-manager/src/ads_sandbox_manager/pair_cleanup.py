@@ -308,7 +308,7 @@ class PairCleanupCapture:
                 self.sessions.begin() as db,
             ):
                 self._configuration(work)
-                return await self.repository.pair_writers_settled(
+                return await self.repository.seal_pair_cleanup(
                     db,
                     work,
                     datetime.now(UTC),
