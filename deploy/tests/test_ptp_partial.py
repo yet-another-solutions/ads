@@ -158,6 +158,58 @@ def test_original_vm_attempt_history_survives_cri_collection_without_recapturing
     assert value["attempts"]  # Absence alone would fail the next test.
 
 
+@pytest.mark.parametrize("fault", [None, "missing", "ready", "pid", "host", "changed"])
+def test_assigned_pre_cni_vm_requires_positive_original_live_namespace(
+    partial, plugin, attest, release, inventory, monkeypatch, fault
+):
+    f = inventory
+    f.path.unlink()
+    f.scope["pod_uids"].pop("guest-relay")
+    f.observer.pods = lambda: [f.vm]
+    inspected = {"status": deepcopy(f.vm_sandbox), "info": {"pid": 303}}
+    if fault == "ready":
+        inspected["status"]["state"] = "SANDBOX_READY"
+    elif fault == "pid":
+        inspected["info"]["pid"] = 0
+    reads = 0
+
+    def cri(*args):
+        nonlocal reads
+        if args[0] == "pods":
+            return {"items": [] if fault == "missing" else [deepcopy(f.vm_sandbox)]}
+        reads += 1
+        result = deepcopy(inspected)
+        if fault == "changed" and reads == 2:
+            result["info"]["pid"] = 404
+        return result
+
+    @contextlib.contextmanager
+    def processes(pids):
+        assert pids == (303,)
+        yield lambda: None
+
+    @contextlib.contextmanager
+    def namespace(path):
+        yield 301 if path == "/proc/1/ns/net" else 303
+
+    f.observer.cri = cri
+    monkeypatch.setattr(attest, "processes", processes)
+    monkeypatch.setattr(plugin, "namespace", namespace)
+    monkeypatch.setattr(plugin, "ns_identity", lambda fd: [7, 301 if fault == "host" else fd])
+    if fault:
+        with pytest.raises(ValueError):
+            capture(f, partial, plugin, attest, release)
+    else:
+        value = capture(f, partial, plugin, attest, release)
+        assert value["members"]["guest"] == {
+            "runtime_ids": ["d" * 64],
+            "namespaces": [[7, 303]],
+            "links": [],
+        }
+        assert value["attempts"] == {}
+        assert not partial.report(value)["observed_runtime_released"]
+
+
 @pytest.mark.parametrize(
     "fault",
     [
@@ -208,13 +260,42 @@ def test_partial_capture_refuses_missing_unknown_or_reassigned_history(
         extra["metadata"]["uid"] = str(uuid4())
         f.observer.pods = lambda: [f.vm, f.relay, extra]
     elif fault == "relay-journal":
-        f.relay_record["complete"] = False
+        f.relay_record["complete"] = "false"
     elif fault == "relay-private":
         f.relay_record["private"] = [7, 999]
     else:
         f.relay["spec"]["containers"][0]["image"] = "foreign"
     with pytest.raises((ValueError, KeyError)):
         capture(f, partial, plugin, attest, release)
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_incomplete_and_stopped_relay_keep_original_namespace_inventory(
+    partial, plugin, attest, release, inventory, stopped
+):
+    f = inventory
+    f.relay_record["complete"] = False
+    if stopped:
+        f.relay_record["stopped"] = True
+    value = capture(f, partial, plugin, attest, release)
+    assert value["members"]["guest-relay"]["namespaces"] == [[7, 201], [7, 202]]
+    assert value["members"]["guest-relay"]["runtime_ids"] == ["c" * 64, "b" * 64]
+    assert not partial.report(value)["observed_runtime_released"]
+
+
+@pytest.mark.parametrize("stopped", [False, True])
+def test_no_private_identity_requires_terminal_original_relay_history(
+    partial, plugin, attest, release, inventory, stopped
+):
+    f = inventory
+    f.relay_record.update(complete=False, private=None, stopped=stopped)
+    if stopped:
+        value = capture(f, partial, plugin, attest, release)
+        assert value["members"]["guest-relay"]["namespaces"] == [[7, 202]]
+        assert not partial.report(value)["observed_runtime_released"]
+    else:
+        with pytest.raises(ValueError, match="history unavailable"):
+            capture(f, partial, plugin, attest, release)
 
 
 @pytest.mark.parametrize("fault", ["pod", "attempt", "boot"])

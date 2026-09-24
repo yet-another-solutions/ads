@@ -13,11 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
 from ads_commons.sandbox.node_release import NodeReleaseReport, decode_node_release
+from ads_commons.sandbox.partial_release import PartialReleaseReport, decode_partial_release
 from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_objects import COMPUTE_ROLES, PairBinding
+from ads_sandbox_manager.pair_partial_proof import remaining_private
 from ads_sandbox_manager.pair_storage_capture import storage_targets
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_unscheduled_proof import RUNTIME_ROLES, never_scheduled, pod_uid
@@ -30,6 +32,7 @@ class PairRuntimeKubernetes(Protocol):
     @property
     def golden_version(self) -> str: ...
     async def compute_node(self, pair: PairBinding, uids: dict[str, str | None]) -> str: ...
+    async def partial_node(self, pair: PairBinding, uids: dict[str, str]) -> str: ...
     async def delete_compute(
         self, pair: PairBinding, role: str, uid: str, *, node: str
     ) -> bool: ...
@@ -57,6 +60,10 @@ class PairNodeOwner(Protocol):
         self, pair: PairBinding, *, node: str, pod_uid: str, volume_uid: str
     ) -> bytes: ...
     async def observe_ipc(self, captured: IpcReleaseReport) -> bytes: ...
+    async def capture_partial(
+        self, pair: PairBinding, *, node: str, pod_uids: dict[str, str]
+    ) -> bytes: ...
+    async def observe_partial(self, captured: PartialReleaseReport) -> bytes: ...
 
 
 class PairRuntimeTeardown:
@@ -182,11 +189,20 @@ class PairRuntimeTeardown:
         if (
             journal["node_capture"] is None
             and journal["ipc_capture"] is None
+            and journal["partial_capture"] is None
             and await self._release_unscheduled(work, recovery)
         ):
             return True
         if self.node_owner is None:
             return False  # Unconfigured node delivery never authorizes runtime deletion.
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        if journal["partial_capture"] is not None or any(
+            self._never_started(journal, role) for role in RUNTIME_ROLES
+        ):
+            return await self._release_partial(work, recovery)
         if journal["runtime_release"] is not None and journal["ipc_release"] is not None:
             return True  # Validated retained proof, not a fresh API-absence guess.
         pair = self.repository.cleanup_pair(work)
@@ -313,9 +329,8 @@ class PairRuntimeTeardown:
             assert uid is not None  # A sealed dispatched writer has an exact original UID.
             async with asyncio.timeout(self.settings.control_seconds):
                 observed = await self.kube.unscheduled_pod(pair, role, uid)
-            if observed is None:
-                return False  # Mixed/live prefixes need node capture, not guessed absence.
-            candidates[role] = observed
+            if observed is not None:
+                candidates[role] = observed
         # All remaining issued Pods were positively observed unassigned. Each
         # binding race is still fenced by its own original UID/resourceVersion.
         for role, captured in candidates.items():
@@ -349,6 +364,107 @@ class PairRuntimeTeardown:
         return checkpoint is not None and all(
             self._never_started(checkpoint[1], role) for role in RUNTIME_ROLES
         )
+
+    async def _release_partial(self, work: CleanupWork, recovery: SandboxSession | None) -> bool:
+        """Compose never-started roles with exact assigned runtime proof.
+
+        The observations retained here are not volume release/reclamation.
+        Assigned IPC retains its separate application-node capture and release.
+        """
+        assert self.node_owner is not None
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        if any(
+            attempts and attempts[-1]["dispatch"] == "inflight"
+            for attempts in journal["unscheduled"].values()
+        ):
+            return False
+        if journal["partial_release"] is not None:
+            return True
+        pair = self.repository.cleanup_pair(work)
+        uids = remaining_private(journal)
+        for role, target in storage_targets(
+            journal["snapshot"], journal["retain_workspace"], issued_only=True
+        ).items():
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            if role in journal["partial_storage"]:
+                continue
+            async with asyncio.timeout(self.settings.control_seconds):
+                evidence = await self.storage.capture(target)
+            async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+                work = await self._owned(db, work, recovery)
+                await self.repository.record_pair_partial_storage(
+                    db,
+                    work,
+                    role,
+                    evidence,
+                    datetime.now(UTC),
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                )
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        if uids and journal["partial_capture"] is None:
+            async with asyncio.timeout(self.settings.control_seconds):
+                node = await self.kube.partial_node(pair, uids)
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            async with asyncio.timeout(self.settings.control_seconds):
+                raw = await self.node_owner.capture_partial(pair, node=node, pod_uids=uids)
+            async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+                work = await self._owned(db, work, recovery)
+                if not await self.repository.record_pair_partial_proof(
+                    db,
+                    work,
+                    raw,
+                    datetime.now(UTC),
+                    node=node,
+                    network=self.node_owner.network,
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                ):
+                    return False
+        if not self._never_started(journal, "ipc") and not await self._release_ipc(work, recovery):
+            return False
+        if not uids:
+            return True
+        for role in COMPUTE_ROLES:
+            if role not in uids:
+                continue
+            checkpoint = await self._checkpoint(work, recovery)
+            if checkpoint is None:
+                return False
+            work, journal = checkpoint
+            captured = decode_partial_release(msgspec.json.encode(journal["partial_capture"]))
+            async with asyncio.timeout(self.settings.control_seconds):
+                if not await self.kube.delete_compute(pair, role, uids[role], node=captured.node):
+                    return False
+        checkpoint = await self._checkpoint(work, recovery)
+        if checkpoint is None:
+            return False
+        work, journal = checkpoint
+        captured = decode_partial_release(msgspec.json.encode(journal["partial_capture"]))
+        async with asyncio.timeout(self.settings.control_seconds):
+            raw = await self.node_owner.observe_partial(captured)
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            work = await self._owned(db, work, recovery)
+            return await self.repository.record_pair_partial_proof(
+                db,
+                work,
+                raw,
+                datetime.now(UTC),
+                recovery=recovery,
+                recovery_seconds=self.settings.recovery_seconds,
+            )
 
     async def _release_ipc(self, work: CleanupWork, recovery: SandboxSession | None) -> bool:
         assert self.node_owner is not None

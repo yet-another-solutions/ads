@@ -13,6 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_commons.sandbox.ipc_release import decode_ipc_release
 from ads_commons.sandbox.node_release import decode_node_release
+from ads_commons.sandbox.partial_release import decode_partial_release
 from ads_sandbox_manager.egress_state_store import (
     EgressState,
     require_cleanup_state,
@@ -24,7 +25,17 @@ from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
 from ads_sandbox_manager.pair_ipc_proof import ipc_capture_report, ipc_release_report
 from ads_sandbox_manager.pair_node_proof import capture_report, release_report
 from ads_sandbox_manager.pair_objects import PairBinding
-from ads_sandbox_manager.pair_storage_capture import storage_targets, validate_storage_capture
+from ads_sandbox_manager.pair_partial_proof import (
+    partial_capture_report,
+    partial_release_report,
+    remaining_private,
+    validate_partial_journal,
+)
+from ads_sandbox_manager.pair_storage_capture import (
+    storage_targets,
+    validate_storage_capture,
+    validate_storage_observation,
+)
 from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
     PairClaimLost,
@@ -198,6 +209,9 @@ class LifecycleRepository:
                 "ipc_capture",
                 "ipc_release",
                 "unscheduled",
+                "partial_storage",
+                "partial_capture",
+                "partial_release",
             }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
@@ -259,6 +273,7 @@ class LifecycleRepository:
         if journal["runtime_unissued"] != self.unissued_runtime(current):
             raise PairClaimLost("creator never-dispatched runtime proof changed")
         validate_unscheduled(saved, journal["unscheduled"])
+        validate_partial_journal(journal, pair)
         if not isinstance(journal["storage_capture"], dict):
             raise RuntimeError("invalid retained storage capture")
         if journal["storage_capture"]:
@@ -322,9 +337,10 @@ class LifecycleRepository:
             ):
                 raise RuntimeError("invalid original IPC placement")
         if captured is not None:
-            if placement is None or "ipc" not in journal["storage_capture"]:
+            storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
+            if placement is None or storage is None:
                 raise RuntimeError("IPC capture missing original placement or storage")
-            if placement["node"] not in journal["storage_capture"]["ipc"]["nodes"]:
+            if placement["node"] not in storage["nodes"]:
                 raise RuntimeError("IPC node differs from captured volume use")
             ipc_capture_report(
                 msgspec.json.encode(captured),
@@ -379,6 +395,9 @@ class LifecycleRepository:
                 "ipc_capture": None,
                 "ipc_release": None,
                 "unscheduled": {},
+                "partial_storage": {},
+                "partial_capture": None,
+                "partial_release": None,
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
@@ -473,6 +492,91 @@ class LifecycleRepository:
         validate_unscheduled(journal["snapshot"], journal["unscheduled"])
         intent.cleanup_journal = journal
         await db.flush()
+
+    async def record_pair_partial_storage(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        evidence: dict[str, Any],
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> None:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            raise PairClaimLost("pair writers have not settled")
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        targets = storage_targets(
+            journal["snapshot"], journal["retain_workspace"], issued_only=True
+        )
+        if role not in targets:
+            raise ValueError("unsupported original partial storage role")
+        validate_storage_observation(targets[role], evidence)
+        old = journal["partial_storage"].get(role)
+        if old is not None and old != evidence:
+            raise PairClaimLost("original partial storage observation cannot be replaced")
+        journal["partial_storage"][role] = deepcopy(evidence)
+        validate_partial_journal(journal, pair)
+        intent.cleanup_journal = journal
+        await db.flush()
+
+    async def record_pair_partial_proof(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        node: str | None = None,
+        network: str | None = None,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        if journal["node_capture"] is not None:
+            raise PairClaimLost("full node capture cannot be replaced by partial proof")
+        report = decode_partial_release(raw)
+        value = msgspec.to_builtins(report)
+        if node is not None:
+            if network is None:
+                raise ValueError("trusted partial network required")
+            partial_capture_report(
+                raw,
+                pair,
+                node=node,
+                network=network,
+                namespace=journal["snapshot"]["namespace"],
+                pod_uids=remaining_private(journal),
+            )
+            field = "partial_capture"
+        else:
+            if journal["partial_capture"] is None:
+                raise PairClaimLost("original partial capture required")
+            if not partial_release_report(
+                raw, decode_partial_release(msgspec.json.encode(journal["partial_capture"]))
+            ):
+                return False
+            field = "partial_release"
+        if journal[field] is not None and journal[field] != value:
+            raise PairClaimLost("original partial proof cannot be replaced")
+        journal[field] = value
+        validate_partial_journal(journal, pair)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
 
     async def record_pair_node_capture(
         self,

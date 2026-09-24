@@ -292,6 +292,34 @@ class PairControlAdapter:
         assert node is not None
         return node
 
+    async def partial_node(self, pair: PairBinding, uids: dict[str, str]) -> str:
+        """Resolve only the exact issued subset, without inventing missing Pods."""
+        if (
+            not uids
+            or not set(uids) <= set(COMPUTE_ROLES)
+            or any(not isinstance(uid, str) or not uid.strip() for uid in uids.values())
+            or len(set(uids.values())) != len(uids)
+        ):
+            raise ValueError("exact nonempty partial Pod UID map required")
+        node = None
+        for _ in range(2):
+            for role, uid in sorted(uids.items()):
+                desired = compute_identity(self.kube.settings, pair, role)
+                observed = await self.kube._get(
+                    self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+                )
+                if observed is None:
+                    raise RuntimeError("original partial Pod placement unavailable")
+                self._identity(observed, desired, uid)
+                actual = observed.get("spec", {}).get("nodeName")
+                if not isinstance(actual, str) or not actual.strip():
+                    raise RuntimeError("original partial Pod is not assigned")
+                if node is not None and node != actual:
+                    raise RuntimeError("partial Pod placement changed or spans nodes")
+                node = actual
+        assert node is not None
+        return node
+
     async def delete_compute(self, pair: PairBinding, role: str, uid: str, *, node: str) -> bool:
         """UID/RV-fenced removal; True means API absence only, never runtime release.
 

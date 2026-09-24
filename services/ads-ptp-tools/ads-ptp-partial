@@ -159,7 +159,12 @@ def attempts(plugin, root, scope):
 
 
 def relay_inventory(plugin, attestor, observer, scope, pod):
-    """Capture an actual running relay, including its completed private namespace."""
+    """Capture an original live container and its positive relay setup history.
+
+    A setup need not complete to own a namespace. A stopped journal retains
+    that identity after its bind mount is removed. Neither missing history nor
+    a fresh empty inventory can stand in for those original observations.
+    """
     cfg = observer.config
     containers = pod["spec"].get("containers", [])
     statuses = pod.get("status", {}).get("containerStatuses", [])
@@ -180,27 +185,46 @@ def relay_inventory(plugin, attestor, observer, scope, pod):
     transport_path = f"/proc/{sandbox_pid}/ns/net"
     with attestor.processes(pids) as check:
         with (
-            plugin.namespace(private_path) as private,
             plugin.namespace(transport_path) as transport,
             plugin.namespace(f"/proc/{container_pid}/ns/net") as container_net,
         ):
-            ns = [plugin.ns_identity(private), plugin.ns_identity(transport)]
-            require(
-                ns[0] != ns[1] and plugin.ns_identity(container_net) == ns[1],
-                "relay namespaces changed",
-            )
             path = Path(f"/proc/{container_pid}/root/run/relay-state/state.json")
             record = plugin.read_record(path)
+            transport_identity = plugin.ns_identity(transport)
             require(
-                record.get("complete") is True
-                and not record.get("stopped")
+                type(record.get("complete")) is bool
+                and type(record.get("stopped", False)) is bool
+                and not (record.get("stopped") and record["complete"])
                 and record.get("pod_uid") == pod["metadata"]["uid"]
                 and record.get("generation") == scope["generation"]
                 and record.get("sandbox_id") == scope["sandbox_id"]
-                and record.get("private") == ns[0]
-                and record.get("transport") == ns[1],
+                and record.get("transport") == transport_identity
+                and plugin.ns_identity(container_net) == transport_identity,
                 "original relay setup inventory unavailable",
             )
+            private_identity = record.get("private")
+            ns = []
+            if private_identity is not None:
+                namespace_identity(private_identity)
+                require(private_identity != transport_identity, "relay namespaces changed")
+                if not record.get("stopped") or Path(private_path).exists():
+                    with plugin.namespace(private_path) as private:
+                        require(
+                            plugin.ns_identity(private) == private_identity,
+                            "relay namespaces changed",
+                        )
+                ns.append(private_identity)
+            else:
+                # An incomplete setup can still create its private namespace
+                # after this read. Only terminal cleanup with positive retained
+                # history and no outstanding namespace bind excludes that path.
+                require(
+                    record.get("stopped") is True
+                    and not Path(private_path).exists()
+                    and not Path(private_path).is_symlink(),
+                    "original private namespace history unavailable",
+                )
+            ns.append(transport_identity)
             upstream = plugin.links(transport)["eth0"]
             peers = [
                 link
@@ -218,23 +242,28 @@ def relay_inventory(plugin, attestor, observer, scope, pod):
     return {"runtime_ids": [runtime, container_id], "namespaces": ns, "links": [peer]}
 
 
-def vm_inventory(plugin, observer, scope, pod, records):
+def vm_inventory(plugin, attestor, observer, scope, pod, records):
     """Known namespaces come from immutable ADD history, never a missing API row."""
     uid = pod["metadata"]["uid"]
     history = [r for r in records.values() if r["request"]["pod_uid"] == uid]
-    require(history, "original VM attempt history unavailable")
     runtimes = {r["request"]["container_id"] for r in history}
     current = [
         item
         for item in observer.cri("pods", "-o", "json")["items"]
         if item["metadata"].get("uid") == uid
     ]
+    require(history or current, "original VM attempt history unavailable")
+    ns = {tuple(namespace_identity(r["vm_identity"])) for r in history}
     for item in current:
         require(
-            item["id"] in runtimes and item["metadata"].get("namespace") == scope["namespace"],
+            (not history or item["id"] in runtimes)
+            and isinstance(item["id"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", item["id"])
+            and item["metadata"].get("namespace") == scope["namespace"],
             "VM runtime lacks original attempt history",
         )
-        detail = observer.cri("inspectp", "-o", "json", item["id"])["status"]
+        inspected = observer.cri("inspectp", "-o", "json", item["id"])
+        detail = inspected["status"]
         require(
             detail["id"] == item["id"]
             and detail["metadata"]["uid"] == uid
@@ -243,7 +272,30 @@ def vm_inventory(plugin, observer, scope, pod, records):
             and detail["state"] in ("SANDBOX_READY", "SANDBOX_NOTREADY"),
             "VM runtime observation changed",
         )
-    ns = {tuple(namespace_identity(r["vm_identity"])) for r in history}
+        if not history:
+            # This is positive pre-CNI runtime evidence, not inference from an
+            # empty API/CRI list. If the runtime cannot expose its exact original
+            # live namespace, preserve the obligation rather than fabricate one.
+            pid = inspected.get("info", {}).get("pid")
+            require(
+                detail["state"] == "SANDBOX_NOTREADY" and type(pid) is int and pid > 1,
+                "original pre-CNI sandbox namespace unavailable",
+            )
+            with attestor.processes((pid,)) as check:
+                with (
+                    plugin.namespace(f"/proc/{pid}/ns/net") as original,
+                    plugin.namespace("/proc/1/ns/net") as host,
+                ):
+                    identity = plugin.ns_identity(original)
+                    namespace_identity(identity)
+                    require(identity != plugin.ns_identity(host), "VM shares host namespace")
+                    require(
+                        observer.cri("inspectp", "-o", "json", item["id"]) == inspected,
+                        "pre-CNI runtime changed during capture",
+                    )
+                    check()
+                    ns.add(tuple(identity))
+            runtimes.add(item["id"])
     for record in history:
         binding = record["binding"]
         if binding is not None:
@@ -369,7 +421,7 @@ def capture(plugin, attestor, observer, release, root, scope):
         members[role] = (
             relay_inventory(plugin, attestor, observer, scope, pod)
             if role.endswith("-relay")
-            else vm_inventory(plugin, observer, scope, pod, records)
+            else vm_inventory(plugin, attestor, observer, scope, pod, records)
         )
     require(exact_pods(observer, scope) == pods, "Pod changed during partial capture")
     require(
