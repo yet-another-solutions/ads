@@ -20,8 +20,9 @@ from ads_sandbox_manager.egress_state_store import (
 )
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
-from ads_sandbox_manager.pair_node_proof import capture_report
+from ads_sandbox_manager.pair_node_proof import capture_report, release_report
 from ads_sandbox_manager.pair_objects import PairBinding
+from ads_sandbox_manager.pair_storage_capture import storage_targets, validate_storage_capture
 from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
     PairClaimLost,
@@ -173,7 +174,15 @@ class LifecycleRepository:
             not intent.creation_fenced
             or not isinstance(journal, dict)
             or set(journal)
-            != {"snapshot", "creator_snapshot", "targets", "retain_workspace", "node_capture"}
+            != {
+                "snapshot",
+                "creator_snapshot",
+                "targets",
+                "retain_workspace",
+                "node_capture",
+                "storage_capture",
+                "runtime_release",
+            }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
             or any(not isinstance(item, dict) for item in journal["targets"])
@@ -198,7 +207,7 @@ class LifecycleRepository:
         # Neither exception permits replacing a known identity or erasing a write.
         comparable = deepcopy(current)
 
-        def evidence(live: dict[str, Any], old: dict[str, Any], uid: str, dispatch: str) -> None:
+        def normalize(live: dict[str, Any], old: dict[str, Any], uid: str, dispatch: str) -> None:
             if live[uid] is None:
                 live[uid] = old[uid]
             if (old[dispatch], live[dispatch]) == ("inflight", "settled"):
@@ -215,11 +224,11 @@ class LifecycleRepository:
                     comparable[f"{family}_dispatch"][key] = "inflight"
         for field in ("relay_inputs", "volume_resources", "ipc_resources"):
             for role, entry in comparable[field].items():
-                evidence(entry, saved[field][role], "uid", "dispatch")
-        evidence(comparable["relay_custody"], saved["relay_custody"], "uid", "dispatch")
+                normalize(entry, saved[field][role], "uid", "dispatch")
+        normalize(comparable["relay_custody"], saved["relay_custody"], "uid", "dispatch")
         if comparable["egress_state"] is not None and saved["egress_state"] is not None:
             for role in ("key", "volume"):
-                evidence(
+                normalize(
                     comparable["egress_state"],
                     saved["egress_state"],
                     f"{role}_uid",
@@ -229,6 +238,14 @@ class LifecycleRepository:
             comparable["topics_dispatch"] = "inflight"
         if comparable != saved:
             raise PairClaimLost("retained cleanup ownership changed")
+        if not isinstance(journal["storage_capture"], dict):
+            raise RuntimeError("invalid retained storage capture")
+        if journal["storage_capture"]:
+            targets = storage_targets(saved, journal["retain_workspace"])
+            for role, evidence in journal["storage_capture"].items():
+                if role not in targets:
+                    raise RuntimeError("foreign retained storage capture")
+                validate_storage_capture(targets[role], evidence)
         if journal["node_capture"] is not None:
             raw = msgspec.json.encode(journal["node_capture"])
             report = decode_node_release(raw)
@@ -240,6 +257,16 @@ class LifecycleRepository:
                 network=report.network,
                 pod_uids=saved["compute_uids"],
             )
+        if journal["runtime_release"] is not None:
+            if journal["node_capture"] is None or set(journal["storage_capture"]) != set(
+                storage_targets(saved, journal["retain_workspace"])
+            ):
+                raise RuntimeError("runtime release missing original capture")
+            if not release_report(
+                msgspec.json.encode(journal["runtime_release"]),
+                decode_node_release(msgspec.json.encode(journal["node_capture"])),
+            ):
+                raise RuntimeError("retained runtime report does not prove release")
         return deepcopy(saved)
 
     async def seal_pair_cleanup(
@@ -272,6 +299,8 @@ class LifecycleRepository:
                 "retain_workspace": expected.kind == "idle"
                 or any(item.get("retain") for item in expected.targets),
                 "node_capture": None,
+                "storage_capture": {},
+                "runtime_release": None,
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
@@ -320,6 +349,69 @@ class LifecycleRepository:
             raise PairClaimLost("original node capture cannot be replaced")
         intent.cleanup_journal = {**journal, "node_capture": value}
         await db.flush()
+
+    async def record_pair_storage_capture(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        evidence: dict[str, Any],
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> None:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            raise PairClaimLost("pair writers have not settled")
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = intent.cleanup_journal
+        targets = storage_targets(journal["snapshot"], journal["retain_workspace"])
+        if role not in targets:
+            raise ValueError("unsupported paired storage role")
+        validate_storage_capture(targets[role], evidence)
+        saved = journal["storage_capture"]
+        if role in saved and saved[role] != evidence:
+            raise PairClaimLost("original storage capture cannot be replaced")
+        intent.cleanup_journal = {**journal, "storage_capture": {**saved, role: deepcopy(evidence)}}
+        await db.flush()
+
+    async def record_pair_runtime_release(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        """Persist positive original-inventory proof, never API-absence inference."""
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = intent.cleanup_journal
+        if journal["node_capture"] is None or set(journal["storage_capture"]) != set(
+            storage_targets(journal["snapshot"], journal["retain_workspace"])
+        ):
+            raise PairClaimLost("original node and storage captures required")
+        captured = decode_node_release(msgspec.json.encode(journal["node_capture"]))
+        if not release_report(raw, captured):
+            return False
+        value = msgspec.to_builtins(decode_node_release(raw))
+        value["pod_uids"] = sorted(value["pod_uids"])
+        if journal["runtime_release"] is not None and journal["runtime_release"] != value:
+            raise PairClaimLost("original runtime-release report cannot be replaced")
+        intent.cleanup_journal = {**journal, "runtime_release": value}
+        await db.flush()
+        return True
 
     async def work(
         self,

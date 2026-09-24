@@ -105,9 +105,13 @@ class RecoveryService:
                     if not await self.lifecycle.pair_capture.capture(work, recovery=row):
                         log.warning("paired recovery writers unresolved; evidence retained")
                         return
+                    runtime = self.lifecycle.pair_runtime
+                    if runtime is None or not await runtime.release(work, recovery=row):
+                        log.warning("paired recovery requires runtime-release proof")
+                        return
             # Do not delete control policies, storage or old-generation evidence
             # through the legacy guest/IPC-only recovery path.
-            log.warning("paired recovery requires runtime-release proof: %s", row.session_id)
+            log.warning("paired recovery resource retirement pending: %s", row.session_id)
             return
         if any(obj.get("retain") for work in works for obj in work.targets):
             # Older versions converted idle timeouts into destructive recovery.

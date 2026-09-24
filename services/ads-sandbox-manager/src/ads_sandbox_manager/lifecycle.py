@@ -19,6 +19,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
+from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMER,
@@ -67,6 +68,7 @@ class LifecycleService:
         credentials: ClientCredentials,
         tokens: TokenMinter,
         pair_capture: PairCleanupCapture,
+        pair_runtime: PairRuntimeTeardown | None = None,
     ) -> None:
         self.settings, self.sessions, self.repository = settings, sessions, repository
         self.kube, self.publisher, self.credentials, self.tokens = (
@@ -77,6 +79,7 @@ class LifecycleService:
         )
         self._task: asyncio.Task[None] | None = None
         self.pair_capture = pair_capture
+        self.pair_runtime = pair_runtime
         self._ping_task: asyncio.Task[None] | None = None
 
     async def emit(self, topic: str, message: Signal) -> None:
@@ -527,9 +530,12 @@ class LifecycleService:
                     if not await self.pair_capture.capture(work):
                         log.warning("paired writers unresolved; cleanup retained: %s", work_id)
                         return
-                # Keep pair control policies in force until the complete runtime
-                # release path is installed. The old two-Deployment path lacks it.
-                log.warning("pair retirement requires runtime-release proof: %s", work_id)
+                if self.pair_runtime is None or not await self.pair_runtime.release(work):
+                    log.warning("pair retirement requires runtime-release proof: %s", work_id)
+                    return
+                # Positive private-runtime release does not retire IPC, storage,
+                # control policies, credentials or the generation ledger.
+                log.warning("paired resource retirement remains pending: %s", work_id)
                 return
             targets = []
             for obj in work.targets:
