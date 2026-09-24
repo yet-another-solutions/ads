@@ -120,6 +120,8 @@ class LifecycleRepository:
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
         validate_volume_resources(intent.volume_resources)
+        validate_control_dispatch(intent)
+        validate_compute_evidence(intent)
         if intent.topics_dispatch not in ("unissued", "inflight", "settled"):
             raise RuntimeError("corrupt paired topic dispatch")
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
@@ -140,10 +142,14 @@ class LifecycleRepository:
             "session_id": str(intent.session_id),
             "sandbox_id": str(intent.sandbox_id),
             "project_id": str(intent.project_id),
+            "claim_owner": str(intent.claim_owner),
+            "claim_changed": intent.claim_changed.isoformat(),
             "namespace": intent.namespace,
             "golden_version": intent.golden_version,
             "control_uids": dict(intent.control_uids),
             "compute_uids": dict(intent.compute_uids),
+            "control_dispatch": dict(intent.control_dispatch),
+            "compute_dispatch": dict(intent.compute_dispatch),
             "compute_payloads": dict(intent.compute_payloads),
             "relay_custody": dict(intent.relay_custody),
             "relay_inputs": dict(intent.relay_inputs),
@@ -296,10 +302,14 @@ class LifecycleRepository:
             "session_id",
             "sandbox_id",
             "project_id",
+            "claim_owner",
+            "claim_changed",
             "namespace",
             "golden_version",
             "control_uids",
             "compute_uids",
+            "control_dispatch",
+            "compute_dispatch",
             "relay_custody",
             "relay_inputs",
             "compute_payloads",
@@ -311,6 +321,31 @@ class LifecycleRepository:
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
+        try:
+            owner, changed = snapshot["claim_owner"], snapshot["claim_changed"]
+            if not isinstance(owner, str) or str(UUID(owner)) != owner:
+                raise ValueError
+            if not isinstance(changed, str):
+                raise ValueError
+            instant = datetime.fromisoformat(changed)
+            if instant.tzinfo is None or instant.isoformat() != changed:
+                raise ValueError
+        except ValueError:
+            raise RuntimeError("invalid captured pair creator claim") from None
+        for family, keys in (
+            ("control", {resource_key(*item) for item in CONTROL_RESOURCES}),
+            ("compute", set(new_compute_uids())),
+        ):
+            dispatches = snapshot[f"{family}_dispatch"]
+            if (
+                not isinstance(dispatches, dict)
+                or set(dispatches) != keys
+                or any(
+                    value not in ("unissued", "inflight", "settled")
+                    for value in dispatches.values()
+                )
+            ):
+                raise RuntimeError("corrupt captured pair dispatch")
         validate_relay_custody(snapshot["relay_custody"])
         validate_ipc_resources(snapshot["ipc_resources"])
         validate_volume_resources(snapshot["volume_resources"])
@@ -562,6 +597,8 @@ class LifecycleRepository:
             or intent.binding() != pair
             or intent.namespace != work.pair_snapshot["namespace"]
             or intent.golden_version != work.pair_snapshot["golden_version"]
+            or str(intent.claim_owner) != work.pair_snapshot["claim_owner"]
+            or intent.claim_changed.isoformat() != work.pair_snapshot["claim_changed"]
         ):
             raise PairClaimLost("pair creator fence identity changed")
         validate_control_dispatch(intent)
@@ -628,6 +665,75 @@ class LifecycleRepository:
         intent.creation_fenced = True
         await db.flush()
         return intent
+
+    async def pair_writers_settled(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        """Fence future dispatch and check every original writer under the claim.
+
+        A normal return settled by the original publisher is the only positive
+        write evidence. Captured UIDs cannot settle an ambiguous invocation.
+        This neither proves runtime release nor authorizes resource deletion.
+        """
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        intent = await self.fence_pair_creators(db, work)
+        snapshot = work.pair_snapshot
+        assert snapshot is not None and intent.creation_fenced
+        evidence: list[tuple[str, str | None]] = []
+        for family in ("control", "compute"):
+            for key, dispatch in getattr(intent, f"{family}_dispatch").items():
+                before = snapshot[f"{family}_dispatch"][key]
+                uid = getattr(intent, f"{family}_uids")[key]
+                if (dispatch != before and (before, dispatch) != ("inflight", "settled")) or (
+                    uid is not None and uid != snapshot[f"{family}_uids"][key]
+                ):
+                    # Metadata capture still preserves the original obligation;
+                    # later ledger drift cannot establish positive settlement.
+                    return False
+            evidence.extend(
+                (dispatch, snapshot[f"{family}_uids"][key])
+                for key, dispatch in getattr(intent, f"{family}_dispatch").items()
+            )
+        for field in ("relay_inputs", "volume_resources", "ipc_resources"):
+            for role, entry in getattr(intent, field).items():
+                captured = snapshot[field][role]
+                before = captured["dispatch"]
+                if entry["dispatch"] != before and (before, entry["dispatch"]) != (
+                    "inflight",
+                    "settled",
+                ):
+                    raise PairClaimLost("pair cleanup resource dispatch changed")
+                if entry["uid"] is not None and entry["uid"] != captured["uid"]:
+                    raise PairClaimLost("pair cleanup resource identity changed")
+                evidence.append((entry["dispatch"], captured["uid"]))
+        custody, captured = intent.relay_custody, snapshot["relay_custody"]
+        if (
+            custody["dispatch"] != captured["dispatch"]
+            and (captured["dispatch"], custody["dispatch"]) != ("inflight", "settled")
+        ) or (custody["uid"] is not None and custody["uid"] != captured["uid"]):
+            raise PairClaimLost("pair cleanup custody evidence changed")
+        evidence.append((custody["dispatch"], captured["uid"]))
+        if intent.egress_state_id is not None:
+            state = await db.get(
+                EgressState, intent.egress_state_id, with_for_update=True, populate_existing=True
+            )
+            assert state is not None  # Already validated and locked by the creator fence.
+            evidence.extend(
+                (getattr(state, f"{role}_dispatch"), snapshot["egress_state"][f"{role}_uid"])
+                for role in ("key", "volume")
+            )
+        return intent.topics_dispatch != "inflight" and all(
+            (dispatch == "unissued" and uid is None) or (dispatch == "settled" and uid is not None)
+            for dispatch, uid in evidence
+        )
 
     async def record_clone(
         self,

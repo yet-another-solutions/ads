@@ -102,7 +102,9 @@ class RecoveryService:
         if any(work.pair_snapshot is not None for work in works):
             for work in works:
                 if work.pair_snapshot is not None:
-                    await self.lifecycle.pair_capture.capture(work, recovery=row)
+                    if not await self.lifecycle.pair_capture.capture(work, recovery=row):
+                        log.warning("paired recovery writers unresolved; evidence retained")
+                        return
             # Do not delete control policies, storage or old-generation evidence
             # through the legacy guest/IPC-only recovery path.
             log.warning("paired recovery requires runtime-release proof: %s", row.session_id)

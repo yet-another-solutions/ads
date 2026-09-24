@@ -75,7 +75,7 @@ class PairCleanupCapture:
         ) != wanted:
             raise RuntimeError("pair cleanup builder configuration changed")
 
-    async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> None:
+    async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> bool:
         async with asyncio.timeout(self.settings.cleanup_seconds):
             for role in VOLUME_ROLES:
                 async with (
@@ -303,3 +303,15 @@ class PairCleanupCapture:
                         recovery=recovery,
                         recovery_seconds=self.settings.recovery_seconds,
                     )
+            async with (
+                asyncio.timeout(self.settings.control_seconds),
+                self.sessions.begin() as db,
+            ):
+                self._configuration(work)
+                return await self.repository.pair_writers_settled(
+                    db,
+                    work,
+                    datetime.now(UTC),
+                    recovery=recovery,
+                    recovery_seconds=self.settings.recovery_seconds,
+                )
