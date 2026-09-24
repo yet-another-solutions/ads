@@ -45,6 +45,7 @@ async def state(f):
 async def teardown(journal):
     f = journal
     f.events, f.blocked, f.node_hook, f.storage_hook, f.delete_hook = [], True, None, None, None
+    f.ipc_blocked = False
     f.storage = CleanupAdapter(f.adapter.kube)
     targets = storage_targets(f.work.pair_snapshot, False)
     pvs = {}
@@ -74,6 +75,20 @@ async def teardown(journal):
     # The directly owned IPC Pod remains on the configured application node.
     ipc = f.remote.objects[("Pod", ipc_name(f.work.sandbox_id))]
     ipc["spec"]["nodeName"] = "application"
+    f.ipc_report = {
+        "schema": "ads-ipc-release-v1",
+        "node": "application",
+        "namespace": f.adapter.namespace,
+        "generation": str(f.intent.generation),
+        "sandbox_id": str(f.work.sandbox_id),
+        "boot_id": str(uuid4()),
+        "pod_uid": ipc["metadata"]["uid"],
+        "volume_uid": f.work.pair_snapshot["ipc_resources"]["volume"]["uid"],
+        "inventory_sha256": "c" * 64,
+        "release_inventory_captured": True,
+        "observed_runtime_released": False,
+        "leftovers": None,
+    }
     f.adapter.kube.core.list_namespaced_pod.side_effect = lambda *a, **kw: {
         "items": [deepcopy(obj) for (kind, _), obj in f.remote.objects.items() if kind == "Pod"],
         "metadata": {},
@@ -94,6 +109,7 @@ async def teardown(journal):
 
     f.adapter.kube.core.delete_namespaced_pod.side_effect = remove
     real_delete = f.adapter.delete_compute
+    real_delete_ipc = f.adapter.delete_ipc
     real_capture = f.storage.capture
 
     async def storage(target):
@@ -120,6 +136,16 @@ async def teardown(journal):
 
     f.storage.capture = storage
     f.adapter.delete_compute = delete_compute
+
+    async def delete_ipc(pair, uid, *, node):
+        saved = await state(f)
+        assert saved["ipc_capture"] and saved["ipc_placement"]
+        f.events.append(("delete", "ipc"))
+        if f.delete_hook:
+            await f.delete_hook("ipc")
+        return await real_delete_ipc(pair, uid, node=node)
+
+    f.adapter.delete_ipc = delete_ipc
 
     class NodeOwner:
         network = f.report["network"]
@@ -158,6 +184,38 @@ async def teardown(journal):
                 }
             )
 
+        async def capture_ipc(self, pair, *, node, pod_uid, volume_uid):
+            f.events.append(("ipc", "capture"))
+            assert pair == f.intent.binding()
+            assert (node, pod_uid, volume_uid) == (
+                f.ipc_report["node"],
+                f.ipc_report["pod_uid"],
+                f.ipc_report["volume_uid"],
+            )
+            if f.node_hook:
+                await f.node_hook("ipc_capture")
+            return msgspec.json.encode(f.ipc_report)
+
+        async def observe_ipc(self, captured):
+            f.events.append(("ipc", "observe"))
+            assert captured.inventory_sha256 == f.ipc_report["inventory_sha256"]
+            assert ("Pod", ipc_name(f.work.sandbox_id)) not in f.remote.objects
+            if f.node_hook:
+                await f.node_hook("ipc_observe")
+            return msgspec.json.encode(
+                {
+                    **f.ipc_report,
+                    "observed_runtime_released": not f.ipc_blocked,
+                    "leftovers": {
+                        "pods": 0,
+                        "ready_sandboxes": 0,
+                        "live_containers": 0,
+                        "process_references": 0,
+                        "mount_references": int(f.ipc_blocked),
+                    },
+                }
+            )
+
     f.node = NodeOwner()
     f.runtime = PairRuntimeTeardown(
         replace(f.h.settings, cleanup_seconds=60, recovery_seconds=120),
@@ -181,6 +239,9 @@ async def test_real_ordered_teardown_preserves_storage_and_waits_for_positive_ru
     assert [event[0] for event in f.events[:6]] == ["storage"] * 6
     assert f.events[6:] == [
         ("node", "capture"),
+        ("ipc", "capture"),
+        ("delete", "ipc"),
+        ("ipc", "observe"),
         *(("delete", role) for role in COMPUTE_ROLES),
         ("node", "observe"),
     ]
@@ -189,10 +250,8 @@ async def test_real_ordered_teardown_preserves_storage_and_waits_for_positive_ru
     assert saved["runtime_release"] is None
     assert await retained(f) == f.work.pair_snapshot
     assert all(f.remote.objects[key] == value for key, value in before.items() if key[0] != "Pod")
-    assert (
-        f.remote.objects[("Pod", ipc_name(f.work.sandbox_id))]
-        == before[("Pod", ipc_name(f.work.sandbox_id))]
-    )
+    assert ("Pod", ipc_name(f.work.sandbox_id)) not in f.remote.objects
+    assert saved["ipc_release"]["observed_runtime_released"]
     # A new service instance resumes the exact committed capture without Pods.
     f.runtime = PairRuntimeTeardown(
         f.runtime.settings,
@@ -255,7 +314,7 @@ async def test_claim_loss_across_each_external_boundary_stops_progress(teardown,
     if stage in ("storage", "capture"):
         assert not any(event[0] == "delete" for event in f.events)
     if stage == "delete":
-        assert [event for event in f.events if event[0] == "delete"] == [("delete", "guest")]
+        assert [event for event in f.events if event[0] == "delete"] == [("delete", "ipc")]
 
 
 @pytest.mark.parametrize("fault", ["absent", "unbound", "no_nodes", "pv_replaced"])
@@ -321,7 +380,7 @@ async def test_api_present_stops_before_next_compute_and_positive_observer(teard
     f = teardown
     f.adapter.kube.core.delete_namespaced_pod.side_effect = None
     assert not await release(f)
-    assert [event for event in f.events if event[0] == "delete"] == [("delete", "guest")]
+    assert [event for event in f.events if event[0] == "delete"] == [("delete", "ipc")]
     assert ("node", "observe") not in f.events
     assert (await state(f))["runtime_release"] is None
 
@@ -543,7 +602,8 @@ async def test_real_recovery_entrypoint_stops_before_other_resource_retirement(t
     async with f.h.sessions.begin() as db:
         assert (await db.get(SandboxSession, f.row.session_id)).status == "recovering"
         assert await db.get(CleanupWork, f.work.work_id) is not None
-    assert ("Pod", ipc_name(f.work.sandbox_id)) in f.remote.objects
+    assert ("Pod", ipc_name(f.work.sandbox_id)) not in f.remote.objects
+    assert (await state(f))["ipc_release"]["observed_runtime_released"]
 
 
 async def test_real_idle_entrypoint_preserves_retention_after_private_runtime_release(teardown):
@@ -606,3 +666,170 @@ async def test_real_orphan_entrypoint_reuses_original_node_and_storage_capture(t
     assert journal["storage_capture"] == original["storage_capture"]
     assert journal["node_capture"] == original["node_capture"]
     assert sum(event == ("node", "capture") for event in f.events) == 1
+
+
+async def test_ipc_api_absence_is_not_release_and_blocks_private_destruction(teardown):
+    f = teardown
+    f.ipc_blocked = True
+    assert not await release(f)
+    original = deepcopy(await state(f))
+    assert original["ipc_capture"] and original["ipc_release"] is None
+    assert ("Pod", ipc_name(f.work.sandbox_id)) not in f.remote.objects
+    assert [event for event in f.events if event[0] == "delete"] == [("delete", "ipc")]
+    assert not any(event == ("node", "observe") for event in f.events)
+    f.ipc_blocked, f.blocked = False, False
+    assert await release(f)
+    current = await state(f)
+    assert current["ipc_capture"] == original["ipc_capture"]
+    assert current["ipc_placement"] == original["ipc_placement"]
+    assert sum(event == ("ipc", "capture") for event in f.events) == 1
+
+
+@pytest.mark.parametrize(
+    "phase,field",
+    [
+        (phase, field)
+        for phase in ("capture", "observe")
+        for field in ("node", "namespace", "generation", "sandbox_id", "pod_uid", "volume_uid")
+    ]
+    + [("observe", "boot_id"), ("observe", "inventory_sha256")],
+)
+async def test_ipc_wrong_identity_cannot_cross_release_boundary(teardown, phase, field):
+    f = teardown
+    if phase == "observe":
+        f.ipc_blocked = True
+        assert not await release(f)
+        f.ipc_blocked = False
+    old = f.ipc_report[field]
+    value = (
+        "b" * 64
+        if field == "inventory_sha256"
+        else "other"
+        if field in ("node", "namespace")
+        else str(uuid4())
+    )
+    method = f.node.capture_ipc if phase == "capture" else f.node.observe_ipc
+
+    async def altered(*args, **kwargs):
+        report = msgspec.json.decode(await method(*args, **kwargs))
+        report[field] = value
+        return msgspec.json.encode(report)
+
+    if phase == "capture":
+        f.node.capture_ipc = altered
+    else:
+        f.node.observe_ipc = altered
+    with pytest.raises(ValueError):
+        await release(f)
+    saved = await state(f)
+    assert saved["ipc_release"] is None and saved["runtime_release"] is None
+    assert f.ipc_report[field] == old
+    assert not any(event == ("delete", "guest") for event in f.events)
+
+
+@pytest.mark.parametrize("phase", ["ipc_capture", "ipc_observe"])
+async def test_ipc_claim_loss_retains_original_evidence(teardown, phase):
+    f = teardown
+
+    async def lose(stage):
+        if stage == phase:
+            async with f.h.sessions.begin() as db:
+                row = await db.get(SandboxSession, f.claim.session_id)
+                row.status_changed_at += timedelta(microseconds=1)
+
+    f.node_hook = lose
+    with pytest.raises(PairClaimLost):
+        await release(f)
+    saved = await state(f)
+    assert saved["ipc_release"] is None and saved["runtime_release"] is None
+    assert bool(saved["ipc_capture"]) == (phase == "ipc_observe")
+    assert not any(event == ("delete", "guest") for event in f.events)
+
+
+async def test_ipc_capture_rollback_never_authorizes_delete(teardown):
+    f = teardown
+    original = f.capture.repository.record_pair_ipc_proof
+
+    async def rollback(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise TimeoutError
+
+    f.capture.repository.record_pair_ipc_proof = rollback
+    with pytest.raises(TimeoutError):
+        await release(f)
+    saved = await state(f)
+    assert saved["ipc_capture"] is None and saved["ipc_placement"] is None
+    assert not any(event[0] == "delete" for event in f.events)
+    f.capture.repository.record_pair_ipc_proof = original
+    f.blocked = False
+    assert await release(f)
+
+
+@pytest.mark.parametrize("field", ["ipc_capture", "ipc_placement", "ipc_release"])
+async def test_corrupt_retained_ipc_proof_cannot_shortcut_release(teardown, field):
+    f = teardown
+    f.blocked = False
+    assert await release(f)
+    async with f.h.sessions.begin() as db:
+        intent = await db.get(PairIntent, f.intent.generation)
+        saved = deepcopy(intent.cleanup_journal)
+        saved[field]["node"] = "replacement"
+        intent.cleanup_journal = saved
+    events = list(f.events)
+    with pytest.raises((RuntimeError, ValueError)):
+        await release(f)
+    assert events == f.events
+
+
+async def test_ipc_observation_must_not_be_capture_only(teardown):
+    f = teardown
+    f.node.observe_ipc = AsyncMock(return_value=msgspec.json.encode(f.ipc_report))
+    with pytest.raises(ValueError):
+        await release(f)
+    assert (await state(f))["ipc_release"] is None
+    assert not any(event == ("delete", "guest") for event in f.events)
+
+
+async def test_ipc_release_commit_loss_does_not_destroy_private_compute(teardown):
+    f = teardown
+    original = f.capture.repository.record_pair_ipc_proof
+
+    async def lost(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        if kwargs.get("placement") is None:
+            raise TimeoutError
+        return result
+
+    f.capture.repository.record_pair_ipc_proof = lost
+    with pytest.raises(TimeoutError):
+        await release(f)
+    saved = await state(f)
+    assert saved["ipc_capture"] and saved["ipc_release"] is None
+    assert not any(event == ("delete", "guest") for event in f.events)
+    f.capture.repository.record_pair_ipc_proof = original
+    f.blocked = False
+    assert await release(f)
+
+
+async def test_ipc_cancelled_capture_never_authorizes_delete(teardown):
+    f = teardown
+    entered = asyncio.Event()
+
+    async def blocked(stage):
+        if stage == "ipc_capture":
+            entered.set()
+            await asyncio.Event().wait()
+
+    f.node_hook = blocked
+    task = asyncio.create_task(release(f))
+    try:
+        await asyncio.wait_for(entered.wait(), 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert (await state(f))["ipc_capture"] is None
+        assert not any(event[0] == "delete" for event in f.events)
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)

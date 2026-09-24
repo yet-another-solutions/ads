@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from ads_commons.sandbox.ipc_release import decode_ipc_release
 from ads_commons.sandbox.node_release import decode_node_release
 from ads_sandbox_manager.egress_state_store import (
     EgressState,
@@ -20,6 +21,7 @@ from ads_sandbox_manager.egress_state_store import (
 )
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
+from ads_sandbox_manager.pair_ipc_proof import ipc_capture_report, ipc_release_report
 from ads_sandbox_manager.pair_node_proof import capture_report, release_report
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_storage_capture import storage_targets, validate_storage_capture
@@ -186,6 +188,9 @@ class LifecycleRepository:
                 "node_capture",
                 "storage_capture",
                 "runtime_release",
+                "ipc_placement",
+                "ipc_capture",
+                "ipc_release",
             }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
@@ -250,6 +255,7 @@ class LifecycleRepository:
                 if role not in targets:
                     raise RuntimeError("foreign retained storage capture")
                 validate_storage_capture(targets[role], evidence)
+        self.validate_ipc_journal(journal, pair)
         if journal["node_capture"] is not None:
             raw = msgspec.json.encode(journal["node_capture"])
             report = decode_node_release(raw)
@@ -272,6 +278,38 @@ class LifecycleRepository:
             ):
                 raise RuntimeError("retained runtime report does not prove release")
         return deepcopy(saved)
+
+    @staticmethod
+    def validate_ipc_journal(journal: dict[str, Any], pair: PairBinding) -> None:
+        placement, captured = journal["ipc_placement"], journal["ipc_capture"]
+        saved = journal["snapshot"]
+        if placement is not None:
+            if (
+                not isinstance(placement, dict)
+                or set(placement) != {"uid", "node", "resource_version"}
+                or any(not isinstance(v, str) or not v.strip() for v in placement.values())
+                or placement["uid"] != saved["ipc_resources"]["pod"]["uid"]
+            ):
+                raise RuntimeError("invalid original IPC placement")
+        if captured is not None:
+            if placement is None or "ipc" not in journal["storage_capture"]:
+                raise RuntimeError("IPC capture missing original placement or storage")
+            if placement["node"] not in journal["storage_capture"]["ipc"]["nodes"]:
+                raise RuntimeError("IPC node differs from captured volume use")
+            ipc_capture_report(
+                msgspec.json.encode(captured),
+                pair,
+                node=placement["node"],
+                namespace=saved["namespace"],
+                pod_uid=placement["uid"],
+                volume_uid=saved["ipc_resources"]["volume"]["uid"],
+            )
+        if journal["ipc_release"] is not None:
+            if captured is None or not ipc_release_report(
+                msgspec.json.encode(journal["ipc_release"]),
+                decode_ipc_release(msgspec.json.encode(captured)),
+            ):
+                raise RuntimeError("retained IPC report does not prove release")
 
     async def seal_pair_cleanup(
         self,
@@ -305,6 +343,9 @@ class LifecycleRepository:
                 "node_capture": None,
                 "storage_capture": {},
                 "runtime_release": None,
+                "ipc_placement": None,
+                "ipc_capture": None,
+                "ipc_release": None,
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
@@ -414,6 +455,48 @@ class LifecycleRepository:
         if journal["runtime_release"] is not None and journal["runtime_release"] != value:
             raise PairClaimLost("original runtime-release report cannot be replaced")
         intent.cleanup_journal = {**journal, "runtime_release": value}
+        await db.flush()
+        return True
+
+    async def record_pair_ipc_proof(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        raw: bytes,
+        now: datetime,
+        *,
+        placement: dict[str, Any] | None = None,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        """Commit original capture or positive observation under the same cleanup claim."""
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        value = msgspec.to_builtins(decode_ipc_release(raw))
+        if placement is not None:
+            if journal["ipc_placement"] is not None and journal["ipc_placement"] != placement:
+                raise PairClaimLost("original IPC placement cannot be replaced")
+            if journal["ipc_capture"] is not None and journal["ipc_capture"] != value:
+                raise PairClaimLost("original IPC capture cannot be replaced")
+            journal.update(ipc_placement=deepcopy(placement), ipc_capture=value)
+        else:
+            if journal["ipc_capture"] is None:
+                raise PairClaimLost("original IPC capture required")
+            if not ipc_release_report(
+                raw, decode_ipc_release(msgspec.json.encode(journal["ipc_capture"]))
+            ):
+                return False
+            if journal["ipc_release"] is not None and journal["ipc_release"] != value:
+                raise PairClaimLost("original IPC release cannot be replaced")
+            journal["ipc_release"] = value
+        self.validate_ipc_journal(journal, pair)
+        intent.cleanup_journal = journal
         await db.flush()
         return True
 

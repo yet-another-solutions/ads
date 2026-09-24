@@ -16,6 +16,16 @@ inventory. It does not retire the pair or drop its cleanup intent.
 - Resolve all four exact Pod identities to one node. The trusted node-owner
   port must durably fence admission before capturing the original inventory.
   Commit its exact scope/Pod/boot/digest-bound response before deleting compute.
+- Capture the exact manager-owned IPC Pod's application-node placement twice,
+  retaining its original UID and resource version alongside the IPC volume
+  identity. Commit a separate `ads-ipc-release-v1` node capture before deleting
+  IPC with UID/resource-version preconditions and normal grace.
+- Observe IPC runtime and mount release against that original application-node
+  capture before removing any private compute. A private-pair report cannot
+  stand in for IPC proof. API absence is only removal progress. Lost replies
+  and manager restart reuse the original retained capture; they do not recapture
+  a missing or replaced Pod. Ordinary idle still requires the authenticated,
+  transition-bound drain acknowledgement, including at the runtime boundary.
 - Remove the four private Pods in guest, egress, guest-relay, egress-relay order,
   with original UID/resourceVersion/node checks. An incomplete API removal stops
   advancement. A lost deletion response retains the journal and can only retry
@@ -44,10 +54,13 @@ and admission-fence ordering; transport must preserve that authority.
 Full-pair bound storage and the existing complete node inventory are required.
 Earlier partial starts, missing node inventories and unavailable bound-volume
 evidence remain fail-closed, not silently synthesized or claimed supported.
-IPC Pod teardown, positive storage release/reclamation, exact key/control
-cleanup, generation retirement, retained-state transfer and reset coordination
-remain later lifecycle stages. This component keeps the final paired-completion
-guard and all policies, credentials, PVCs and generation evidence.
+The manager IPC stage and strict proof contract are implemented with fake
+node-owner delivery in tests. Actual IPC node inventory/observation and trusted
+production delivery remain required; neither a digest nor an arbitrary report
+is authority. Positive storage release/reclamation, exact key/control cleanup,
+generation retirement, retained-state transfer and reset coordination remain
+later lifecycle stages. This component keeps the final paired-completion guard
+and all policies, credentials, PVCs and generation evidence.
 
 The proof here is real PostgreSQL and real Kubernetes-adapter logic with fake
 external Kubernetes/CSI and node-owner responses. It is not live integration

@@ -27,3 +27,14 @@ normal, recovery and orphan runtime-release guards remain closed. Unsupported
 partial node inventories remain blocked. Later ordered teardown must commit this
 journal before deletion, honor its retained targets and retention disposition,
 and obtain positive release evidence rather than interpreting API absence.
+
+The subsequent ordered runtime stage now extends this same journal with
+`ipc_placement`, `ipc_capture` and `ipc_release`. Placement records the exact
+Pod UID, application node and resource version; the separate IPC capture binds
+namespace, sandbox/generation, Pod and volume UIDs, boot and protected inventory
+digest. Its positive observation must match the original capture, including
+boot identity. These fields survive session/work-row removal, are immutable
+once recorded and are revalidated before reuse. They do not authorize storage
+reclamation or final generation retirement. Production node delivery and the
+actual IPC node observer remain separately required, not supplied by these
+manager tests.

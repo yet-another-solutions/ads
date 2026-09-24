@@ -301,6 +301,41 @@ class PairControlAdapter:
         No force deletion, grace-period override, finalizer removal or recreation.
         """
         desired = compute_identity(self.kube.settings, pair, role)
+        return await self._delete_pod(desired, uid, node=node)
+
+    async def ipc_placement(self, pair: PairBinding, uid: str) -> Object:
+        """Capture exact IPC placement twice, never infer it from a missing Pod."""
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("original IPC Pod UID required")
+        desired = ipc_identity(self.kube.settings, pair, "pod")
+        captured: Object | None = None
+        for _ in range(2):
+            observed = await self.kube._get(
+                self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+            )
+            if observed is None:
+                raise RuntimeError("original IPC Pod placement unavailable")
+            self._identity(observed, desired, uid)
+            node = observed.get("spec", {}).get("nodeName")
+            if not isinstance(node, str) or not node.strip():
+                raise RuntimeError("original IPC Pod node unavailable")
+            current = {
+                "uid": uid,
+                "node": node,
+                "resource_version": observed["metadata"]["resourceVersion"],
+            }
+            if captured is not None and captured != current:
+                raise RuntimeError("IPC Pod placement changed during capture")
+            captured = current
+        assert captured is not None
+        return captured
+
+    async def delete_ipc(self, pair: PairBinding, uid: str, *, node: str) -> bool:
+        """Remove only the captured IPC Pod; API absence is not runtime release."""
+        desired = ipc_identity(self.kube.settings, pair, "pod")
+        return await self._delete_pod(desired, uid, node=node)
+
+    async def _delete_pod(self, desired: Object, uid: str, *, node: str) -> bool:
         if (
             not isinstance(uid, str)
             or not uid.strip()
