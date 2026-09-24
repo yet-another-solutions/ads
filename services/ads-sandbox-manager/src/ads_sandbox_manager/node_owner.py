@@ -18,6 +18,7 @@ import msgspec
 
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
 from ads_commons.sandbox.node_release import NodeReleaseReport, _unique, decode_node_release
+from ads_commons.sandbox.partial_release import PartialReleaseReport, decode_partial_release
 from ads_sandbox_manager.pair_objects import PairBinding
 
 LIMIT = 32768
@@ -136,6 +137,7 @@ class HttpsNodeOwner:
         volume_uid: str | None = None,
         inventory_sha256: str | None = None,
         boot_id: str | None = None,
+        pod_uids: dict[str, str] | None = None,
     ) -> bytes:
         endpoint = self.settings.endpoints.get(node)
         if endpoint is None:
@@ -155,6 +157,7 @@ class HttpsNodeOwner:
                 "volume_uid": volume_uid,
                 "inventory_sha256": inventory_sha256,
                 "boot_id": boot_id,
+                **({"pod_uids": pod_uids} if operation.startswith("partial-") else {}),
             }
         )
         async with asyncio.timeout(self.settings.timeout):
@@ -186,11 +189,13 @@ class HttpsNodeOwner:
         ):
             raise ValueError("node-owner response correlation failed")
         report = msgspec.json.encode(result["report"])
-        decoded = (
-            decode_ipc_release(report)
-            if operation.startswith("ipc-")
-            else decode_node_release(report)
-        )
+        decoded: IpcReleaseReport | NodeReleaseReport | PartialReleaseReport
+        if operation.startswith("ipc-"):
+            decoded = decode_ipc_release(report)
+        elif operation.startswith("partial-"):
+            decoded = decode_partial_release(report)
+        else:
+            decoded = decode_node_release(report)
         if (
             decoded.node != node
             or decoded.namespace != self.settings.namespace
@@ -201,9 +206,14 @@ class HttpsNodeOwner:
             or (decoded.leftovers is None) != operation.endswith("capture")
         ):
             raise ValueError("node-owner returned a different original inventory")
-        if isinstance(decoded, NodeReleaseReport):
+        if isinstance(decoded, (NodeReleaseReport, PartialReleaseReport)):
             if decoded.network != self.network:
                 raise ValueError("node-owner network mismatch")
+            if (
+                isinstance(decoded, PartialReleaseReport)
+                and {key: str(uid) for key, uid in decoded.pod_uids.items()} != pod_uids
+            ):
+                raise ValueError("node-owner partial identity mismatch")
         elif str(decoded.pod_uid) != pod_uid or str(decoded.volume_uid) != volume_uid:
             raise ValueError("node-owner IPC identity mismatch")
         return report
@@ -228,6 +238,28 @@ class HttpsNodeOwner:
         if set(decode_node_release(raw).pod_uids) != set(captured.pod_uids):
             raise ValueError("node-owner changed original private Pod identities")
         return raw
+
+    async def capture_partial(
+        self, pair: PairBinding, *, node: str, pod_uids: dict[str, str]
+    ) -> bytes:
+        return await self._call(
+            "partial-capture",
+            node=node,
+            generation=str(pair.generation),
+            sandbox_id=str(pair.sandbox_id),
+            pod_uids=pod_uids,
+        )
+
+    async def observe_partial(self, captured: PartialReleaseReport) -> bytes:
+        return await self._call(
+            "partial-observe",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            pod_uids={key: str(uid) for key, uid in captured.pod_uids.items()},
+            boot_id=str(captured.boot_id),
+            inventory_sha256=captured.inventory_sha256,
+        )
 
     async def capture_ipc(
         self, pair: PairBinding, *, node: str, pod_uid: str, volume_uid: str

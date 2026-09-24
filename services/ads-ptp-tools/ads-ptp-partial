@@ -1,0 +1,461 @@
+#!/usr/bin/env python3
+"""Exact partial private-runtime inventories under the durable admission fence."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+import time
+from copy import deepcopy
+from pathlib import Path
+from uuid import UUID
+
+ROLES = {
+    "guest": "ads-sandbox",
+    "egress": "ads-sandbox-egress",
+    "guest-relay": "ads-sandbox-relay",
+    "egress-relay": "ads-sandbox-egress-relay",
+}
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name.replace("-", "_"), str(Path(__file__).with_name(name))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def uuid(value):
+    require(isinstance(value, str) and str(UUID(value)) == value, "canonical identity required")
+    return value
+
+
+def digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def pod_map(value):
+    require(
+        isinstance(value, dict) and 1 <= len(value) <= 4 and set(value) <= set(ROLES),
+        "nonempty exact private Pod map required",
+    )
+    require(len(set(value.values())) == len(value), "duplicate original Pod UID")
+    for uid in value.values():
+        uuid(uid)
+    return value
+
+
+def namespace_identity(value):
+    require(
+        isinstance(value, list)
+        and len(value) == 2
+        and all(type(x) is int and x > 0 for x in value),
+        "original namespace identity required",
+    )
+    return value
+
+
+def exact_pods(observer, scope):
+    """A trusted request supplies UIDs; labels alone confer no authority."""
+    pods = {}
+    for pod in observer.pods():
+        meta = pod["metadata"]
+        labels = meta.get("labels", {})
+        if labels.get("ads.io/attachment-generation") != scope["generation"]:
+            continue
+        if labels.get("app.kubernetes.io/component") == "ads-sandbox-ipc":
+            continue  # Its separate exact application-runtime proof is never supplied here.
+        matches = [role for role, uid in scope["pod_uids"].items() if uid == meta["uid"]]
+        require(len(matches) == 1, "unexpected local generation member")
+        role = matches[0]
+        spec = pod["spec"]
+        require(
+            role not in pods
+            and meta["namespace"] == scope["namespace"]
+            and labels.get("ads.io/sandbox-id") == scope["sandbox_id"]
+            and labels.get("app.kubernetes.io/component") == ROLES[role]
+            and not meta.get("ownerReferences")
+            and spec.get("nodeName") == scope["node"]
+            and not any(spec.get(k) for k in ("hostNetwork", "hostPID", "hostIPC"))
+            and not spec.get("initContainers")
+            and not spec.get("ephemeralContainers"),
+            "partial Pod ownership changed",
+        )
+        if role.endswith("-relay"):
+            require(not spec.get("runtimeClassName"), "relay requires native runtime")
+        else:
+            require(
+                spec.get("runtimeClassName") == observer.config[role + "_runtime"],
+                "private VM runtime changed",
+            )
+        pods[role] = deepcopy(pod)
+    require(set(pods) == set(scope["pod_uids"]), "original assigned Pod missing")
+    return pods
+
+
+def attempts(plugin, root, scope):
+    """Read pre-effect history without altering or clearing any original record."""
+    found = {}
+    for index, path in enumerate(root.iterdir()):
+        require(index < 16384, "attachment history exceeds bound")
+        if not re.fullmatch(r"attempt-[0-9a-f]{64}\.json", path.name):
+            continue
+        saved = plugin.read_record(path)
+        req = saved["request"]
+        if req["pod_uid"] not in scope["pod_uids"].values():
+            continue
+        require(
+            set(saved) == {"schema", "request", "boot_id", "vm_identity", "binding"}
+            and saved["schema"] == "ads-ptp-attempt-v1"
+            and saved["boot_id"] == scope["boot_id"]
+            and set(req)
+            == {"command", "network", "container_id", "ifname", "pod_uid", "netns", "key"}
+            and req["command"] == "ADD"
+            and req["network"] == scope["network"]
+            and isinstance(req["container_id"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", req["container_id"])
+            and isinstance(req["netns"], str)
+            and req["netns"].startswith("/")
+            and req["key"]
+            == hashlib.sha256(
+                f"{req['network']}/{req['container_id']}/{req['ifname']}".encode()
+            ).hexdigest()
+            and path.name == "attempt-" + req["key"] + ".json",
+            "invalid original ADD attempt",
+        )
+        role = next(role for role, uid in scope["pod_uids"].items() if uid == req["pod_uid"])
+        require(
+            role in ("guest", "egress")
+            and req["ifname"] == ("eth0" if role == "guest" else "eth1"),
+            "unexpected private attachment role",
+        )
+        namespace_identity(saved["vm_identity"])
+        if saved["binding"] is not None:
+            binding = plugin.binding(saved["binding"], req)
+            require(
+                binding["generation"] == scope["generation"]
+                and binding["sandbox_id"] == scope["sandbox_id"]
+                and binding["role"] == role
+                and binding["relay_pod_uid"] == scope["pod_uids"].get(role + "-relay"),
+                "attempt binding differs from original pair",
+            )
+        found[path.name] = saved
+    return found
+
+
+def relay_inventory(plugin, attestor, observer, scope, pod):
+    """Capture an actual running relay, including its completed private namespace."""
+    cfg = observer.config
+    containers = pod["spec"].get("containers", [])
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    require(
+        len(containers) == len(statuses) == 1
+        and containers[0].get("name") == cfg["relay_container"]
+        and containers[0].get("image") == cfg["relay_image"]
+        and statuses[0].get("name") == cfg["relay_container"]
+        and "running" in statuses[0].get("state", {})
+        and isinstance(statuses[0].get("containerID"), str)
+        and re.fullmatch(r"containerd://[0-9a-f]{64}", statuses[0]["containerID"]),
+        "original running relay required",
+    )
+    container_id = statuses[0]["containerID"].split("://", 1)[1]
+    runtime, pids = attestor.runtime_identity(observer, pod, container_id)
+    sandbox_pid, container_pid = pids
+    private_path = f"/proc/{container_pid}/root/run/netns/private-{scope['generation']}"
+    transport_path = f"/proc/{sandbox_pid}/ns/net"
+    with attestor.processes(pids) as check:
+        with (
+            plugin.namespace(private_path) as private,
+            plugin.namespace(transport_path) as transport,
+            plugin.namespace(f"/proc/{container_pid}/ns/net") as container_net,
+        ):
+            ns = [plugin.ns_identity(private), plugin.ns_identity(transport)]
+            require(
+                ns[0] != ns[1] and plugin.ns_identity(container_net) == ns[1],
+                "relay namespaces changed",
+            )
+            path = Path(f"/proc/{container_pid}/root/run/relay-state/state.json")
+            record = plugin.read_record(path)
+            require(
+                record.get("complete") is True
+                and not record.get("stopped")
+                and record.get("pod_uid") == pod["metadata"]["uid"]
+                and record.get("generation") == scope["generation"]
+                and record.get("sandbox_id") == scope["sandbox_id"]
+                and record.get("private") == ns[0]
+                and record.get("transport") == ns[1],
+                "original relay setup inventory unavailable",
+            )
+            upstream = plugin.links(transport)["eth0"]
+            peers = [
+                link
+                for link in observer.command("ip", "-j", "link")
+                if link["ifindex"] == upstream["link_index"]
+            ]
+            require(len(peers) == 1, "original relay host peer unavailable")
+            peer = {key: peers[0][key] for key in ("ifname", "ifindex")}
+            require(plugin.read_record(path) == record, "relay setup changed during capture")
+            require(
+                attestor.runtime_identity(observer, pod, container_id) == (runtime, pids),
+                "relay runtime changed during capture",
+            )
+            check()
+    return {"runtime_ids": [runtime, container_id], "namespaces": ns, "links": [peer]}
+
+
+def vm_inventory(plugin, observer, scope, pod, records):
+    """Known namespaces come from immutable ADD history, never a missing API row."""
+    uid = pod["metadata"]["uid"]
+    history = [r for r in records.values() if r["request"]["pod_uid"] == uid]
+    require(history, "original VM attempt history unavailable")
+    runtimes = {r["request"]["container_id"] for r in history}
+    current = [
+        item
+        for item in observer.cri("pods", "-o", "json")["items"]
+        if item["metadata"].get("uid") == uid
+    ]
+    for item in current:
+        require(
+            item["id"] in runtimes and item["metadata"].get("namespace") == scope["namespace"],
+            "VM runtime lacks original attempt history",
+        )
+        detail = observer.cri("inspectp", "-o", "json", item["id"])["status"]
+        require(
+            detail["id"] == item["id"]
+            and detail["metadata"]["uid"] == uid
+            and detail["metadata"]["namespace"] == scope["namespace"]
+            and detail["metadata"]["name"] == pod["metadata"]["name"]
+            and detail["state"] in ("SANDBOX_READY", "SANDBOX_NOTREADY"),
+            "VM runtime observation changed",
+        )
+    ns = {tuple(namespace_identity(r["vm_identity"])) for r in history}
+    for record in history:
+        binding = record["binding"]
+        if binding is not None:
+            ns.update(tuple(binding[key]["identity"]) for key in ("private", "transport"))
+    return {
+        "runtime_ids": sorted(runtimes),
+        "namespaces": [list(n) for n in sorted(ns)],
+        "links": [],
+    }
+
+
+def validate(value, scope):
+    require(
+        isinstance(value, dict)
+        and set(value) == set(scope) | {"boot_id", "members", "attempts"}
+        and all(value[key] == item for key, item in scope.items()),
+        "exact retained partial inventory required",
+    )
+    uuid(value["boot_id"])
+    pod_map(value["pod_uids"])
+    require(
+        isinstance(value["members"], dict) and set(value["members"]) == set(value["pod_uids"]),
+        "partial member inventory changed",
+    )
+    for role, member in value["members"].items():
+        require(
+            isinstance(member, dict)
+            and set(member) == {"runtime_ids", "namespaces", "links"}
+            and isinstance(member["runtime_ids"], list)
+            and 1 <= len(member["runtime_ids"]) <= 128
+            and len(set(member["runtime_ids"])) == len(member["runtime_ids"])
+            and all(
+                isinstance(r, str) and re.fullmatch(r"[0-9a-f]{64}", r)
+                for r in member["runtime_ids"]
+            )
+            and isinstance(member["namespaces"], list)
+            and 1 <= len(member["namespaces"]) <= 384
+            and isinstance(member["links"], list)
+            and len(member["links"]) == int(role.endswith("-relay")),
+            "incomplete original partial member",
+        )
+        for ns in member["namespaces"]:
+            namespace_identity(ns)
+        for link in member["links"]:
+            require(
+                isinstance(link, dict)
+                and set(link) == {"ifname", "ifindex"}
+                and isinstance(link["ifname"], str)
+                and re.fullmatch(r"[a-zA-Z0-9_.-]{1,15}", link["ifname"])
+                and type(link["ifindex"]) is int
+                and link["ifindex"] > 0,
+                "invalid original host peer",
+            )
+    require(
+        isinstance(value["attempts"], dict)
+        and len(value["attempts"]) <= 256
+        and all(
+            re.fullmatch(r"attempt-[0-9a-f]{64}\.json", key)
+            and isinstance(item, str)
+            and re.fullmatch(r"[0-9a-f]{64}", item)
+            for key, item in value["attempts"].items()
+        ),
+        "invalid retained attempt digest map",
+    )
+    return value
+
+
+def report(value, leftovers=None):
+    validate(
+        value,
+        {
+            key: value[key]
+            for key in ("node", "namespace", "network", "generation", "sandbox_id", "pod_uids")
+        },
+    )
+    if leftovers is not None:
+        require(
+            isinstance(leftovers, dict)
+            and set(leftovers)
+            == {
+                "pods",
+                "ready_sandboxes",
+                "live_containers",
+                "journals",
+                "host_links",
+                "process_namespace_references",
+            }
+            and all(
+                type(count) is int and 0 <= count <= 2147483647 for count in leftovers.values()
+            ),
+            "complete bounded partial release observations required",
+        )
+    return {
+        "schema": "ads-partial-release-v1",
+        **{
+            key: value[key]
+            for key in (
+                "node",
+                "namespace",
+                "network",
+                "generation",
+                "sandbox_id",
+                "boot_id",
+                "pod_uids",
+            )
+        },
+        "inventory_sha256": digest(value),
+        "attachment_admission_fenced": True,
+        "release_inventory_captured": True,
+        "observed_runtime_released": leftovers is not None and not any(leftovers.values()),
+        "generation_retired": False,
+        "leftovers": leftovers,
+    }
+
+
+def capture(plugin, attestor, observer, release, root, scope):
+    boot = release.boot_id()
+    scope_with_boot = {**scope, "boot_id": boot}
+    pods = exact_pods(observer, scope)
+    records = attempts(plugin, root, scope_with_boot)
+    members = {}
+    for role, pod in sorted(pods.items()):
+        members[role] = (
+            relay_inventory(plugin, attestor, observer, scope, pod)
+            if role.endswith("-relay")
+            else vm_inventory(plugin, observer, scope, pod, records)
+        )
+    require(exact_pods(observer, scope) == pods, "Pod changed during partial capture")
+    require(
+        attempts(plugin, root, scope_with_boot) == records, "ADD history changed during capture"
+    )
+    require(release.boot_id() == boot, "node boot changed during partial capture")
+    return validate(
+        {
+            **scope_with_boot,
+            "members": members,
+            "attempts": {name: digest(record) for name, record in records.items()},
+        },
+        scope,
+    )
+
+
+def observe(plugin, observer, release, root, value):
+    require(release.boot_id() == value["boot_id"], "captured node boot changed")
+    current = attempts(plugin, root, value)
+    require(
+        {name: digest(record) for name, record in current.items()} == value["attempts"],
+        "original attempt history changed after capture",
+    )
+    flat = {
+        **value,
+        "pod_uids": list(value["pod_uids"].values()),
+        "runtime_ids": sorted({r for m in value["members"].values() for r in m["runtime_ids"]}),
+        "namespaces": [
+            list(n)
+            for n in sorted({tuple(n) for m in value["members"].values() for n in m["namespaces"]})
+        ],
+        "links": [link for m in value["members"].values() for link in m["links"]],
+    }
+    counts = release.observe_counts(plugin, observer, root, flat)
+    require(
+        {name: digest(record) for name, record in attempts(plugin, root, value).items()}
+        == value["attempts"],
+        "original attempt history changed during release observation",
+    )
+    return report(value, counts)
+
+
+def perform(request):
+    require(os.geteuid() == 0, "trusted node-root observer required")
+    require(
+        isinstance(request, dict)
+        and set(request)
+        == {"action", "attestorConfig", "stateDir", "generation", "sandbox_id", "pod_uids"}
+        and request["action"] in ("capture", "observe"),
+        "exact partial inventory request required",
+    )
+    plugin, attestor, release = load("ads-ptp"), load("ads-ptp-attest"), load("ads-ptp-release")
+    config = attestor.validate(plugin.read_record(Path(request["attestorConfig"])))
+    observer = attestor.Observer(config)
+    observer.deadline = time.monotonic() + 60
+    scope = {key: config[key] for key in ("node", "namespace", "network")}
+    scope.update({key: uuid(request[key]) for key in ("generation", "sandbox_id")})
+    scope["pod_uids"] = pod_map(request["pod_uids"])
+    root = plugin.private_directory(request["stateDir"])
+    path = root / ("partial-release-" + scope["generation"] + ".json")
+    with plugin.generation_lock(root, scope["generation"]) as fence:
+        require(
+            plugin.read_record(fence)
+            == {key: scope[key] for key in ("network", "generation", "sandbox_id")},
+            "exact durable admission fence required",
+        )
+        if request["action"] == "capture":
+            value = (
+                validate(plugin.read_record(path), scope)
+                if path.exists() or path.is_symlink()
+                else capture(plugin, attestor, observer, release, root, scope)
+            )
+            require(value["boot_id"] == release.boot_id(), "captured node boot changed")
+            plugin.save_record(path, value)
+            return report(value)
+        value = validate(plugin.read_record(path), scope)
+        return observe(plugin, observer, release, root, value)
+
+
+def main():
+    try:
+        print(json.dumps(perform(load("ads-ptp").decode(sys.stdin.buffer.read(65537)))))
+    except Exception as error:
+        print(json.dumps({"error": "partial inventory failed", "details": type(error).__name__}))
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

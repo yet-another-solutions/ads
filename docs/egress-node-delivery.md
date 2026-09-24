@@ -40,6 +40,10 @@ exchange; a digest by itself still provides no authentication.
   inventory.
 - `ipc-observe`: observe that exact IPC capture, without conflating it with the
   private-pair inventory.
+- `partial-capture`: fence admission and capture the exact nonempty original
+  private role/UID map through `ads-ptp-partial`.
+- `partial-observe`: observe that same retained partial inventory, boot and
+  digest. The separate partial report cannot satisfy a full four-Pod contract.
 
 The service substitutes all configuration paths server-side. Only those fixed
 helpers can be executed, without a shell or inherited caller environment.
@@ -61,7 +65,7 @@ Run the service as an actual host systemd service, not in a private PID or mount
 namespace. Extract the scripts from the reviewed immutable CI-built
 `ads-ptp-tools` image. Do not build an image on a lab host. Install the
 `ads-ptp`, `ads-ptp-attest`, `ads-ptp-retire`, `ads-ptp-release`,
-`ads-ipc-release` and `ads-node-owner` scripts together in `/usr/local/bin`,
+`ads-ptp-partial`, `ads-ipc-release` and `ads-node-owner` scripts together in `/usr/local/bin`,
 root-owned mode 0755, including protected parent directories.
 
 Use `deploy/node-owner/ads-node-owner.service`. The host must already have the

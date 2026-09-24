@@ -22,7 +22,14 @@ from uuid import UUID
 
 LIMIT = 32768
 SCHEMA = "ads-node-owner-v1"
-OPERATIONS = {"pair-capture", "pair-observe", "ipc-capture", "ipc-observe"}
+OPERATIONS = {
+    "pair-capture",
+    "pair-observe",
+    "ipc-capture",
+    "ipc-observe",
+    "partial-capture",
+    "partial-observe",
+}
 
 
 def require(value, message):
@@ -67,6 +74,7 @@ def settings(path):
         "ads-ptp-attest",
         "ads-ptp-retire",
         "ads-ptp-release",
+        "ads-ptp-partial",
         "ads-ipc-release",
         "ads-node-owner",
     ):
@@ -154,7 +162,12 @@ def request(raw, config):
             "volume_uid",
             "boot_id",
             "inventory_sha256",
-        },
+        }
+        | (
+            {"pod_uids"}
+            if value.get("operation") in ("partial-capture", "partial-observe")
+            else set()
+        ),
         "exact node request required",
     )
     require(
@@ -170,6 +183,8 @@ def request(raw, config):
         )
     ipc = value["operation"].startswith("ipc-")
     require(config["ipc" if ipc else "pair"] is not None, "node role unavailable")
+    if value["operation"].startswith("partial-"):
+        load("ads-ptp-partial").pod_map(value["pod_uids"])
     for key in ("pod_uid", "volume_uid"):
         require(
             isinstance(value[key], str) and str(UUID(value[key])) == value[key]
@@ -239,12 +254,14 @@ def perform(raw, config):
                     "stateDir": config["pair"]["stateDir"],
                 },
             )
+        partial = value["operation"].startswith("partial-")
         report = helper(
-            "ads-ptp-release",
+            "ads-ptp-partial" if partial else "ads-ptp-release",
             {
                 **identity,
                 **config["pair"],
                 "action": "capture" if capture else "observe",
+                **({"pod_uids": value["pod_uids"]} if partial else {}),
             },
         )
     require(
