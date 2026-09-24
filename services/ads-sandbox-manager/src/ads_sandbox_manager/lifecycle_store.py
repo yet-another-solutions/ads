@@ -281,7 +281,7 @@ class LifecycleRepository:
             for role, evidence in journal["storage_capture"].items():
                 if role not in targets:
                     raise RuntimeError("foreign retained storage capture")
-                validate_storage_capture(targets[role], evidence)
+                validate_storage_capture(targets[role], evidence, filesystem=role == "ipc")
         self.validate_ipc_journal(journal, pair)
         if journal["node_capture"] is not None:
             raw = msgspec.json.encode(journal["node_capture"])
@@ -642,7 +642,7 @@ class LifecycleRepository:
         targets = storage_targets(journal["snapshot"], journal["retain_workspace"])
         if role not in targets:
             raise ValueError("unsupported paired storage role")
-        validate_storage_capture(targets[role], evidence)
+        validate_storage_capture(targets[role], evidence, filesystem=role == "ipc")
         saved = journal["storage_capture"]
         if role in saved and saved[role] != evidence:
             raise PairClaimLost("original storage capture cannot be replaced")

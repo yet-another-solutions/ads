@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import PurePosixPath
 from uuid import UUID
 
 from ads_sandbox_manager.egress_state_objects import identity
@@ -85,7 +86,9 @@ def validate_storage_observation(target: Object, evidence: Object) -> None:
                 raise ValueError
         elif (
             set(evidence)
-            != common | {"pv_name", "pv_uid", "delete_policy", "volume_key", "reclaim_guard"}
+            != common
+            | {"pv_name", "pv_uid", "delete_policy", "volume_key", "reclaim_guard"}
+            | ({"filesystem_backing"} if "filesystem_backing" in evidence else set())
             or any(
                 not isinstance(evidence[key], str) or not evidence[key].strip()
                 for key in ("pv_name", "pv_uid")
@@ -101,11 +104,29 @@ def validate_storage_observation(target: Object, evidence: Object) -> None:
             )
         ):
             raise ValueError
+        if "filesystem_backing" in evidence:
+            validate_filesystem_backing(evidence)
     except (KeyError, TypeError, ValueError):
         raise RuntimeError("incomplete original partial storage observation") from None
 
 
-def validate_storage_capture(target: Object, evidence: Object) -> None:
+def validate_filesystem_backing(evidence: Object) -> None:
+    backing = evidence["filesystem_backing"]
+    if (
+        not isinstance(backing, dict)
+        or set(backing) != {"source", "path"}
+        or backing["source"] not in ("local", "hostPath")
+        or evidence["volume_key"] is not None
+        or not isinstance(backing["path"], str)
+        or not backing["path"].startswith("/")
+        or backing["path"] == "/"
+        or str(PurePosixPath(backing["path"])) != backing["path"]
+        or ".." in PurePosixPath(backing["path"]).parts
+    ):
+        raise ValueError("invalid original filesystem backing identity")
+
+
+def validate_storage_capture(target: Object, evidence: Object, *, filesystem: bool = False) -> None:
     """Require bound-volume/node evidence; never invent a never-mounted shortcut."""
     fields = {
         *target,
@@ -119,6 +140,12 @@ def validate_storage_capture(target: Object, evidence: Object) -> None:
         "reclaim_guard",
     }
     try:
+        local = "filesystem_backing" in evidence
+        if local:
+            if not filesystem:
+                raise ValueError
+            validate_filesystem_backing(evidence)
+            fields.add("filesystem_backing")
         if (
             not isinstance(evidence, dict)
             or set(evidence) != fields
@@ -133,7 +160,12 @@ def validate_storage_capture(target: Object, evidence: Object) -> None:
             or len(set(evidence["nodes"])) != len(evidence["nodes"])
             or any(
                 not isinstance(evidence[key], str) or not evidence[key].strip()
-                for key in ("pv_name", "pv_uid", "volume_key", "observed_at")
+                for key in (
+                    "pv_name",
+                    "pv_uid",
+                    "observed_at",
+                    *(("volume_key",) if not local else ()),
+                )
             )
         ):
             raise ValueError

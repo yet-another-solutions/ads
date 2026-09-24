@@ -275,6 +275,62 @@ async def test_real_ordered_teardown_preserves_storage_and_waits_for_positive_ru
         assert await db.get(CleanupWork, f.work.work_id) is not None
 
 
+@pytest.mark.parametrize("source", ["local", "hostPath"])
+async def test_original_ipc_filesystem_backing_is_retained_before_runtime_removal(teardown, source):
+    f = teardown
+    original = f.adapter.kube.core.read_persistent_volume.side_effect
+
+    def filesystem(name, **kwargs):
+        pv = original(name, **kwargs)
+        if name == "pv-ipc":
+            del pv["spec"]["csi"]
+            pv["spec"][source] = {"path": "/storage/original-ipc"}
+            pv["metadata"]["finalizers"] = ["kubernetes.io/pv-protection"]
+        return pv
+
+    f.adapter.kube.core.read_persistent_volume.side_effect = filesystem
+    f.blocked = False
+    assert await release(f)
+    saved = await state(f)
+    ipc = saved["storage_capture"]["ipc"]
+    assert ipc["volume_key"] is None and not ipc["reclaim_guard"]
+    assert ipc["filesystem_backing"] == {"source": source, "path": "/storage/original-ipc"}
+    assert ipc["nodes"] == ["application"]
+    assert saved["ipc_release"]["observed_runtime_released"]
+    async with f.h.sessions.begin() as db:
+        assert not await f.capture.repository.complete(db, f.work, datetime.now(UTC))
+    assert ("PersistentVolumeClaim", ipc["name"]) in f.remote.objects
+    f.runtime = PairRuntimeTeardown(
+        f.runtime.settings, f.h.sessions, type(f.capture.repository)(), f.adapter, f.storage, f.node
+    )
+    assert await release(f) and (await state(f))["storage_capture"]["ipc"] == ipc
+
+
+@pytest.mark.parametrize("fault", ["root", "relative", "parent", "missing", "block-role"])
+async def test_filesystem_identity_does_not_weaken_block_storage_capture(teardown, fault):
+    f = teardown
+    original = f.adapter.kube.core.read_persistent_volume.side_effect
+
+    def filesystem(name, **kwargs):
+        pv = original(name, **kwargs)
+        if name == ("pv-workspace" if fault == "block-role" else "pv-ipc"):
+            del pv["spec"]["csi"]
+            if fault != "missing":
+                pv["spec"]["hostPath"] = {
+                    "path": {
+                        "root": "/",
+                        "relative": "storage/pvc",
+                        "parent": "/storage/../foreign",
+                    }.get(fault, "/storage/original-ipc")
+                }
+        return pv
+
+    f.adapter.kube.core.read_persistent_volume.side_effect = filesystem
+    with pytest.raises(RuntimeError):
+        await release(f)
+    assert not any(event[0] == "delete" for event in f.events)
+
+
 async def test_production_provider_without_node_transport_never_deletes(teardown):
     f = teardown
     provider = AppProvider(f.runtime.settings).pair_runtime(

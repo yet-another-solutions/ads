@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -89,6 +90,14 @@ class CleanupAdapter:
         result["reclaim_guard"] = "external-provisioner.volume.kubernetes.io/finalizer" in pv.get(
             "metadata", {}
         ).get("finalizers", [])
+        if not csi and obj.get("spec", {}).get("volumeMode", "Filesystem") == "Filesystem":
+            sources = [kind for kind in ("local", "hostPath") if kind in spec]
+            if len(sources) == 1:
+                source = sources[0]
+                result["filesystem_backing"] = {
+                    "source": source,
+                    "path": deepcopy(spec[source].get("path")),
+                }
         return result
 
     @staticmethod

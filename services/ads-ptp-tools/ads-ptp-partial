@@ -278,7 +278,15 @@ def vm_inventory(plugin, attestor, observer, scope, pod, records):
             # live namespace, preserve the obligation rather than fabricate one.
             pid = inspected.get("info", {}).get("pid")
             require(
-                detail["state"] == "SANDBOX_NOTREADY" and type(pid) is int and pid > 1,
+                len(current) == 1
+                and detail["state"] == "SANDBOX_NOTREADY"
+                and type(detail["metadata"].get("attempt")) is int
+                and detail["metadata"]["attempt"] == 0
+                and type(item["metadata"].get("attempt")) is int
+                and item["metadata"]["attempt"] == 0
+                and not pod.get("status", {}).get("containerStatuses")
+                and type(pid) is int
+                and pid > 1,
                 "original pre-CNI sandbox namespace unavailable",
             )
             with attestor.processes((pid,)) as check:

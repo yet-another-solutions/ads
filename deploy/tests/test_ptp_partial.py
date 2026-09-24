@@ -158,7 +158,9 @@ def test_original_vm_attempt_history_survives_cri_collection_without_recapturing
     assert value["attempts"]  # Absence alone would fail the next test.
 
 
-@pytest.mark.parametrize("fault", [None, "missing", "ready", "pid", "host", "changed"])
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "ready", "pid", "host", "changed", "attempt", "unknown", "started"]
+)
 def test_assigned_pre_cni_vm_requires_positive_original_live_namespace(
     partial, plugin, attest, release, inventory, monkeypatch, fault
 ):
@@ -166,11 +168,19 @@ def test_assigned_pre_cni_vm_requires_positive_original_live_namespace(
     f.path.unlink()
     f.scope["pod_uids"].pop("guest-relay")
     f.observer.pods = lambda: [f.vm]
+    f.vm_sandbox["metadata"]["attempt"] = 0
+    f.vm.setdefault("status", {}).pop("containerStatuses", None)
     inspected = {"status": deepcopy(f.vm_sandbox), "info": {"pid": 303}}
     if fault == "ready":
         inspected["status"]["state"] = "SANDBOX_READY"
     elif fault == "pid":
         inspected["info"]["pid"] = 0
+    elif fault == "attempt":
+        inspected["status"]["metadata"]["attempt"] = 1
+    elif fault == "unknown":
+        del inspected["status"]["metadata"]["attempt"]
+    elif fault == "started":
+        f.vm["status"]["containerStatuses"] = [{"name": "guest", "restartCount": 0}]
     reads = 0
 
     def cri(*args):
