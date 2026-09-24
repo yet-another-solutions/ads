@@ -43,21 +43,24 @@ writer ledger before reuse.
 
 ## Remaining boundaries
 
-`PairNodeOwner` is a narrow trusted delivery port, not a host transport or a
-new root-capable API. The production provider deliberately has no node owner
-until that separately reviewed integration exists; it returns blocked without
-storage/node/delete I/O. Tests fake this unbuilt port, not production success.
-Reports must not be accepted from guests, relays, arbitrary HTTP payloads or
-untrusted files. The actual node command already enforces protected inventory
-and admission-fence ordering; transport must preserve that authority.
+`PairNodeOwner` is implemented by the configured mutual-TLS node-owner channel;
+see [authenticated delivery](egress-node-delivery.md). Production startup
+requires that configuration, and DI supplies/closes the real client. Direct
+isolated fixtures without a channel still block before storage/node/delete I/O.
+Reports cannot be accepted from guests, relays, arbitrary HTTP payloads or
+untrusted files. Fixed server-side helper paths, dedicated TLS authority,
+fresh request correlation and original boot/inventory binding preserve the
+protected node command's inventory and admission-fence ordering.
 
 Full-pair bound storage and the existing complete node inventory are required.
 Earlier partial starts, missing node inventories and unavailable bound-volume
 evidence remain fail-closed, not silently synthesized or claimed supported.
-The manager IPC stage and strict proof contract are implemented with fake
-node-owner delivery in tests. Actual IPC node inventory/observation and trusted
-production delivery remain required; neither a digest nor an arbitrary report
-is authority. Positive storage release/reclamation, exact key/control cleanup,
+The manager IPC stage, strict proof contract, native node inventory/observation
+and trusted production delivery are implemented. Repository lifecycle tests
+fake external node delivery; separate real TLS tests exercise the delivery
+with only privileged helpers faked, and kernel CI exercises the observers.
+Neither a digest nor an arbitrary report is authority.
+Positive storage release/reclamation, exact key/control cleanup,
 generation retirement, retained-state transfer and reset coordination remain
 later lifecycle stages. This component keeps the final paired-completion guard
 and all policies, credentials, PVCs and generation evidence.

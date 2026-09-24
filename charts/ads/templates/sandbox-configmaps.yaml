@@ -34,6 +34,7 @@ data:
   {{ $prefix }}ADS_BASE_URL: {{ printf "https://%s:%v" (include "ads.fullname" $root) $root.Values.service.port | quote }}
   {{ $prefix }}ADS_SERVICE_SUBJECT: {{ $root.Values.keycloak.serviceSubjects.ads | quote }}
   {{ $prefix }}PAIR_INPUTS: {{ $settings.pairInputs | toJson | quote }}
+  {{ $prefix }}NODE_OWNER: {{ dict "endpoints" $settings.nodeOwner.endpoints "namespace" $sb.namespace "network" $settings.nodeOwner.network "ca" "/node-owner/ca.crt" "certificate" "/node-owner/tls.crt" "key" "/node-owner/tls.key" "timeout" $settings.nodeOwner.timeoutSeconds | toJson | quote }}
   ADS_SESSION_SIZE: {{ ($root.Files.Get "files/sandbox-release.yaml" | fromYaml).sessionSize | quote }}
   {{ $prefix }}GOLDEN_VERSION: {{ printf "v%s" $root.Chart.AppVersion | quote }}
   {{ $prefix }}GOLDEN_IMAGE: {{ include "ads.sandboxImage" (dict "root" $root "image" $sb.golden.image) | quote }}

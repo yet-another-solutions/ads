@@ -50,6 +50,11 @@ spec:
             - secretRef:
                 name: {{ include "ads.sandboxSecret" $ctx }}
           volumeMounts:
+            {{- if and (eq $component "manager") $sb.manager.nodeOwner.tlsSecretName }}
+            - name: node-owner
+              mountPath: /node-owner
+              readOnly: true
+            {{- end }}
             - name: tls
               mountPath: /tls
               readOnly: true
@@ -77,6 +82,19 @@ spec:
           resources:
             {{- toYaml $settings.resources | nindent 12 }}
       volumes:
+        {{- if and (eq $component "manager") $sb.manager.nodeOwner.tlsSecretName }}
+        - name: node-owner
+          secret:
+            secretName: {{ $sb.manager.nodeOwner.tlsSecretName }}
+            defaultMode: 0440
+            items:
+              - key: ca.crt
+                path: ca.crt
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+        {{- end }}
         - name: tls
           secret:
             secretName: {{ include "ads.sandboxTLS" $ctx }}

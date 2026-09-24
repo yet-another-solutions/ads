@@ -119,6 +119,17 @@ def configure(monkeypatch, settings):
         "ADS_SERVICE_SUBJECT": "11111111-1111-4111-8111-111111111111",
         "CA": '{"image":"fixture/ca:1","signing_secret":"signer","additional_configmap":"extra"}',
         "PAIR_INPUTS": json.dumps(pair_inputs()),
+        "NODE_OWNER": json.dumps(
+            {
+                "endpoints": {"worker.test": "https://worker.test:9443"},
+                "namespace": settings.namespace,
+                "network": "private",
+                "ca": str(settings.tls_cert_path),
+                "certificate": str(settings.tls_cert_path),
+                "key": str(settings.tls_key_path),
+                "timeout": 8,
+            }
+        ),
         "SESSION_OBJECTS": json.dumps(
             {
                 "guest_image": "registry.test/guest:1",
