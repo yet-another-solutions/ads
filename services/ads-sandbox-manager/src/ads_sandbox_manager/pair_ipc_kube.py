@@ -29,43 +29,13 @@ class PairIpcAdapter:
             raise RuntimeError("paired IPC configuration changed")
 
     @staticmethod
-    def _deployment_matches(observed: Object, desired: Object) -> bool:
-        actual = deepcopy(observed.get("spec", {}))
-        expected = desired["spec"]
-        annotations = observed.get("metadata", {}).get("annotations") or {}
-        if not isinstance(annotations, dict) or set(annotations) - {
-            "deployment.kubernetes.io/revision"
-        }:
+    def _pod_matches(observed: Object, desired: Object) -> bool:
+        if observed.get("metadata", {}).get("annotations"):
             return False
-        revision = annotations.get("deployment.kubernetes.io/revision")
-        if revision is not None and (
-            not isinstance(revision, str)
-            or not revision.isdecimal()
-            or str(int(revision)) != revision
-            or int(revision) < 1
-        ):
-            return False
-        for field, default in (
-            ("revisionHistoryLimit", 10),
-            ("progressDeadlineSeconds", 600),
-            ("minReadySeconds", 0),
-            ("paused", False),
-        ):
-            if field not in expected and actual.pop(field, default) != default:
-                return False
-        template = actual.pop("template", {})
-        if template.get("metadata") != expected["template"]["metadata"]:
-            return False
-        pod = template.get("spec", {})
-        wanted = expected["template"]["spec"]
+        pod = deepcopy(observed.get("spec", {}))
+        wanted = desired["spec"]
         if pod.pop("serviceAccount", wanted["serviceAccountName"]) != wanted["serviceAccountName"]:
             return False
-        for field, pod_default in (
-            ("restartPolicy", "Always"),
-            ("terminationGracePeriodSeconds", 30),
-        ):
-            if field not in wanted and pod.pop(field, pod_default) != pod_default:
-                return False
         for container in pod.get("containers", []):
             for port in container.get("ports", []):
                 if port.pop("protocol", "TCP") != "TCP":
@@ -73,10 +43,7 @@ class PairIpcAdapter:
         for volume in pod.get("volumes", []):
             if "secret" in volume and volume["secret"].pop("defaultMode", 0o644) != 0o644:
                 return False
-        return bool(
-            actual == {key: value for key, value in expected.items() if key != "template"}
-            and PairComputeAdapter._spec_matches({"spec": pod}, {"spec": wanted})
-        )
+        return PairComputeAdapter._spec_matches({"spec": pod}, {"spec": wanted})
 
     async def _read(
         self, intent: PairIntent, role: str, payload: Object, uid: str | None
@@ -86,7 +53,7 @@ class PairIpcAdapter:
         method = (
             self.kube.core.read_namespaced_persistent_volume_claim
             if role == "volume"
-            else self.kube.apps.read_namespaced_deployment
+            else self.kube.core.read_namespaced_pod
         )
         try:
             observed = await self.kube._get(method, desired["metadata"]["name"])
@@ -106,7 +73,7 @@ class PairIpcAdapter:
                     or not volume_matches(observed, desired)
                 )
             )
-            or (role == "deployment" and not self._deployment_matches(observed, desired))
+            or (role == "pod" and not self._pod_matches(observed, desired))
         ):
             raise RuntimeError("deleting or incompatible paired IPC resource")
         return result
@@ -126,7 +93,7 @@ class PairIpcAdapter:
             )
         for member, entry in intent.relay_inputs.items():
             await self.relays.observe(intent.binding(), member, entry["payload"], entry["uid"])
-        if role == "deployment":
+        if role == "pod":
             volume = intent.ipc_resources["volume"]
             if payload["volume_uid"] != volume["uid"] or volume["dispatch"] != "settled":
                 raise RuntimeError("committed IPC volume identity changed")
@@ -151,7 +118,7 @@ class PairIpcAdapter:
         method = (
             self.kube.core.create_namespaced_persistent_volume_claim
             if role == "volume"
-            else self.kube.apps.create_namespaced_deployment
+            else self.kube.core.create_namespaced_pod
         )
         try:
             await self.kube._call(method, intent.namespace, body=desired)

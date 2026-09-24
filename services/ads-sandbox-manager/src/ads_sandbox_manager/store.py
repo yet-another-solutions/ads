@@ -36,6 +36,7 @@ class SandboxSession(Base):
     service_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     guest_deployment_uid: Mapped[str | None]
     ipc_deployment_uid: Mapped[str | None]
+    ipc_pod_uid: Mapped[str | None]
     ipc_pvc_uid: Mapped[str | None]
     ca_attempt: Mapped[UUID | None]
     ca_sources: Mapped[dict[str, str] | None] = mapped_column(JSONB)
@@ -91,6 +92,18 @@ class SessionRepository:
     """Data methods require a caller-owned transaction; never call Kubernetes here."""
 
     async def _require_unpaired(self, db: AsyncSession, session_id: UUID, sandbox_id: UUID) -> None:
+        pod = await db.scalar(
+            select(SandboxSession.session_id)
+            .where(
+                SandboxSession.ipc_pod_uid.is_not(None),
+                or_(
+                    SandboxSession.session_id == session_id, SandboxSession.sandbox_id == sandbox_id
+                ),
+            )
+            .limit(1)
+        )
+        if pod is not None:
+            raise RuntimeError("paired IPC Pod binding blocks legacy session admission")
         # PairIntent depends on this module's Base/session model. Import only at
         # call time to avoid a model import cycle, not to bypass the repository.
         from ads_sandbox_manager.egress_state_store import EgressState
@@ -131,7 +144,7 @@ class SessionRepository:
         from ads_sandbox_manager.pair_ready import paired_ready
 
         pair_ready = await paired_ready(db, row)
-        if pair_ready is False:
+        if pair_ready is False or (pair_ready is None and row.ipc_pod_uid is not None):
             return False
         if row.ca_attempt is not None and (
             set(row.ca_sources or {}) != {"public", "private"}
@@ -150,7 +163,9 @@ class SessionRepository:
                 SandboxSession.pvc_uid.is_not(None),
                 SandboxSession.ipc_pvc_uid.is_not(None),
                 true() if pair_ready is True else SandboxSession.guest_deployment_uid.is_not(None),
-                SandboxSession.ipc_deployment_uid.is_not(None),
+                SandboxSession.ipc_pod_uid.is_not(None)
+                if pair_ready is True
+                else SandboxSession.ipc_deployment_uid.is_not(None),
             )
             .values(
                 status="ready",

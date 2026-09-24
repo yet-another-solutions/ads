@@ -1,9 +1,10 @@
 # Immutable IPC pair handoff
 
-The fixed manager constructor reuses the ordinary-runtime IPC Deployment:
-single replica with Recreate, existing PID/revision disk, credential references,
-TLS, projected ServiceAccount, budgets and health endpoints. It adds exact
-session/project/sandbox/generation labels and a generation-bound selector, plus
+The fixed manager constructor reuses the ordinary-runtime IPC container spec
+in a directly manager-owned Pod, with `restartPolicy: Always`, existing
+PID/revision disk, credential references, TLS, projected ServiceAccount,
+budgets and health endpoints. It adds exact
+session/project/sandbox/generation labels for generation-bound policy selection, plus
 explicit pair addresses, trusted ADS service-account subject and recorded guest
 Pod name/UID/generation. Explicit environment entries override shared envFrom.
 No wrapping key, egress private CA volume or host privilege reaches IPC.
@@ -22,7 +23,7 @@ Current projected ServiceAccount authentication and TLS remain unchanged; no
 Keycloak token is sent to Kubernetes.
 
 This is construction and runtime identity consumption, not create authority.
-The lifecycle publisher must commit the exact Deployment and verify recorded
+The lifecycle publisher must commit the exact Pod and verify recorded
 compute/control/PID-volume dependencies before its one-shot dispatch. It must
 track that writer through cleanup just like the other pair writers. No IPC
 publication, readiness shortcut, retirement, schema reset or live acceptance is

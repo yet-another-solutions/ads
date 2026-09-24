@@ -34,7 +34,7 @@ WRITERS = (
     ]
     + [("relay_inputs", role) for role in ("guest-relay", "egress-relay")]
     + [("volume_resources", role) for role in ("workspace", "guest", "egress", "key")]
-    + [("ipc_resources", role) for role in ("volume", "deployment")]
+    + [("ipc_resources", role) for role in ("volume", "pod")]
     + [("relay_custody", None), ("topics_dispatch", None), ("state", "volume"), ("state", "key")]
 )
 

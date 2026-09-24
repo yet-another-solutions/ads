@@ -138,9 +138,10 @@ class PairCreation:
                     row.status_changed_at,
                 )
                 or current.guest_deployment_uid is not None
+                or current.ipc_deployment_uid is not None
                 or current.pvc_uid != intent.volume_resources["workspace"]["uid"]
                 or current.ipc_pvc_uid != intent.ipc_resources["volume"]["uid"]
-                or current.ipc_deployment_uid != intent.ipc_resources["deployment"]["uid"]
+                or current.ipc_pod_uid != intent.ipc_resources["pod"]["uid"]
             ):
                 raise PairClaimLost("completed paired claim changed")
             self._settled(intent.volume_resources)
