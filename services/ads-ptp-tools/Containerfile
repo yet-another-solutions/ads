@@ -10,6 +10,7 @@ COPY services/ads-ptp-tools/ads-ptp-relay /usr/local/bin/ads-ptp-relay
 COPY services/ads-ptp-tools/ads-ptp-attest /usr/local/bin/ads-ptp-attest
 COPY services/ads-ptp-tools/ads-ptp-retire /usr/local/bin/ads-ptp-retire
 COPY services/ads-ptp-tools/ads-ptp-release /usr/local/bin/ads-ptp-release
-RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay /usr/local/bin/ads-ptp-attest /usr/local/bin/ads-ptp-retire /usr/local/bin/ads-ptp-release
+COPY services/ads-ptp-tools/ads-ipc-release /usr/local/bin/ads-ipc-release
+RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay /usr/local/bin/ads-ptp-attest /usr/local/bin/ads-ptp-retire /usr/local/bin/ads-ptp-release /usr/local/bin/ads-ipc-release
 ENV PYTHONUNBUFFERED=1
 CMD ["python", "-c", "import time; time.sleep(86400)"]
