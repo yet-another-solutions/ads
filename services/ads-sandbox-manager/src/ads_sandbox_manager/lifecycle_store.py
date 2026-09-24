@@ -188,6 +188,7 @@ class LifecycleRepository:
                 "node_capture",
                 "storage_capture",
                 "runtime_release",
+                "runtime_unissued",
                 "ipc_placement",
                 "ipc_capture",
                 "ipc_release",
@@ -247,6 +248,10 @@ class LifecycleRepository:
             comparable["topics_dispatch"] = "inflight"
         if comparable != saved:
             raise PairClaimLost("retained cleanup ownership changed")
+        if journal["runtime_unissued"] != self.unissued_runtime(saved):
+            raise RuntimeError("retained never-dispatched runtime proof changed")
+        if journal["runtime_unissued"] != self.unissued_runtime(current):
+            raise PairClaimLost("creator never-dispatched runtime proof changed")
         if not isinstance(journal["storage_capture"], dict):
             raise RuntimeError("invalid retained storage capture")
         if journal["storage_capture"]:
@@ -278,6 +283,24 @@ class LifecycleRepository:
             ):
                 raise RuntimeError("retained runtime report does not prove release")
         return deepcopy(saved)
+
+    @staticmethod
+    def unissued_runtime(snapshot: dict[str, Any]) -> list[str]:
+        """Classify a sealed creator ledger, not an API or kernel inventory.
+
+        This becomes proof only inside a validated retained journal, after the
+        permanent creator fence and settlement of every original writer. A null
+        UID alone says nothing about whether a Pod could have started.
+        """
+        result = [
+            key
+            for key, dispatch in sorted(snapshot["compute_dispatch"].items())
+            if dispatch == "unissued" and snapshot["compute_uids"][key] is None
+        ]
+        ipc = snapshot["ipc_resources"]["pod"]
+        if ipc["dispatch"] == "unissued" and ipc["uid"] is None and ipc["payload"] is None:
+            result.append("Pod/ipc")
+        return result
 
     @staticmethod
     def validate_ipc_journal(journal: dict[str, Any], pair: PairBinding) -> None:
@@ -330,6 +353,7 @@ class LifecycleRepository:
         ):
             return False
         pair = self.cleanup_pair(expected)
+        assert expected.pair_snapshot is not None
         intent = await db.get(PairIntent, pair.generation, with_for_update=True)
         assert intent is not None
         if intent.cleanup_journal is None:
@@ -343,6 +367,7 @@ class LifecycleRepository:
                 "node_capture": None,
                 "storage_capture": {},
                 "runtime_release": None,
+                "runtime_unissued": self.unissued_runtime(expected.pair_snapshot),
                 "ipc_placement": None,
                 "ipc_capture": None,
                 "ipc_release": None,
