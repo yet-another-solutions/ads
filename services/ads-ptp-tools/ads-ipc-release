@@ -1,0 +1,572 @@
+#!/usr/bin/env python3
+"""Trusted native IPC runtime/volume observation; no deletion or arbitrary execution."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import stat
+import sys
+import time
+from itertools import chain
+from pathlib import Path
+from uuid import UUID
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name.replace("-", "_"), str(Path(__file__).with_name(name))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def uuid(value):
+    require(isinstance(value, str) and str(UUID(value)) == value, "canonical UUID required")
+    return value
+
+
+def config(value):
+    require(
+        isinstance(value, dict)
+        and set(value)
+        == {
+            "node",
+            "namespace",
+            "kubeconfig",
+            "kubectl",
+            "crictl",
+            "cri_endpoint",
+            "container",
+            "mount",
+            "stateDir",
+        },
+        "exact IPC observer configuration required",
+    )
+    for key in ("node", "namespace", "container"):
+        require(
+            isinstance(value[key], str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", value[key]),
+            "invalid platform name",
+        )
+    for key in ("kubeconfig", "kubectl", "crictl"):
+        path = Path(value[key])
+        info = path.lstat()
+        require(
+            path.is_absolute()
+            and path.resolve() == path
+            and stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0
+            and not info.st_mode & 0o022,
+            "protected platform file required",
+        )
+        require(
+            not info.st_mode & 0o077 if key == "kubeconfig" else info.st_mode & 0o111,
+            "private kubeconfig or executable required",
+        )
+    require(
+        isinstance(value["cri_endpoint"], str) and value["cri_endpoint"].startswith("unix:///"),
+        "local CRI required",
+    )
+    socket = Path(value["cri_endpoint"].removeprefix("unix://"))
+    require(socket.resolve() == socket, "canonical CRI endpoint required")
+    mount = value["mount"]
+    require(
+        isinstance(mount, str)
+        and mount.startswith("/")
+        and mount != "/"
+        and str(Path(mount)) == mount
+        and ".." not in Path(mount).parts,
+        "exact non-root IPC mount required",
+    )
+    return value
+
+
+def unescape(value):
+    return re.sub(r"\\(040|011|012|134)", lambda m: chr(int(m[1], 8)), value)
+
+
+def mounts(text):
+    result = {}
+    for line in text.splitlines():
+        fields = line.split()
+        require(len(fields) >= 10 and "-" in fields, "incomplete mount observation")
+        separator = fields.index("-")
+        require(separator >= 6 and len(fields) >= separator + 4, "incomplete mount observation")
+        mount_id = int(fields[0])
+        require(
+            mount_id > 0 and mount_id not in result and re.fullmatch(r"\d+:\d+", fields[2]),
+            "invalid mount identity",
+        )
+        root, target = unescape(fields[3]), unescape(fields[4])
+        require(root.startswith("/") and target.startswith("/"), "invalid mount paths")
+        result[mount_id] = {"device": fields[2], "root": root, "target": target}
+    require(result, "empty mount observation")
+    return result
+
+
+def beneath(path, root):
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def scope(request, settings):
+    return {
+        "node": settings["node"],
+        "namespace": settings["namespace"],
+        **{
+            key: uuid(request[key]) for key in ("generation", "sandbox_id", "pod_uid", "volume_uid")
+        },
+    }
+
+
+def exact_pod(observer, wanted):
+    name = "ads-sandbox-ipc-" + wanted["sandbox_id"]
+    matches = [p for p in observer.pods() if p["metadata"]["name"] == name]
+    require(len(matches) == 1, "original IPC Pod unavailable")
+    pod = matches[0]
+    meta, spec = pod["metadata"], pod["spec"]
+    labels = meta.get("labels", {})
+    require(
+        meta["uid"] == wanted["pod_uid"]
+        and meta["namespace"] == wanted["namespace"]
+        and not meta.get("ownerReferences")
+        and spec.get("nodeName") == wanted["node"]
+        and labels.get("ads.io/sandbox-id") == wanted["sandbox_id"]
+        and labels.get("ads.io/attachment-generation") == wanted["generation"]
+        and labels.get("app.kubernetes.io/component") == "ads-sandbox-ipc"
+        and not any(spec.get(k) for k in ("hostPID", "hostNetwork", "hostIPC")),
+        "IPC Pod ownership changed",
+    )
+    container = [c for c in spec["containers"] if c["name"] == observer.config["container"]]
+    require(
+        len(container) == 1
+        and len(spec["containers"]) == 1
+        and not spec.get("initContainers")
+        and not spec.get("ephemeralContainers"),
+        "one native IPC container required",
+    )
+    volume_mounts = [
+        v for v in container[0]["volumeMounts"] if v["mountPath"] == observer.config["mount"]
+    ]
+    require(
+        len(volume_mounts) == 1
+        and not volume_mounts[0].get("subPath")
+        and not volume_mounts[0].get("subPathExpr"),
+        "complete IPC volume mount required",
+    )
+    volumes = [v for v in spec["volumes"] if v["name"] == volume_mounts[0]["name"]]
+    require(
+        len(volumes) == 1 and volumes[0].get("persistentVolumeClaim", {}).get("claimName") == name,
+        "exact IPC state claim required",
+    )
+    cfg = observer.config
+    pvc = observer.command(
+        cfg["kubectl"],
+        "--kubeconfig=" + cfg["kubeconfig"],
+        "--insecure-skip-tls-verify=false",
+        "--request-timeout=3s",
+        "-n",
+        cfg["namespace"],
+        "get",
+        "pvc",
+        name,
+        "-o",
+        "json",
+    )
+    require(
+        pvc["metadata"]["uid"] == wanted["volume_uid"]
+        and pvc["metadata"]["namespace"] == wanted["namespace"]
+        and pvc["metadata"]["name"] == name
+        and pvc["status"]["phase"] == "Bound"
+        and pvc["spec"].get("volumeMode", "Filesystem") == "Filesystem",
+        "IPC volume ownership changed",
+    )
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    current = [s for s in statuses if s["name"] == cfg["container"]]
+    require(len(current) == 1, "IPC runtime status unavailable")
+    identity = current[0].get("containerID", "")
+    require(
+        re.fullmatch(r"(containerd|cri-o)://[0-9a-f]{64}", identity),
+        "exact native runtime identity required",
+    )
+    return pod, identity.split("://", 1)[1]
+
+
+def runtime(observer, wanted, pod, container_id):
+    sandboxes = observer.cri("pods", "-o", "json")["items"]
+    current = [
+        s
+        for s in sandboxes
+        if s["metadata"].get("uid") == wanted["pod_uid"] and s["state"] == "SANDBOX_READY"
+    ]
+    require(len(current) == 1, "one ready original IPC runtime required")
+    sandbox_id = current[0]["id"]
+    require(re.fullmatch(r"[0-9a-f]{64}", sandbox_id), "invalid runtime identity")
+    sandbox = observer.cri("inspectp", "-o", "json", sandbox_id)
+    container = observer.cri("inspect", "-o", "json", container_id)
+    status, detail = container["status"], sandbox["status"]
+    require(
+        detail["id"] == sandbox_id
+        and detail["state"] == "SANDBOX_READY"
+        and detail["metadata"]["uid"] == wanted["pod_uid"]
+        and detail["metadata"]["namespace"] == wanted["namespace"]
+        and detail["metadata"]["name"] == pod["metadata"]["name"]
+        and status["id"] == container_id
+        and status["state"] == "CONTAINER_RUNNING"
+        and status["metadata"]["name"] == observer.config["container"]
+        and status["labels"].get("io.kubernetes.pod.uid") == wanted["pod_uid"]
+        and status["labels"].get("io.kubernetes.pod.namespace") == wanted["namespace"]
+        and container["info"].get("sandboxID") == sandbox_id,
+        "IPC runtime ownership changed",
+    )
+    pids = (sandbox["info"]["pid"], container["info"]["pid"])
+    require(all(type(pid) is int and pid > 1 for pid in pids), "original native PIDs required")
+    return sandbox_id, pids
+
+
+def validate_snapshot(value, wanted):
+    require(
+        isinstance(value, dict)
+        and set(value)
+        == set(wanted) | {"boot_id", "runtime_id", "container_id", "namespaces", "filesystem"},
+        "exact IPC snapshot required",
+    )
+    require(all(value[k] == v for k, v in wanted.items()), "IPC snapshot scope changed")
+    uuid(value["boot_id"])
+    require(
+        all(
+            isinstance(value[k], str) and re.fullmatch(r"[0-9a-f]{64}", value[k])
+            for k in ("runtime_id", "container_id")
+        ),
+        "invalid captured runtime",
+    )
+    ns = value["namespaces"]
+    require(
+        isinstance(ns, dict)
+        and set(ns) == {"net", "mnt", "pid"}
+        and all(
+            isinstance(n, list) and len(n) == 2 and all(type(x) is int and x > 0 for x in n)
+            for n in ns.values()
+        ),
+        "complete native namespace inventory required",
+    )
+    fs = value["filesystem"]
+    require(
+        isinstance(fs, dict)
+        and set(fs) == {"device", "root", "target", "root_identity"}
+        and isinstance(fs["device"], str)
+        and re.fullmatch(r"\d+:\d+", fs["device"])
+        and all(
+            isinstance(fs[k], str)
+            and fs[k].startswith("/")
+            and fs[k] != "/"
+            and ".." not in Path(fs[k]).parts
+            for k in ("root", "target")
+        )
+        and isinstance(fs["root_identity"], list)
+        and len(fs["root_identity"]) == 2
+        and all(type(x) is int and x > 0 for x in fs["root_identity"]),
+        "dedicated IPC filesystem subtree required",
+    )
+    require(
+        f"{os.major(fs['root_identity'][0])}:{os.minor(fs['root_identity'][0])}" == fs["device"],
+        "filesystem device mismatch",
+    )
+    return value
+
+
+def capture(observer, wanted, attestor, release, proc=Path("/proc")):
+    pod, container_id = exact_pod(observer, wanted)
+    runtime_id, pids = runtime(observer, wanted, pod, container_id)
+    initial_boot = release.boot_id()
+    with attestor.processes(pids) as check:
+        process = proc / str(pids[1])
+        identities = {}
+        for name in ("net", "mnt", "pid"):
+            info = (process / "ns" / name).stat()
+            host = (proc / "1" / "ns" / name).stat()
+            identity = [info.st_dev, info.st_ino]
+            require(identity != [host.st_dev, host.st_ino], "IPC shares a host namespace")
+            identities[name] = identity
+        table = mounts(release.bounded_text(process / "mountinfo"))
+        found = [m for m in table.values() if m["target"] == observer.config["mount"]]
+        require(len(found) == 1, "exact mounted IPC filesystem required")
+        mounted = found[0]
+        root = process / "root" / mounted["target"].lstrip("/")
+        info = root.stat()
+        require(stat.S_ISDIR(info.st_mode), "IPC filesystem root required")
+        value = {
+            **wanted,
+            "boot_id": initial_boot,
+            "runtime_id": runtime_id,
+            "container_id": container_id,
+            "namespaces": identities,
+            "filesystem": {**mounted, "root_identity": [info.st_dev, info.st_ino]},
+        }
+        validate_snapshot(value, wanted)
+        check()
+        again, again_id = exact_pod(observer, wanted)
+        require(
+            again_id == container_id
+            and runtime(observer, wanted, again, again_id) == (runtime_id, pids),
+            "IPC runtime changed during capture",
+        )
+        require(
+            mounts(release.bounded_text(process / "mountinfo")) == table,
+            "IPC mount inventory changed",
+        )
+        current = root.stat()
+        require(
+            [current.st_dev, current.st_ino] == value["filesystem"]["root_identity"]
+            and release.boot_id() == initial_boot,
+            "IPC filesystem or boot changed",
+        )
+        for name, expected in identities.items():
+            info = (process / "ns" / name).stat()
+            require([info.st_dev, info.st_ino] == expected, "IPC namespace changed during capture")
+        check()
+    return value
+
+
+def references(snapshot, deadline, release, proc=Path("/proc")):
+    """Scan every task, mount table, namespace handle, cwd/root and open descriptor."""
+    ns = {tuple(value) for value in snapshot["namespaces"].values()}
+    fs = snapshot["filesystem"]
+    device = fs["root_identity"][0]
+    process_refs, mount_refs, visited = 0, 0, 0
+
+    def budget():
+        nonlocal visited
+        visited += 1
+        require(visited <= 131072 and time.monotonic() < deadline, "IPC scan exceeded bound")
+
+    def related(mount):
+        return mount["device"] == fs["device"] and beneath(mount["root"], fs["root"])
+
+    for process in proc.iterdir():
+        budget()
+        if not process.name.isdigit():
+            continue
+        try:
+            command = release.bounded_text(process / "cmdline", 65536)
+            process_refs += any(snapshot[key] in command for key in ("runtime_id", "container_id"))
+            for task in (process / "task").iterdir():
+                budget()
+                try:
+                    status = release.bounded_text(task / "stat", 65536).rsplit(")", 1)[1].split()
+                    # Positively identified kernel threads have no userspace
+                    # mm or descriptor table. Zombies cannot retain either.
+                    if status[0] in ("Z", "X") or int(status[6]) & 0x00200000:
+                        continue
+                    cgroup = release.bounded_text(task / "cgroup", 65536)
+                    process_refs += any(
+                        uid in cgroup
+                        for uid in (snapshot["pod_uid"], snapshot["pod_uid"].replace("-", "_"))
+                    )
+                    for name in ("net", "mnt", "pid"):
+                        info = (task / "ns" / name).stat()
+                        process_refs += (info.st_dev, info.st_ino) in ns
+                    table = mounts(release.bounded_text(task / "mountinfo"))
+                    mount_refs += sum(related(m) for m in table.values())
+                    for link in chain(
+                        (task / "cwd", task / "root", task / "exe"),
+                        (task / "fd").iterdir(),
+                        (task / "map_files").iterdir(),
+                    ):
+                        budget()
+                        try:
+                            info = link.stat()
+                            target = os.readlink(link)
+                        except FileNotFoundError:
+                            # Deleted files held by a live FD are still stat-able.
+                            # Ignore a closed FD only; missing cwd/root is ambiguous.
+                            require(
+                                link.parent.name in ("fd", "map_files") and not link.exists(),
+                                "incomplete IPC process reference",
+                            )
+                            continue
+                        process_refs += (info.st_dev, info.st_ino) in ns
+                        if info.st_dev != device:
+                            continue
+                        # Host-path aliases, container-path aliases and deleted
+                        # entries remain blockers even after their bind is gone.
+                        mount_refs += beneath(target.removesuffix(" (deleted)"), fs["root"])
+                        mount_refs += beneath(target.removesuffix(" (deleted)"), fs["target"])
+                        if link.parent.name == "fd":
+                            fields = release.bounded_text(task / "fdinfo" / link.name, 65536)
+                            ids = re.findall(r"^mnt_id:\s*(\d+)$", fields, re.MULTILINE)
+                            require(len(ids) == 1, "descriptor mount identity unavailable")
+                            mounted = table.get(int(ids[0]))
+                            # A detached mount on the same filesystem cannot be
+                            # dismissed merely because it left the namespace.
+                            mount_refs += mounted is None or related(mounted)
+                        else:
+                            # cwd/root can hold a detached aliased bind even
+                            # though its displayed path omits the volume root.
+                            fd = os.open(link, os.O_PATH | os.O_CLOEXEC)
+                            try:
+                                fields = release.bounded_text(
+                                    Path(f"/proc/self/fdinfo/{fd}"), 65536
+                                )
+                                ids = re.findall(r"^mnt_id:\s*(\d+)$", fields, re.MULTILINE)
+                                require(len(ids) == 1, "directory mount identity unavailable")
+                                mounted = table.get(int(ids[0]))
+                                mount_refs += mounted is None or related(mounted)
+                            finally:
+                                os.close(fd)
+                except FileNotFoundError:
+                    if task.exists():
+                        status = (
+                            release.bounded_text(task / "stat", 65536).rsplit(")", 1)[1].split()[0]
+                        )
+                        require(status in ("Z", "X"), "IPC task observation incomplete")
+        except FileNotFoundError:
+            require(not process.exists(), "IPC process observation incomplete")
+    return process_refs, mount_refs
+
+
+def report(snapshot, leftovers=None):
+    wanted = {
+        key: snapshot[key]
+        for key in ("node", "namespace", "generation", "sandbox_id", "pod_uid", "volume_uid")
+    }
+    validate_snapshot(snapshot, wanted)
+    if leftovers is not None:
+        require(
+            isinstance(leftovers, dict)
+            and set(leftovers)
+            == {
+                "pods",
+                "ready_sandboxes",
+                "live_containers",
+                "process_references",
+                "mount_references",
+            }
+            and all(type(n) is int and 0 <= n <= 2147483647 for n in leftovers.values()),
+            "complete bounded IPC observations required",
+        )
+    return {
+        "schema": "ads-ipc-release-v1",
+        **wanted,
+        "boot_id": snapshot["boot_id"],
+        "inventory_sha256": hashlib.sha256(
+            json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "release_inventory_captured": True,
+        "observed_runtime_released": leftovers is not None and not any(leftovers.values()),
+        "leftovers": leftovers,
+    }
+
+
+def observe(observer, snapshot, release):
+    require(release.boot_id() == snapshot["boot_id"], "captured IPC node boot changed")
+
+    def api_runtime():
+        pods = observer.pods()
+        sandboxes = observer.cri("pods", "-o", "json")["items"]
+        containers = observer.cri("ps", "-a", "-o", "json")["containers"]
+        return {
+            "pods": sum(
+                p["metadata"]["uid"] == snapshot["pod_uid"]
+                or (
+                    p["metadata"].get("labels", {}).get("ads.io/attachment-generation")
+                    == snapshot["generation"]
+                    and p["metadata"].get("labels", {}).get("app.kubernetes.io/component")
+                    == "ads-sandbox-ipc"
+                )
+                for p in pods
+            ),
+            "ready_sandboxes": sum(
+                (s["id"] == snapshot["runtime_id"] or s["metadata"]["uid"] == snapshot["pod_uid"])
+                and s["state"] != "SANDBOX_NOTREADY"
+                for s in sandboxes
+            ),
+            "live_containers": sum(
+                (
+                    c["id"] == snapshot["container_id"]
+                    or c["podSandboxId"] == snapshot["runtime_id"]
+                    or c.get("labels", {}).get("io.kubernetes.pod.uid") == snapshot["pod_uid"]
+                )
+                and c["state"] != "CONTAINER_EXITED"
+                for c in containers
+            ),
+        }
+
+    before = api_runtime()
+    processes, mounts = references(snapshot, observer.deadline, release)
+    after = api_runtime()
+    leftovers = {key: max(value, after[key]) for key, value in before.items()}
+    leftovers.update(process_references=processes, mount_references=mounts)
+    require(release.boot_id() == snapshot["boot_id"], "IPC node boot changed during observation")
+    return report(snapshot, leftovers)
+
+
+def perform(request):
+    require(os.geteuid() == 0, "trusted node-root IPC observer required")
+    require(
+        isinstance(request, dict)
+        and request.get("action") in ("capture", "observe")
+        and set(request)
+        == {
+            "action",
+            "config",
+            "generation",
+            "sandbox_id",
+            "pod_uid",
+            "volume_uid",
+            "inventory_sha256",
+        },
+        "exact IPC request required",
+    )
+    require(
+        request["inventory_sha256"] is None
+        if request["action"] == "capture"
+        else isinstance(request["inventory_sha256"], str)
+        and re.fullmatch(r"[0-9a-f]{64}", request["inventory_sha256"]),
+        "original IPC inventory digest required",
+    )
+    plugin, attestor, release = load("ads-ptp"), load("ads-ptp-attest"), load("ads-ptp-release")
+    settings = config(plugin.read_record(Path(request["config"])))
+    root = plugin.private_directory(settings["stateDir"])
+    wanted = scope(request, settings)
+    observer = attestor.Observer(settings)
+    observer.deadline = time.monotonic() + 60
+    path = root / ("ipc-release-" + wanted["generation"] + ".json")
+    with plugin.generation_lock(root, wanted["generation"]):
+        if request["action"] == "capture":
+            if path.exists() or path.is_symlink():
+                snapshot = validate_snapshot(plugin.read_record(path), wanted)
+                require(snapshot["boot_id"] == release.boot_id(), "captured IPC node boot changed")
+            else:
+                snapshot = capture(observer, wanted, attestor, release)
+            plugin.save_record(path, snapshot)
+            return report(snapshot)
+        snapshot = validate_snapshot(plugin.read_record(path), wanted)
+        require(
+            report(snapshot)["inventory_sha256"] == request["inventory_sha256"],
+            "original IPC inventory changed",
+        )
+        return observe(observer, snapshot, release)
+
+
+def main():
+    try:
+        request = load("ads-ptp").decode(sys.stdin.buffer.read(65537))
+        print(json.dumps(perform(request)))
+    except Exception as error:
+        print(json.dumps({"error": "IPC observation failed", "details": type(error).__name__}))
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
