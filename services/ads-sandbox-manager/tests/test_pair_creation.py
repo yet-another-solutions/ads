@@ -230,6 +230,8 @@ async def test_late_topic_writer_survives_caller_but_cannot_cross_cleanup(creati
         assert not any(current.compute_uids.values())
         final = await saved(f, work)
         assert final.pair_snapshot["topics_dispatch"] == "inflight"
+        assert await capture.capture(final, recovery=claim) is (not cancel_writer)
+        assert (await saved(f, work)).pair_snapshot["topics_dispatch"] == "inflight"
         async with f.h.sessions.begin() as db:
             assert not await capture.repository.complete(db, final, datetime.now(UTC))
     finally:
