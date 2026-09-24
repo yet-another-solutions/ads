@@ -14,6 +14,7 @@ from ads_sandbox_manager.kube import KubeClient
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_ipc_inputs import ipc_identity
 from ads_sandbox_manager.pair_objects import (
+    COMPUTE_ROLES,
     PairBinding,
     compute_identity,
     control_ingress,
@@ -256,6 +257,92 @@ class PairControlAdapter:
             self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
         )
         return None if observed is None else self._identity(observed, desired, uid)
+
+    async def compute_node(self, pair: PairBinding, uids: dict[str, str | None]) -> str:
+        """Observe one placement for all four exact Pods, never derive it from absence.
+
+        The node owner must still attest the actual runtime and inventory. Two
+        complete reads reject disappearance/replacement while resolving placement;
+        neither read supplies runtime-release or readiness evidence.
+        """
+        if (
+            not isinstance(uids, dict)
+            or set(uids) != {f"Pod/{role}" for role in COMPUTE_ROLES}
+            or any(not isinstance(uid, str) or not uid.strip() for uid in uids.values())
+            or len(set(uids.values())) != len(COMPUTE_ROLES)
+        ):
+            raise ValueError("four distinct recorded pair Pod UIDs required")
+        uids = dict(uids)
+        node: str | None = None
+        for _ in range(2):
+            for role in COMPUTE_ROLES:
+                desired = compute_identity(self.kube.settings, pair, role)
+                observed = await self.kube._get(
+                    self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+                )
+                if observed is None:
+                    raise RuntimeError("exact pair Pod placement unavailable")
+                self._identity(observed, desired, uids[f"Pod/{role}"])
+                actual = observed.get("spec", {}).get("nodeName")
+                if not isinstance(actual, str) or not actual.strip():
+                    raise RuntimeError("exact pair Pod is not assigned to a node")
+                if node is not None and node != actual:
+                    raise RuntimeError("pair Pod placement changed or spans nodes")
+                node = actual
+        assert node is not None
+        return node
+
+    async def delete_compute(self, pair: PairBinding, role: str, uid: str, *, node: str) -> bool:
+        """UID/RV-fenced removal; True means API absence only, never runtime release.
+
+        The caller must already have committed settled-writer ownership and
+        original node capture. This adapter does not establish that authority.
+        Keep policies, volumes and keys until separate positive release proof.
+        No force deletion, grace-period override, finalizer removal or recreation.
+        """
+        desired = compute_identity(self.kube.settings, pair, role)
+        if (
+            not isinstance(uid, str)
+            or not uid.strip()
+            or not isinstance(node, str)
+            or not node.strip()
+        ):
+            raise ValueError("recorded Pod UID and captured node required")
+        name = desired["metadata"]["name"]
+        observed = await self.kube._get(self.kube.core.read_namespaced_pod, name)
+        if observed is None:
+            return True
+        self._identity(observed, desired, uid)
+        if observed.get("spec", {}).get("nodeName") != node:
+            raise RuntimeError("pair Pod moved away from captured node")
+        if not observed["metadata"].get("deletionTimestamp"):
+            try:
+                await self.kube._call(
+                    self.kube.core.delete_namespaced_pod,
+                    name,
+                    self.namespace,
+                    body={
+                        "apiVersion": "v1",
+                        "kind": "DeleteOptions",
+                        "propagationPolicy": "Foreground",
+                        "preconditions": {
+                            "uid": uid,
+                            "resourceVersion": observed["metadata"]["resourceVersion"],
+                        },
+                    },
+                )
+            except ApiException as exc:
+                if exc.status == 409:
+                    return False
+                if exc.status != 404:
+                    raise
+        remaining = await self.kube._get(self.kube.core.read_namespaced_pod, name)
+        if remaining is None:
+            return True
+        self._identity(remaining, desired, uid)
+        if remaining.get("spec", {}).get("nodeName") != node:
+            raise RuntimeError("pair Pod moved away from captured node")
+        return False
 
     async def observe_relay_custody(self, pair: PairBinding, uid: str | None) -> str | None:
         """Owned deleting/drifted Secrets remain obligations, not usable custody."""
