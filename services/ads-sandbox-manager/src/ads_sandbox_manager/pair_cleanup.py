@@ -19,6 +19,7 @@ from ads_sandbox_manager.pair_store import (
     compute_key,
     resource_key,
 )
+from ads_sandbox_manager.pair_volume_inputs import VOLUME_ROLES
 from ads_sandbox_manager.relay_inputs import INPUT_ROLES
 from ads_sandbox_manager.store import SandboxSession
 
@@ -42,6 +43,9 @@ class PairCleanupKubernetes(Protocol):
         self, snapshot: dict[str, object], role: str, uid: str | None
     ) -> str | None: ...
     async def observe_ipc(self, pair: PairBinding, role: str, uid: str | None) -> str | None: ...
+    async def observe_clone(
+        self, pair: PairBinding, role: str, payload: dict[str, object], uid: str | None
+    ) -> str | None: ...
 
 
 class PairCleanupCapture:
@@ -73,6 +77,39 @@ class PairCleanupCapture:
 
     async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> None:
         async with asyncio.timeout(self.settings.cleanup_seconds):
+            for role in VOLUME_ROLES:
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.owned_pair_cleanup(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+                    self._configuration(work)
+                    await self.repository.fence_pair_creators(db, work)
+                    pair = self.repository.cleanup_pair(work)
+                assert work.pair_snapshot is not None
+                entry = work.pair_snapshot["volume_resources"][role]
+                if entry["dispatch"] == "unissued":
+                    continue
+                uid = await self.kube.observe_clone(pair, role, entry["payload"], entry["uid"])
+                async with (
+                    asyncio.timeout(self.settings.control_seconds),
+                    self.sessions.begin() as db,
+                ):
+                    work = await self.repository.record_clone(
+                        db,
+                        work,
+                        role,
+                        uid,
+                        datetime.now(UTC),
+                        recovery=recovery,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
             for role in IPC_ROLES:
                 async with (
                     asyncio.timeout(self.settings.control_seconds),

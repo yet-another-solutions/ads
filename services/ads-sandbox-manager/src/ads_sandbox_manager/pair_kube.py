@@ -20,6 +20,7 @@ from ads_sandbox_manager.pair_objects import (
     control_service,
     pod_group,
 )
+from ads_sandbox_manager.pair_volume_inputs import volume_manifest
 from ads_sandbox_manager.relay_inputs import input_identity
 from ads_sandbox_manager.relay_keys import custody_identity
 
@@ -226,6 +227,17 @@ class PairControlAdapter:
             observed = await self.kube._get(method, desired["metadata"]["name"])
         except Exception:
             raise RuntimeError("paired IPC cleanup read failed") from None
+        return None if observed is None else self._identity(observed, desired, uid)
+
+    async def observe_clone(
+        self, pair: PairBinding, role: str, payload: Object, uid: str | None
+    ) -> str | None:
+        """Capture only committed clone ownership, without touching source services."""
+        desired = volume_manifest(self.kube.settings, pair, role, payload)
+        try:
+            observed = await self.kube.named_pvc(desired["metadata"]["name"])
+        except Exception:
+            raise RuntimeError("paired clone cleanup read failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
 
     async def observe_compute(
