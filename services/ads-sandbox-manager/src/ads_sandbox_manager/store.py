@@ -254,6 +254,8 @@ class SessionRepository:
         row: SandboxSession,
         owner: UUID,
         now: datetime,
+        *,
+        paired: bool = False,
     ) -> SandboxSession | None:
         # Always lock sandbox before PVC, shared by admission/idle/reap/service/recovery.
         expected = (row.sandbox_id, row.status, row.status_changed_at, row.pvc_id)
@@ -275,7 +277,13 @@ class SessionRepository:
         # A stopped/pending mapping is not authority to route a retained pair
         # through the legacy guest/IPC builder. Positive paired resume/retirement
         # must be integrated before this boundary can be opened.
-        await self._require_unpaired(db, current.session_id, current.sandbox_id)
+        if paired and current.status == "stopped" and current.pvc_id is not None:
+            from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+            from ads_sandbox_manager.pair_transfer import PairTransferRepository
+
+            await PairTransferRepository(LifecycleRepository()).available(db, current)
+        else:
+            await self._require_unpaired(db, current.session_id, current.sandbox_id)
         pvc = (
             await db.get(SessionPVC, current.pvc_id, with_for_update=True)
             if current.pvc_id

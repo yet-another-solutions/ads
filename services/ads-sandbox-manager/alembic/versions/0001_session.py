@@ -113,12 +113,54 @@ def upgrade() -> None:
         sa.Column("volume_resources", JSONB(), nullable=False),
         sa.Column("topics_dispatch", sa.String(), nullable=False),
         sa.Column("cleanup_journal", JSONB(), nullable=True),
-        sa.UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
+        sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("retained_from", sa.Uuid(), nullable=True),
         sa.UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"
         ),
     )
     op.create_index("ix_sandbox_pair_intent_session_id", "sandbox_pair_intent", ["session_id"])
+    op.create_index(
+        "sandbox_pair_intent_sandbox",
+        "sandbox_pair_intent",
+        ["sandbox_id"],
+        unique=True,
+        postgresql_where=sa.text("retired_at IS NULL"),
+    )
+    op.create_table(
+        "sandbox_pair_retirement",
+        sa.Column("generation", sa.Uuid(), primary_key=True),
+        sa.Column("session_id", sa.Uuid(), nullable=False),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("work_id", sa.Uuid(), nullable=False),
+        sa.Column("kind", sa.String(), nullable=False),
+        sa.Column("retired_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("journal", JSONB(), nullable=False),
+        sa.Column("journal_sha256", sa.String(), nullable=False),
+    )
+    op.create_index(
+        "ix_sandbox_pair_retirement_session_id", "sandbox_pair_retirement", ["session_id"]
+    )
+    op.create_index(
+        "ix_sandbox_pair_retirement_sandbox_id", "sandbox_pair_retirement", ["sandbox_id"]
+    )
+    op.create_table(
+        "sandbox_pair_transfer",
+        sa.Column("generation", sa.Uuid(), primary_key=True),
+        sa.Column("predecessor", sa.Uuid(), nullable=False),
+        sa.Column("session_id", sa.Uuid(), nullable=False),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("claim_owner", sa.Uuid(), nullable=False),
+        sa.Column("claim_changed", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("retirement_sha256", sa.String(), nullable=False),
+        sa.Column("state", JSONB(), nullable=False),
+        sa.Column("workspace", JSONB(), nullable=False),
+        sa.UniqueConstraint("predecessor", name="sandbox_pair_transfer_once"),
+    )
+    op.create_index("ix_sandbox_pair_transfer_session_id", "sandbox_pair_transfer", ["session_id"])
+    op.create_index("ix_sandbox_pair_transfer_sandbox_id", "sandbox_pair_transfer", ["sandbox_id"])
     # Persistent sandbox identity and key commitment survive all attachment rows.
     op.create_table(
         "sandbox_egress_state",
@@ -142,6 +184,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("sandbox_pair_transfer")
+    op.drop_table("sandbox_pair_retirement")
     op.drop_table("sandbox_egress_state")
     op.drop_table("sandbox_pair_intent")
     op.drop_table("ping_probe")

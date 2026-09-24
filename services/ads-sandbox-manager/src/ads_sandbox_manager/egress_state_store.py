@@ -159,6 +159,24 @@ def state_from_snapshot(value: object) -> EgressState:
 
 
 def _matches(state: EgressState, pair: PairIntent) -> None:
+    # Async owning callers validate the immutable one-use transfer receipt.
+    # Creator fields never become the new attachment owner's claim.
+    if pair.retained_from is not None:
+        if (
+            state.session_id,
+            state.sandbox_id,
+            state.project_id,
+            state.namespace,
+            state.state_id,
+        ) != (
+            pair.session_id,
+            pair.sandbox_id,
+            pair.project_id,
+            pair.namespace,
+            pair.egress_state_id,
+        ):
+            raise PairClaimLost("retained persistent state ownership changed")
+        return
     if (
         state.session_id,
         state.sandbox_id,
@@ -339,6 +357,9 @@ class EgressStateRepository:
         """
         _role(role)
         validate(expected)
+        creator = await db.get(PairIntent, expected.creator_generation, with_for_update=True)
+        if creator is None or creator.retired_at is not None:
+            raise PairClaimLost("retired state creator cannot settle writes")
         scope = _scope(expected)  # Capture before an identity-map refresh.
         custody_uid = expected.key_uid
         state = await db.scalar(

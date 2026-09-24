@@ -27,6 +27,11 @@ def runtime_complete(journal: Object) -> bool:
 def storage_complete(journal: Object) -> bool:
     targets = storage_targets(journal["snapshot"], journal["retain_workspace"], issued_only=True)
     for role, target in targets.items():
+        unused = journal["unused_storage"].get(role)
+        if unused is not None and unused["disposition"] == (
+            "retained" if target["retain"] else "reclaimed"
+        ):
+            continue
         if role == "ipc":
             if journal["ipc_storage_reclaimed"] is None:
                 return False

@@ -56,6 +56,7 @@ from ads_sandbox_manager.pair_unscheduled_proof import (
     validate_observation,
     validate_unscheduled,
 )
+from ads_sandbox_manager.pair_unused_proof import validate_unused_journal
 from ads_sandbox_manager.pair_volume_inputs import validate_volume_resources, volume_role
 from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
 from ads_sandbox_manager.session_objects import (
@@ -133,12 +134,22 @@ class LifecycleRepository:
         return row, pvc
 
     async def pair_snapshot(
-        self, db: AsyncSession, session_id: UUID, sandbox_id: UUID
+        self,
+        db: AsyncSession,
+        session_id: UUID,
+        sandbox_id: UUID,
+        *,
+        generation: UUID | None = None,
     ) -> dict[str, Any] | None:
         """Capture the original pair, never follow a replacement session mapping."""
         intent = await db.scalar(
             select(PairIntent)
             .where(PairIntent.sandbox_id == sandbox_id)
+            .where(
+                PairIntent.generation == generation
+                if generation is not None
+                else PairIntent.retired_at.is_(None)
+            )
             .with_for_update()
             .execution_options(populate_existing=True)
         )
@@ -146,6 +157,13 @@ class LifecycleRepository:
             return None
         if intent.session_id != session_id:
             raise RuntimeError("pair cleanup session identity mismatch")
+        # Active transferred owners must prove the exact preceding retirement.
+        # Historical tombstone verification validates its original immutable
+        # creator/state snapshot without recursively walking the whole chain.
+        if intent.retired_at is None:
+            from ads_sandbox_manager.pair_store import PairIntentRepository
+
+            await PairIntentRepository._transfer(db, intent)
         validate_relay_custody(intent.relay_custody)
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
@@ -169,6 +187,7 @@ class LifecycleRepository:
             persistent = state_snapshot(state)
         current = {
             "generation": str(intent.generation),
+            "retained_from": str(intent.retained_from) if intent.retained_from else None,
             "session_id": str(intent.session_id),
             "sandbox_id": str(intent.sandbox_id),
             "project_id": str(intent.project_id),
@@ -224,6 +243,7 @@ class LifecycleRepository:
                 "block_disposition",
                 "resource_disposition",
                 "topic_disposition",
+                "unused_storage",
             }
             or type(journal["retain_workspace"]) is not bool
             or not isinstance(journal["targets"], list)
@@ -317,6 +337,7 @@ class LifecycleRepository:
             ):
                 raise RuntimeError("retained runtime report does not prove release")
         validate_block_journal(journal)
+        validate_unused_journal(journal)
         validate_resource_journal(journal)
         return deepcopy(saved)
 
@@ -471,6 +492,7 @@ class LifecycleRepository:
                 "block_disposition": {},
                 "resource_disposition": {},
                 "topic_disposition": None,
+                "unused_storage": {},
             }
             await db.flush()
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
@@ -968,6 +990,38 @@ class LifecycleRepository:
         await db.flush()
         return True
 
+    async def record_pair_unused_storage(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        role: str,
+        now: datetime,
+        *,
+        captured: dict[str, Any] | None = None,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> bool:
+        if not await self.seal_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        ):
+            return False
+        pair = self.cleanup_pair(expected)
+        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
+        assert intent is not None and intent.cleanup_journal is not None
+        journal = deepcopy(intent.cleanup_journal)
+        entries = journal["unused_storage"]
+        if captured is not None:
+            if role in entries and entries[role]["capture"] != captured:
+                raise PairClaimLost("original unused storage capture cannot be replaced")
+            entries.setdefault(role, {"capture": deepcopy(captured), "disposition": None})
+        else:
+            target = entries[role]["capture"]["target"]
+            entries[role]["disposition"] = "retained" if target["retain"] else "reclaimed"
+        validate_unused_journal(journal)
+        intent.cleanup_journal = journal
+        await db.flush()
+        return True
+
     async def work(
         self,
         db: AsyncSession,
@@ -1121,6 +1175,7 @@ class LifecycleRepository:
         snapshot = work.pair_snapshot
         fields = {
             "generation",
+            "retained_from",
             "session_id",
             "sandbox_id",
             "project_id",
@@ -1179,6 +1234,14 @@ class LifecycleRepository:
         ):
             raise RuntimeError("invalid persistent egress cleanup anchor")
         persistent = snapshot["egress_state"]
+        predecessor = snapshot["retained_from"]
+        if predecessor is not None and (
+            not isinstance(predecessor, str)
+            or str(UUID(predecessor)) != predecessor
+            or predecessor == snapshot["generation"]
+            or persistent is None
+        ):
+            raise RuntimeError("invalid retained cleanup provenance")
         if (state_id is None) != (persistent is None):
             raise RuntimeError("persistent egress cleanup anchor and snapshot disagree")
         if persistent is not None:
@@ -1188,7 +1251,7 @@ class LifecycleRepository:
                 or str(state.sandbox_id) != snapshot["sandbox_id"]
                 or str(state.session_id) != snapshot["session_id"]
                 or str(state.project_id) != snapshot["project_id"]
-                or str(state.creator_generation) != snapshot["generation"]
+                or (predecessor is None and str(state.creator_generation) != snapshot["generation"])
                 or state.namespace != snapshot["namespace"]
                 or state.sandbox_id != work.sandbox_id
             ):
@@ -1416,6 +1479,7 @@ class LifecycleRepository:
         )
         if (
             intent is None
+            or intent.retired_at is not None
             or intent.binding() != pair
             or intent.namespace != work.pair_snapshot["namespace"]
             or intent.golden_version != work.pair_snapshot["golden_version"]

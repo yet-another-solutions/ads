@@ -10,7 +10,9 @@ from ads_sandbox_manager.app import create_app
 from ads_sandbox_manager.config import load_settings
 from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle_store import CleanupWork
+from ads_sandbox_manager.pair_retirement import PairRetirement
 from ads_sandbox_manager.pair_store import PairIntent
+from ads_sandbox_manager.pair_transfer import PairTransfer
 from ads_sandbox_manager.store import PingProbe, SandboxSession, SessionPVC
 
 
@@ -27,7 +29,14 @@ def main() -> None:
         alembic_ini=alembic_ini_for("ads-sandbox-manager"),
         database_url=settings.database_url,
         tables=mapped_tables(
-            SandboxSession, SessionPVC, CleanupWork, PingProbe, PairIntent, EgressState
+            SandboxSession,
+            SessionPVC,
+            CleanupWork,
+            PingProbe,
+            PairIntent,
+            EgressState,
+            PairRetirement,
+            PairTransfer,
         ),
     )
     FailFastServer(

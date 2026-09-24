@@ -16,6 +16,7 @@ from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
 from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
 from ads_sandbox_manager.pair_store import PairClaimLost
+from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
 from ads_sandbox_manager.session_objects import session_name
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
 from ads_sandbox_manager.store import SandboxSession, SessionPVC, SessionRepository, advance
@@ -111,6 +112,7 @@ class RecoveryService:
                     if runtime is None or not await runtime.release(work, recovery=row):
                         log.warning("paired recovery requires runtime-release proof")
                         return
+                    await PairUnusedStorageTeardown(runtime).dispose(work, recovery=row)
                     if await PairIpcStorageTeardown(runtime).dispose(work, recovery=row):
                         await PairBlockStorageTeardown(runtime).dispose(work, recovery=row)
                     if self.lifecycle.pair_resources is not None:

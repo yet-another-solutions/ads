@@ -29,9 +29,14 @@ class PairIpcStorageTeardown:
         r = self.runtime
         async with asyncio.timeout(r.settings.cleanup_seconds):
             checkpoint = await r._checkpoint(expected, recovery)
-            if checkpoint is None or r.node_owner is None:
+            if checkpoint is None:
                 return False
             work, journal = checkpoint
+            unused = journal["unused_storage"].get("ipc")
+            if unused is not None and unused["disposition"] == "reclaimed":
+                return True
+            if r.node_owner is None:
+                return False
             if journal["ipc_storage_reclaimed"] is not None:
                 return True
             if journal["ipc_release"] is None or journal["ipc_storage_capture"] is None:

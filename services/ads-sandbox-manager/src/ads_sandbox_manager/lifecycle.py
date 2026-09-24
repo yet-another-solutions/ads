@@ -23,6 +23,7 @@ from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
 from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
 from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
 from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
+from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMER,
@@ -538,6 +539,7 @@ class LifecycleService:
                 if self.pair_runtime is None or not await self.pair_runtime.release(work):
                     log.warning("pair retirement requires runtime-release proof: %s", work_id)
                     return
+                await PairUnusedStorageTeardown(self.pair_runtime).dispose(work)
                 if await PairIpcStorageTeardown(self.pair_runtime).dispose(work):
                     await PairBlockStorageTeardown(self.pair_runtime).dispose(work)
                 if self.pair_resources is not None:
