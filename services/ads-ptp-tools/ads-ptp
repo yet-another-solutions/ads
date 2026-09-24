@@ -293,6 +293,75 @@ def ns_identity(fd):
     return [info.st_dev, info.st_ino]
 
 
+def boot_identity():
+    with open("/proc/sys/kernel/random/boot_id") as stream:
+        value = stream.read(65).strip()
+    if str(UUID(value)) != value:
+        raise ValueError("canonical node boot identity required")
+    return value
+
+
+def capture_attempt(root, req):
+    """Preserve every ADD before attestation, namespace inspection or effects.
+
+    Caller holds the original attachment lock. This is history, not trusted
+    generation binding or a runtime-release verdict. DEL never removes it.
+    """
+    path = root / ("attempt-" + req["key"] + ".json")
+    active = root / (req["key"] + ".json")
+    if path.exists() or path.is_symlink():
+        saved = read_record(path)
+        if (
+            set(saved) != {"schema", "request", "boot_id", "vm_identity", "binding"}
+            or saved["schema"] != "ads-ptp-attempt-v1"
+            or saved["request"] != req
+            or saved["boot_id"] != boot_identity()
+        ):
+            raise ValueError("original ADD attempt changed")
+        identity = saved["vm_identity"]
+        if identity is not None and (
+            not isinstance(identity, list)
+            or len(identity) != 2
+            or not all(type(x) is int and x > 0 for x in identity)
+        ):
+            raise ValueError("invalid original attempt namespace")
+        if saved["binding"] is not None:
+            binding(saved["binding"], req)
+            if identity is None:
+                raise ValueError("admitted attempt missing original namespace")
+    else:
+        if active.exists() or active.is_symlink():
+            raise ValueError("active attachment missing original attempt history")
+        saved = {
+            "schema": "ads-ptp-attempt-v1",
+            "request": req,
+            "boot_id": boot_identity(),
+            "vm_identity": None,
+            "binding": None,
+        }
+    # Reassert durability after a lost response/directory-fsync failure. An
+    # inability even to inspect the namespace still leaves the original request.
+    save_record(path, saved)
+    with namespace(req["netns"], saved["vm_identity"]) as fd:
+        identity = ns_identity(fd)
+        if saved["vm_identity"] is not None and identity != saved["vm_identity"]:
+            raise ValueError("original attempt namespace replaced")
+        saved = {**saved, "vm_identity": identity}
+    if boot_identity() != saved["boot_id"]:
+        raise ValueError("node boot changed during ADD attempt")
+    save_record(path, saved)
+    return path, saved
+
+
+def bind_attempt(path, saved, attestation):
+    """Called under the generation fence immediately before possible effects."""
+    if saved["binding"] is not None and saved["binding"] != attestation:
+        raise ValueError("original admitted attempt binding changed")
+    if boot_identity() != saved["boot_id"]:
+        raise ValueError("node boot changed before ADD admission")
+    save_record(path, {**saved, "binding": attestation})
+
+
 def execute(fd, *args, other=()):
     descriptors = (fd, *other)
     result = subprocess.run(
@@ -419,11 +488,11 @@ def result(req, attestation, mac, previous):
     return value
 
 
-def add(req, attestation, state_path, previous):
+def add(req, attestation, state_path, previous, vm_identity):
     if state_path.exists():
         raise ValueError("attachment already attempted; DEL required")
     with (
-        namespace(req["netns"]) as vm,
+        namespace(req["netns"], vm_identity) as vm,
         namespace(attestation["private"]["path"], attestation["private"]["identity"]) as private,
         namespace(
             attestation["transport"]["path"], attestation["transport"]["identity"]
@@ -431,6 +500,8 @@ def add(req, attestation, state_path, previous):
         namespace("/proc/self/ns/net") as host,
     ):
         identities = [tuple(ns_identity(fd)) for fd in (vm, private, transport, host)]
+        if list(identities[0]) != vm_identity:
+            raise ValueError("original attempt namespace replaced before effects")
         if len(set(identities)) != 4:
             raise ValueError("host, VM, private and transport namespaces must differ")
         require_ipv4_only(vm)
@@ -607,6 +678,7 @@ def perform(config, env):
                 raise ValueError("cleanup Pod UID changed")
             delete(saved, state_path)
             return None
+        attempt = capture_attempt(state_root, req) if req["command"] == "ADD" else None
         root = private_directory(config["bindingDir"])
         if "attestorConfig" in config:
             loader = importlib.machinery.SourceFileLoader(
@@ -629,7 +701,12 @@ def perform(config, env):
                 read_record(retired)  # Corrupt/unreadable records also fail closed.
                 raise ValueError("attachment generation retired")
             if req["command"] == "ADD":
-                return add(req, attestation, state_path, config.get("prevResult"))
+                assert attempt is not None
+                path, saved = attempt
+                bind_attempt(path, saved, attestation)
+                return add(
+                    req, attestation, state_path, config.get("prevResult"), saved["vm_identity"]
+                )
             saved = read_record(state_path)
             if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
                 raise ValueError("CHECK identity changed")

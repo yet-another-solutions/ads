@@ -129,7 +129,7 @@ jobs:
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
             context: .
-            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire','ads-ptp-release','ads-ipc-release','ads-node-owner'))"
+            smoke: "import shutil; assert all(shutil.which(x) for x in ('ip','bridge','wg','nft','tcpdump','ping','arping','ads-ptp-canary','ads-ptp','ads-ptp-relay','ads-ptp-attest','ads-ptp-retire','ads-ptp-release','ads-ptp-partial','ads-ipc-release','ads-node-owner'))"
             pack: "false"
     steps:
       - uses: actions/checkout@v7
