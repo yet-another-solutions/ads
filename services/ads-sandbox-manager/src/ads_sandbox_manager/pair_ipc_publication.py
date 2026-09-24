@@ -78,7 +78,7 @@ class PairIpcPublication:
                     intent = await self.repository.pairs.owned(db, row, owner, generation)
                     self._configuration(intent)
                     payload = self.repository.dependencies(intent)
-                    if role == "deployment":
+                    if role == "pod":
                         payload["volume_uid"] = intent.ipc_resources["volume"]["uid"]
                         payload["ads_service_subject"] = str(ads_service_subject)
                     payload["manifest"] = ipc_manifest(

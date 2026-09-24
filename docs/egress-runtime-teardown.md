@@ -44,7 +44,7 @@ and admission-fence ordering; transport must preserve that authority.
 Full-pair bound storage and the existing complete node inventory are required.
 Earlier partial starts, missing node inventories and unavailable bound-volume
 evidence remain fail-closed, not silently synthesized or claimed supported.
-IPC controller teardown, positive storage release/reclamation, exact key/control
+IPC Pod teardown, positive storage release/reclamation, exact key/control
 cleanup, generation retirement, retained-state transfer and reset coordination
 remain later lifecycle stages. This component keeps the final paired-completion
 guard and all policies, credentials, PVCs and generation evidence.

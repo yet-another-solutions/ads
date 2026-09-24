@@ -222,7 +222,7 @@ class PairControlAdapter:
         method = (
             self.kube.core.read_namespaced_persistent_volume_claim
             if role == "volume"
-            else self.kube.apps.read_namespaced_deployment
+            else self.kube.core.read_namespaced_pod
         )
         try:
             observed = await self.kube._get(method, desired["metadata"]["name"])

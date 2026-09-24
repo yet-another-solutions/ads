@@ -47,8 +47,8 @@ async def publication(egress_publication):
     await keys.prepare(f.row, f.intent.generation)
     await inputs.prepare(f.row, f.intent.generation, f.relay)
     kube.apps = Mock()
-    kube.apps.read_namespaced_deployment.side_effect = partial(f.remote.read, "Deployment")
-    kube.apps.create_namespaced_deployment.side_effect = f.remote.create
+    kube.core.read_namespaced_pod.side_effect = partial(f.remote.read, "Pod")
+    kube.core.create_namespaced_pod.side_effect = f.remote.create
     f.ipc = PairIpcAdapter(f.compute)
     f.ipc_repo = PairIpcRepository(f.repo)
     f.service = PairIpcPublication(f.h.settings, f.h.sessions, f.ipc_repo, f.ipc)
@@ -70,14 +70,14 @@ async def prepare(f):
 def resource(f, role):
     return f.remote.objects[
         (
-            "PersistentVolumeClaim" if role == "volume" else "Deployment",
+            "PersistentVolumeClaim" if role == "volume" else "Pod",
             ipc_name(f.row.sandbox_id),
         )
     ]
 
 
 def hook_create(f, role, *, delayed=False, lost_reply=False):
-    target = "PersistentVolumeClaim" if role == "volume" else "Deployment"
+    target = "PersistentVolumeClaim" if role == "volume" else "Pod"
     original = f.remote.create
 
     def create(*args, body, **kwargs):
@@ -88,7 +88,7 @@ def hook_create(f, role, *, delayed=False, lost_reply=False):
         return original(*args, body=body, **kwargs)
 
     f.adapter.kube.core.create_namespaced_persistent_volume_claim.side_effect = create
-    f.adapter.kube.apps.create_namespaced_deployment.side_effect = create
+    f.adapter.kube.core.create_namespaced_pod.side_effect = create
 
 
 async def test_committed_payload_before_each_write_and_session_uid_binding(publication):
@@ -105,7 +105,7 @@ async def test_committed_payload_before_each_write_and_session_uid_binding(publi
             assert entry["dispatch"] == "inflight" and entry["uid"] is None
             assert entry["payload"]["compute_uids"] == current.compute_uids
             assert entry["payload"]["control_uids"] == current.control_uids
-            if role == "deployment":
+            if role == "pod":
                 assert entry["payload"]["volume_uid"] == row.ipc_pvc_uid
             steps.append(role)
         return await original(intent, role)
@@ -115,7 +115,7 @@ async def test_committed_payload_before_each_write_and_session_uid_binding(publi
     assert steps == list(IPC_ROLES)
     row = await row_for(f.h, f.row.session_id)
     assert row.ipc_pvc_uid == resource(f, "volume")["metadata"]["uid"]
-    assert row.ipc_deployment_uid == resource(f, "deployment")["metadata"]["uid"]
+    assert row.ipc_pod_uid == resource(f, "pod")["metadata"]["uid"]
     assert row.status == "creating" and not f.h.kube.calls
     assert all(
         entry["dispatch"] == "settled" and entry["uid"] for entry in first.ipc_resources.values()
@@ -229,9 +229,7 @@ async def test_missing_replaced_or_incompatible_ipc_never_repaired(publication, 
     elif role == "volume":
         obj["spec"]["dataSource"] = {"kind": "PersistentVolumeClaim", "name": "foreign"}
     else:
-        obj["spec"]["template"]["spec"]["containers"][0]["env"].append(
-            {"name": "FOREIGN", "value": "1"}
-        )
+        obj["spec"]["containers"][0]["env"].append({"name": "FOREIGN", "value": "1"})
     with pytest.raises(RuntimeError):
         await prepare(f)
     assert (await snapshot(f, f.intent.generation)).ipc_resources == before.ipc_resources
@@ -278,7 +276,7 @@ async def test_session_identity_drift_after_io_cannot_bind(publication, role):
         if member == role:
             async with f.h.sessions.begin() as db:
                 row = await db.get(SandboxSession, f.row.session_id)
-                setattr(row, "ipc_pvc_uid" if role == "volume" else "ipc_deployment_uid", "foreign")
+                setattr(row, "ipc_pvc_uid" if role == "volume" else "ipc_pod_uid", "foreign")
         return uid
 
     f.ipc.create = create
@@ -315,13 +313,10 @@ async def test_api_defaults_do_not_expand_ipc_authority(publication):
     before = await prepare(f)
     volume = resource(f, "volume")
     volume["spec"]["volumeName"] = "assigned-pv"
-    deployment = resource(f, "deployment")
-    deployment["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "1"}
-    deployment["spec"].update(
-        revisionHistoryLimit=10, progressDeadlineSeconds=600, minReadySeconds=0, paused=False
-    )
-    spec = deployment["spec"]["template"]["spec"]
+    pod = resource(f, "pod")
+    spec = pod["spec"]
     spec.update(
+        nodeName="application",
         dnsPolicy="ClusterFirst",
         schedulerName="default-scheduler",
         restartPolicy="Always",
@@ -414,19 +409,35 @@ async def test_actual_dependency_replacement_blocks_publication_and_binding(
     current = await snapshot(f, f.intent.generation)
     assert current.ipc_resources["volume"]["dispatch"] == "inflight"
     assert current.ipc_resources["volume"]["uid"] is None
-    assert current.ipc_resources["deployment"]["dispatch"] == "unissued"
+    assert current.ipc_resources["pod"]["dispatch"] == "unissued"
     assert len(f.remote.created) == int(late)
 
 
 @pytest.mark.parametrize(
     "fault",
-    ["account", "token", "host", "sidecar", "annotation", "protocol", "mode", "probe", "revision"],
+    [
+        "account",
+        "token",
+        "host",
+        "sidecar",
+        "annotation",
+        "protocol",
+        "mode",
+        "probe",
+        "revision",
+        "audience",
+        "token-lifetime",
+        "token-mount",
+        "automount",
+        "restart",
+        "selector",
+    ],
 )
-async def test_additive_or_noncanonical_deployment_defaults_rejected(publication, fault):
+async def test_additive_or_noncanonical_pod_defaults_rejected(publication, fault):
     f = publication
     before = await prepare(f)
-    obj = resource(f, "deployment")
-    spec = obj["spec"]["template"]["spec"]
+    obj = resource(f, "pod")
+    spec = obj["spec"]
     container = spec["containers"][0]
     if fault == "account":
         spec["serviceAccount"] = "foreign"
@@ -451,19 +462,56 @@ async def test_additive_or_noncanonical_deployment_defaults_rejected(publication
     elif fault == "sidecar":
         spec["containers"].append(deepcopy(container))
     elif fault == "annotation":
-        obj["spec"]["template"]["metadata"]["annotations"] = {"inject": "true"}
+        obj["metadata"]["annotations"] = {"inject": "true"}
     elif fault == "protocol":
         container["ports"][0]["protocol"] = "UDP"
     elif fault == "mode":
         next(v["secret"] for v in spec["volumes"] if "secret" in v)["defaultMode"] = 0o777
     elif fault == "probe":
         container["readinessProbe"]["successThreshold"] = 2
-    else:
+    elif fault == "revision":
         obj["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "01"}
+    elif fault in ("audience", "token-lifetime"):
+        token = next(v for v in spec["volumes"] if v["name"] == "kube-api")["projected"]["sources"][
+            0
+        ]["serviceAccountToken"]
+        token["audience" if fault == "audience" else "expirationSeconds"] = (
+            "foreign" if fault == "audience" else 86400
+        )
+    elif fault == "token-mount":
+        container["volumeMounts"][-1]["readOnly"] = False
+    elif fault == "automount":
+        spec["automountServiceAccountToken"] = True
+    elif fault == "restart":
+        spec["restartPolicy"] = "Never"
+    else:
+        spec["nodeSelector"] = {"foreign": "true"}
     with pytest.raises(RuntimeError, match="incompatible"):
         await prepare(f)
     assert (await snapshot(f, f.intent.generation)).ipc_resources == before.ipc_resources
     assert len(f.remote.created) == 2
+
+
+async def test_legacy_ipc_uid_cannot_be_adopted_as_a_pod_uid(publication):
+    f = publication
+    async with f.h.sessions.begin() as db:
+        row = await db.get(SandboxSession, f.row.session_id)
+        row.ipc_deployment_uid = "legacy-uid"
+    with pytest.raises(PairClaimLost, match="legacy IPC Deployment"):
+        await prepare(f)
+    assert not f.remote.created
+
+
+async def test_missing_ipc_pod_never_recreated_by_a_restarted_publisher(publication):
+    f = publication
+    before = await prepare(f)
+    del f.remote.objects[("Pod", ipc_name(f.row.sandbox_id))]
+    f.service = PairIpcPublication(f.h.settings, f.h.sessions, f.ipc_repo, f.ipc)
+    with pytest.raises(RuntimeError, match="disappeared"):
+        await prepare(f)
+    assert (await snapshot(f, f.intent.generation)).ipc_resources == before.ipc_resources
+    assert len(f.remote.created) == 2
+    f.adapter.kube.apps.create_namespaced_deployment.assert_not_called()
 
 
 async def test_committed_subject_change_is_not_an_in_place_update(publication):
@@ -484,7 +532,7 @@ async def test_cleanup_rejects_changed_committed_ipc_ownership(publication, faul
     async with f.h.sessions.begin() as db:
         intent = await db.get(PairIntent, f.intent.generation)
         resources = deepcopy(intent.ipc_resources)
-        entry = resources["deployment"]
+        entry = resources["pod"]
         if fault == "payload":
             entry["payload"]["ads_service_subject"] = str(uuid4())
         elif fault == "uid":
@@ -513,6 +561,6 @@ def test_corrupt_ipc_evidence_rejected(fault):
     elif fault == "payload":
         value["volume"] = {"uid": None, "dispatch": "inflight", "payload": {}}
     else:
-        value["deployment"]["payload"] = {}
+        value["pod"]["payload"] = {}
     with pytest.raises(RuntimeError):
         validate_ipc_resources(value)

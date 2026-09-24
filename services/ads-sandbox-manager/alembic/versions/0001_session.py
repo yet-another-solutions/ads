@@ -23,6 +23,7 @@ def upgrade() -> None:
         sa.Column("service_deadline", sa.DateTime(timezone=True), nullable=True),
         sa.Column("guest_deployment_uid", sa.String(), nullable=True),
         sa.Column("ipc_deployment_uid", sa.String(), nullable=True),
+        sa.Column("ipc_pod_uid", sa.String(), nullable=True),
         sa.Column("ipc_pvc_uid", sa.String(), nullable=True),
         sa.Column("ca_attempt", sa.Uuid(), nullable=True),
         sa.Column("ca_sources", JSONB(), nullable=True),

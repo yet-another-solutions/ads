@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import delete, select
 
 from ads_sandbox_manager.egress_state_store import EgressState
+from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, sandbox_targets
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.store import SandboxSession, SessionPVC
@@ -92,8 +93,11 @@ async def test_existing_provisioner_uses_full_pair_and_only_ipc_ready_admits(cre
     row = await f.h.service.provision(sid)
     assert observed == [row.sandbox_id] and row.status == "creating"
     assert row.guest_deployment_uid is None
-    assert row.ipc_deployment_uid and row.pvc_uid and len(row.ca_clones) == 3
+    assert row.ipc_deployment_uid is None
+    assert row.ipc_pod_uid and row.pvc_uid and len(row.ca_clones) == 3
     assert len(f.remote.created) == 23
+    assert not any(kind == "Deployment" for kind, _ in f.remote.objects)
+    f.adapter.kube.apps.create_namespaced_deployment.assert_not_called()
     async with f.h.sessions.begin() as db:
         intent = await db.scalar(select(PairIntent).where(PairIntent.session_id == sid))
         assert intent.topics_dispatch == "settled"
@@ -116,9 +120,55 @@ async def test_restart_reuses_committed_pair_without_writes_or_topic_replay(crea
         f.h.settings, f.h.sessions, f.adapter.kube, f.golden, f.ca, f.topics
     )
     second = await build(f)
-    assert second.ipc_deployment_uid == first.ipc_deployment_uid
+    assert second.ipc_pod_uid == first.ipc_pod_uid
     assert len(f.remote.created) == count
     f.topics.prepare.assert_awaited_once()
+
+
+async def test_untracked_ipc_pod_never_enters_legacy_claim_ready_or_cleanup(creation):
+    f = creation
+    row = await build(f)
+    uid = row.ipc_pod_uid
+    async with f.h.sessions.begin() as db:
+        before = set(await db.scalars(select(CleanupWork.work_id)))
+        await db.execute(delete(PairIntent))
+        await db.execute(delete(EgressState))
+    async with f.h.sessions.begin() as db:
+        assert not await f.h.repository.mark_ready(
+            db, row.sandbox_id, datetime.now(UTC), row.status_changed_at
+        )
+    with pytest.raises(RuntimeError, match="Pod binding blocks legacy"):
+        async with f.h.sessions.begin() as db:
+            await f.h.repository._require_unpaired(db, row.session_id, row.sandbox_id)
+    with pytest.raises(RuntimeError, match="no retained generation"):
+        async with f.h.sessions.begin() as db:
+            await LifecycleRepository().work(
+                db,
+                row,
+                await db.get(SessionPVC, row.pvc_id),
+                "idle",
+                datetime.now(UTC),
+                120,
+                sandbox_targets(row, retain=True),
+            )
+    assert (await row_for(f.h, row.session_id)).ipc_pod_uid == uid
+    async with f.h.sessions.begin() as db:
+        assert set(await db.scalars(select(CleanupWork.work_id))) == before
+
+
+async def test_cleanup_rejects_changed_session_pod_uid_before_rotating_identity(creation):
+    f = creation
+    row = await build(f)
+    async with f.h.sessions.begin() as db:
+        current = await db.get(SandboxSession, row.session_id)
+        current.ipc_pod_uid = "foreign"
+    with pytest.raises(RuntimeError, match="Pod session identity changed"):
+        async with f.h.sessions.begin() as db:
+            await LifecycleRepository().recover(
+                db, row.session_id, row.sandbox_id, datetime.now(UTC), 120
+            )
+    current = await row_for(f.h, row.session_id)
+    assert current.sandbox_id == row.sandbox_id and current.ipc_pod_uid == "foreign"
 
 
 @pytest.mark.parametrize("replacement", [False, True])
@@ -294,7 +344,8 @@ async def test_authenticated_ready_cannot_bypass_incomplete_or_ambiguous_pair(cr
 
 
 @pytest.mark.parametrize(
-    "fault", ["workspace", "ca-clone", "ipc-volume", "ipc-deployment", "state-missing", "owner"]
+    "fault",
+    ["workspace", "ca-clone", "ipc-volume", "ipc-pod", "state-missing", "owner", "legacy-ipc"],
 )
 async def test_ready_rechecks_exact_current_dependency_bindings(creation, fault):
     f = creation
@@ -307,7 +358,9 @@ async def test_ready_rechecks_exact_current_dependency_bindings(creation, fault)
             current.ca_clones = {**current.ca_clones, "key": "foreign"}
         elif fault == "ipc-volume":
             current.ipc_pvc_uid = "foreign"
-        elif fault == "ipc-deployment":
+        elif fault == "ipc-pod":
+            current.ipc_pod_uid = "foreign"
+        elif fault == "legacy-ipc":
             current.ipc_deployment_uid = "foreign"
         elif fault == "owner":
             current.claimed_by = uuid4()

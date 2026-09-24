@@ -50,12 +50,14 @@ class PairIpcRepository:
         role: str,
         payload: Object,
     ) -> None:
+        if current.ipc_deployment_uid is not None:
+            raise PairClaimLost("legacy IPC Deployment binding blocks paired Pod publication")
         expected = self.dependencies(intent)
         if any(payload[key] != value for key, value in expected.items()):
             raise PairClaimLost("paired IPC dependency identities changed")
         for member, committed in intent.compute_payloads.items():
             await self.pairs._compute_dependencies(db, intent, current, member, committed)
-        if role == "deployment":
+        if role == "pod":
             volume = intent.ipc_resources["volume"]
             if (
                 volume["dispatch"] != "settled"
@@ -80,7 +82,7 @@ class PairIpcRepository:
         assert current is not None
         await self._dependencies(db, intent, current, role, payload)
         entry = intent.ipc_resources[role]
-        field = "ipc_pvc_uid" if role == "volume" else "ipc_deployment_uid"
+        field = "ipc_pvc_uid" if role == "volume" else "ipc_pod_uid"
         if getattr(current, field) != entry["uid"]:
             raise PairClaimLost("untracked or replaced IPC session binding")
         if entry["payload"] is not None and entry["payload"] != payload:
@@ -113,7 +115,7 @@ class PairIpcRepository:
         if entry["dispatch"] == "unissued":
             raise RuntimeError("paired IPC resource was never dispatched")
         await self._dependencies(db, intent, current, role, entry["payload"])
-        field = "ipc_pvc_uid" if role == "volume" else "ipc_deployment_uid"
+        field = "ipc_pvc_uid" if role == "volume" else "ipc_pod_uid"
         if any(
             previous is not None and previous != uid
             for previous in (entry["uid"], getattr(current, field))

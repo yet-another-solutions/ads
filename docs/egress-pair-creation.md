@@ -26,7 +26,7 @@ any candidate rollout; this change does not invent deployable later-slice images
 
 Creation executes the existing publishers in order: controls, fresh workspace
 and CA clones, topics/barrier, guest and relay Pods, paired-key custody,
-immutable relay inputs, persistent state, egress Pod and IPC PVC/Deployment.
+immutable relay inputs, persistent state, egress Pod and IPC PVC/manager-owned Pod.
 Each prerequisite must have settled original writes and exact UID bindings
 before dependent execution. Publishers retain their own committed payloads and
 current-claim checks around external calls.
@@ -55,7 +55,7 @@ claim/generation and bound-UID check. A replacement claim is still rejected.
 The existing manager ready transaction now distinguishes paired from truly
 unpaired rows. A pair requires the original unfenced claim; settled topics,
 controls, compute, custody, relay inputs, clones, persistent state and IPC;
-matching session/PVC/CA/state/IPC identities; and no legacy guest Deployment.
+matching session/PVC/CA/state/IPC identities; and no legacy guest or IPC Deployment.
 Missing, replaced, incomplete or inflight evidence cannot satisfy that gate.
 Only then does the existing atomic ready/attached transition proceed.
 

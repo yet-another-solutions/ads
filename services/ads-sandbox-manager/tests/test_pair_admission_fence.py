@@ -22,6 +22,21 @@ from test_sessions import row_for, sessions_harness  # noqa: F401
 pytestmark = pytest.mark.anyio
 
 
+async def test_legacy_cleanup_cannot_clear_an_untracked_ipc_pod_binding(life):
+    h = life
+    async with h.sessions.begin() as db:
+        work = await h.lifecycle_repository.idle(
+            db, h.row.session_id, h.row.sandbox_id, datetime.now(UTC), 60, 120
+        )
+        assert work is not None and work.pair_snapshot is None
+        row = await db.get(SandboxSession, h.row.session_id)
+        row.ipc_pod_uid = "untracked-pod"
+    async with h.sessions.begin() as db:
+        assert not await h.lifecycle_repository.complete(db, work, datetime.now(UTC))
+    row = await row_for(h, h.row.session_id)
+    assert row.status == "shutting_down" and row.ipc_pod_uid == "untracked-pod"
+
+
 async def lose_session(f):
     async with f.h.sessions.begin() as db:
         await db.execute(

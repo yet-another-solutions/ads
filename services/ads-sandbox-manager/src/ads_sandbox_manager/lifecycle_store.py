@@ -71,7 +71,11 @@ def target(kind: str, name: str, uid: str | None, *, retain: bool = False) -> di
 
 def sandbox_targets(row: SandboxSession, *, retain: bool) -> list[dict[str, Any]]:
     objects = [
-        target("Deployment", ipc_name(row.sandbox_id), row.ipc_deployment_uid),
+        target(
+            "Pod" if row.ipc_pod_uid is not None else "Deployment",
+            ipc_name(row.sandbox_id),
+            row.ipc_pod_uid if row.ipc_pod_uid is not None else row.ipc_deployment_uid,
+        ),
         target("Deployment", session_name(row.sandbox_id), row.guest_deployment_uid),
         target("PersistentVolumeClaim", ipc_name(row.sandbox_id), row.ipc_pvc_uid),
     ]
@@ -423,6 +427,20 @@ class LifecycleRepository:
         timeout: float,
         targets: list[dict[str, Any]],
     ) -> CleanupWork:
+        snapshot = await self.pair_snapshot(db, row.session_id, row.sandbox_id)
+        if row.ipc_pod_uid is not None and snapshot is None:
+            raise RuntimeError("paired IPC Pod has no retained generation ownership")
+        if snapshot is not None:
+            if row.ipc_pod_uid is not None and (
+                row.ipc_pod_uid != snapshot["ipc_resources"]["pod"]["uid"]
+            ):
+                raise RuntimeError("paired IPC Pod session identity changed")
+            targets = [
+                {**obj, "kind": "Pod", "uid": snapshot["ipc_resources"]["pod"]["uid"]}
+                if obj["name"] == ipc_name(row.sandbox_id) and obj["kind"] in ("Deployment", "Pod")
+                else obj
+                for obj in targets
+            ]
         work = CleanupWork(
             work_id=uuid4(),
             session_id=row.session_id,
@@ -434,7 +452,7 @@ class LifecycleRepository:
             deadline=now + timedelta(seconds=timeout),
             targets=targets,
             acknowledged=False,
-            pair_snapshot=await self.pair_snapshot(db, row.session_id, row.sandbox_id),
+            pair_snapshot=snapshot,
         )
         db.add(work)
         return work
@@ -1167,6 +1185,8 @@ class LifecycleRepository:
         if work.session_id is not None:
             row, pvc = await self.locked(db, work.session_id, work.sandbox_id)
             assert row is not None
+            if row.ipc_pod_uid is not None:
+                return False  # Never retire untracked paired Pod ownership through legacy cleanup.
             if work.kind == "reap":
                 assert pvc is not None
                 row.pvc_id = None
@@ -1234,6 +1254,7 @@ class LifecycleRepository:
         row.claimed_by = None
         row.pvc_id = row.pvc_uid = None
         row.guest_deployment_uid = row.ipc_deployment_uid = row.ipc_pvc_uid = None
+        row.ipc_pod_uid = None  # Original exact Pod remains in the committed cleanup snapshot.
         row.ca_attempt = row.ca_sources = row.ca_clones = None
         row.last_ping_at = row.last_ping_sent_at = None
         await db.execute(delete(PingProbe).where(PingProbe.sandbox_id == sandbox_id))

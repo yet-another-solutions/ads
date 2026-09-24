@@ -37,7 +37,12 @@ async def paired_ready(db: AsyncSession, row: SandboxSession) -> bool | None:
             .limit(1)
         )
         return None if retained is None else False
-    if row.status != "creating" or row.claimed_by is None or row.guest_deployment_uid is not None:
+    if (
+        row.status != "creating"
+        or row.claimed_by is None
+        or row.guest_deployment_uid is not None
+        or row.ipc_deployment_uid is not None
+    ):
         return False
     try:
         pairs = PairIntentRepository()
@@ -59,7 +64,7 @@ async def paired_ready(db: AsyncSession, row: SandboxSession) -> bool | None:
         ipc = PairIpcRepository(pairs)
         for role, entry in intent.ipc_resources.items():
             await ipc._dependencies(db, intent, row, role, entry["payload"])
-            uid = row.ipc_pvc_uid if role == "volume" else row.ipc_deployment_uid
+            uid = row.ipc_pvc_uid if role == "volume" else row.ipc_pod_uid
             if uid != entry["uid"]:
                 return False
     except (RuntimeError, ValueError, KeyError, TypeError):

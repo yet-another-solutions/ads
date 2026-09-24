@@ -22,6 +22,7 @@ from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.pair_storage_capture import storage_targets, validate_storage_capture
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.recovery import RecoveryService
+from ads_sandbox_manager.session_objects import ipc_name
 from ads_sandbox_manager.store import SandboxSession, SessionPVC
 from test_kube_release import api  # noqa: F401
 from test_node_release_wire import clear_counts, node_report  # noqa: F401
@@ -70,13 +71,9 @@ async def teardown(journal):
     for (kind, _), obj in f.remote.objects.items():
         if kind == "Pod":
             obj["spec"]["nodeName"] = f.report["node"]
-    # Simulated application-node IPC child supplies its real volume-use shape.
-    deployment = next(obj for (kind, _), obj in f.remote.objects.items() if kind == "Deployment")
-    ipc = {
-        "metadata": {"name": "ipc-child", "uid": str(uuid4())},
-        "spec": {**deepcopy(deployment["spec"]["template"]["spec"]), "nodeName": "application"},
-    }
-    f.remote.objects[("Pod", "ipc-child")] = ipc
+    # The directly owned IPC Pod remains on the configured application node.
+    ipc = f.remote.objects[("Pod", ipc_name(f.work.sandbox_id))]
+    ipc["spec"]["nodeName"] = "application"
     f.adapter.kube.core.list_namespaced_pod.side_effect = lambda *a, **kw: {
         "items": [deepcopy(obj) for (kind, _), obj in f.remote.objects.items() if kind == "Pod"],
         "metadata": {},
@@ -192,6 +189,10 @@ async def test_real_ordered_teardown_preserves_storage_and_waits_for_positive_ru
     assert saved["runtime_release"] is None
     assert await retained(f) == f.work.pair_snapshot
     assert all(f.remote.objects[key] == value for key, value in before.items() if key[0] != "Pod")
+    assert (
+        f.remote.objects[("Pod", ipc_name(f.work.sandbox_id))]
+        == before[("Pod", ipc_name(f.work.sandbox_id))]
+    )
     # A new service instance resumes the exact committed capture without Pods.
     f.runtime = PairRuntimeTeardown(
         f.runtime.settings,
@@ -542,7 +543,7 @@ async def test_real_recovery_entrypoint_stops_before_other_resource_retirement(t
     async with f.h.sessions.begin() as db:
         assert (await db.get(SandboxSession, f.row.session_id)).status == "recovering"
         assert await db.get(CleanupWork, f.work.work_id) is not None
-    assert any(kind == "Deployment" for kind, _ in f.remote.objects)
+    assert ("Pod", ipc_name(f.work.sandbox_id)) in f.remote.objects
 
 
 async def test_real_idle_entrypoint_preserves_retention_after_private_runtime_release(teardown):
