@@ -134,8 +134,26 @@ async def test_create_race_keeps_cleanup_intent_and_never_starts_compute(session
     targets = sandbox_targets(row, retain=False)
     for role in CA_CONSUMERS:
         assert any(t["name"] == ca_consumer_name(row.sandbox_id, role) for t in targets)
-    assert all(not t["name"].startswith(CA_NAME) for t in targets)
+    # A sandbox UUID may begin with "ca"; that is not the shared CA namespace.
+    assert all(t["name"] != CA_NAME and not t["name"].startswith(f"{CA_NAME}-") for t in targets)
     assert not any(k[0] == "Deployment" for k in h.kube.objects)
+
+
+async def test_cleanup_ca_source_exclusion_with_ca_prefixed_sandbox_uuid():
+    sandbox_id = UUID("ca000000-0000-4000-8000-000000000001")
+    row = SandboxSession(
+        session_id=uuid4(),
+        sandbox_id=sandbox_id,
+        pvc_id=sandbox_id,
+        ca_attempt=uuid4(),
+        ca_clones={},
+    )
+    targets = sandbox_targets(row, retain=False)
+    names = {item["name"] for item in targets}
+    assert session_name(sandbox_id) in names
+    assert all(ca_consumer_name(sandbox_id, role) in names for role in CA_CONSUMERS)
+    assert names.isdisjoint({CA_NAME, f"{CA_NAME}-public", f"{CA_NAME}-private"})
+    assert all(name != CA_NAME and not name.startswith(f"{CA_NAME}-") for name in names)
 
 
 @pytest.mark.parametrize("field", ["source", "owner", "reference", "deleting", "role", "lost"])

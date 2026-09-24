@@ -267,3 +267,4 @@ class TransitService:
         self._requests.clear()
         self._workers.clear()
         self._pending.clear()
+        await self.provisioner.drain()

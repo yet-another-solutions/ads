@@ -24,6 +24,29 @@ BLOCK = "/apis/storage.k8s.io/v1/storageclasses/sandbox-block"
 FILESYSTEM = "/apis/storage.k8s.io/v1/storageclasses/local-path"
 
 
+def paired_runtime_fixture():
+    """Non-deployable fixture values; production has no guessed runtime defaults."""
+    return {
+        "guest": {"runtime_class": "kata-private", "transport_mtu": 1450},
+        "relay": {
+            "image": "registry.test/relay@sha256:" + "a" * 64,
+            "tls_secret": "relay-tls",
+            "transport_mtu": 1450,
+        },
+        "egress": {
+            "image": "registry.test/egress@sha256:" + "b" * 64,
+            "runtime_class": "kata-egress",
+            "tls_secret": "egress-tls",
+            "transport_mtu": 1450,
+            "cpu_millis": 1000,
+            "memory_mib": 512,
+            "resolver_ipv4": "10.96.0.10",
+            "ipc_service_subject": "22222222-2222-4222-8222-222222222222",
+        },
+        "state_bytes": 1024**3,
+    }
+
+
 def resource(kind, name, **fields):
     return {"apiVersion": "v1", "kind": kind, "metadata": {"name": name}, **fields}
 
@@ -96,6 +119,33 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
+        from ads_sandbox_manager.config import load_settings
+
+        for value in ({}, None, {"unexpected": "rejected"}):
+            with self.subTest(value=value):
+                docs = self.documents(
+                    "--set",
+                    "keycloak.serviceSubjects.ads=11111111-1111-4111-8111-111111111111",
+                    "--set",
+                    "sandbox.ca.signingSecret=fixture-signer",
+                    "--set-json",
+                    "sandbox.manager.pairInputs=" + json.dumps(value),
+                )
+                key = "ADS_SANDBOX_MANAGER_PAIR_INPUTS"
+                config = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+                for (kind, name), doc in docs.items():
+                    if kind == "ConfigMap" and name != "ads-sandbox-manager":
+                        self.assertNotIn(key, doc["data"])
+                env = config | docs["Secret", "ads-sandbox-manager"]["stringData"]
+                with (
+                    patch.dict(os.environ, env, clear=True),
+                    patch("ads_sandbox_manager.config.load_tls_context") as tls,
+                    self.assertRaises(ValueError),
+                ):
+                    load_settings()
+                tls.assert_not_called()
+
     def test_egress_identity_bindings_and_application_sasl(self):
         ads_subject = "11111111-1111-4111-8111-111111111111"
         manager_subject = "22222222-2222-4222-8222-222222222222"
@@ -677,6 +727,8 @@ class ChartTests(unittest.TestCase):
             "keycloak.serviceSubjects.ads=11111111-1111-4111-8111-111111111111",
             "--set",
             "sandbox.ca.signingSecret=dedicated-egress-signer",
+            "--set-json",
+            "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
         )
 
         def environment(component):
@@ -689,6 +741,7 @@ class ChartTests(unittest.TestCase):
         ):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
+        self.assertEqual(settings.pair_inputs, paired_runtime_fixture())
         self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
         self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")
         self.assertEqual(settings.ca.source_size, "256Mi")
@@ -701,6 +754,12 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(settings.ping_timeout_seconds, 40)
         self.assertEqual(settings.golden_bytes, 23 * 1024**3)
         self.assertEqual(settings.session_objects.create_seconds, 144)
+        from ads_sandbox_manager.pair_runtime import pair_runtime
+
+        paired = pair_runtime(settings)
+        self.assertEqual(paired.guest.runtime_class, "kata-private")
+        self.assertEqual(paired.egress.keycloak_issuer, settings.keycloak_issuer)
+        self.assertEqual(paired.state_bytes, 1024**3)
         job = golden_job(settings)["spec"]["template"]["spec"]
         self.assertEqual(job["runtimeClassName"], "kata-qemu")
         self.assertEqual(job["imagePullSecrets"], [{"name": "guest-registry"}])

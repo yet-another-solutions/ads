@@ -120,6 +120,8 @@ class LifecycleRepository:
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
         validate_volume_resources(intent.volume_resources)
+        if intent.topics_dispatch not in ("unissued", "inflight", "settled"):
+            raise RuntimeError("corrupt paired topic dispatch")
         validate_relay_inputs(intent.binding(), intent.relay_inputs)
         persistent = None
         if intent.egress_state_id is not None:
@@ -149,6 +151,7 @@ class LifecycleRepository:
             "egress_state": persistent,
             "ipc_resources": deepcopy(intent.ipc_resources),
             "volume_resources": deepcopy(intent.volume_resources),
+            "topics_dispatch": intent.topics_dispatch,
         }
 
     async def work(
@@ -304,12 +307,15 @@ class LifecycleRepository:
             "egress_state",
             "ipc_resources",
             "volume_resources",
+            "topics_dispatch",
         }
         if not isinstance(snapshot, dict) or set(snapshot) != fields:
             raise RuntimeError("incomplete pair cleanup snapshot")
         validate_relay_custody(snapshot["relay_custody"])
         validate_ipc_resources(snapshot["ipc_resources"])
         validate_volume_resources(snapshot["volume_resources"])
+        if snapshot["topics_dispatch"] not in ("unissued", "inflight", "settled"):
+            raise RuntimeError("corrupt paired topic cleanup evidence")
         state_id = snapshot["egress_state_id"]
         if state_id is not None and (
             not isinstance(state_id, str) or str(UUID(state_id)) != state_id
@@ -565,6 +571,11 @@ class LifecycleRepository:
         validate_compute_payloads(intent.compute_payloads)
         validate_ipc_resources(intent.ipc_resources)
         validate_volume_resources(intent.volume_resources)
+        if intent.topics_dispatch != work.pair_snapshot["topics_dispatch"] and (
+            work.pair_snapshot["topics_dispatch"],
+            intent.topics_dispatch,
+        ) != ("inflight", "settled"):
+            raise PairClaimLost("paired topic cleanup ownership changed")
         for role, entry in intent.volume_resources.items():
             captured = work.pair_snapshot["volume_resources"][role]
             if (

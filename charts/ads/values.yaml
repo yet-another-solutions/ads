@@ -285,6 +285,10 @@ sandbox:
     inputBytes: 262144
   manager:
     replicaCount: 1
+    # Required for manager startup; no guessed runtime classes, image digests or
+    # inline credentials. Exact guest/relay/egress/state_bytes shape is documented
+    # in docs/egress-pair-creation.md. Empty fails closed, like the CA signer input.
+    pairInputs: {}
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-manager
       tag: ""

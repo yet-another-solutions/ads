@@ -154,6 +154,7 @@ class PairIntent(Base):
     egress_state_id: Mapped[UUID | None]
     ipc_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_ipc_resources)
     volume_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_volume_resources)
+    topics_dispatch: Mapped[str] = mapped_column(default="unissued")
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -197,6 +198,8 @@ class PairIntentRepository:
 
     @staticmethod
     def _validate(intent: PairIntent) -> None:
+        if intent.topics_dispatch not in ("unissued", "inflight", "settled"):
+            raise RuntimeError("corrupt paired topic dispatch")
         if intent.egress_state_id is not None and not isinstance(intent.egress_state_id, UUID):
             raise RuntimeError("corrupt persistent egress state anchor")
         validate_control_dispatch(intent)

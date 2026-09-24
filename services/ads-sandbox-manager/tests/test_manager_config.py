@@ -118,6 +118,7 @@ def configure(monkeypatch, settings):
         "ADS_BASE_URL": "https://ads.test",
         "ADS_SERVICE_SUBJECT": "11111111-1111-4111-8111-111111111111",
         "CA": '{"image":"fixture/ca:1","signing_secret":"signer","additional_configmap":"extra"}',
+        "PAIR_INPUTS": json.dumps(pair_inputs()),
         "SESSION_OBJECTS": json.dumps(
             {
                 "guest_image": "registry.test/guest:1",
@@ -133,6 +134,28 @@ def configure(monkeypatch, settings):
     }.items():
         monkeypatch.setenv("ADS_SANDBOX_MANAGER_" + name, value)
     monkeypatch.setenv("ADS_SESSION_SIZE", settings.session_size)
+
+
+def pair_inputs():
+    return {
+        "guest": {"runtime_class": "kata-private", "transport_mtu": 1450},
+        "relay": {
+            "image": "registry.test/relay@sha256:" + "a" * 64,
+            "tls_secret": "relay-tls",
+            "transport_mtu": 1450,
+        },
+        "egress": {
+            "image": "registry.test/egress@sha256:" + "b" * 64,
+            "runtime_class": "kata-egress",
+            "tls_secret": "egress-tls",
+            "transport_mtu": 1450,
+            "cpu_millis": 1000,
+            "memory_mib": 512,
+            "resolver_ipv4": "10.96.0.10",
+            "ipc_service_subject": "22222222-2222-4222-8222-222222222222",
+        },
+        "state_bytes": 1024**3,
+    }
 
 
 def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
