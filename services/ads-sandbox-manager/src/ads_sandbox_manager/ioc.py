@@ -31,6 +31,7 @@ from ads_sandbox_manager.lifecycle_store import LifecycleRepository
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
+from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
 from ads_sandbox_manager.service import Maintenance, Publisher, TransitService
@@ -107,6 +108,21 @@ class AppProvider(Provider):
     pair_capture = provide(PairCleanupCapture, scope=Scope.APP)
     lifecycle = provide(LifecycleService, scope=Scope.APP)
     recovery = provide(RecoveryService, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def pair_runtime(
+        self,
+        settings: Settings,
+        sessions: async_sessionmaker[AsyncSession],
+        repository: LifecycleRepository,
+        kube: KubeClient,
+        storage: CleanupKubernetes,
+    ) -> PairRuntimeTeardown | None:
+        # Node-owner delivery is not installed by this component. The service
+        # returns blocked without it, never a production success-returning fake.
+        return PairRuntimeTeardown(
+            settings, sessions, repository, PairControlAdapter(kube), storage
+        )
 
     @provide(scope=Scope.APP)
     def pair_creation(
