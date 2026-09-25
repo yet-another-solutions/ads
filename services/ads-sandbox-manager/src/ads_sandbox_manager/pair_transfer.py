@@ -35,6 +35,7 @@ class PairTransfer(Base):
     retirement_sha256: Mapped[str]
     state: Mapped[dict[str, Any]] = mapped_column(JSONB)
     workspace: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class PairTransferRepository:
@@ -46,6 +47,8 @@ class PairTransferRepository:
         self, db: AsyncSession, row: SandboxSession
     ) -> tuple[PairRetirement, EgressState, SessionPVC]:
         """Called under the session lock before claim or generation allocation."""
+        from ads_sandbox_manager.pair_disposal import PairDisposal
+
         prior = await db.scalar(
             select(PairIntent)
             .where(PairIntent.sandbox_id == row.sandbox_id)
@@ -65,6 +68,7 @@ class PairTransferRepository:
                 select(PairTransfer.generation).where(PairTransfer.predecessor == prior.generation)
             )
             is not None
+            or await db.get(PairDisposal, prior.generation) is not None
         ):
             raise PairClaimLost("retained generation is not available for exclusive transfer")
         old = saved.journal["snapshot"]["volume_resources"]["workspace"]
@@ -204,9 +208,24 @@ class PairTransferRepository:
         original["payload"]["pvc_changed"] = receipt.workspace["payload"]["pvc_changed"]
         if original != receipt.workspace:
             raise PairClaimLost("retained workspace provenance changed")
+        if (receipt.validated_at is not None and receipt.validated_at <= receipt.claim_changed) or (
+            receipt.validated_at is None
+            and any(value != "unissued" for value in pair.compute_dispatch.values())
+        ):
+            raise PairClaimLost("retained attachment lacks prior external validation")
         state = await db.get(
             EgressState, pair.egress_state_id, with_for_update=True, populate_existing=True
         )
         if state is None or state_snapshot(state) != receipt.state:
             raise PairClaimLost("retained state provenance changed")
+        if pair.cleanup_journal is not None:
+            from ads_sandbox_manager.pair_inherited_storage import inherited_capture
+
+            for role, entry in pair.cleanup_journal["unused_storage"].items():
+                if entry["capture"]["mode"] == "retired-inherited-csi" and entry["capture"] != (
+                    inherited_capture(
+                        previous, role, retain=pair.cleanup_journal["retain_workspace"]
+                    )
+                ):
+                    raise PairClaimLost("inherited storage differs from its retired predecessor")
         return receipt

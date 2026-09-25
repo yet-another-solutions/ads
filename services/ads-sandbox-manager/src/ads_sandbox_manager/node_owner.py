@@ -18,7 +18,12 @@ import msgspec
 
 from ads_commons.sandbox.block_release import BlockReleaseReport, decode_block_release
 from ads_commons.sandbox.ipc_release import IpcReleaseReport, decode_ipc_release
-from ads_commons.sandbox.ipc_storage import IpcStorageReport, decode_ipc_storage
+from ads_commons.sandbox.ipc_storage import (
+    IpcStorageReport,
+    UnusedIpcStorageReport,
+    decode_ipc_storage,
+    decode_unused_ipc_storage,
+)
 from ads_commons.sandbox.node_release import NodeReleaseReport, _unique, decode_node_release
 from ads_commons.sandbox.partial_release import PartialReleaseReport, decode_partial_release
 from ads_sandbox_manager.pair_objects import PairBinding
@@ -142,6 +147,7 @@ class HttpsNodeOwner:
         pod_uids: dict[str, str] | None = None,
         volumes: dict[str, dict[str, str]] | None = None,
         runtime_sha256: str | None = None,
+        pv_uid: str | None = None,
     ) -> bytes:
         endpoint = self.settings.endpoints.get(node)
         if endpoint is None:
@@ -161,6 +167,7 @@ class HttpsNodeOwner:
                 "volume_uid": volume_uid,
                 "inventory_sha256": inventory_sha256,
                 "boot_id": boot_id,
+                **({"pv_uid": pv_uid} if operation.startswith("ipc-unused-") else {}),
                 **({"pod_uids": pod_uids} if operation.startswith("partial-") else {}),
                 **(
                     {"volumes": volumes, "runtime_sha256": runtime_sha256}
@@ -204,9 +211,12 @@ class HttpsNodeOwner:
             | PartialReleaseReport
             | IpcStorageReport
             | BlockReleaseReport
+            | UnusedIpcStorageReport
         )
         if operation.startswith("block-"):
             decoded = decode_block_release(report)
+        elif operation.startswith("ipc-unused-"):
+            decoded = decode_unused_ipc_storage(report)
         elif operation.startswith("ipc-storage-"):
             decoded = decode_ipc_storage(report)
         elif operation.startswith("ipc-"):
@@ -225,7 +235,7 @@ class HttpsNodeOwner:
             or (
                 (
                     not decoded.observed
-                    if isinstance(decoded, IpcStorageReport)
+                    if isinstance(decoded, (IpcStorageReport, UnusedIpcStorageReport))
                     else decoded.leftovers is None
                 )
                 != operation.endswith("capture")
@@ -253,6 +263,9 @@ class HttpsNodeOwner:
                 != volumes
             ):
                 raise ValueError("node-owner original Block identity mismatch")
+        elif isinstance(decoded, UnusedIpcStorageReport):
+            if str(decoded.volume_uid) != volume_uid or str(decoded.pv_uid) != pv_uid:
+                raise ValueError("node-owner unused IPC backing identity mismatch")
         elif str(decoded.pod_uid) != pod_uid or str(decoded.volume_uid) != volume_uid:
             raise ValueError("node-owner IPC identity mismatch")
         return report
@@ -337,6 +350,30 @@ class HttpsNodeOwner:
         if proof.boot_id != captured.boot_id or proof.runtime_sha256 != captured.inventory_sha256:
             raise ValueError("storage capture differs from original IPC runtime")
         return raw
+
+    async def capture_unused_ipc_storage(
+        self, pair: PairBinding, *, node: str, volume_uid: str, pv_uid: str
+    ) -> bytes:
+        return await self._call(
+            "ipc-unused-capture",
+            node=node,
+            generation=str(pair.generation),
+            sandbox_id=str(pair.sandbox_id),
+            volume_uid=volume_uid,
+            pv_uid=pv_uid,
+        )
+
+    async def observe_unused_ipc_storage(self, captured: UnusedIpcStorageReport) -> bytes:
+        return await self._call(
+            "ipc-unused-observe",
+            node=captured.node,
+            generation=str(captured.generation),
+            sandbox_id=str(captured.sandbox_id),
+            volume_uid=str(captured.volume_uid),
+            pv_uid=str(captured.pv_uid),
+            boot_id=str(captured.boot_id),
+            inventory_sha256=captured.inventory_sha256,
+        )
 
     async def observe_ipc_storage(self, captured: IpcStorageReport) -> bytes:
         raw = await self._call(

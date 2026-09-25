@@ -206,6 +206,39 @@ class CleanupAdapter:
             "storage_class": None,
             "pvc_created": None,
         }
+        if evidence.get("filesystem_backing"):
+            pv = await self.kube._call(self.kube.core.read_persistent_volume, evidence["pv_name"])
+            terms = (
+                pv.get("spec", {})
+                .get("nodeAffinity", {})
+                .get("required", {})
+                .get("nodeSelectorTerms")
+            )
+            if (
+                pv["metadata"]["uid"] != evidence["pv_uid"]
+                or not isinstance(terms, list)
+                or len(terms) != 1
+                or set(terms[0]) != {"matchExpressions"}
+                or len(terms[0]["matchExpressions"]) != 1
+            ):
+                raise RuntimeError("exact unused filesystem backing node required")
+            expression = terms[0]["matchExpressions"][0]
+            if (
+                set(expression) != {"key", "operator", "values"}
+                or expression["key"] != "kubernetes.io/hostname"
+                or expression["operator"] != "In"
+                or not isinstance(expression["values"], list)
+                or len(expression["values"]) != 1
+                or not isinstance(expression["values"][0], str)
+                or not expression["values"][0]
+            ):
+                raise RuntimeError("exact unused filesystem backing node required")
+            return {
+                **result,
+                "mode": "never-mounted-filesystem",
+                "node": expression["values"][0],
+                "backing": None,
+            }
         if not evidence.get("never_bound"):
             return result  # Repository checks the positive consumer and CSI contract.
         obj = await self.observe(target)
@@ -274,6 +307,10 @@ class CleanupAdapter:
                     for key in ("pv_name", "pv_uid", "volume_key", "delete_policy", "reclaim_guard")
                 ):
                     raise RuntimeError("unused original CSI backing changed")
+                if captured["mode"] == "never-mounted-filesystem" and (
+                    current.get("filesystem_backing") != target["filesystem_backing"]
+                ):
+                    raise RuntimeError("unused original filesystem backing changed")
                 if target["retain"]:
                     if obj["metadata"].get("deletionTimestamp"):
                         raise RuntimeError("retained unused claim is terminating")
@@ -285,7 +322,10 @@ class CleanupAdapter:
             return False
         if captured["mode"] == "never-provisioned":
             return True  # Original positive ledger/contract, not API absence alone.
-        if not (target["delete_policy"] and target["reclaim_guard"]):
+        if not (
+            target["delete_policy"]
+            and (target["reclaim_guard"] or captured["mode"] == "never-mounted-filesystem")
+        ):
             return False
         try:
             await self.kube._call(self.kube.core.read_persistent_volume, target["pv_name"])

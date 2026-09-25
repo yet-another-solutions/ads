@@ -96,6 +96,29 @@ class PairVolumeAdapter:
         await self._sources(role, payload)
         return result
 
+    async def observe_retained(self, intent: PairIntent) -> str:
+        """Original clone, not a new source lookup or a create/adopt operation."""
+        self.configuration(intent)
+        if intent.retained_from is None:
+            raise RuntimeError("explicit retained workspace transfer required")
+        entry = intent.volume_resources["workspace"]
+        if entry["dispatch"] != "settled" or not entry["uid"]:
+            raise RuntimeError("retained workspace publication proof missing")
+        desired = volume_manifest(
+            self.kube.settings, intent.binding(), "workspace", entry["payload"]
+        )
+        observed = await self.kube.named_pvc(desired["metadata"]["name"])
+        if observed is None:
+            raise RuntimeError("retained workspace disappeared")
+        uid = PairControlAdapter._identity(observed, desired, entry["uid"])
+        if (
+            observed["metadata"].get("deletionTimestamp")
+            or observed.get("status", {}).get("phase") != "Bound"
+            or not self.matches(observed, desired)
+        ):
+            raise RuntimeError("retained workspace is not the original usable clone")
+        return uid
+
     async def create(self, intent: PairIntent, role: str) -> str:
         self.configuration(intent)
         entry = intent.volume_resources[role]

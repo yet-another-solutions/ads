@@ -52,18 +52,21 @@ untrusted files. Fixed server-side helper paths, dedicated TLS authority,
 fresh request correlation and original boot/inventory binding preserve the
 protected node command's inventory and admission-fence ordering.
 
-Full-pair bound storage and the existing complete node inventory are required.
-Earlier partial starts, missing node inventories and unavailable bound-volume
-evidence remain fail-closed, not silently synthesized or claimed supported.
+Full-pair teardown uses the existing complete node inventory. Separate partial
+runtime and unused-storage paths support positively recorded publication
+prefixes, never-dispatched consumers and original never-scheduled Pods.
+Missing or contradictory history and unavailable original-volume evidence
+remain fail-closed, not silently synthesized.
 The manager IPC stage, strict proof contract, native node inventory/observation
 and trusted production delivery are implemented. Repository lifecycle tests
 fake external node delivery; separate real TLS tests exercise the delivery
 with only privileged helpers faked, and kernel CI exercises the observers.
 Neither a digest nor an arbitrary report is authority.
-Positive storage release/reclamation, exact key/control cleanup,
-generation retirement, retained-state transfer and reset coordination remain
-later lifecycle stages. This component keeps the final paired-completion guard
-and all policies, credentials, PVCs and generation evidence.
+Positive storage release/reclamation, exact key/control cleanup and generation
+retirement are subsequent implemented lifecycle stages. This runtime component
+alone does not authorize them: it retains policies, credentials, PVCs and
+generation evidence until their own ordered proof gates pass. Retained-state
+transfer and reset coordination have separate admission/fencing contracts.
 
 The proof here is real PostgreSQL and real Kubernetes-adapter logic with fake
 external Kubernetes/CSI and node-owner responses. It is not live integration

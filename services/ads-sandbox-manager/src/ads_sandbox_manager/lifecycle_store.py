@@ -13,7 +13,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_commons.sandbox.block_release import decode_block_release
 from ads_commons.sandbox.ipc_release import decode_ipc_release
-from ads_commons.sandbox.ipc_storage import decode_ipc_storage
+from ads_commons.sandbox.ipc_storage import decode_ipc_storage, decode_unused_ipc_storage
 from ads_commons.sandbox.node_release import decode_node_release
 from ads_commons.sandbox.partial_release import decode_partial_release
 from ads_sandbox_manager.egress_state_store import (
@@ -998,6 +998,7 @@ class LifecycleRepository:
         now: datetime,
         *,
         captured: dict[str, Any] | None = None,
+        proof: bytes | None = None,
         recovery: SandboxSession | None = None,
         recovery_seconds: float = 0,
     ) -> bool:
@@ -1013,7 +1014,33 @@ class LifecycleRepository:
         if captured is not None:
             if role in entries and entries[role]["capture"] != captured:
                 raise PairClaimLost("original unused storage capture cannot be replaced")
-            entries.setdefault(role, {"capture": deepcopy(captured), "disposition": None})
+            entries.setdefault(
+                role,
+                {
+                    "capture": deepcopy(captured),
+                    "disposition": None,
+                    **(
+                        {"release": None, "reclaimed": None}
+                        if captured["mode"] == "never-mounted-filesystem"
+                        else {"release": None}
+                        if captured["mode"] == "retired-inherited-csi"
+                        else {}
+                    ),
+                },
+            )
+        elif proof is not None:
+            if entries[role]["capture"]["mode"] == "retired-inherited-csi":
+                block = decode_block_release(proof)
+                if not block.released:
+                    return False
+                entries[role]["release"] = msgspec.to_builtins(block)
+            else:
+                report = decode_unused_ipc_storage(proof)
+                if not report.observed or not report.released:
+                    return False
+                entries[role]["release"] = msgspec.to_builtins(report)
+                if report.reclaimed:
+                    entries[role]["reclaimed"] = msgspec.to_builtins(report)
         else:
             target = entries[role]["capture"]["target"]
             entries[role]["disposition"] = "retained" if target["retain"] else "reclaimed"
@@ -1113,9 +1140,18 @@ class LifecycleRepository:
             or pvc.last_state_change > now - timedelta(seconds=detached)
         ):
             return None
+        from ads_sandbox_manager.pair_disposal import PairDisposalRepository
+        from ads_sandbox_manager.pair_transfer import PairTransferRepository
+
+        history = await db.scalar(
+            select(PairIntent.generation).where(PairIntent.sandbox_id == sandbox_id).limit(1)
+        )
+        saved = None
+        if history is not None:
+            saved, _, _ = await PairTransferRepository(self).available(db, row)
         pvc.state = "destroying"
         pvc.last_state_change = advance(pvc.last_state_change, now)
-        return await self.work(
+        work = await self.work(
             db,
             row,
             pvc,
@@ -1129,6 +1165,10 @@ class LifecycleRepository:
                 }
             ],
         )
+        if saved is not None:
+            await db.flush()
+            await PairDisposalRepository(self).begin(db, work, saved, now)
+        return work
 
     async def service(
         self,
@@ -1141,6 +1181,18 @@ class LifecycleRepository:
     ) -> CleanupWork | None:
         row, pvc = await self.locked(db, session_id, sandbox_id)
         if row is None or row.status != "stopped" or (pvc is not None and pvc.state != "detached"):
+            return None
+        history = await db.scalar(
+            select(PairIntent)
+            .where(PairIntent.sandbox_id == sandbox_id)
+            .order_by(PairIntent.claim_changed.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        if history is not None and history.retired_at is not None:
+            # Retirement settled every original writer and resource obligation.
+            # Labels or late inventory cannot reopen that generation as legacy
+            # maintenance. Retained expiry has its separate exclusive receipt.
             return None
         row.status = "service"
         row.status_changed_at = advance(row.status_changed_at, now)
@@ -1832,6 +1884,22 @@ class LifecycleRepository:
         """Fence recovery from idle retention, including delayed published verdicts."""
         row, pvc = await self.locked(db, session_id, sandbox_id)
         if row is None:
+            return False
+        from ads_sandbox_manager.pair_disposal import PairDisposal
+
+        if (
+            await db.scalar(
+                select(PairDisposal.generation)
+                .where(
+                    PairDisposal.session_id == session_id,
+                    PairDisposal.completed_at.is_(None),
+                )
+                .limit(1)
+            )
+            is not None
+        ):
+            # A retryable expiry is already an irreversible whole-lifetime
+            # claim. A timeout cannot convert or supersede its original proof.
             return False
         if row.status == "shutting_down" or (
             row.status == "stopped" and (pvc is None or pvc.state != "destroying")

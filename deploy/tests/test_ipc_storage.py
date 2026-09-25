@@ -12,7 +12,7 @@ import msgspec
 import pytest
 from test_ipc_node_release import captured, ipc, observer, wanted  # noqa: F401
 
-from ads_commons.sandbox.ipc_storage import decode_ipc_storage
+from ads_commons.sandbox.ipc_storage import decode_ipc_storage, decode_unused_ipc_storage
 
 
 @pytest.fixture
@@ -75,6 +75,90 @@ def backing(ipc, captured, observer, tmp_path, monkeypatch):  # noqa: F811
 
 def snapshot(f):
     return f.module.capture(f.observer, f.runtime, f.ipc)
+
+
+def unused_snapshot(f):
+    scope = {
+        key: f.runtime[key]
+        for key in ("node", "namespace", "generation", "sandbox_id", "volume_uid")
+    }
+    scope["pv_uid"] = f.pv["metadata"]["uid"]
+    f.pv["spec"]["nodeAffinity"] = {
+        "required": {
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "kubernetes.io/hostname",
+                            "operator": "In",
+                            "values": [scope["node"]],
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    return scope, f.module.unused_capture(f.observer, scope, f.ipc, f.release)
+
+
+def test_unused_capture_is_real_backing_not_a_fabricated_runtime(backing, monkeypatch):
+    f = backing
+    scope, saved = unused_snapshot(f)
+    assert f.module.unused_validate(saved, scope, f.ipc) == saved
+    assert "runtime" not in saved and "pod_uid" not in saved
+    report = decode_unused_ipc_storage(msgspec.json.encode(f.module.unused_report(saved)))
+    assert not report.observed and str(report.pv_uid) == scope["pv_uid"]
+    monkeypatch.setattr(f.ipc, "filesystem_references", lambda *a: (0, 0))
+    observed = f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+    assert observed["released"] and not observed["reclaimed"]
+    f.folder.rmdir()
+    assert f.module.unused_observe(f.observer, saved, f.ipc, f.release)["reclaimed"]
+    assert observed["inventory_sha256"] == report.inventory_sha256
+
+
+@pytest.mark.parametrize("fault", ["busy", "boot", "rename", "replacement", "parent"])
+def test_unused_backing_never_turns_path_absence_or_lost_boot_into_reclamation(
+    backing, monkeypatch, fault
+):
+    f = backing
+    _, saved = unused_snapshot(f)
+    monkeypatch.setattr(f.ipc, "filesystem_references", lambda *a: (0, int(fault == "busy")))
+    if fault == "busy":
+        f.folder.rmdir()
+        report = f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+        assert report["observed"] and not report["released"] and not report["reclaimed"]
+        return
+    if fault == "boot":
+        monkeypatch.setattr(f.release, "boot_id", lambda: str(uuid4()))
+    elif fault in ("rename", "replacement"):
+        f.folder.rename(f.folder.with_name("original-moved"))
+        if fault == "replacement":
+            f.folder.mkdir()
+    else:
+        saved["parent"][1] += 1
+    with pytest.raises((ValueError, FileNotFoundError)):
+        f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+
+
+@pytest.mark.parametrize("fault", ["pv", "node", "scope", "filesystem"])
+def test_unused_scope_and_backing_binding_are_exact(backing, fault):
+    f = backing
+    scope, saved = unused_snapshot(f)
+    if fault == "scope":
+        saved["volume_uid"] = str(uuid4())
+    elif fault == "filesystem":
+        saved["filesystem"]["root_identity"] = [saved["identity"][0], saved["identity"][1] + 1]
+    elif fault == "pv":
+        scope["pv_uid"] = str(uuid4())
+    else:
+        f.pv["spec"]["nodeAffinity"]["required"]["nodeSelectorTerms"][0]["matchExpressions"][0][
+            "values"
+        ] = ["different-node"]
+        with pytest.raises(ValueError):
+            f.module.unused_capture(f.observer, scope, f.ipc, f.release)
+        return
+    with pytest.raises(ValueError):
+        f.module.unused_validate(saved, scope, f.ipc)
 
 
 def test_backing_capture_and_actual_path_reclamation_are_distinct(backing, monkeypatch):

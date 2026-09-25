@@ -34,7 +34,11 @@ def runtime_from_payload(value: Any) -> EgressRuntime:
 
 
 def egress_payload(
-    row: SandboxSession, state: EgressState, runtime: EgressRuntime
+    row: SandboxSession,
+    state: EgressState,
+    runtime: EgressRuntime,
+    *,
+    retained_from: UUID | None = None,
 ) -> dict[str, Any]:
     if (
         not isinstance(row.ca_attempt, UUID)
@@ -50,6 +54,7 @@ def egress_payload(
     encoded = asdict(runtime)
     encoded["ipc_service_subject"] = str(runtime.ipc_service_subject)
     return {
+        "retained_from": str(retained_from) if retained_from else None,
         "ca_attempt": str(row.ca_attempt),
         "ca_clones": {role: row.ca_clones[role] for role in ("egress", "key")},
         "ca_sources": dict(row.ca_sources),
@@ -61,6 +66,7 @@ def egress_payload(
 
 def validate_egress_payload(payload: dict[str, Any]) -> None:
     if set(payload) != {
+        "retained_from",
         "ca_attempt",
         "ca_clones",
         "ca_sources",
@@ -87,6 +93,11 @@ def validate_egress_payload(payload: dict[str, Any]) -> None:
         ):
             raise ValueError("invalid egress CA identities")
     state = state_from_snapshot(payload["state"])
+    predecessor = payload["retained_from"]
+    if predecessor is not None and (
+        not isinstance(predecessor, str) or str(UUID(predecessor)) != predecessor
+    ):
+        raise ValueError("invalid retained egress provenance")
     if (
         state.key_dispatch != "settled"
         or state.volume_dispatch != "settled"
@@ -106,6 +117,7 @@ def egress_manifest(
         UUID(payload["ca_attempt"]),
         state_from_snapshot(payload["state"]),
         runtime_from_payload(payload["runtime"]),
+        retained_from=UUID(payload["retained_from"]) if payload["retained_from"] else None,
     )
 
 
@@ -121,6 +133,11 @@ async def require_egress_dependencies(
     if state is None:
         raise PairClaimLost("persistent egress compute reservation missing")
     require_cleanup_state(state, intent)
-    expected = egress_payload(current, state, runtime_from_payload(payload["runtime"]))
+    expected = egress_payload(
+        current,
+        state,
+        runtime_from_payload(payload["runtime"]),
+        retained_from=intent.retained_from,
+    )
     if any(payload[key] != value for key, value in expected.items()):
         raise PairClaimLost("egress compute dependency identity changed")

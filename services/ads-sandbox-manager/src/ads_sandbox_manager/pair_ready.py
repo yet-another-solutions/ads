@@ -16,6 +16,7 @@ async def paired_ready(db: AsyncSession, row: SandboxSession) -> bool | None:
     """None identifies a truly unpaired fixture/legacy row; incomplete is False."""
     intent = await db.scalar(
         select(PairIntent)
+        .where(PairIntent.retired_at.is_(None))
         .where(
             or_(
                 PairIntent.session_id == row.session_id,
@@ -36,7 +37,16 @@ async def paired_ready(db: AsyncSession, row: SandboxSession) -> bool | None:
             )
             .limit(1)
         )
-        return None if retained is None else False
+        history = await db.scalar(
+            select(PairIntent.generation)
+            .where(
+                or_(
+                    PairIntent.session_id == row.session_id, PairIntent.sandbox_id == row.sandbox_id
+                )
+            )
+            .limit(1)
+        )
+        return None if retained is None and history is None else False
     if (
         row.status != "creating"
         or row.claimed_by is None

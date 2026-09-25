@@ -20,9 +20,14 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import COMPONENT, Object
 from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
+from ads_sandbox_manager.pair_disposal import PairDisposal, PairRetainedDisposal
 from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
+from ads_sandbox_manager.pair_objects import GENERATION, PROJECT
+from ads_sandbox_manager.pair_registry import PairRegistry
 from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
+from ads_sandbox_manager.pair_retirement import PairRetirementRepository
 from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
+from ads_sandbox_manager.pair_store import PairIntent
 from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
@@ -252,6 +257,17 @@ class LifecycleService:
             await self.emit(RECOVER, Signal(row.session_id, row.sandbox_id))
 
     async def _ownership(self, db: AsyncSession, message: Signal) -> str:
+        if (
+            await db.scalar(
+                select(PairIntent.generation)
+                .where(PairIntent.sandbox_id == message.sandbox_id)
+                .limit(1)
+            )
+            is not None
+        ):
+            # The durable paired registry exclusively owns paired inventory.
+            # Never reinterpret its state PVC or a lost session as legacy debris.
+            return "owned"
         row = await db.get(SandboxSession, message.session_id, with_for_update=True)
         recovery = await db.scalars(
             select(CleanupWork).where(
@@ -286,6 +302,22 @@ class LifecycleService:
         observed: list[Object],
     ) -> None:
         if not message.kind or not message.name or not message.uid:
+            return
+        generation = await db.scalar(
+            select(PairIntent.generation)
+            .where(
+                PairIntent.session_id == message.session_id,
+                PairIntent.sandbox_id == message.sandbox_id,
+            )
+            .order_by(PairIntent.claim_changed.desc())
+            .limit(1)
+        )
+        if generation is not None:
+            # The suggestion only wakes the same exact ledger reconciliation
+            # used by the periodic scan; its names/labels confer no authority.
+            await PairRegistry(self.repository).reconcile(
+                db, generation, now, self.settings.cleanup_seconds
+            )
             return
         ownership = await self._ownership(db, message)
         objects = []
@@ -358,6 +390,10 @@ class LifecycleService:
         try:
             meta = obj["metadata"]
             labels = meta["labels"]
+            if any(key in labels for key in (GENERATION, PROJECT, "ads.io/egress-state-id")):
+                # A wiped registry must not turn paired PVCs into legacy debris.
+                # Their exact durable ledger, not label discovery, owns cleanup.
+                return None
             sid, sandbox = UUID(labels[SESSION]), UUID(labels[SANDBOX])
             name, uid = meta["name"], meta["uid"]
             component = labels[COMPONENT]
@@ -387,6 +423,15 @@ class LifecycleService:
         now, s = datetime.now(UTC), self.settings
         signals: list[tuple[str, Signal]] = []
         if kind == "orphan":
+            registry = PairRegistry(self.repository)
+            async with self.sessions.begin() as db:
+                generations = await registry.candidates(db, s.lifecycle_batch)
+            for generation in generations:
+                try:
+                    async with self.sessions.begin() as db:
+                        await registry.reconcile(db, generation, now, s.cleanup_seconds)
+                except Exception:
+                    log.warning("paired inventory reconciliation blocked: %s", generation)
             seen: set[UUID] = set()
             for obj in await self.kube.inventory():
                 message = self.object_signal(obj)
@@ -501,8 +546,15 @@ class LifecycleService:
             work = await db.get(CleanupWork, work_id)
             if work is None or work.kind == "recovery" or not await self.repository.owns(db, work):
                 return
+            retained = await db.scalar(
+                select(PairDisposal.generation).where(PairDisposal.work_id == work_id)
+            )
+            if work.kind == "orphan":
+                # Rotate queue priority even for permanently ambiguous orphans.
+                # This is scheduling only, never proof or an ambiguity timeout.
+                work.deadline = datetime.now(UTC) + timedelta(seconds=self.settings.cleanup_seconds)
         if datetime.now(UTC) >= work.deadline:
-            if work.kind == "idle":
+            if work.kind == "idle" or retained is not None:
                 async with self.sessions.begin() as db:
                     if not await self.repository.owns(db, work):
                         return
@@ -518,6 +570,10 @@ class LifecycleService:
                 return
             # True orphans never recreate anything. Keep exact targets/evidence and retry.
         try:
+            if retained is not None:
+                if self.pair_resources is not None:
+                    await PairRetainedDisposal(self.pair_resources).dispose(work)
+                return
             if work.kind == "idle" and not work.acknowledged:
                 async with asyncio.timeout(self.settings.control_seconds):
                     subject = await asyncio.to_thread(self.credentials.mint)
@@ -544,9 +600,15 @@ class LifecycleService:
                     await PairBlockStorageTeardown(self.pair_runtime).dispose(work)
                 if self.pair_resources is not None:
                     await self.pair_resources.dispose(work)
-                # Positive private-runtime release does not retire IPC, storage,
-                # control policies, credentials or the generation ledger.
-                log.warning("paired resource retirement remains pending: %s", work_id)
+                async with self.sessions.begin() as db:
+                    if work.kind == "idle":
+                        await PairRetirementRepository(self.repository).finish_idle(
+                            db, work, datetime.now(UTC)
+                        )
+                    else:
+                        await PairRetirementRepository(self.repository).finish_destroyed(
+                            db, work, datetime.now(UTC)
+                        )
                 return
             targets = []
             for obj in work.targets:

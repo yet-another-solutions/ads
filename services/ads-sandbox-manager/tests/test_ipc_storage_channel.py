@@ -10,11 +10,81 @@ import msgspec
 import pytest
 
 from ads_commons.sandbox.ipc_release import decode_ipc_release
-from ads_commons.sandbox.ipc_storage import decode_ipc_storage
+from ads_commons.sandbox.ipc_storage import decode_ipc_storage, decode_unused_ipc_storage
+from ads_sandbox_manager.pair_objects import PairBinding
 from test_ipc_release_wire import ipc_report  # noqa: F401
 from test_node_owner import Stream, config, owner  # noqa: F401
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "pv_uid", "volume_uid", "boot_id", "inventory_sha256", "nonce"]
+)
+async def test_unused_channel_binds_backing_without_inventing_pod(config, fault):
+    pair = PairBinding(uuid4(), uuid4(), uuid4(), uuid4())
+    volume, pv, boot = str(uuid4()), str(uuid4()), str(uuid4())
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        observed = body["operation"].endswith("observe")
+        report = {
+            "schema": "ads-ipc-unused-storage-v1",
+            **{
+                key: body[key]
+                for key in (
+                    "node",
+                    "namespace",
+                    "generation",
+                    "sandbox_id",
+                    "volume_uid",
+                    "pv_uid",
+                )
+            },
+            "boot_id": boot,
+            "inventory_sha256": "d" * 64,
+            "observed": observed,
+            "released": observed,
+            "reclaimed": observed,
+        }
+        if observed and fault not in (None, "nonce"):
+            report[fault] = "e" * 64 if fault == "inventory_sha256" else str(uuid4())
+        envelope = {
+            "schema": "ads-node-owner-v1",
+            "nonce": str(uuid4()) if observed and fault == "nonce" else body["nonce"],
+            "request_sha256": hashlib.sha256(request.content).hexdigest(),
+            "report": report,
+        }
+        return httpx2.Response(
+            200,
+            headers={"Content-Type": "application/json"},
+            stream=Stream(json.dumps(envelope).encode()),
+        )
+
+    channel = owner(config, handler)
+    try:
+        saved = decode_unused_ipc_storage(
+            await channel.capture_unused_ipc_storage(
+                pair,
+                node="worker.test",
+                volume_uid=volume,
+                pv_uid=pv,
+            )
+        )
+        if fault is None:
+            assert decode_unused_ipc_storage(
+                await channel.observe_unused_ipc_storage(saved)
+            ).reclaimed
+        else:
+            with pytest.raises(ValueError):
+                await channel.observe_unused_ipc_storage(saved)
+        assert calls[0]["pod_uid"] is None and calls[1]["pod_uid"] is None
+        assert calls[0]["nonce"] != calls[1]["nonce"]
+        assert not any(key in calls[0] for key in ("path", "command", "handle", "config"))
+    finally:
+        await channel.close()
 
 
 @pytest.mark.parametrize(

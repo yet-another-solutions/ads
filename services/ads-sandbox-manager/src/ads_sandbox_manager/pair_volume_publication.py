@@ -73,6 +73,16 @@ class PairVolumePublication:
                 ):
                     intent = await self.repository.pairs.owned(db, row, owner, generation)
                     self._configuration(intent)
+                if role == "workspace" and intent.retained_from is not None:
+                    retained_uid = await self.kube.observe_retained(intent)
+                    async with (
+                        asyncio.timeout(self.settings.control_seconds),
+                        self.sessions.begin() as db,
+                    ):
+                        intent = await self.repository.pairs.owned(db, row, owner, generation)
+                        if intent.volume_resources["workspace"]["uid"] != retained_uid:
+                            raise PairClaimLost("retained workspace UID changed")
+                    continue
                 # Shared source services retain their own Job/PVC locks and release
                 # checks. No session SQL transaction crosses their network work.
                 sources = await self.kube.sources(role)

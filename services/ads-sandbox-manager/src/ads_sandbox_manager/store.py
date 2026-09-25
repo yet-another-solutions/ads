@@ -282,6 +282,13 @@ class SessionRepository:
             from ads_sandbox_manager.pair_transfer import PairTransferRepository
 
             await PairTransferRepository(LifecycleRepository()).available(db, current)
+        elif paired and current.status == "stopped" and current.pvc_id is None:
+            from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+            from ads_sandbox_manager.pair_retirement import PairRetirementRepository
+
+            await PairRetirementRepository(LifecycleRepository()).require_destroyed_history(
+                db, current
+            )
         else:
             await self._require_unpaired(db, current.session_id, current.sandbox_id)
         pvc = (

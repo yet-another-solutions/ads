@@ -21,12 +21,11 @@ trusted node placement and an authenticated node-owner response. Repeated exact
 reports are idempotent; changed boot, inventory, scope or identity cannot replace
 the first report. Its digest is not authentication or freshness.
 
-This component introduces no node transport, resource deletion, positive runtime
-release, storage reclamation, retirement or retained-state transfer. Existing
-normal, recovery and orphan runtime-release guards remain closed. Unsupported
-partial node inventories remain blocked. Later ordered teardown must commit this
-journal before deletion, honor its retained targets and retention disposition,
-and obtain positive release evidence rather than interpreting API absence.
+The journal itself is not node transport, release proof or deletion authority.
+The composed normal, recovery and registry-driven orphan paths must commit it
+before ordered teardown, honor its retained targets and sticky retention
+disposition, and obtain positive runtime/storage release rather than interpreting
+API absence. Unsupported or contradictory partial inventories remain blocked.
 
 The subsequent ordered runtime stage now extends this same journal with
 `ipc_placement`, `ipc_capture` and `ipc_release`. Placement records the exact
@@ -36,5 +35,6 @@ digest. Its positive observation must match the original capture, including
 boot identity. These fields survive session/work-row removal, are immutable
 once recorded and are revalidated before reuse. They do not authorize storage
 reclamation or final generation retirement. Production node delivery and the
-actual IPC node observer remain separately required, not supplied by these
-manager tests.
+actual IPC node observer are separate implemented components, not proven by
+these manager tests. See [authenticated delivery](egress-node-delivery.md) and
+[IPC storage](egress-ipc-storage.md) for their proof boundaries.

@@ -137,7 +137,9 @@ class SessionProvisioner:
             if not inserted and row.status != "stopped":
                 return row
             resuming = row.status == "stopped" and row.pvc_id is not None
-            claimed = await self.repository.claim(db, row, owner, datetime.now(UTC))
+            claimed = await self.repository.claim(
+                db, row, owner, datetime.now(UTC), paired=self.pair_creation is not None
+            )
             if claimed is None:
                 current = await self.repository.get(db, session_id)
                 assert current is not None

@@ -341,7 +341,22 @@ def capture(observer, wanted, attestor, release, proc=Path("/proc")):
 def references(snapshot, deadline, release, proc=Path("/proc")):
     """Scan every task, mount table, namespace handle, cwd/root and open descriptor."""
     ns = {tuple(value) for value in snapshot["namespaces"].values()}
-    fs = snapshot["filesystem"]
+    return filesystem_references(
+        snapshot["filesystem"],
+        deadline,
+        release,
+        proc,
+        namespaces=ns,
+        runtime_ids=tuple(snapshot[key] for key in ("runtime_id", "container_id")),
+        pod_uid=snapshot["pod_uid"],
+    )
+
+
+def filesystem_references(
+    fs, deadline, release, proc=Path("/proc"), *, namespaces=(), runtime_ids=(), pod_uid=None
+):
+    """Physical subtree use, also valid without an originally created runtime."""
+    ns = set(namespaces)
     device = fs["root_identity"][0]
     process_refs, mount_refs, visited = 0, 0, 0
 
@@ -359,7 +374,7 @@ def references(snapshot, deadline, release, proc=Path("/proc")):
             continue
         try:
             command = release.bounded_text(process / "cmdline", 65536)
-            process_refs += any(snapshot[key] in command for key in ("runtime_id", "container_id"))
+            process_refs += any(identity in command for identity in runtime_ids)
             for task in (process / "task").iterdir():
                 budget()
                 try:
@@ -371,7 +386,7 @@ def references(snapshot, deadline, release, proc=Path("/proc")):
                     cgroup = release.bounded_text(task / "cgroup", 65536)
                     process_refs += any(
                         uid in cgroup
-                        for uid in (snapshot["pod_uid"], snapshot["pod_uid"].replace("-", "_"))
+                        for uid in ((pod_uid, pod_uid.replace("-", "_")) if pod_uid else ())
                     )
                     for name in ("net", "mnt", "pid"):
                         info = (task / "ns" / name).stat()

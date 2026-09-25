@@ -54,7 +54,9 @@ class EgressComputePublication:
                 state = await self.states.owned(db, row, owner, generation, intent.egress_state_id)
                 current = await db.get(SandboxSession, row.session_id)
                 assert current is not None
-                payload = egress_payload(current, state, runtime)
+                payload = egress_payload(
+                    current, state, runtime, retained_from=intent.retained_from
+                )
                 payload["control_uids"] = dict(intent.control_uids)
                 payload["manifest"] = compute_manifest(
                     self.settings, intent.binding(), "egress", payload

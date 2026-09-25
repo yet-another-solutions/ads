@@ -40,3 +40,32 @@ def decode_ipc_storage(raw: bytes) -> IpcStorageReport:
     return msgspec.convert(
         json.loads(raw, object_pairs_hook=_unique), type=IpcStorageReport, strict=True
     )
+
+
+class UnusedIpcStorageReport(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    """Backing identity only; manager must separately prove the consumer never ran."""
+
+    schema: Literal["ads-ipc-unused-storage-v1"]
+    node: Name
+    namespace: Name
+    generation: UUID
+    sandbox_id: UUID
+    boot_id: UUID
+    volume_uid: UUID
+    pv_uid: UUID
+    inventory_sha256: Digest
+    observed: bool
+    released: bool
+    reclaimed: bool
+
+    def __post_init__(self) -> None:
+        if (self.released and not self.observed) or (self.reclaimed and not self.released):
+            raise ValueError("inconsistent unused IPC storage report")
+
+
+def decode_unused_ipc_storage(raw: bytes) -> UnusedIpcStorageReport:
+    if type(raw) is not bytes or not 0 < len(raw) <= 16384:
+        raise ValueError("bounded unused IPC storage report required")
+    return msgspec.convert(
+        json.loads(raw, object_pairs_hook=_unique), type=UnusedIpcStorageReport, strict=True
+    )

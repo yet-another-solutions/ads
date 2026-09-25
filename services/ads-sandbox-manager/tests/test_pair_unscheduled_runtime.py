@@ -29,9 +29,22 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-async def unscheduled_runtime(creation):
+async def unscheduled_runtime(creation, request):
     f = creation
-    await build(f)
+    if getattr(request, "param", None) == "ipc-unissued":
+        reserve = f.creator.ipc.repository.reserve
+
+        async def stop_before_pod(db, row, owner, generation, role, payload):
+            if role == "pod":
+                raise RuntimeError("stop before original IPC Pod reservation")
+            return await reserve(db, row, owner, generation, role, payload)
+
+        f.creator.ipc.repository.reserve = stop_before_pod
+        with pytest.raises(RuntimeError, match="before original IPC"):
+            await build(f)
+        f.creator.ipc.repository.reserve = reserve
+    else:
+        await build(f)
     f.capture, f.work, f.claim = await cleanup_claim(f)
     f.storage = AsyncMock()
     f.runtime = PairRuntimeTeardown(
@@ -46,6 +59,7 @@ async def unscheduled_runtime(creation):
     f.pods = {
         role: f.remote.objects[("Pod", f.adapter._runtime_identity(pair, role)["metadata"]["name"])]
         for role in RUNTIME_ROLES
+        if ("Pod", f.adapter._runtime_identity(pair, role)["metadata"]["name"]) in f.remote.objects
     }
     for pod in f.pods.values():
         pod["spec"].pop("nodeName", None)

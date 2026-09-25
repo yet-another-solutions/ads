@@ -888,9 +888,16 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(policy["egress"], [])
         self.assertEqual(policy["policyTypes"], ["Ingress", "Egress"])
         self.assertFalse(any(kind == "Job" for kind, _ in docs))  # Manager owns the lock.
-        for (kind, _), resource in docs.items():
+        for (kind, name), resource in docs.items():
             if kind in ("Role", "ClusterRole"):
-                self.assertTrue(all("secrets" not in r["resources"] for r in resource["rules"]))
+                for rule in resource["rules"]:
+                    if "secrets" not in rule["resources"]:
+                        continue
+                    # Explicit slice-19 authorization replaces the earlier
+                    # blanket denial, not the no-discovery/no-exec boundary.
+                    self.assertEqual((kind, name), ("Role", "ads-sandbox-manager"))
+                    self.assertEqual(resource["metadata"]["namespace"], "ads-sandbox")
+                    self.assertEqual(set(rule["verbs"]), {"create", "get", "delete"})
         invalid = self.render(
             "--set-string", "sandbox.ca.additionalTrustPEM=-----BEGIN PRIVATE KEY-----"
         )

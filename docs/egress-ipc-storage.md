@@ -41,7 +41,8 @@ Normal and recovery entrypoints call the stage. Lost deletion responses retain
 the release receipt and retry only the same UID; claim loss prevents subsequent
 commits. Positive reclamation is retained independently of the work/session
 rows. This stage never disposes workspace, CA clones, persistent egress state,
-keys, policies or topics, and does not remove the final retirement guard.
+keys, policies or topics. The subsequent resource stage and proof-checked
+retirement repository own those terminal transitions.
 
 ## Installation and proof
 

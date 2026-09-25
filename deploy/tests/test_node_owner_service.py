@@ -102,6 +102,46 @@ def test_observe_requires_original_boot_and_digest(service, node_request, config
             service.request(json.dumps({**node_request, field: None}).encode(), config)
 
 
+@pytest.mark.parametrize("phase", ["capture", "observe"])
+def test_unused_backing_has_no_invented_pod_or_caller_path(
+    service, node_request, config, monkeypatch, phase
+):
+    config["ipc"] = "/platform/ipc"
+    node_request.update(
+        operation="ipc-unused-" + phase,
+        volume_uid=str(uuid4()),
+        pv_uid=str(uuid4()),
+        boot_id=str(uuid4()) if phase == "observe" else None,
+        inventory_sha256="a" * 64 if phase == "observe" else None,
+    )
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return {
+            **{
+                key: node_request[key]
+                for key in (
+                    "node",
+                    "namespace",
+                    "generation",
+                    "sandbox_id",
+                    "boot_id",
+                    "inventory_sha256",
+                )
+            },
+        }
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-ipc-storage"
+    assert calls[0][1]["action"] == "unused-" + phase
+    assert "pod_uid" not in calls[0][1] and "path" not in calls[0][1]
+    for change in ({"pod_uid": str(uuid4())}, {"pv_uid": None}, {"path": "/arbitrary"}):
+        with pytest.raises(ValueError):
+            service.request(json.dumps({**node_request, **change}).encode(), config)
+
+
 @pytest.mark.parametrize("action", ["capture", "observe"])
 def test_storage_calls_only_fixed_ipc_backing_observer(
     service, node_request, config, monkeypatch, action

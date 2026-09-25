@@ -22,9 +22,20 @@ in that history remains ambiguous and is not deleted by this path.
   VolumeAttachment or node usage may contradict that history. Destructive
   disposition requires the captured Delete policy and external-provisioner
   reclamation guard, then actual completion of that protected PV deletion.
+* Never-mounted IPC filesystem: the trusted application-node helper captures
+  the exact bound local/hostPath PV, canonical dedicated subtree, parent inode
+  and filesystem handle before deletion. A distinct unused-storage report
+  proves host-process references absent and the original handle stale after
+  provisioner reclamation. API absence or a renamed but addressable inode
+  cannot satisfy reclamation. This does not invent an IPC Pod/runtime capture.
+* Inherited workspace/state after an interrupted resume: a verified exclusive
+  transfer retains the predecessor's original storage and retirement evidence.
+  Previously mounted backing requires a fresh observation against that original
+  Block capture, even if the new consumer never started. Never-mounted lineage
+  remains explicit and cannot be substituted for previously mounted backing.
 * Started consumers continue through the original node/runtime/Block or IPC
-  filesystem proof. Bound non-CSI never-mounted backing needs a positive
-  backing observer; this path deliberately cannot authorize its reclamation.
+  filesystem proof. Unsupported provisioners, ambiguous consumer history and
+  unavailable original backing identities remain blocked.
 
 Every original capture commits before deletion, each disposition commits under
 the same cleanup/recovery claim, and lost replies retry only the captured

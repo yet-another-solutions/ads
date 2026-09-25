@@ -96,7 +96,7 @@ class PairControlProvisioner:
             self._configuration(intent)
         return intent
 
-    async def prepare(self, row: SandboxSession) -> PairIntent:
+    async def prepare(self, row: SandboxSession, *, resume: bool = False) -> PairIntent:
         config = self.settings.session_objects
         if config is None or row.claimed_by is None:
             raise PairClaimLost("a configured provisioning claim is required")
@@ -113,6 +113,7 @@ class PairControlProvisioner:
                     owner,
                     namespace=self.settings.namespace,
                     golden_version=self.settings.golden_version,
+                    resume=resume,
                 )
             generation = intent.generation
             uid: str | None

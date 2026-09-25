@@ -107,6 +107,8 @@ def egress_pod(
     ca_attempt: UUID,
     state: EgressState,
     runtime: EgressRuntime,
+    *,
+    retained_from: UUID | None = None,
 ) -> Object:
     """Constructor only: lifecycle must verify exact control/volume identities.
 
@@ -125,10 +127,14 @@ def egress_pod(
         state.session_id,
         state.sandbox_id,
         state.project_id,
-        state.creator_generation,
         state.namespace,
-    ) != (pair.session_id, pair.sandbox_id, pair.project_id, pair.generation, settings.namespace):
+    ) != (pair.session_id, pair.sandbox_id, pair.project_id, settings.namespace):
         raise ValueError("persistent state does not belong to the egress pair")
+    if (retained_from is None and state.creator_generation != pair.generation) or (
+        retained_from is not None
+        and (not isinstance(retained_from, UUID) or retained_from == pair.generation)
+    ):
+        raise ValueError("persistent state does not belong to original or retained provenance")
     if (
         state.key_dispatch != "settled"
         or state.volume_dispatch != "settled"

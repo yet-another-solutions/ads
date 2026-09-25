@@ -10,12 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_sandbox_manager.config import Settings
+from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle import RECOVER, LifecycleService, Signal
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
 from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
-from ads_sandbox_manager.pair_store import PairClaimLost
+from ads_sandbox_manager.pair_retirement import PairRetirementRepository
+from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
 from ads_sandbox_manager.session_objects import session_name
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
@@ -102,7 +104,9 @@ class RecoveryService:
     async def _execute(self, row: SandboxSession, works: list[CleanupWork]) -> None:
         if not works:
             raise RuntimeError("recovery has no durable intent")
-        if any(work.pair_snapshot is not None for work in works):
+        if self.provisioner.pair_creation is not None or any(
+            work.pair_snapshot is not None for work in works
+        ):
             for work in works:
                 if work.pair_snapshot is not None:
                     if not await self.lifecycle.pair_capture.capture(work, recovery=row):
@@ -117,9 +121,7 @@ class RecoveryService:
                         await PairBlockStorageTeardown(runtime).dispose(work, recovery=row)
                     if self.lifecycle.pair_resources is not None:
                         await self.lifecycle.pair_resources.dispose(work, recovery=row)
-            # Do not delete control policies, storage or old-generation evidence
-            # through the legacy guest/IPC-only recovery path.
-            log.warning("paired recovery resource retirement pending: %s", row.session_id)
+            await self._finish_paired(row, works)
             return
         if any(obj.get("retain") for work in works for obj in work.targets):
             # Older versions converted idle timeouts into destructive recovery.
@@ -242,6 +244,81 @@ class RecoveryService:
             if claimed is None:
                 raise RuntimeError("rebuild claim lost")
         # Crash here leaves creating, covered by the watchdog; never replay an execution.
+        await self.provisioner.build(claimed, resume=False)
+
+    async def _finish_paired(self, row: SandboxSession, works: list[CleanupWork]) -> None:
+        """Commit all original retirements and the fresh claim in one transaction."""
+        retirements = PairRetirementRepository(self.lifecycle.repository)
+        async with self.sessions.begin() as db:
+            current = await self._owned(db, row)
+            if current is None:
+                return
+            retired = {}
+            unissued = set()
+            for work in works:
+                if work.pair_snapshot is None:
+                    # A recovery retry may carry a never-created interim identity.
+                    # Under paired configuration every create-capable session
+                    # operation first reserves a PairIntent under the session lock.
+                    if (
+                        self.provisioner.pair_creation is None
+                        or any(obj["uid"] is not None for obj in work.targets)
+                        or await db.scalar(
+                            select(PairIntent.generation)
+                            .where(PairIntent.sandbox_id == work.sandbox_id)
+                            .limit(1)
+                        )
+                        is not None
+                        or await db.scalar(
+                            select(EgressState.state_id)
+                            .where(EgressState.sandbox_id == work.sandbox_id)
+                            .limit(1)
+                        )
+                        is not None
+                    ):
+                        raise PairClaimLost("mixed recovery lacks original unissued evidence")
+                    unissued.add(work.sandbox_id)
+                    continue
+                pair = self.lifecycle.repository.cleanup_pair(work)
+                if pair.generation not in retired:
+                    saved = await retirements.retire(
+                        db,
+                        work,
+                        datetime.now(UTC),
+                        recovery=row,
+                        recovery_seconds=self.settings.recovery_seconds,
+                    )
+                    if saved is None:
+                        # Roll back earlier tentative retirements too.
+                        raise PairClaimLost("paired recovery terminal proof incomplete")
+                    retired[pair.generation] = saved
+            for pvc in await db.scalars(
+                select(SessionPVC).where(SessionPVC.session_id == row.session_id).with_for_update()
+            ):
+                if not any(
+                    retirements.owns_destroyed_pvc(saved, pvc) for saved in retired.values()
+                ):
+                    if pvc.sandbox_id not in unissued or pvc.uid is not None:
+                        raise PairClaimLost("paired recovery workspace not proven destroyed")
+                await db.delete(pvc)
+            for work in works:
+                stored = await db.get(CleanupWork, work.work_id)
+                if stored is None or stored.kind != "recovery":
+                    raise PairClaimLost("paired recovery work changed before retirement")
+                await db.delete(stored)
+            current.pvc_id = current.pvc_uid = None
+            current.guest_deployment_uid = current.ipc_deployment_uid = current.ipc_pvc_uid = None
+            current.ipc_pod_uid = None
+            current.ca_attempt = current.ca_sources = current.ca_clones = None
+            current.status = "stopped"
+            current.status_changed_at = advance(current.status_changed_at, datetime.now(UTC))
+            await db.flush()
+            claimed = await self.repository.claim(
+                db, current, uuid4(), datetime.now(UTC), paired=True
+            )
+            if claimed is None:
+                raise PairClaimLost("paired fresh recovery claim lost")
+        # A crash now leaves creating with its fresh claim, never an old ready state.
         await self.provisioner.build(claimed, resume=False)
 
     async def run_once(self) -> None:

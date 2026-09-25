@@ -157,10 +157,28 @@ def upgrade() -> None:
         sa.Column("retirement_sha256", sa.String(), nullable=False),
         sa.Column("state", JSONB(), nullable=False),
         sa.Column("workspace", JSONB(), nullable=False),
+        sa.Column("validated_at", sa.DateTime(timezone=True), nullable=True),
         sa.UniqueConstraint("predecessor", name="sandbox_pair_transfer_once"),
     )
     op.create_index("ix_sandbox_pair_transfer_session_id", "sandbox_pair_transfer", ["session_id"])
     op.create_index("ix_sandbox_pair_transfer_sandbox_id", "sandbox_pair_transfer", ["sandbox_id"])
+    op.create_table(
+        "sandbox_pair_disposal",
+        sa.Column("generation", sa.Uuid(), primary_key=True),
+        sa.Column("work_id", sa.Uuid(), nullable=False, unique=True),
+        sa.Column("session_id", sa.Uuid(), nullable=False),
+        sa.Column("sandbox_id", sa.Uuid(), nullable=False),
+        sa.Column("project_id", sa.Uuid(), nullable=False),
+        sa.Column("pvc_id", sa.Uuid(), nullable=False),
+        sa.Column("pvc_uid", sa.String(), nullable=False),
+        sa.Column("retirement_sha256", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("targets", JSONB(), nullable=False),
+        sa.Column("block_release", JSONB(), nullable=True),
+        sa.Column("dispositions", JSONB(), nullable=False),
+        sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_index("ix_sandbox_pair_disposal_session_id", "sandbox_pair_disposal", ["session_id"])
     # Persistent sandbox identity and key commitment survive all attachment rows.
     op.create_table(
         "sandbox_egress_state",
@@ -184,6 +202,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("sandbox_pair_disposal")
     op.drop_table("sandbox_pair_transfer")
     op.drop_table("sandbox_pair_retirement")
     op.drop_table("sandbox_egress_state")

@@ -10,6 +10,7 @@ from ads_sandbox_manager.app import create_app
 from ads_sandbox_manager.config import load_settings
 from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle_store import CleanupWork
+from ads_sandbox_manager.pair_disposal import PairDisposal
 from ads_sandbox_manager.pair_retirement import PairRetirement
 from ads_sandbox_manager.pair_store import PairIntent
 from ads_sandbox_manager.pair_transfer import PairTransfer
@@ -37,6 +38,7 @@ def main() -> None:
             EgressState,
             PairRetirement,
             PairTransfer,
+            PairDisposal,
         ),
     )
     FailFastServer(

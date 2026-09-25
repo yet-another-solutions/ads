@@ -5,7 +5,8 @@ import asyncio
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import msgspec
@@ -705,8 +706,10 @@ def lifecycle(f):
         f.capture.repository,
         f.storage,
         AsyncMock(),
-        AsyncMock(),
-        AsyncMock(),
+        SimpleNamespace(mint=Mock(return_value="synthetic-subject-token")),
+        SimpleNamespace(
+            mint=Mock(return_value=SimpleNamespace(access_token="synthetic-ipc-token"))
+        ),
         f.capture,
         f.runtime,
     )

@@ -31,6 +31,8 @@ OPERATIONS = {
     "partial-observe",
     "ipc-storage-capture",
     "ipc-storage-observe",
+    "ipc-unused-capture",
+    "ipc-unused-observe",
     "block-capture",
     "block-observe",
 }
@@ -185,6 +187,11 @@ def request(raw, config):
             {"volumes", "runtime_sha256"}
             if value.get("operation") in ("block-capture", "block-observe")
             else set()
+        )
+        | (
+            {"pv_uid"}
+            if value.get("operation") in ("ipc-unused-capture", "ipc-unused-observe")
+            else set()
         ),
         "exact node request required",
     )
@@ -200,6 +207,7 @@ def request(raw, config):
             "canonical request identity required",
         )
     ipc = value["operation"].startswith("ipc-")
+    unused = value["operation"].startswith("ipc-unused-")
     require(config["ipc" if ipc else "pair"] is not None, "node role unavailable")
     if value["operation"].startswith("partial-"):
         load("ads-ptp-partial").pod_map(value["pod_uids"])
@@ -211,10 +219,10 @@ def request(raw, config):
             and re.fullmatch(r"[0-9a-f]{64}", value["runtime_sha256"]),
             "original private runtime capture binding required",
         )
-    for key in ("pod_uid", "volume_uid"):
+    for key in ("pod_uid", "volume_uid", *(("pv_uid",) if unused else ())):
         require(
             isinstance(value[key], str) and str(UUID(value[key])) == value[key]
-            if ipc
+            if ipc and not (unused and key == "pod_uid")
             else value[key] is None,
             "exact IPC ownership required",
         )
@@ -260,7 +268,17 @@ def perform(raw, config):
     value = request(raw, config)
     identity = {key: value[key] for key in ("generation", "sandbox_id")}
     capture = value["operation"].endswith("capture")
-    if value["operation"].startswith("ipc-"):
+    if value["operation"].startswith("ipc-unused-"):
+        report = helper(
+            "ads-ipc-storage",
+            {
+                **identity,
+                "action": "unused-capture" if capture else "unused-observe",
+                "config": config["ipc"],
+                **{key: value[key] for key in ("volume_uid", "pv_uid", "inventory_sha256")},
+            },
+        )
+    elif value["operation"].startswith("ipc-"):
         report = helper(
             "ads-ipc-storage"
             if value["operation"].startswith("ipc-storage-")
