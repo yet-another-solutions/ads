@@ -273,7 +273,7 @@ class IdentityStore:
     def prepare_key(self, name: str, kind: str, public: bytes, private: bytes) -> None:
         self._name(name)
         if (
-            kind not in ("root", "dnssec", "ech")
+            kind not in ("root", "dnssec", "ech", "tls")
             or not public
             or not private
             or (len(public) > 65536 or len(private) > 65536)
@@ -298,16 +298,25 @@ class IdentityStore:
             self._commit_inventory()
         self._sync_directory()
 
-    def key(self, name: str) -> tuple[str, bytes, bytes, str]:
+    def find_key(self, name: str) -> tuple[str, bytes, bytes, str] | None:
+        """A genuine missing mapping differs from corrupt or retired state."""
         self._verify_inventory()
         row = (
             self._connection()
             .execute("SELECT kind,public,sealed,stage FROM keys WHERE name=?", (name,))
             .fetchone()
         )
-        if row is None or row[3] == "retired":
+        if row is None:
+            return None
+        if row[3] == "retired":
             raise StateUnavailable("required persistent key unavailable")
         return row[0], row[1], self._open(self._key_label(name, row[0], row[1]), row[2]), row[3]
+
+    def key(self, name: str) -> tuple[str, bytes, bytes, str]:
+        result = self.find_key(name)
+        if result is None:
+            raise StateUnavailable("required persistent key unavailable")
+        return result
 
     @staticmethod
     def _key_label(name: str, kind: str, public: bytes) -> bytes:

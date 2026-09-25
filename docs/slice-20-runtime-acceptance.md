@@ -22,12 +22,54 @@ Branch: `feature/slice-20-egress-runtime`.
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
-| TLS certificate pairs and defect mirroring | `origin_tls.py`; real OpenSSL validation and two-leg tests | Origin acquisition/validation implemented; stable substitution and defect mirroring open |
+| TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`; real validation/two-leg tests | Origin validation and encrypted stable success pairs implemented; defect mirroring/CRL distribution open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Stable success pairs and approved unmappable outcomes
+
+The user approved reset-only handling for genuinely unmappable upstream TLS
+failures on 2026-09-25. `UnmappableTLS` accepts only fixed reason enum values.
+Actual origin handshake failures are classified separately from local invalid
+configuration; frontend termination emits a TCP reset without an HTTP response
+or clean/generic-untrusted certificate fallback. Its warning contains only the
+fixed bounded reason, with no raw exception text, traceback or private material.
+Real socket tests verify reset, no response/repair, and cleanup. Supported
+certificate defects still require the dedicated mirroring path.
+
+`CertificatePairs` now persists successful certificate/private-key mappings in
+the authenticated encrypted identity store. The mapping includes original
+IP/port, effective TLS name, full upstream leaf fingerprint and minted signer
+fingerprint. A/B/A returns the original A substitution, including after store
+recovery. Current origin validation precedes every lookup; a newly revoked or
+otherwise defective observation cannot receive its retained clean pair.
+Missing, corrupt and retired mappings have distinct outcomes. Interrupted
+prepared/published generations complete without changing the certificate/key.
+Changed CRL locators, signer/key mismatch and expired material fail closed.
+No replacement root or silent quota-driven eviction is introduced.
+
+The actual ECH two-leg test now uses this production pair service: it verifies
+the original origin certificate, durably generates the substitution, completes
+client TLS under a different explicitly trusted fixture CA, and exchanges data.
+Request authorization and the original-destination network boundary remain
+explicit fixture boundaries. CRL URLs are present in substituted certificates,
+but the local CRL publication/listener is not yet implemented.
+
+Independent installed OpenSSL validation proves a self-issued, differently-keyed
+synthetic intermediate can retain the existing CA's path_length=0 and still
+express expired/future intermediate errors without adding a path-length error.
+This is consistent with RFC 5280 sections 4.2.1.9 and 6.1.4, which count
+non-self-issued intermediates: https://www.rfc-editor.org/rfc/rfc5280 .
+The production intermediate-defect composer is not yet implemented; this proof
+does not relax the minted CA contract or change shared PKI.
+
+All five local Nox gates passed for this increment. Egress selection:
+**296 passed, zero skips**, 10.68 seconds. Full workspace and local-client trust
+installation compatibility are not claimed by the component run. No CI,
+merge, publication, local project-image/native/chart build or later slice work.
 
 ### TLS transport increment
 
@@ -57,8 +99,9 @@ fixture in the first transport tests. A further actual two-leg test now uses
 `origin_tls.py` to establish and verify a separate origin TLS connection, carry
 the decrypted SNI and unchanged ALPN offers there, and feed its actual selected
 ALPN back into frontend resume. Both TLS legs carry real application records.
-Certificate substitution and request authorization are explicitly fixture
-boundaries, not claimed as implemented by that test.
+At that earlier milestone, certificate substitution and request authorization
+were explicit fixture boundaries. The successful-substitution boundary is
+removed by the subsequent pair increment described above.
 
 `origin_tls.py` retains the presented and built chains plus per-certificate
 validation findings. Its observation callback continues a defective handshake
@@ -92,13 +135,9 @@ passed, zero skips**, 10.31 seconds. The 62 TLS tests present before the final
 three review cases also passed on Python 3.12.13 in 1.73 seconds. No full
 workspace rerun or CI run was performed on this increment.
 
-Before wiring the certificate coordinator, one adopted-contract decision still
-requires explicit approval: the client-visible outcome for malformed origin
-certificates, failed upstream TLS handshakes, or validation states that cannot
-be faithfully mirrored. The reviewed proxy contract explicitly leaves that
-general outcome unagreed; do not silently treat generic untrusted substitution
-or connection reset as a fully implemented mirroring requirement. Low-level
-transport cleanup on exceptions is not such an outcome policy.
+The initially unapproved outcome for genuinely unmappable TLS failures was
+subsequently approved and implemented as described above. That approval does
+not convert an unimplemented supported defect into an unmappable case.
 
 ### Earlier component verification
 

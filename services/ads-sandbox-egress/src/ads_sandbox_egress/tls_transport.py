@@ -8,13 +8,16 @@ path exists here; the returned stream still needs HTTP authorization.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from ads_sandbox_egress.http1 import reset
-from ads_sandbox_egress.tls import ClientHello, TLSContext, TLSFailure, TLSSession
+from ads_sandbox_egress.tls import ClientHello, TLSContext, TLSFailure, TLSSession, UnmappableTLS
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,10 +81,14 @@ class TLSStream:
                         await stream._receive()
                     else:
                         raise TLSFailure("unexpected_memory_bio_backpressure")
-        except BaseException:
+        except BaseException as exc:
             if session is not None:
                 session.close()
             reset(writer)
+            if isinstance(exc, UnmappableTLS):
+                # Fixed enum only: no exception repr/traceback, certificate,
+                # server name, private key or arbitrary remote text.
+                _LOG.warning("unmappable_tls reason=%s", exc.reason.value)
             raise
 
     @property

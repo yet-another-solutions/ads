@@ -1,12 +1,18 @@
 import asyncio
 import base64
+import ipaddress
 import os
 
 import pytest
+from cryptography.hazmat.primitives import serialization
 
+from ads_sandbox_egress.certificates import CertificatePairs, PairDestination
+from ads_sandbox_egress.identity_store import IdentityStore
 from ads_sandbox_egress.origin_tls import OriginContext, inspect_origin
 from ads_sandbox_egress.tls import TLSContext
-from ads_sandbox_egress.tls_transport import FrontendIdentity, TLSStream
+from ads_sandbox_egress.tls_transport import TLSStream
+from test_certificates import pair_signer as pair_signer
+from test_certificates import pair_state as pair_state
 from test_origin_tls import certificate_fixture
 from test_tls import anyio_backend as anyio_backend
 from test_tls import native as native
@@ -15,7 +21,7 @@ from test_tls import native as native
 @pytest.mark.anyio
 @pytest.mark.parametrize("selected", ["h2", "http/1.1", None])
 async def test_actual_ech_to_actual_verified_origin_no_application_before_resume(
-    native, tmp_path, selected
+    native, tmp_path, selected, pair_signer, pair_state
 ):
     library, directory, executable = native
     origin_server, root, _, _ = certificate_fixture(tmp_path, "valid")
@@ -24,10 +30,10 @@ async def test_actual_ech_to_actual_verified_origin_no_application_before_resume
     seen_names = []
     origin_server.set_servername_callback(lambda ssl, name, ctx: seen_names.append(name))
     trust = tmp_path / "trust.pem"
-    trust.write_bytes(root)
-    # Reuse a fixture identity rather than claim certificate substitution proof.
-    cert = (tmp_path / "origin.pem").read_bytes()
-    private = (tmp_path / "private.pem").read_bytes()
+    # Client and origin trust contexts are genuinely distinct.
+    trust.write_bytes(pair_signer.certificate.public_bytes(serialization.Encoding.PEM))
+    store = IdentityStore(*pair_state, capacity=2**20, create=True)
+    pairs = CertificatePairs(store, pair_signer, "http://egress.invalid/crl/test")
     key = library.generate_ech("cover.example")
     frontend_context = TLSContext(library, (key,))
     origin_context = OriginContext(library, extra_trust=(root,), system_trust=False)
@@ -90,7 +96,16 @@ async def test_actual_ech_to_actual_verified_origin_no_application_before_resume
             assert certificate.verified
             assert certificate.selected_alpn == (selected.encode() if selected else None)
             events.append("origin-verified")
-            return FrontendIdentity((cert,), private, certificate.selected_alpn)
+            identity = pairs.valid(
+                PairDestination(
+                    ipaddress.ip_address("127.0.0.1"),
+                    origin_listener.sockets[0].getsockname()[1],
+                    hello.server_name,
+                ),
+                certificate,
+            )
+            events.append("substitution-durable")
+            return identity
 
         try:
             downstream = await TLSStream.accept(reader, writer, frontend_context, prepare)
@@ -149,6 +164,7 @@ async def test_actual_ech_to_actual_verified_origin_no_application_before_resume
         assert events == [
             "inner-hello",
             "origin-verified",
+            "substitution-durable",
             "frontend-complete",
             "origin-application",
         ]
@@ -167,6 +183,7 @@ async def test_actual_ech_to_actual_verified_origin_no_application_before_resume
         await origin_listener.wait_closed()
         frontend_context.close()
         origin_context.close()
+        store.close()
         (tmp_path / "private.pem").unlink()
     assert not frontend_context._sessions
     assert not origin_context._sessions

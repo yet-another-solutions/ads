@@ -18,7 +18,13 @@ from typing import Any, Literal
 
 from ads_sandbox_egress.http1 import reset
 from ads_sandbox_egress.policy import canonical_host
-from ads_sandbox_egress.tls import TLSFailure, TLSLibrary, TLSSession
+from ads_sandbox_egress.tls import (
+    TLSFailure,
+    TLSLibrary,
+    TLSSession,
+    UnmappableReason,
+    UnmappableTLS,
+)
 from ads_sandbox_egress.tls_transport import TLSStream
 
 
@@ -276,17 +282,23 @@ async def inspect_origin(
             raise ValueError("finite positive origin deadline required")
         session = context.session(name, protocols)
         stream = TLSStream(reader, writer, session, idle_timeout=30)
-        async with asyncio.timeout(handshake_timeout):
-            while True:
-                state = session.handshake()
-                await stream.drain()
-                if state == "complete":
-                    if session.certificate is None:
-                        raise TLSFailure("origin_certificate_absent")
-                    return stream, session.certificate
-                if state != "read":
-                    raise TLSFailure("unexpected_memory_bio_backpressure")
-                await stream._receive()
+        try:
+            async with asyncio.timeout(handshake_timeout):
+                while True:
+                    state = session.handshake()
+                    await stream.drain()
+                    if state == "complete":
+                        if session.certificate is None:
+                            raise TLSFailure("origin_certificate_absent")
+                        return stream, session.certificate
+                    if state != "read":
+                        raise TLSFailure("unexpected_memory_bio_backpressure")
+                    await stream._receive()
+        except (TLSFailure, OSError):
+            # Only actual origin handshake/I/O failures reach this outcome.
+            # Local invalid settings or closed contexts above are not relabeled
+            # as an upstream certificate defect. Never retain arbitrary text.
+            raise UnmappableTLS(UnmappableReason.UPSTREAM_HANDSHAKE) from None
     except BaseException:
         if session is not None:
             session.close()

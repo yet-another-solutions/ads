@@ -12,6 +12,7 @@ import base64
 import re
 import threading
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
@@ -113,6 +114,22 @@ int SSL_shutdown(SSL *);
 
 class TLSFailure(Exception):
     """Internal, credential-free reason. The transport resets on failure."""
+
+
+class UnmappableReason(StrEnum):
+    UPSTREAM_HANDSHAKE = "upstream_handshake"
+    MALFORMED_CERTIFICATE = "malformed_certificate"
+    UNREPRESENTABLE_VALIDATION = "unrepresentable_validation"
+
+
+class UnmappableTLS(TLSFailure):
+    """Approved reset-only outcome, never an alternative to a supported mirror."""
+
+    def __init__(self, reason: UnmappableReason) -> None:
+        if not isinstance(reason, UnmappableReason):
+            raise ValueError("fixed unmappable TLS reason required")
+        self.reason = reason
+        super().__init__(reason.value)
 
 
 @dataclass(frozen=True, slots=True)
