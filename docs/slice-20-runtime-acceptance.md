@@ -29,6 +29,48 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Request authorization and two-leg HTTP/1 owner
+
+`RequestAuthorizer` composes the shared PolicyStore, original destination,
+TLS/HTTP authority agreement, connection-owned DNS membership, real NGINX
+normalization and final current-revision policy decision. The normalized path
+is only for matching; original target/authority/query remain unchanged.
+DNS evidence is acquired after the potentially slow helper, immediately before
+the final no-await policy decision. Pending requests do not retain an older
+allowance across a policy update. IP literals do not fabricate DNS identities,
+and bogus/indeterminate DNSSEC status alone is not an extra proxy prohibition.
+
+`HTTP1Proxy` authorizes each request before opening a plaintext upstream
+connection or writing application bytes on a prepared inspected TLS leg.
+The connector receives only the immutable original destination; it remains an
+explicit external boundary, not a claim of completed kernel/interface binding.
+The owner relays interim/final responses, streams bodies/trailers under
+backpressure, reauthorizes keep-alive/pipelined requests and never follows
+redirects. Denial, framing errors and cancellation reset both owned legs.
+Genuine early-final responses are relayed without fabricating 100 or draining
+an unwanted upload. Ordinary duplex uploads continue after response headers;
+early termination happens on completed response or final-before-100, not on
+every status header. Active authorized responses survive policy updates.
+
+Real NGINX plus two socket legs prove named-request authorization/forwarding,
+original target preservation, zero upstream contact on denial, chunked bodies
+and trailers, 100-continue, early final, duplex upload, policy/revision behavior,
+failed membership refresh, redirects and malformed upstream responses.
+Only socket admission/connector and resolver acquisition are fixture boundaries.
+No production TLS/kernel/bootstrap integration is claimed by these plain-socket
+tests; existing TLS tests remain separate.
+
+All five local Nox gates pass: **740 affected tests, zero skips**, 22.92 seconds,
+`slice20-http1-owner-nox.log`, including 28 new owner/authorization cases.
+No full workspace rerun or CI.
+
+Known incomplete cases are explicit: the current NGINX helper rejects legally
+empty Host, so absence is not repaired with an invented name or raw-path
+fallback. Extended WebSocket CONNECT normalization, full Upgrade owners and
+server-wide asterisk-target normalization still require implementation.
+HTTP/2 ordinary request-to-helper adaptation is tested, but its multiplexed
+two-leg owner is the next step. Slice 20 remains open.
+
 ### HTTP/2 framing and stream isolation
 
 `HTTP2Connection` uses exactly pinned h2 4.4.1, hpack 4.2.0 and hyperframe 6.1.0.
