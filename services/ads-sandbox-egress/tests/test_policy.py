@@ -175,3 +175,34 @@ def test_one_budget_across_patterns():
 def test_invalid_path_cannot_bypass_empty_path_rules(path):
     assert not permitted(snapshot(rule()), replace(REQUEST, normalized_path=path))
     assert not permitted(snapshot(mode="blacklist"), replace(REQUEST, normalized_path=path))
+
+
+@pytest.mark.parametrize("mode", ["whitelist", "blacklist"])
+def test_options_asterisk_matches_only_complete_pathless_rules(mode):
+    pathless = replace(REQUEST, method="OPTIONS", normalized_path=None)
+    assert permitted(snapshot(rule(method="OPTIONS"), mode=mode), pathless) is (mode == "whitelist")
+    for pattern in ("/", "/**", "/*"):
+        assert permitted(
+            snapshot(rule(method="OPTIONS", paths=(EgressPath(pattern),)), mode=mode), pathless
+        ) is (mode == "blacklist")
+    for restriction in (rule(method="GET"), rule("other.example", method="OPTIONS")):
+        assert permitted(snapshot(restriction, mode=mode), pathless) is (mode == "blacklist")
+    assert not permitted(
+        snapshot(rule(method="any"), mode=mode), replace(REQUEST, normalized_path=None)
+    )
+
+
+def test_pathless_unnamed_and_mixed_rules_do_not_invent_a_domain_or_path():
+    pathless = replace(REQUEST, method="OPTIONS", normalized_path=None, names=())
+    assert not permitted(snapshot(rule(method="OPTIONS")), pathless)
+    assert not permitted(snapshot(rule(method="OPTIONS"), mode="blacklist"), pathless)
+    assert permitted(snapshot(rule("*", method="OPTIONS")), pathless)
+    assert permitted(
+        snapshot(rule(method="OPTIONS", paths=(EgressPath("/**"),)), mode="blacklist"), pathless
+    )
+    assert permitted(
+        snapshot(
+            rule("*", method="OPTIONS", paths=(EgressPath("/**"),)), rule("*", method="OPTIONS")
+        ),
+        pathless,
+    )

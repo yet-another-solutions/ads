@@ -93,7 +93,9 @@ class RequestHead:
             raise RequestDenied("invalid_request_target")
         if request.method == b"CONNECT":
             raise RequestDenied("generic_connect")
-        if not target.startswith(b"/"):
+        if target == b"*" and request.method == b"OPTIONS":
+            pass  # Explicit server-wide target, not a URI requiring normalization.
+        elif not target.startswith(b"/"):
             absolute = _ABSOLUTE.fullmatch(target)
             if absolute is None or absolute[1].decode("ascii") != connection.protocol:
                 raise RequestDenied("unsupported_request_target")
@@ -138,7 +140,11 @@ class RequestHead:
             or set(pseudo) - {b":method", b":scheme", b":path", b":authority", b":protocol"}
             or not _TOKEN.fullmatch(pseudo[b":method"])
             or pseudo[b":scheme"] != connection.protocol.encode("ascii")
-            or not pseudo[b":path"].startswith(b"/")
+            or not (
+                pseudo[b":path"].startswith(b"/")
+                or pseudo[b":path"] == b"*"
+                and pseudo[b":method"] == b"OPTIONS"
+            )
             or len(pseudo[b":path"]) > 8192
             or b"#" in pseudo[b":path"]
             or any(char <= 32 or char == 127 for char in pseudo[b":path"])
@@ -186,7 +192,7 @@ class RequestHead:
 class AuthorizedRequest:
     head: RequestHead
     policy_revision: int
-    normalized_path: bytes
+    normalized_path: bytes | None
 
 
 class RequestAuthorizer:
@@ -218,9 +224,15 @@ class RequestAuthorizer:
                     raise RequestDenied("literal_destination_mismatch")
         elif authority_port != target.port:
             raise RequestDenied("unnamed_destination_port")
-        normalized = await self.normalizer.normalize(
-            head.normalization_method, head.target, head.normalization_headers()
-        )
+        normalized: bytes | None
+        if head.target == b"*" and head.method == b"OPTIONS":
+            # Approved pathless semantics. No invented "/" and no raw-path
+            # fallback: ordinary targets still require successful NGINX output.
+            normalized = None
+        else:
+            normalized = await self.normalizer.normalize(
+                head.normalization_method, head.target, head.normalization_headers()
+            )
         if membership_name is not None:
             # Fresh DNS evidence is acquired AFTER the potentially slow helper,
             # immediately before the final no-await authorization decision.

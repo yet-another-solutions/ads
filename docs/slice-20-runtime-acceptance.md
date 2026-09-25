@@ -13,11 +13,11 @@ Branch: `feature/slice-20-egress-runtime`.
 | Obligation | Owning code / planned proof | Evidence state |
 | --- | --- | --- |
 | Immutable snapshot, process UUID, authenticated apply | Existing configuration/control; receiver tests | Existing component regression passed; production health integration open |
-| Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `request_authorization.py`, request-owner tests | Ordinary request owners tested; absent-authority helper compatibility and transition owners open |
+| Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `request_authorization.py`, request-owner tests | Ordinary/transition owners, approved absent-authority helper and pathless OPTIONS tested; runtime integration open |
 | Mandatory address classification and trusted infrastructure inventory | `destinations.py`, `test_destinations.py` | Component tested; manager provisioning still open |
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
-| Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
+| Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1, HTTP/2, approved empty/absent authority and extended CONNECT adapters tested; OPTIONS asterisk is explicitly pathless |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, real BIND delv chain proofs | Durable signing identities/component proofs implemented; upstream classification, delegation/negative proofs and publication open |
@@ -28,6 +28,46 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Approved no-authority helper and pathless OPTIONS
+
+The user approved both narrow adaptations on 2026-09-25 at 19:39 MSK.
+For protocol-valid empty/absent authority, the private no-body helper envelope
+uses HTTP/1.0 and omits Host and Transfer-Encoding. The parser/framing/identity
+gates run before adaptation. Original target/method, Expect and other headers
+remain in the helper; original upstream Host and framing remain unchanged.
+No authority, body or terminating chunk is fabricated. The helper response
+accepts only HTTP/1.0 or HTTP/1.1 with the existing strict status/header/Base64
+checks and still closes each disposable connection. Malformed framing and
+duplicate Host values are rejected rather than sanitized.
+
+OPTIONS `*` is explicitly pathless (`normalized_path=None`), not raw path,
+empty path or invented `/`. Both request adapters preserve the original target;
+only rules without path constraints can match. In blacklist mode, a path-bound
+rule therefore does not match a server-wide request; all mandatory checks and
+named-domain unknown-denial behavior remain. Every ordinary URI still requires
+successful NGINX output. Other methods with `*` are rejected; H2 denial is
+stream-local and sends no origin request. Pathless requests still check public
+destination, membership, authority port, TLS identity and the current snapshot.
+
+Real NGINX and native HTTP parsers prove chunked/fixed uploads, 100-continue,
+trailers, original target/empty Host preservation, absent/empty H2 authority,
+both policy modes, TLS-name-only policy, malformed-input rejection and
+unrelated H2 stream survival. Hyper-h2's default requires an authority; the
+named external endpoint fixture disables only header validation to observe
+the agreed absent-authority profile on the wire, without using ADS's codec.
+An absent helper socket cannot turn an ordinary URI into a pathless request.
+
+Review: no upstream serializer or original request mutation, invented identity,
+method widening or path wildcard introduced. Initial test collection caught a
+reserved pytest parameter name; corrected before execution. New one-shot H1
+fixtures originally left client keepalive open while awaiting EOF; they now
+explicitly request close, retaining response/wire assertions.
+
+All five local Nox gates pass: **871 affected tests, zero skips**, 39.79s,
+`slice20-pathless-reviewed-nox.log`. No latest full-workspace rerun or CI.
+Fixture listeners/processes closed; no containers created. No images, merge,
+publication, deployment, lab action or later-slice work.
 
 ### Persistent DNSSEC signing identities
 

@@ -3,6 +3,7 @@
 Callers must separately enforce framing, original destination, DNS membership,
 TLS/HTTP identity and supported protocol mechanics before sending HTTP bytes.
 The path argument is already-normalized NGINX output, never a raw-path fallback.
+None denotes the explicitly pathless OPTIONS asterisk target, not helper failure.
 """
 
 from __future__ import annotations
@@ -167,7 +168,7 @@ class PolicyRequest:
     protocol: str
     sub_protocol: str
     method: str
-    normalized_path: bytes
+    normalized_path: bytes | None
     upgrade: UpgradeTarget | None = None
 
 
@@ -180,9 +181,15 @@ def permitted(snapshot: ProjectEgressSnapshot | None, request: PolicyRequest) ->
         or request.sub_protocol not in ("http/1.1", "http/2", "websocket")
         or not 1 <= request.port <= 65535
         or request.upgrade not in (None, "http/2", "websocket")
-        or not request.normalized_path.startswith(b"/")
-        or len(request.normalized_path) > 8192
-        or b"\0" in request.normalized_path
+        or (request.normalized_path is None and request.method != "OPTIONS")
+        or (
+            request.normalized_path is not None
+            and (
+                not request.normalized_path.startswith(b"/")
+                or len(request.normalized_path) > 8192
+                or b"\0" in request.normalized_path
+            )
+        )
         or (
             request.method == "CONNECT"
             and not (request.sub_protocol == "http/2" and request.upgrade == "websocket")
@@ -205,18 +212,21 @@ def permitted(snapshot: ProjectEgressSnapshot | None, request: PolicyRequest) ->
             or options.method not in ("any", request.method)
         ):
             continue
-        if options.paths and not any(
-            ant_matches(
-                item.pattern.encode("utf-8"),
-                request.normalized_path,
-                budget=budget,
-                insensitive=(
-                    not whitelist
-                    if item.case_insensitive is msgspec.UNSET
-                    else item.case_insensitive
-                ),
+        if options.paths and (
+            request.normalized_path is None
+            or not any(
+                ant_matches(
+                    item.pattern.encode("utf-8"),
+                    request.normalized_path,
+                    budget=budget,
+                    insensitive=(
+                        not whitelist
+                        if item.case_insensitive is msgspec.UNSET
+                        else item.case_insensitive
+                    ),
+                )
+                for item in options.paths
             )
-            for item in options.paths
         ):
             continue
         if request.upgrade is not None and not (

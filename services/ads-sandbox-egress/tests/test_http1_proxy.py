@@ -606,20 +606,22 @@ def test_conflicting_schemes_and_tls_names_are_not_selectable_hints(protocol):
 
 
 @pytest.mark.anyio
-async def test_empty_host_is_not_repaired_to_make_nginx_pass(nginx_helper):
-    # This exposes an unfinished supported case, not successful proxy support:
-    # NGINX rejects the legally empty Host. No invented authority/raw-path fallback.
+async def test_empty_host_is_preserved_with_approved_private_helper_adapter(nginx_helper):
+    received = []
+
     async def origin(reader, writer):
-        pytest.fail("helper rejection must not be repaired")
+        received.append(await reader.readuntil(b"\r\n\r\n"))
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        await writer.drain()
 
     async with proxy_lab(nginx_helper, origin, settings(domain="*")) as lab:
         reader, writer = await asyncio.open_connection(*lab.address)
         try:
-            writer.write(b"GET / HTTP/1.1\r\nHost:\r\n\r\n")
+            writer.write(b"GET /a/../b?raw=%2f HTTP/1.1\r\nHost:\r\nConnection: close\r\n\r\n")
             await writer.drain()
-            with pytest.raises(ConnectionResetError):
-                await asyncio.wait_for(reader.read(), 2)
-            assert not lab.connected and not lab.resolver.calls
+            assert b"200 OK" in await asyncio.wait_for(reader.read(), 2)
+            assert len(lab.connected) == 1 and not lab.resolver.calls
+            assert received == [b"GET /a/../b?raw=%2f HTTP/1.1\r\nhost: \r\n\r\n"]
         finally:
             await close_client(writer)
 

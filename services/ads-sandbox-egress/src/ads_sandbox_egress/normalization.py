@@ -77,8 +77,22 @@ class Normalizer:
         headers = validate_headers(headers)
         if any(name.startswith(b":") for name, _ in headers):
             raise RequestDenied("normalizer_requires_protocol_adapter")
-        # Do not change method, authority, original target, Expect or framing.
-        request = method + b" " + target + b" HTTP/1.1\r\n"
+        hosts = [value for name, value in headers if name == b"host"]
+        if len(hosts) > 1:
+            raise RequestDenied("normalization_multiple_hosts")
+        # Approved no-authority adapter, only for this private no-body exchange.
+        # Protocol validity/identity were checked by RequestHead/authorizer.
+        # Retain method, exact target, Expect and all other header semantics;
+        # never change the separately retained request or its upstream framing.
+        version = b"1.1"
+        if not hosts or hosts == [b""]:
+            version = b"1.0"
+            headers = tuple(
+                (name, value)
+                for name, value in headers
+                if name not in (b"host", b"transfer-encoding")
+            )
+        request = method + b" " + target + b" HTTP/" + version + b"\r\n"
         request += b"".join(name + b": " + value + b"\r\n" for name, value in headers) + b"\r\n"
         if len(request) > 65536:
             raise RequestDenied("normalization_header_limit")
@@ -92,7 +106,7 @@ class Normalizer:
                 while True:
                     block = await reader.readuntil(b"\r\n\r\n")
                     start, result = raw_http1_headers(block)
-                    if not re.fullmatch(rb"HTTP/1[.]1 [0-9]{3}(?: [^\r\n]*)?", start):
+                    if not re.fullmatch(rb"HTTP/1[.][01] [0-9]{3}(?: [^\r\n]*)?", start):
                         raise RequestDenied("invalid_normalization_response")
                     status = int(start.split(b" ", 2)[1])
                     if 100 <= status < 200 and status != 101:
