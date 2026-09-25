@@ -25,7 +25,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | TLS certificate pairs and defect mirroring | TLS inspection; real validation clients | Open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
-| Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full regression still running at this checkpoint |
+| Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
 
@@ -34,9 +34,24 @@ Local Nox lint, deps, typecheck and package passed. The package gate builds the
 existing Python packages only; no project image, native binary, rootfs or chart
 was built. No CI was initiated or treated as this branch's evidence.
 
-The full regression was launched before the later source additions and tests.
-Its final result must be recorded separately, with this collection-time limit;
-it cannot be described as an exact-final-head collection of every new test.
+The full local regression passed **4,585 tests and four subtests**, with
+**two skips**, 2,088 warnings, in 1,822.76 seconds (Nox session: 32 minutes).
+It was launched before later source additions/tests and cannot be described
+as an exact-final-head collection of every new test. The final 208-test
+component selection additionally passed under Python 3.12.13 in 13.36 seconds.
+
+The skips are the existing Docker-gated Keycloak tests
+`test_keycloak_login_shows_the_threadline_shell` and
+`test_published_realm_sample_import_and_identity`. No Docker executable is
+installed. Rootless Podman supplied PostgreSQL through supported fixture URL
+overrides, not a fake Docker command or a weakened Keycloak test gate.
+
+Disposable PostgreSQL removal and isolated VFS `system reset --force` succeeded.
+The test driver's final assertion incorrectly required the empty VFS directory
+itself to disappear; manual inspection verified no layers, containers, image
+metadata, volumes, helper processes or test listeners. The remaining 88 KiB
+runtime/lock skeleton and temporary Python 3.12 environment were removed.
+Cleanup is verified, not inferred from the reset exit code.
 
 Real boundary tests cover installed NGINX/Lua, TCP RST without an HTTP response,
 chunk/trailer wire parsing, duplicate-length pipelining, UDP-to-TCP DNS retry,
