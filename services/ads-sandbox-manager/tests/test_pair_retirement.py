@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, select
 
+from ads_sandbox_manager.egress_state_store import EgressState, EgressStateRepository
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.pair_retirement import PairRetirement, PairRetirementRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
@@ -155,3 +156,20 @@ async def test_retired_creator_cannot_reenter_or_settle_original_writes(resource
         generations = list(await db.scalars(select(PairIntent.generation)))
         assert generations == [f.intent.generation]
         assert await db.get(PairRetirement, f.intent.generation)
+
+
+async def test_retired_state_writer_stays_fenced_after_pair_row_loss(resources):
+    f = resources
+    assert await dispose(f)
+    async with f.h.sessions.begin() as db:
+        saved = await retire(f, db)
+        state = await db.get(EgressState, UUID(f.work.pair_snapshot["egress_state_id"]))
+        assert saved is not None and state is not None
+        before = state.key_dispatch
+        await db.execute(delete(PairIntent).where(PairIntent.generation == f.intent.generation))
+    with pytest.raises(PairClaimLost, match="retired"):
+        async with f.h.sessions.begin() as db:
+            await EgressStateRepository(PairIntentRepository()).settle(db, state, "key")
+    async with f.h.sessions.begin() as db:
+        assert (await db.get(EgressState, state.state_id)).key_dispatch == before
+        assert await db.get(PairRetirement, f.intent.generation) is not None

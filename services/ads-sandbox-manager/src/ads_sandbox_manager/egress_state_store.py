@@ -357,9 +357,17 @@ class EgressStateRepository:
         """
         _role(role)
         validate(expected)
+        from ads_sandbox_manager.pair_retirement import PairRetirement
+
         creator = await db.get(PairIntent, expected.creator_generation, with_for_update=True)
-        if creator is None or creator.retired_at is not None:
+        if (creator is not None and creator.retired_at is not None) or await db.get(
+            PairRetirement, expected.creator_generation
+        ) is not None:
             raise PairClaimLost("retired state creator cannot settle writes")
+        # The independently retained original state reservation can still record
+        # its original invocation's normal return after pair/session loss. This
+        # creates no objects, bindings or replacement ledger; retirement remains
+        # a permanent refusal even if its PairIntent was separately lost.
         scope = _scope(expected)  # Capture before an identity-map refresh.
         custody_uid = expected.key_uid
         state = await db.scalar(

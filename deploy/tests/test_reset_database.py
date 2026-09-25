@@ -24,6 +24,18 @@ from ads_preferences.service import PreferencesService
 database = load("database")
 
 
+def test_reset_table_scope_is_independent_of_other_imported_applications():
+    for service in database.MODULES:
+        database.application_tables(service)
+    preferences = {table.name for table in database.application_tables("ads-preferences")}
+    ads = {table.name for table in database.application_tables("ads")}
+    manager = {table.name for table in database.application_tables("ads-sandbox-manager")}
+    assert preferences == {"user_model", "project_egress"}
+    assert {"project", "session", "session_entry"} <= ads
+    assert "sandbox_pair_disposal" in manager and "sandbox_pair_retirement" in manager
+    assert preferences.isdisjoint(ads | manager) and ads.isdisjoint(manager)
+
+
 @contextmanager
 def postgres():
     configured = os.environ.get("ADS_PREFERENCES_TEST_DATABASE_URL")
@@ -163,3 +175,24 @@ def test_table_grants_are_restored_without_changing_schema_or_role(reset_db):
     reset_db.reset(captured)
     reset_db.initialize(captured)
     assert reset_db.inventory()["grants"] == captured["grants"]
+
+
+def test_explicit_reset_target_wins_over_application_environment(reset_db, monkeypatch):
+    captured = reset_db.inventory()
+    reset_db.reset(captured)
+    variable = "ADS_PREFERENCES_DATABASE_URL"
+    foreign = "postgresql+psycopg://unrelated@127.0.0.1:1/never-authorized"
+    monkeypatch.setenv(variable, foreign)
+    reset_db.initialize(captured)
+    assert os.environ[variable] == foreign
+    assert reset_db.inventory()["tables"] == captured["tables"]
+
+    def fail(**kwargs):
+        assert variable not in os.environ
+        assert kwargs["database_url"] == reset_db.target.url
+        raise RuntimeError("synthetic initialization failure")
+
+    monkeypatch.setattr(database, "prepare_schema", fail)
+    with pytest.raises(protected.PreservationError):
+        reset_db.initialize(captured)
+    assert os.environ[variable] == foreign

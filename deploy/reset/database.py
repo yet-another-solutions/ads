@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -39,7 +40,21 @@ def application_tables(service: str):
     bases = {module.Base for module in modules if hasattr(module, "Base")}
     if len(bases) != 1:
         raise PreservationError("normal application schema metadata unavailable")
-    return tuple(next(iter(bases)).metadata.tables.values())
+    base = next(iter(bases))
+    # AdvancedAlchemy's registry/metadata may be shared by separately imported
+    # applications. That is not authority to reset another service's tables.
+    tables = {
+        model.__table__.name: model.__table__
+        for module in modules
+        for model in vars(module).values()
+        if isinstance(model, type)
+        and model.__module__ == module.__name__
+        and issubclass(model, base)
+        and getattr(model, "__table__", None) is not None
+    }
+    if not tables:
+        raise PreservationError("normal application tables unavailable")
+    return tuple(tables[name] for name in sorted(tables))
 
 
 @dataclass(frozen=True)
@@ -260,6 +275,11 @@ class Database:
             ) from None
 
     def initialize(self, captured: dict[str, Any]) -> None:
+        # Alembic env.py supports application startup environment overrides.
+        # This operator's explicit, verified target must win instead. The reset
+        # coordinator is synchronous and holds its process-wide operator lock.
+        variable = self.target.service.upper().replace("-", "_") + "_DATABASE_URL"
+        previous = os.environ.pop(variable, None)
         try:
             prepare_schema(
                 alembic_ini=self.root / "services" / self.target.service / "alembic.ini",
@@ -305,3 +325,6 @@ class Database:
             raise PreservationError(
                 "normal fresh-schema initialization failed; keep writers fenced"
             ) from None
+        finally:
+            if previous is not None:
+                os.environ[variable] = previous

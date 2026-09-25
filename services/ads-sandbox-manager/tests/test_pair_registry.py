@@ -1,7 +1,8 @@
 # ruff: noqa: F811
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, select
@@ -11,6 +12,7 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.pair_disposal import PairDisposal
 from ads_sandbox_manager.pair_registry import PairRegistry
 from ads_sandbox_manager.pair_retirement import PairRetirement, PairRetirementRepository
+from ads_sandbox_manager.pair_store import PairIntent
 from ads_sandbox_manager.store import SandboxSession
 from test_kube_release import api  # noqa: F401
 from test_node_release_wire import node_report  # noqa: F401
@@ -175,3 +177,31 @@ async def test_maintenance_cannot_reopen_retired_pair_as_legacy_cleanup(resource
     assert f.remote.objects == before
     resumed = await f.h.service.provision(row.session_id)
     assert resumed.sandbox_id == row.sandbox_id and resumed.status == "creating"
+
+
+async def test_bounded_registry_scan_advances_past_unreconciled_oldest_entry(resources):
+    f = resources
+    await lose_session(f)
+    registry = PairRegistry(f.capture.repository)
+    old_id = uuid4()
+    async with f.h.sessions.begin() as db:
+        # Deliberately malformed retained inventory is a blocker, not permission
+        # to delete anything or to monopolize every subsequent bounded scan.
+        db.add(
+            PairIntent(
+                generation=old_id,
+                session_id=uuid4(),
+                sandbox_id=uuid4(),
+                project_id=f.intent.project_id,
+                claim_owner=uuid4(),
+                claim_changed=f.intent.claim_changed - timedelta(seconds=1),
+                namespace=f.intent.namespace,
+                golden_version=f.intent.golden_version,
+                control_uids={},
+            )
+        )
+    async with f.h.sessions.begin() as db:
+        assert await registry.candidates(db, 1) == [old_id]
+        assert await registry.candidates(db, 1, after=old_id) == [f.intent.generation]
+        assert await registry.candidates(db, 1, after=f.intent.generation) == [old_id]
+        assert await registry.candidates(db, 1, after=uuid4()) == [old_id]

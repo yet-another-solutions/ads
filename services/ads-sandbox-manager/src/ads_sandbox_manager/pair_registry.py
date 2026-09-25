@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
@@ -30,7 +30,9 @@ class PairRegistry:
         self.lifecycle = lifecycle
         self.disposal = PairDisposalRepository(lifecycle)
 
-    async def candidates(self, db: AsyncSession, limit: int) -> list[UUID]:
+    async def candidates(
+        self, db: AsyncSession, limit: int, *, after: UUID | None = None
+    ) -> list[UUID]:
         owners = select(SandboxSession.session_id).where(
             SandboxSession.session_id == PairIntent.session_id
         )
@@ -41,37 +43,48 @@ class PairRegistry:
         recoverable = owners.where(
             SandboxSession.status.in_(("shutting_down", "recovering", "service"))
         )
-        return list(
-            await db.scalars(
-                select(PairIntent.generation)
-                .where(
-                    or_(~owners.exists(), recoverable.exists(), pending.exists()),
-                    ~select(CleanupWork.work_id)
-                    .where(CleanupWork.sandbox_id == PairIntent.sandbox_id)
-                    .exists(),
-                    or_(
-                        PairIntent.retired_at.is_(None),
-                        select(PairRetirement.generation)
-                        .where(
-                            PairRetirement.generation == PairIntent.generation,
-                            PairRetirement.kind.in_(("idle", "orphan-retained")),
-                        )
-                        .exists(),
-                    ),
-                    ~select(PairTransfer.generation)
-                    .where(PairTransfer.predecessor == PairIntent.generation)
-                    .exists(),
-                    ~select(PairDisposal.generation)
+        query = (
+            select(PairIntent.generation)
+            .where(
+                or_(~owners.exists(), recoverable.exists(), pending.exists()),
+                ~select(CleanupWork.work_id)
+                .where(CleanupWork.sandbox_id == PairIntent.sandbox_id)
+                .exists(),
+                or_(
+                    PairIntent.retired_at.is_(None),
+                    select(PairRetirement.generation)
                     .where(
-                        PairDisposal.generation == PairIntent.generation,
-                        PairDisposal.completed_at.is_not(None),
+                        PairRetirement.generation == PairIntent.generation,
+                        PairRetirement.kind.in_(("idle", "orphan-retained")),
                     )
                     .exists(),
+                ),
+                ~select(PairTransfer.generation)
+                .where(PairTransfer.predecessor == PairIntent.generation)
+                .exists(),
+                ~select(PairDisposal.generation)
+                .where(
+                    PairDisposal.generation == PairIntent.generation,
+                    PairDisposal.completed_at.is_not(None),
                 )
-                .order_by(PairIntent.claim_changed)
-                .limit(limit)
+                .exists(),
             )
+            .order_by(PairIntent.claim_changed, PairIntent.generation)
+            .limit(limit)
         )
+        cursor = await db.get(PairIntent, after) if after is not None else None
+        if cursor is not None:
+            page = list(
+                await db.scalars(
+                    query.where(
+                        tuple_(PairIntent.claim_changed, PairIntent.generation)
+                        > (cursor.claim_changed, cursor.generation)
+                    )
+                )
+            )
+            if page:
+                return page
+        return list(await db.scalars(query))
 
     async def reconcile(
         self, db: AsyncSession, generation: UUID, now: datetime, timeout: float

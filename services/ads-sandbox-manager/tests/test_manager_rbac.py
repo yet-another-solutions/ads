@@ -29,13 +29,15 @@ def test_manager_cleanup_is_namespace_scoped_and_cluster_observation_stays_read_
         ("batch", "jobs"): ["create", "delete", "get", "list", "watch"],
         ("apps", "deployments"): ["create", "delete", "get", "list", "watch"],
         ("", "persistentvolumeclaims"): ["create", "delete", "get", "list", "watch"],
-        ("", "pods"): ["get", "list", "delete"],
-        ("", "services"): ["get"],
-        ("networking.k8s.io", "networkpolicies"): ["get"],
-        ("scheduling.k8s.io", "podgroups"): ["get"],
+        ("", "pods"): ["create", "get", "list", "delete"],
+        ("", "services"): ["create", "get", "delete"],
+        ("networking.k8s.io", "networkpolicies"): ["create", "get", "delete"],
+        ("scheduling.k8s.io", "podgroups"): ["create", "get", "delete"],
+        ("", "secrets"): ["create", "get", "delete"],
         ("", "persistentvolumes"): ["get"],
         ("", "nodes"): ["get"],
         ("storage.k8s.io", "volumeattachments"): ["list"],
+        ("storage.k8s.io", "storageclasses"): ["get"],
     }
     assert docs[0]["metadata"]["namespace"] == "ads-sandbox"
     assert all(set(rule["verbs"]) <= {"get", "list", "watch"} for rule in docs[1]["rules"])

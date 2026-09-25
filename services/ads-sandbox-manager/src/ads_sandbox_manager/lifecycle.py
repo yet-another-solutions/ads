@@ -92,6 +92,7 @@ class LifecycleService:
         self.pair_runtime = pair_runtime
         self.pair_resources = pair_resources
         self._ping_task: asyncio.Task[None] | None = None
+        self._pair_scan_after: UUID | None = None
 
     async def emit(self, topic: str, message: Signal) -> None:
         async with asyncio.timeout(self.settings.control_seconds):
@@ -425,7 +426,13 @@ class LifecycleService:
         if kind == "orphan":
             registry = PairRegistry(self.repository)
             async with self.sessions.begin() as db:
-                generations = await registry.candidates(db, s.lifecycle_batch)
+                generations = await registry.candidates(
+                    db, s.lifecycle_batch, after=self._pair_scan_after
+                )
+            if generations:
+                # Scheduling cursor only: proof and ownership remain durable.
+                # A corrupt/blocked oldest page cannot starve unrelated pairs.
+                self._pair_scan_after = generations[-1]
             for generation in generations:
                 try:
                     async with self.sessions.begin() as db:

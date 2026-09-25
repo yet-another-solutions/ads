@@ -177,8 +177,8 @@ class PairIntentRepository:
 
     Lock the session first, then the intent, in the existing lifecycle order.
     No transaction here performs Kubernetes, Kafka, filesystem, or token I/O.
-    Retirement/recreation is deliberately unavailable until runtime-release
-    evidence and cleanup are integrated; old ownership is never overwritten.
+    Retirement and retained transfer use separate proof-checked repositories;
+    this creator never overwrites or revives old ownership.
     """
 
     async def _owned(
