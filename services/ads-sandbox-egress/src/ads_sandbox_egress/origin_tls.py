@@ -16,6 +16,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from cryptography import x509
+
 from ads_sandbox_egress.http1 import reset
 from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.tls import (
@@ -33,6 +35,27 @@ class VerificationIssue:
     code: int
     depth: int
     certificate_sha256: str
+
+
+def compatibility_issues(chain: tuple[bytes, ...]) -> tuple[VerificationIssue, ...]:
+    """Retain OpenSSL 3 strict CA criticality across OpenSSL 4's relaxed profile.
+
+    Applied only to the native BUILT chain, never unrelated presented extras.
+    A mirrored noncritical CA can still be accepted by a permissive client;
+    strict clients must see the original defect rather than a repaired chain.
+    """
+    if not 1 <= len(chain) <= 16 or sum(map(len, chain)) > 131072:
+        raise TLSFailure("compatibility_chain_limit")
+    result = []
+    for depth, der in enumerate(chain):
+        certificate = x509.load_der_x509_certificate(der)
+        try:
+            constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+        except x509.ExtensionNotFound:
+            continue
+        if constraints.value.ca and not constraints.critical:
+            result.append(VerificationIssue(89, depth, hashlib.sha256(der).hexdigest()))
+    return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,9 +274,15 @@ class OriginSession(TLSSession):
         if selected is not None and selected not in self.protocols:
             raise TLSFailure("unoffered_origin_alpn")
         self.selected = selected
+        built = self._chain(library.ssl.SSL_get0_verified_chain(self._ssl))
+        for issue in compatibility_issues(built):
+            if issue not in self.issues:
+                self.issues.append(issue)
+        if len(self.issues) > 64:
+            raise TLSFailure("origin_validation_limit")
         self.certificate = OriginCertificate(
             self._chain(library.ssl.SSL_get_peer_cert_chain(self._ssl)),
-            self._chain(library.ssl.SSL_get0_verified_chain(self._ssl)),
+            built,
             tuple(self.issues),
             selected,
         )

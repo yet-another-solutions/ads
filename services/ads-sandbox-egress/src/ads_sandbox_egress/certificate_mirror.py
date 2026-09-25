@@ -1,7 +1,7 @@
 """Compose and independently check client-visible defects, never clean them.
 
-This owns non-revocation certificate construction. CRL/status acquisition and
-publication are separate obligations. An unsupported composer path raises the
+Local revocation publication is an explicit optional dependency. Upstream
+CRL/status acquisition remains separate. An unsupported composer path raises the
 explicit incomplete-support error, NOT the approved genuinely-unmappable reset
 classification. Process-local untrusted issuer keys are never persisted here.
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from datetime import UTC, datetime
+from urllib.parse import urlsplit, urlunsplit
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -25,6 +27,7 @@ from ads_sandbox_egress.certificates import (
     certificate_builder,
     validate_crl_url,
 )
+from ads_sandbox_egress.crl import CRLAuthority, CRLRepository, CRLUnavailable
 from ads_sandbox_egress.issuers import UntrustedIssuer
 from ads_sandbox_egress.origin_tls import OriginCertificate, VerificationIssue
 from ads_sandbox_egress.tls import UnmappableReason, UnmappableTLS
@@ -33,7 +36,7 @@ from ads_sandbox_egress.tls_transport import FrontendIdentity
 _PEM = serialization.Encoding.PEM
 _DER = serialization.Encoding.DER
 _ISSUER = frozenset((18, 19, 20, 21))
-_SUPPORTED = frozenset((7, 9, 10, 26, 34, 62, 64)) | _ISSUER
+_SUPPORTED = frozenset((7, 9, 10, 23, 25, 26, 32, 34, 39, 62, 64, 79, 81, 82, 89, 92)) | _ISSUER
 
 
 def _outcomes(issues: tuple[VerificationIssue, ...]) -> frozenset[tuple[int, int]]:
@@ -44,6 +47,8 @@ def _outcomes(issues: tuple[VerificationIssue, ...]) -> frozenset[tuple[int, int
         if issue.code in (18, 19)
         else (20, -1)
         if issue.code in (20, 21)
+        else (25, -1)
+        if issue.code == 25
         else (issue.code, issue.depth)
         for issue in issues
     )
@@ -56,8 +61,16 @@ class CertificateMirror:
         untrusted: UntrustedIssuer,
         validator: CertificateValidator,
         crl_url: str,
+        *,
+        crls: CRLRepository | None = None,
+        issuer_crls: tuple[bytes, ...] = (),
     ) -> None:
         validate_crl_url(crl_url)
+        if crls is not None and urlsplit(crl_url).path != f"/crl/{signer.fingerprint}.der":
+            raise ValueError("issuer-scoped local CRL route required")
+        if len(issuer_crls) > 16 or sum(map(len, issuer_crls)) > 4194304:
+            raise ValueError("bounded public issuer CRLs required")
+        self.crls, self.issuer_crls = crls, issuer_crls
         if untrusted.certificate.not_valid_after_utc != signer.certificate.not_valid_after_utc:
             raise ValueError("process issuer expiry must equal minted CA expiry")
         spki = serialization.PublicFormat.SubjectPublicKeyInfo
@@ -69,6 +82,13 @@ class CertificateMirror:
         untrusted.certificate.verify_directly_issued_by(untrusted.certificate)
         self.signer, self.untrusted, self.validator = signer, untrusted, validator
         self.crl_url = crl_url
+
+    def _location(self, issuer: x509.Certificate) -> str:
+        if self.crls is None:
+            return self.crl_url
+        parsed = urlsplit(self.crl_url)
+        identity = issuer.fingerprint(hashes.SHA256()).hex()
+        return urlunsplit((parsed.scheme, parsed.netloc, f"/crl/{identity}.der", "", ""))
 
     def mirror(self, destination: PairDestination, observed: OriginCertificate) -> FrontendIdentity:
         self.signer.require_current()
@@ -97,6 +117,9 @@ class CertificateMirror:
             if issue.code not in _SUPPORTED:
                 raise CertificateDefectRequiresMirror("certificate_condition_not_implemented")
             defects[issue.depth].add(issue.code)
+        revoked = any(issue.code == 23 for issue in observed.issues)
+        if revoked and self.crls is None:
+            raise CertificateDefectRequiresMirror("revocation_publication_not_implemented")
         # Do not strip a stapled-status obligation while mirroring another error.
         if any(
             extension.oid == ExtensionOID.TLS_FEATURE
@@ -122,7 +145,7 @@ class CertificateMirror:
                 issuer,
                 missing_key,
                 issuer,
-                self.crl_url,
+                self._location(issuer),
                 cap_expiry=False,
                 bind_issuer_certificate=True,
             ).sign(issuer_key, hashes.SHA384())
@@ -131,14 +154,23 @@ class CertificateMirror:
         # Self-issued (NOT self-signed) bridges retain path_length=0 on the
         # minted CA without introducing an unrelated path-length failure.
         maximum = max(defects)
+        path_length_failure = any(issue.code == 25 for issue in observed.issues)
+        issued: dict[
+            int, tuple[x509.Certificate, ec.EllipticCurvePrivateKey, x509.Certificate]
+        ] = {}
         for depth in range(maximum, 0, -1):
             key = ec.generate_private_key(ec.SECP384R1())
             builder = certificate_builder(
                 source[depth],
                 key,
                 issuer,
-                self.crl_url,
-                subject=issuer.subject,
+                self._location(issuer),
+                # A path-length failure must NOT be repaired by making all
+                # synthetic intermediates self-issued. Reproduce the original
+                # hierarchy's names/counting in that case. Added local CA levels
+                # may also report code 25, so that class is compared independent
+                # of depth; all other non-trust conditions retain their depths.
+                subject=source[depth].subject if path_length_failure else issuer.subject,
                 cap_expiry=False,
                 bind_issuer_certificate=True,
             )
@@ -146,6 +178,7 @@ class CertificateMirror:
                 ec.generate_private_key(ec.SECP384R1()) if 7 in defects[depth] else issuer_key
             )
             bridge = builder.sign(signing_key, hashes.SHA384())
+            issued[depth] = issuer, issuer_key, bridge
             tail.insert(0, bridge.public_bytes(_PEM))
             issuer, issuer_key = bridge, key
         leaf_key = _new_leaf_key(source[0])
@@ -153,14 +186,39 @@ class CertificateMirror:
             source[0],
             leaf_key,
             issuer,
-            self.crl_url,
+            self._location(issuer),
             cap_expiry=False,
             bind_issuer_certificate=True,
         )
         signing_key = ec.generate_private_key(ec.SECP384R1()) if 7 in defects[0] else issuer_key
         leaf = builder.sign(signing_key, hashes.SHA384())
+        issued[0] = issuer, issuer_key, leaf
         chain = (leaf.public_bytes(_PEM), *tail)
-        actual = self.validator.observe(chain, destination.server_name or str(destination.address))
+        published: dict[str, bytes] = {}
+        if revoked:
+            assert self.crls is not None
+            now = datetime.now(UTC)
+            for depth, (local_issuer, private_key, certificate) in issued.items():
+                if 23 in defects[depth] and 7 in defects[depth]:
+                    raise CertificateDefectRequiresMirror("revoked_bad_signature_requires_composer")
+                try:
+                    authority = CRLAuthority(local_issuer, private_key)
+                    publication = self.crls.publish(
+                        authority,
+                        now=now,
+                        revoke=certificate if 23 in defects[depth] else None,
+                    )
+                except (ValueError, CRLUnavailable):
+                    raise CertificateDefectRequiresMirror(
+                        "synthetic_crl_condition_not_implemented"
+                    ) from None
+                published[authority.identity] = publication.crl.public_bytes(_PEM)
+        actual = self.validator.observe(
+            chain,
+            destination.server_name or str(destination.address),
+            crls=tuple(published.values()) + self.issuer_crls,
+            check_revocation=revoked,
+        )
         if _outcomes(actual) != _outcomes(observed.issues):
             raise CertificateDefectRequiresMirror("synthetic_validation_outcome_mismatch")
         return FrontendIdentity(

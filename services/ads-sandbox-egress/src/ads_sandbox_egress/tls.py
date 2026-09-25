@@ -62,6 +62,7 @@ void X509_STORE_CTX_free(X509_STORE_CTX *);
 int X509_STORE_CTX_init(X509_STORE_CTX *, X509_STORE *, X509 *, OPENSSL_STACK *);
 void X509_STORE_CTX_set_verify_cb(X509_STORE_CTX *, int (*)(int, X509_STORE_CTX *));
 X509_VERIFY_PARAM *X509_STORE_CTX_get0_param(const X509_STORE_CTX *);
+OPENSSL_STACK *X509_STORE_CTX_get0_chain(const X509_STORE_CTX *);
 int X509_verify_cert(X509_STORE_CTX *);
 int X509_STORE_add_crl(X509_STORE *, X509_CRL *);
 int X509_STORE_set_flags(X509_STORE *, unsigned long);

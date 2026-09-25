@@ -265,8 +265,8 @@ class IdentityStore:
         # Logical retained-data quota plus physical allocated database limit.
         physical = (
             db.execute("PRAGMA page_count").fetchone()[0]
-            * db.execute("PRAGMA page_size").fetchone()[0]
-        )
+            - db.execute("PRAGMA freelist_count").fetchone()[0]
+        ) * db.execute("PRAGMA page_size").fetchone()[0]
         if used + added > self.capacity or physical + added > self.capacity:
             raise StateUnavailable("persistent quota exhausted")
 
@@ -351,7 +351,8 @@ class IdentityStore:
         """
         self._name(name)
         if (
-            not content
+            name.startswith("crl/")
+            or not content
             or len(content) > 1048576
             or not math.isfinite(retain_until)
             or (
@@ -384,6 +385,74 @@ class IdentityStore:
             db.execute("INSERT INTO publications VALUES(?,?,?)", (name, content, retain_until))
             db.executemany(
                 "INSERT INTO dependencies VALUES(?,?)", ((name, d) for d in dependencies)
+            )
+            self._commit_inventory()
+        self._sync_directory()
+
+    @staticmethod
+    def _crl_prefix(issuer: str) -> str:
+        if re.fullmatch("[0-9a-f]{64}", issuer) is None:
+            raise ValueError("invalid CRL issuer identity")
+        return "crl/" + issuer + "/"
+
+    def crl_head(self, issuer: str) -> tuple[int, bytes, float] | None:
+        """Authenticated latest publication, even when expired; never reset its number."""
+        prefix = self._crl_prefix(issuer)
+        self._verify_inventory()
+        row = (
+            self._connection()
+            .execute(
+                "SELECT name,content,retain_until FROM publications "
+                "WHERE name>=? AND name<? ORDER BY name DESC LIMIT 1",
+                (prefix, prefix + "~"),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        suffix = row[0][len(prefix) :]
+        if not re.fullmatch("[0-9]{20}", suffix) or not 1 <= int(suffix) <= 2**63 - 1:
+            raise StateUnavailable("invalid retained CRL generation")
+        return int(suffix), row[1], row[2]
+
+    def commit_crl(self, issuer: str, expected: int, content: bytes, retain_until: float) -> int:
+        """CAS immutable public CRL generations; never relax DNS/ECH dependencies."""
+        prefix = self._crl_prefix(issuer)
+        if (
+            type(expected) is not int
+            or not 0 <= expected < 2**63 - 1
+            or not content
+            or len(content) > 1048576
+            or not math.isfinite(retain_until)
+            or retain_until <= 0
+        ):
+            raise ValueError("invalid CRL publication")
+        db = self._connection()
+        with db:
+            current = self.crl_head(issuer)
+            if (current[0] if current is not None else 0) != expected:
+                raise StateUnavailable("CRL publication generation changed")
+            name = prefix + f"{expected + 1:020d}"
+            self._reserve(len(name) + len(content) + 128)
+            db.execute("INSERT INTO publications VALUES(?,?,?)", (name, content, retain_until))
+            self._commit_inventory()
+        self._sync_directory()
+        return expected + 1
+
+    def prune_crls(self, issuer: str, *, now: float) -> None:
+        """Remove only superseded, expired CRLs. Retain the head and its number forever."""
+        prefix = self._crl_prefix(issuer)
+        if not math.isfinite(now) or now <= 0:
+            raise ValueError("invalid CRL retention clock")
+        db = self._connection()
+        with db:
+            current = self.crl_head(issuer)
+            if current is None:
+                return
+            head_name = prefix + f"{current[0]:020d}"
+            db.execute(
+                "DELETE FROM publications WHERE name>=? AND name<? AND retain_until<?",
+                (prefix, head_name, now),
             )
             self._commit_inventory()
         self._sync_directory()

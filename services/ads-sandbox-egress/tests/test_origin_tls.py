@@ -25,7 +25,7 @@ def certificate_fixture(tmp_path, defect):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(days=2))
         .not_valid_after(now + timedelta(days=10))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), defect != "noncritical-ca")
         .add_extension(
             x509.KeyUsage(False, False, False, False, False, True, True, False, False), True
         )
@@ -111,6 +111,7 @@ def certificate_fixture(tmp_path, defect):
         ("signature", {7}),
         ("purpose", {26}),
         ("critical", {34}),
+        ("noncritical-ca", {89}),
         ("revoked", {23}),
         ("revocation-unavailable", {3}),
     ],

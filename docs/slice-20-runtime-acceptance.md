@@ -22,12 +22,63 @@ Branch: `feature/slice-20-egress-runtime`.
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
-| TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`; real validation/two-leg tests | Origin validation and encrypted stable success pairs implemented; defect mirroring/CRL distribution open |
+| TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Durable local CRLs and certificate constraints
+
+`CRLRepository` signs only with explicitly supplied egress-owned authorities.
+Issuer-scoped, monotonically numbered CRLs are authenticated and committed
+before wire publication. Refresh retains all revoked serials; expiry cannot
+reset the number or forget revocations. Superseded generations are removed only
+after expiration, and the head remains even when expired. Reclaimed SQLite
+pages are reusable without relaxing the physical or logical capacity limits.
+Public parent/root CRLs are separate inputs, never manufactured with copied
+parent private keys. DNS/ECH publication dependencies are unchanged.
+
+`LocalCRLService` accepts a bootstrap-supplied specific private listener and
+only the paired sandbox source. It serves bounded GET/HEAD for the exact
+literal Host and `/crl/<issuer fingerprint>.der`, with signed DER and bounded
+cache lifetime. Unknown/stale publications, invalid paths/headers/body and
+capacity overflow reset without an HTTP response. Internal persistent/database
+faults latch its health false; shutdown resets live clients and drains tasks.
+This is not an arbitrary private-address exception or a proxy. Interface
+binding, routing and full readiness remain bootstrap integration obligations.
+
+The composer now preserves leaf/intermediate revocation, including combined
+expiry/name failures, with publication before candidate acceptance. Real
+CA-Job hierarchy tests require the public signing-chain CRLs and prove that
+missing issuer CRLs cannot be concealed. Independent installed OpenSSL and a
+CRL-aware TLS client reject the fetched revoked substitution. Tests explicitly
+load the fetched CRL: automatic fetching by arbitrary clients is NOT claimed.
+
+Additional native-observed cases cover CA/basic-constraints, CA/leaf key usage,
+missing CA key usage and path-length errors. Path-length failure is compared
+as an error class because the added local hierarchy may report it at additional
+depths; other non-trust conditions retain exact error depth. The minted
+path_length=0 remains unchanged. Review found that OpenSSL 4 accepts a
+noncritical CA basic-constraints extension which OpenSSL 3 strict mode rejects.
+Origin and candidate verification therefore retain an explicit built-chain
+compatibility finding, and the mirror preserves that field. Tests demonstrate
+both validators' actual behavior rather than claiming identical diagnostics.
+See the [OpenSSL 4 verification profile](https://docs.openssl.org/4.0/man1/openssl-verification-options/).
+
+All five local Nox gates pass: lint, deps, typecheck, test and Python package.
+Affected egress/CA/commons/bootstrap selection: **658 passed, zero skips**,
+20.93 seconds, `slice20-crl-reviewed-nox.log`. The first gate attempt passed
+643 tests but found a reused-variable type error; it was corrected and all
+five gates rerun. The latest selection includes real origin TLS compatibility,
+CRL source/capacity/shutdown/reset, database-failure redaction, durable refresh,
+bounded-store reuse and authenticated corruption regressions.
+
+Open: upstream CRL/OCSP acquisition and stapling, remaining defect combinations,
+stable-pair revocation propagation, refresh scheduling and readiness ownership,
+and complete runtime integration. No full workspace rerun, CI, merge,
+publication or lab proof is claimed. Slice 20 remains open.
 
 ### Non-revocation certificate mirroring
 
@@ -43,8 +94,8 @@ Before returning a certificate, native verification must reproduce all expected
 error codes/depths. Self-signed trust failures and incomplete-issuer failures
 are separate classes; neither can substitute for the other.
 Missing/extra errors reject the candidate, never return a clean replacement.
-Incomplete supported mappings, including revocation, constraints/path length,
-key usage and stapled status, remain explicit incomplete-support exceptions,
+At that checkpoint incomplete supported mappings, including revocation,
+constraints/path length, key usage and stapled status, remained explicit exceptions,
 not relabelled as genuinely unmappable to claim success.
 
 Tests use actual native certificate observations, independent OpenSSL CLI checks,

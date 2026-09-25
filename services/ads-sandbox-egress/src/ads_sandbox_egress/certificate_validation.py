@@ -14,7 +14,7 @@ from typing import Any
 from cryptography.hazmat.primitives.serialization import Encoding
 
 from ads_commons.egress_trust import public_certificates
-from ads_sandbox_egress.origin_tls import VerificationIssue, _certificate_der
+from ads_sandbox_egress.origin_tls import VerificationIssue, _certificate_der, compatibility_issues
 from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.tls import TLSFailure, TLSLibrary
 
@@ -143,6 +143,19 @@ class CertificateValidator:
             crypto.X509_STORE_CTX_set_verify_cb(context, verified)
             if crypto.X509_verify_cert(context) != 1 or not seen or failed:
                 raise TLSFailure("candidate_verification_failed")
+            built = crypto.X509_STORE_CTX_get0_chain(context)
+            count = crypto.OPENSSL_sk_num(built)
+            if not 1 <= count <= 16:
+                raise TLSFailure("candidate_chain_limit")
+            built_der = tuple(
+                _certificate_der(library, ffi.cast("X509 *", crypto.OPENSSL_sk_value(built, index)))
+                for index in range(count)
+            )
+            for issue in compatibility_issues(built_der):
+                if issue not in issues:
+                    issues.append(issue)
+            if len(issues) > 64:
+                raise TLSFailure("candidate_validation_limit")
             return tuple(issues)
         finally:
             crypto.X509_STORE_CTX_free(context)
