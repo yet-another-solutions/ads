@@ -20,7 +20,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
-| Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
+| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, real BIND delv chain proofs | Durable signing identities/component proofs implemented; upstream classification, delegation/negative proofs and publication open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
 | TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
@@ -28,6 +28,39 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Persistent DNSSEC signing identities
+
+`DNSSECIdentities` explicitly initializes one sandbox root, recovers it only
+against the expected full fingerprint, and maps canonical observed zone plus
+full upstream DNSKEY wire identity plus generation into encrypted local state.
+Short key tags are never identity keys. The root has no automatic rotation or
+missing-state regeneration. Distinct zones/keys/generations remain distinct,
+while case-equivalent zone names recover the same mapping.
+
+Supported signing algorithms in this component are RSA/SHA-256, RSA/SHA-512,
+ECDSA P-256/P-384, Ed25519 and Ed448. Mappings retain original algorithm,
+flags and protocol, including defective flags/protocol rather than silently
+repairing them. Other algorithms raise an explicit construction limitation,
+not an upstream authentication diagnosis. Recovered public/private material
+is cross-checked. Prepared mappings cannot be published until the storage
+lifecycle advances them; retirement dependencies and tombstones prevent
+silent regeneration of a retired generation.
+
+Tests verify actual signatures for all six implemented algorithms, encrypted
+recovery and full-identity separation. BIND delv independently validates a
+root-to-zone chain built from generated keys and rejects expired signatures,
+invalid signatures and DS mismatch. The serving fixture supplies already
+constructed RRsets with AD clear and is explicitly outside the component:
+this is not evidence of implemented upstream validation, zone discovery,
+unsigned delegation, NSEC/NSEC3/wildcard transformation or synthetic view
+publication. Signing alone cannot establish any of those obligations.
+
+All five local Nox gates pass: **835 affected tests, zero skips**, 38.60s,
+`slice20-dnssec-identity-nox.log`. The initial focused typecheck flagged
+dnspython's optional wire return type; a checked conversion fixed it before
+tests and the gate rerun. Fixture DNS sockets and delv subprocesses closed.
+No full-workspace rerun/CI, project image build, merge/publication or lab action.
 
 ### Graceful HTTP/2 shutdown
 
