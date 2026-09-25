@@ -91,9 +91,12 @@ unchanged disk inventory check, so the declared public source is already
 kernel-claimed. A device without an attempt is rejected; absent inputs retain
 the isolated component-test path until manager clone integration.
 
-Only `trusted-egress-ca.pem` is streamed to `podman exec` for installation under
-`/usr/local/share/ca-certificates/ads-egress.crt`. Neither parent chains nor the
-egress-only company bundle are imported. Writable-rootfs software is executed
+The minted certificate plus validated `signing-chain.pem` through the root are
+streamed to `podman exec` for one-certificate-per-file installation under
+`/usr/local/share/ca-certificates/ads-egress/`. Both bundle and hashed trust paths
+are refreshed; old ADS-owned entries are replaced without removing baseline CAs.
+This intentionally trusts the configured signing hierarchy, not just the minted
+egress subtree. The egress-only extra bundle remains excluded. Writable-rootfs software is executed
 inside the rootless container, never through guest-root chroot. Trust failure
 prevents initialization/readiness on both create and resume. The private-key
 source is never an input to this helper and must never be attached to the guest.

@@ -1,6 +1,6 @@
 """Verify candidate synthetic outcomes before publishing them to a TLS client.
 
-The sole trusted anchor is the mounted minted CA, not egress-only origin trust
+Trust is the mounted egress CA and signing hierarchy, not egress-only origin trust
 and never the independent process-local untrusted issuer. Continuing the native
 verification callback collects defects; it does not convert them into success.
 """
@@ -11,15 +11,22 @@ import hashlib
 import ipaddress
 from typing import Any
 
+from cryptography.hazmat.primitives.serialization import Encoding
+
+from ads_commons.egress_trust import public_certificates
 from ads_sandbox_egress.origin_tls import VerificationIssue, _certificate_der
 from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.tls import TLSFailure, TLSLibrary
 
 
 class CertificateValidator:
-    def __init__(self, library: TLSLibrary, anchor: bytes) -> None:
-        if not 1 <= len(anchor) <= 65536:
-            raise ValueError("explicit minted trust anchor required")
+    def __init__(self, library: TLSLibrary, anchor: bytes, *, partial_chain: bool = False) -> None:
+        if not 1 <= len(anchor) <= 1048576:
+            raise ValueError("explicit egress trust bundle required")
+        anchors = public_certificates(anchor)
+        if not 1 <= len(anchors) <= 17:
+            raise ValueError("invalid egress trust bundle length")
+        self.partial_chain = partial_chain
         self.library, self.anchor = library, anchor
 
     def observe(
@@ -85,8 +92,11 @@ class CertificateValidator:
             untrusted = crypto.OPENSSL_sk_new_null()
             for handle in (store, context, untrusted):
                 library.require(handle, "candidate_verifier_allocation")
-            anchor = certificate(self.anchor)
-            library.require(crypto.X509_STORE_add_cert(store, anchor), "candidate_anchor")
+            # Public trust loader owns hierarchy/identity checks. This verifier
+            # uses exactly that explicit bundle, never ambient upstream trust.
+            for item in public_certificates(self.anchor):
+                anchor = certificate(item.public_bytes(Encoding.PEM))
+                library.require(crypto.X509_STORE_add_cert(store, anchor), "candidate_anchor")
             leaf = certificate(chain[0])
             for pem in chain[1:]:
                 library.require(
@@ -108,10 +118,11 @@ class CertificateValidator:
             )
             parameter = crypto.X509_STORE_CTX_get0_param(context)
             library.require(parameter, "candidate_verify_parameter")
-            # Explicit minted trust anchor may itself be intermediate-signed.
-            # PARTIAL_CHAIN terminates at THAT supplied anchor, never at an
-            # arbitrary peer intermediate. STRICT and TRUSTED_FIRST remain on.
-            flags = 0x20 | 0x8000 | 0x80000
+            # Default reaches the configured root. Partial-chain mode is explicit
+            # for compatibility regression only, not the production trust model.
+            flags = 0x20 | 0x8000
+            if self.partial_chain:
+                flags |= 0x80000
             if check_revocation:
                 flags |= 0x4 | 0x8
             library.require(crypto.X509_VERIFY_PARAM_set_flags(parameter, flags), "candidate_flags")

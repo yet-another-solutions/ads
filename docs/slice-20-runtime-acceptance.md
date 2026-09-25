@@ -29,7 +29,39 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
-### Minted-anchor compatibility decision
+### Approved full signing-chain trust
+
+The user approved sandbox trust of the complete configured signing hierarchy
+on 2026-09-25 at 16:05 MSK, instead of the proposed same-key self-signed view.
+The CA-Job output/key/expiry remain unchanged. `load_public` now validates the
+existing ordered chain through its root and exports it with the minted CA.
+Private keys and the unrelated egress-only extra bundle remain excluded.
+This deliberately broadens sandbox trust to that configured root hierarchy.
+
+Bootstrap streams this validated bundle into the rootless sandbox, where a
+base-owned Python installer creates one `.crt` per certificate and refreshes
+both CAfile and CApath representations. It removes only old ADS-owned entries.
+Failed validation or installation cannot reach readiness.
+
+Local proof uses actual CA-Job mint/output, shared loader, production pair
+generation and the real installer with isolated update-ca-certificates paths.
+Independent installed OpenSSL verifies via BOTH the generated bundle and hash
+directory without partial-chain mode; native OpenSSL 4 verifies the same chain.
+With issuer CRLs supplied, full-chain revocation verification passes. Missing
+issuer CRLs still fail and a revoked egress CA is still detected at depth 1.
+Issuer CRLs are fixture inputs here, not a claim of production acquisition.
+No host trust store, deployed CA, lab resource or publication changed.
+
+All five local Nox gates passed: lint, deps, typecheck, test and package.
+The affected egress, CA, commons and bootstrap selection passed **599 tests,
+zero skips**, 12.72 seconds. Shell syntax passed. Full workspace regression
+has not been rerun at this increment. The old minted-only negative and
+self-signed-candidate proof remain regression tests, not the selected solution.
+Review confirmed the installer runs only inside rootless `podman exec`, leaves
+baseline files intact, fails startup on update errors and receives no private
+material. No CI fallback was necessary for these gates.
+
+### Earlier minted-anchor compatibility decision
 
 `certificate_validation.py` supplies bounded native candidate-chain verification
 with only the supplied minted trust anchor, not origin extra trust. It reports
@@ -48,12 +80,10 @@ Testing the actual CA-Job `mint()` output exposed a compatibility gap:
   native candidate validator. The original parent-signed certificate remains
   intact and still verifies under its parent.
 
-The candidate is a test-only construction in `test_minted_anchor.py`, not a
-change to CA production output, a new signing key, installed trust, publication
-or lab PKI. Adopting it changes the public certificate representation and needs
-the user's explicit decision before CA-Job/artifact/bootstrap contracts change.
-It would still install only the one minted egress authority, not its parent
-or origin extra CAs. The reset-only unmappable-outcome approval is unrelated
+The self-signed candidate is retained only as a historical regression proof in
+`test_minted_anchor.py`, not a production CA output change.
+Adoption was superseded by the full-chain trust approval above.
+The reset-only unmappable-outcome approval is unrelated
 and remains valid; it is not permission to conceal this valid-chain gap.
 
 All five local Nox sessions passed after adding these checks: **299 egress

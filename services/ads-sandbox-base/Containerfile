@@ -55,6 +55,7 @@ COPY services/ads-sandbox-base/scripts/ads-sandbox-network /usr/local/sbin/ads-s
 COPY services/ads-sandbox-base/scripts/ads-agent-init /usr/local/sbin/ads-agent-init
 COPY services/ads-sandbox-base/scripts/ads-sandbox-shutdown /usr/local/sbin/ads-sandbox-shutdown
 COPY services/ads-sandbox-base/scripts/ads-sandbox-trust /usr/local/sbin/ads-sandbox-trust
+COPY services/ads-sandbox-base/scripts/ads-install-egress-trust /usr/local/sbin/ads-install-egress-trust
 COPY libraries/ads-commons/src/ads_commons/egress_trust.py /usr/local/lib/ads-trust/ads_egress_trust.py
 
 RUN chmod 0644 /usr/local/sbin/ads-agent-init /usr/local/sbin/ads-sandbox-shutdown \

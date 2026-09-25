@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+"""Runs INSIDE rootless sandbox only; base has already validated the public chain."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import ssl
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CERTIFICATE = re.compile(
+    rb"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----"
+)
+MAXIMUM = 2 * 1024 * 1024
+
+
+def install(
+    pem: bytes,
+    directory: Path = Path("/usr/local/share/ca-certificates"),
+    command: tuple[str, ...] = ("update-ca-certificates", "--fresh"),
+) -> None:
+    blocks = CERTIFICATE.findall(pem)
+    if len(pem) > MAXIMUM or not 3 <= len(blocks) <= 17 or CERTIFICATE.sub(b"", pem).strip():
+        raise ValueError("invalid validated trust bundle")
+    names = {
+        hashlib.sha256(ssl.PEM_cert_to_DER_cert(block.decode("ascii"))).hexdigest() + ".crt": block
+        for block in blocks
+    }
+    if len(names) != len(blocks):
+        raise ValueError("duplicate trust certificate")
+    managed = directory / "ads-egress"
+    managed.mkdir(parents=True, exist_ok=True)
+    for name, block in names.items():
+        fd, temporary = tempfile.mkstemp(prefix=".pending-", dir=managed)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(block + b"\n")
+                stream.flush()
+                os.fchmod(stream.fileno(), 0o644)
+                os.fsync(stream.fileno())
+            os.replace(temporary, managed / name)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    # Remove only ADS-owned prior entries, including the old single-cert path.
+    for path in managed.glob("*.crt"):
+        if path.name not in names:
+            path.unlink()
+    (directory / "ads-egress.crt").unlink(missing_ok=True)
+    subprocess.run(command, check=True, timeout=30)
+
+
+if __name__ == "__main__":
+    install(sys.stdin.buffer.read(MAXIMUM + 1))

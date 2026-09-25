@@ -32,10 +32,11 @@ An ancestor expiring earlier is rejected.
 
 Public ext4 volume:
 
-- `trusted-egress-ca.pem`: the only newly minted certificate sandbox boot may
-  install into trust, alongside its ordinary golden baseline.
-- `signing-chain.pem`: public parents, separate from both sandbox trust
-  installation and the configurable extra bundle.
+- `trusted-egress-ca.pem`: the single minted egress certificate and committed identity.
+- `signing-chain.pem`: its complete public signing hierarchy through the root.
+  Sandbox boot validates and installs both files' certificates alongside the
+  ordinary golden baseline. This intentionally trusts the configured parents/root,
+  as approved on 2026-09-25; it is not restricted to the egress subtree.
 - `egress-only-trust.pem`: extra public anchors, imported by egress alone.
 - `complete.json`: format, Job attempt UID, minted certificate fingerprint,
   exact expiry and role.
@@ -128,16 +129,24 @@ expected Job attempt, fingerprint, CA constraints and expiry. Fixed leaf reads
 are bounded, reject symlinks and nonregular files, and use nonblocking opens so
 a corrupt FIFO cannot hang bootstrap.
 
-The guest loader reads only `complete.json` and `trusted-egress-ca.pem`.
+The guest loader reads `complete.json`, `trusted-egress-ca.pem` and
+`signing-chain.pem`, verifying ordered signatures, CA/path constraints, current
+validity, root termination and exact intermediate expiry before exporting trust.
 The egress loader additionally requires a matching private manifest, matching
 key, valid parent signatures/path depth and exact intermediate expiry; it keeps
 company anchors separate from the served signing chain. Private-key objects
 are excluded from diagnostic representations.
 
 The base-owned guest helper requires kernel block read-only and mounted
-filesystem read-only state before using the public clone. Only the minted CA
-is streamed into rootless `podman exec` for trust installation before readiness,
+filesystem read-only state before using the public clone. The minted CA plus
+validated signing hierarchy is streamed into rootless `podman exec` before readiness,
 on both create and resume. Mutable rootfs programs never run as guest root.
+The base-owned installer executes inside that rootless container, writes one
+certificate per `.crt` under `ads-egress/`, removes only prior ADS-owned entries,
+and refreshes the trust bundle/hash directory. Egress-only extra trust and keys
+never enter this stream. The existing CA-Job output format and key are unchanged.
+Full-chain CRL verification separately needs issuer CRLs; certificates are not
+revocation evidence. No parent private keys are copied to supply that evidence.
 GitHub Actions builds the base from repository-root context to copy the exact
 shared verifier; the golden device checker remains unchanged.
 
