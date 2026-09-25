@@ -21,6 +21,7 @@ import dns.rdatatype
 import dns.rdtypes.ANY.RRSIG
 import dns.rrset
 
+from ads_sandbox_egress.dnssec_denial import DenialProof, Kind, validate_denial
 from ads_sandbox_egress.dnssec_identity import (
     DNSKey,
     DNSSECIdentities,
@@ -66,6 +67,13 @@ class DelegationSubstitution:
     records: dns.rrset.RRset
     before: DSCheck
     after: DSCheck
+
+
+@dataclass(frozen=True, slots=True)
+class DenialSubstitution:
+    evidence: tuple[tuple[dns.rrset.RRset, dns.rrset.RRset | None], ...]
+    before: DenialProof
+    after: DenialProof
 
 
 def _defects(check: SignatureCheck | DSCheck) -> tuple[str, ...]:
@@ -243,3 +251,57 @@ class DNSSECTransformer:
             raise DNSSECUnrepresentable("delegation outcome changed during substitution")
         self._deadline()
         return DelegationSubstitution(result, before, after)
+
+    def denial(
+        self,
+        qname: dns.name.Name,
+        qtype: dns.rdatatype.RdataType,
+        kind: Kind,
+        evidence: tuple[tuple[dns.rrset.RRset, dns.rrset.RRset | None], ...],
+        keys: KeySubstitution,
+        *,
+        now: float,
+        wildcard: dns.name.Name | None = None,
+    ) -> DenialSubstitution:
+        """Retain acquired NSEC/NSEC3 structure, including defects and Opt-Out.
+
+        Mapping keys does not change names, hashes, bitmaps or denial ranges.
+        Do not infer absent names from the identity store or add missing proof
+        records. Any semantic record rewrite needs a separate checked plan.
+        """
+        self._deadline()
+        before = validate_denial(
+            qname,
+            qtype,
+            kind,
+            evidence,
+            keys.original,
+            now=now,
+            budget=self.budget,
+            wildcard=wildcard,
+        )
+        transformed = []
+        for records, signatures in evidence:
+            changed = copy.deepcopy(records)
+            result = self.signatures(records, changed, signatures, keys, now=now)
+            transformed.append((changed, result.signatures))
+        result_evidence = tuple(transformed)
+        after = validate_denial(
+            qname,
+            qtype,
+            kind,
+            result_evidence,
+            keys.synthetic,
+            now=now,
+            budget=self.budget,
+            wildcard=wildcard,
+        )
+        if (before.valid, before.opt_out, before.closest_encloser, before.limitation) != (
+            after.valid,
+            after.opt_out,
+            after.closest_encloser,
+            after.limitation,
+        ):
+            raise DNSSECUnrepresentable("denial outcome changed during substitution")
+        self._deadline()
+        return DenialSubstitution(result_evidence, before, after)

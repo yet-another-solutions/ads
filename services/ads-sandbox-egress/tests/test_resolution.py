@@ -68,7 +68,7 @@ def test_wrong_record_family_not_positive_membership(monkeypatch):
         async def exchange(*args, **kwargs):
             return answer("example.com", "AAAA", "2001:4860:4860::8888")
 
-        monkeypatch.setattr("dns.asyncquery.udp", exchange)
+        monkeypatch.setattr("ads_sandbox_egress.resolution.exchange", exchange)
         result = await resolver().acquire("example.com", dns.rdatatype.A)
         assert not result.addresses
 
@@ -92,7 +92,7 @@ def test_traversal_no_cache_and_loop_boundary(monkeypatch):
             # Actual upstream boundary is faked; traversal and inspection are real.
             return result
 
-        monkeypatch.setattr("dns.asyncquery.udp", exchange)
+        monkeypatch.setattr("ads_sandbox_egress.resolution.exchange", exchange)
         instance = resolver()
         result = await instance.acquire("example.com", dns.rdatatype.A)
         assert result.addresses == frozenset((ipaddress.ip_address("8.8.8.8"),))
@@ -120,7 +120,7 @@ def test_all_service_endpoints_not_only_best(monkeypatch):
                 return answer(name, "AAAA")
             return answer(name, "A", "10.0.0.1" if name == "bad.example." else "8.8.8.8")
 
-        monkeypatch.setattr("dns.asyncquery.udp", exchange)
+        monkeypatch.setattr("ads_sandbox_egress.resolution.exchange", exchange)
         with pytest.raises(RequestDenied):
             await resolver().acquire("example.com", dns.rdatatype.HTTPS)
         assert "bad.example." in called

@@ -12,7 +12,6 @@ import math
 import time
 from dataclasses import dataclass
 
-import dns.asyncquery
 import dns.exception
 import dns.flags
 import dns.message
@@ -28,6 +27,7 @@ import dns.rdtypes.IN.AAAA
 import dns.rdtypes.svcbbase
 
 from ads_sandbox_egress.destinations import Address, ResolverBoundary
+from ads_sandbox_egress.dns_wire import exchange
 from ads_sandbox_egress.policy import RequestDenied
 
 
@@ -85,6 +85,7 @@ class AcquiredAnswer:
     expires_at: float
     direct_addresses: frozenset[Address] = frozenset()
     services: tuple[AcquiredService, ...] = ()
+    received_at: tuple[float, ...] = ()
     # DNSSEC classification and synthesis are deliberately NOT inferred here.
 
 
@@ -129,12 +130,12 @@ class UpstreamResolver:
             if remaining <= 0:
                 raise RequestDenied("dns_resolution_deadline")
             try:
-                response = await dns.asyncquery.udp(
+                response = await exchange(
                     query,
                     str(upstream),
                     port=self.upstream_port,
                     timeout=min(self.limits.exchange, remaining),
-                    raise_on_truncation=False,
+                    tcp=False,
                 )
                 # Even a truncated reply cannot hide a known prohibited record.
                 self.inspect(response)
@@ -145,11 +146,12 @@ class UpstreamResolver:
                     remaining = job.deadline - time.monotonic()
                     if remaining <= 0:
                         raise RequestDenied("dns_resolution_deadline")
-                    response = await dns.asyncquery.tcp(
+                    response = await exchange(
                         query,
                         str(upstream),
                         port=self.upstream_port,
                         timeout=min(self.limits.exchange, remaining),
+                        tcp=True,
                     )
                     self.inspect(response)
                     if response.flags & dns.flags.TC:
@@ -160,7 +162,7 @@ class UpstreamResolver:
                     if upstream != self.boundary.upstreams[-1]:
                         continue
                 return response
-            except (OSError, dns.exception.DNSException):
+            except (OSError, dns.exception.DNSException, asyncio.IncompleteReadError):
                 continue
         raise RequestDenied("dns_upstream_unavailable")
 
@@ -205,6 +207,7 @@ class UpstreamResolver:
         # receive a renewed deadline. The local cap may only shorten it.
         deadline = min(job.deadline, time.monotonic() + self.limits.deadline)
         messages: list[dns.message.Message] = []
+        received_at: list[float] = []
         addresses: set[Address] = set()
         service_results: list[AcquiredService] = []
 
@@ -231,6 +234,7 @@ class UpstreamResolver:
                 response = None
             if response is not None:
                 messages.append(response)
+                received_at.append(time.monotonic())
             code = response.rcode() if response is not None else dns.rcode.SERVFAIL
             now = time.monotonic()
             resolved: set[Address] = set()
@@ -279,7 +283,7 @@ class UpstreamResolver:
                     ):
                         services.append(record)
                         expires = min(expires, now + rrset.ttl)
-            if next_name is not None:
+            if next_name is not None and kind != dns.rdatatype.CNAME:
                 if resolved or services:
                     raise RequestDenied("conflicting_dns_alias")
                 branch, branch_expiry = await follow(
@@ -289,14 +293,19 @@ class UpstreamResolver:
                 expires = min(expires, branch_expiry)
             aliases = [service for service in services if service.priority == 0]
             if aliases:
-                if len(aliases) != 1 or len(services) != 1:
-                    raise RequestDenied("conflicting_service_alias")
-                if aliases[0].target != dns.name.root:
-                    branch, branch_expiry = await follow(
-                        aliases[0].target, kind, visited, depth + 1, expires, aliases[0]
-                    )
-                    resolved.update(branch)
-                    expires = min(expires, branch_expiry)
+                # Recipients ignore ServiceMode records whenever AliasMode is
+                # present. Inspect every alternative alias, because clients
+                # may choose any of them; never flatten ignored service ports.
+                for alias in aliases:
+                    job.endpoints += 1
+                    if job.endpoints > self.limits.endpoints:
+                        raise RequestDenied("dns_endpoint_limit")
+                    if alias.target != dns.name.root:
+                        branch, branch_expiry = await follow(
+                            alias.target, kind, visited, depth + 1, expires, alias
+                        )
+                        resolved.update(branch)
+                        expires = min(expires, branch_expiry)
             else:
                 for service in services:
                     job.endpoints += 1
@@ -379,4 +388,5 @@ class UpstreamResolver:
             else expires,
             direct,
             tuple(service_results),
+            tuple(received_at),
         )

@@ -29,6 +29,38 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Alias assembly, negative proofs and local wire compatibility
+
+Acquisition retains receive timestamps. `resolution_answer.py` assembles
+CNAME/DNAME chains and terminal positives/negatives before classification,
+creates only exact protocol-required DNAME CNAMEs, ages TTLs, and rejects
+conflicting observations. A newer failed terminal lookup cannot be replaced
+with older in-packet data. Unrelated records do not enter the assembled view.
+Membership now classifies assembled address chains rather than incorrectly
+treating an incomplete per-packet alias prefix as the complete answer.
+
+The transformer preserves acquired NSEC/NSEC3 structure, missing/corrupt proof
+sets and Opt-Out outcomes. Thirty-one component scenarios and eight independent
+BIND delv negative-answer checks supplement the earlier positive-chain proof.
+Explicit DNSKEY requests retain their aliased answer with DO clear.
+
+The earlier AliasMode parser limitation is now handled by an ADS-local wire
+adapter, not a global dnspython patch: it recovers only the library's exact
+AliasMode-parameter error from original bytes, preserves signed parameter
+bytes, and inspects recognized hints. Unknown/ServiceMode-only AliasMode
+parameters are retained but have no endpoint meaning. Duplicate parameter
+keys are rejected before the stock parser can hide an earlier prohibited hint.
+Real UDP/TCP checks and signature validation prove the recovery path. Mixed
+RRset modes ignore ServiceMode for endpoint selection, while all alternative
+AliasMode branches are bounded and inspected.
+
+All five local Nox gates pass: **1,369 affected tests, zero skips**, 54.43s,
+`slice20-assembly-wire-final-nox.log`. Initial mypy integration issues were
+corrected; all existing security tests remain. Native dnspython rejection
+still has a regression test, alongside passing ADS adapter tests.
+Complete synthetic-root publication/ECH lifecycle and runtime integration
+remain open; none of these component tests supplies lab acceptance.
+
 ### Checked DNSSEC substitutions and client signaling
 
 `dnssec_transform.py` substitutes full DNSKEY identities, corresponding DS

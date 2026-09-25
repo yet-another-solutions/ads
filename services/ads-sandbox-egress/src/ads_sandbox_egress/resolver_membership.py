@@ -14,10 +14,12 @@ import dns.rdtypes.svcbbase
 
 from ads_sandbox_egress.destinations import Address
 from ads_sandbox_egress.dnssec_answer import AnswerAuthentication
+from ads_sandbox_egress.dnssec_identity import DNSSECUnrepresentable
 from ads_sandbox_egress.dnssec_validation import CryptoBudget
 from ads_sandbox_egress.membership import ResolutionEvidence, ServiceEndpoint
 from ads_sandbox_egress.policy import RequestDenied, canonical_host
 from ads_sandbox_egress.resolution import AcquiredAnswer, ResolutionJob
+from ads_sandbox_egress.resolution_answer import assemble
 
 
 class FreshMembership:
@@ -74,7 +76,16 @@ class FreshMembership:
                     )
                 if service.addresses:
                     expiry = min(expiry, service.expires_at)
-            for message in acquired.messages:
+            messages = acquired.messages
+            if acquired.query_type in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                try:
+                    messages = (assemble(acquired, deadline=job.deadline),)
+                except DNSSECUnrepresentable:
+                    # Synthesis/assembly uncertainty does not erase separately
+                    # complete public membership. It cannot claim secure DNS.
+                    states.append("indeterminate")
+                    continue
+            for message in messages:
                 try:
                     status = await self.authentication.classify(message, job, budget=budget)
                     states.append(status.state)

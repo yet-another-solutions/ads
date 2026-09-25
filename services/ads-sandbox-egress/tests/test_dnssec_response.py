@@ -119,6 +119,35 @@ def test_explicit_security_type_query_keeps_answer_without_do(kind, data):
     assert result.answer == candidate.answer
 
 
+def test_explicit_dnskey_through_alias_survives_do_clear_without_unrelated_keys():
+    q = query(False, False, False, False, "DNSKEY")
+    candidate = dns.message.make_response(q)
+    candidate.answer.extend(
+        (
+            dns.rrset.from_text("example.", 60, "IN", "CNAME", "target.example."),
+            dns.rrset.from_text(
+                "target.example.",
+                60,
+                "IN",
+                "DNSKEY",
+                "257 3 15 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            ),
+        )
+    )
+    candidate.additional.append(
+        dns.rrset.from_text(
+            "unrelated.example.",
+            60,
+            "IN",
+            "DNSKEY",
+            "257 3 15 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+    )
+    result = render(q, candidate, evidence(), safe_udp_payload=1232)
+    assert result.answer == candidate.answer
+    assert not result.additional and not result.flags & dns.flags.AD
+
+
 @pytest.mark.parametrize("bad", ["question", "indeterminate", "resolution"])
 def test_unverified_candidate_cannot_use_render(bad):
     q = query(True, True, True, True)

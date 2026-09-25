@@ -172,6 +172,67 @@ def test_budget_and_deadline_do_not_become_synthesis_fallback(transformer):
         transformer.keys(original)
 
 
+@pytest.mark.parametrize("family", ["NSEC", "NSEC3"])
+@pytest.mark.parametrize(
+    "kind,name,qtype,wildcard",
+    [
+        ("nodata", "www.example.", "AAAA", None),
+        ("nxdomain", "missing.example.", "A", None),
+        ("wildcard", "a.wild.example.", "A", "*.wild.example."),
+        ("wildcard_nodata", "a.wild.example.", "AAAA", None),
+        ("unsigned_delegation", "child.example.", "DS", None),
+    ],
+)
+@pytest.mark.parametrize("defect", ["none", "missing", "corrupt"])
+def test_denial_substitution_preserves_acquired_structure_and_result(
+    transformer, family, kind, name, qtype, wildcard, defect
+):
+    from test_dnssec_denial import Zone
+
+    zone = Zone(family)
+    mapping = transformer.keys(zone.keys)
+    proofs = zone.proofs
+    if defect == "missing":
+        proofs = []
+    elif defect == "corrupt":
+        proofs = [
+            (records, dns.rrset.from_rdata(records.name, 60, corrupt(next(iter(sigs)))))
+            for records, sigs in proofs
+        ]
+    result = transformer.denial(
+        dns.name.from_text(name),
+        dns.rdatatype.from_text(qtype),
+        kind,
+        tuple(proofs),
+        mapping,
+        now=zone.now,
+        wildcard=dns.name.from_text(wildcard) if wildcard else None,
+    )
+    assert result.before.valid == result.after.valid == (defect == "none")
+    assert result.before.opt_out == result.after.opt_out
+    assert len(result.evidence) == len(proofs)
+    for (old, old_sigs), (changed, changed_sigs) in zip(proofs, result.evidence, strict=True):
+        assert old == changed and old.ttl == changed.ttl
+        assert changed_sigs != old_sigs
+
+
+def test_opt_out_denial_does_not_gain_secure_answer_status(transformer):
+    from test_dnssec_denial import Zone
+
+    zone = Zone("NSEC3", opt_out=True)
+    mapping = transformer.keys(zone.keys)
+    result = transformer.denial(
+        dns.name.from_text("child.example."),
+        dns.rdatatype.DS,
+        "unsigned_delegation",
+        tuple(zone.proofs),
+        mapping,
+        now=zone.now,
+    )
+    assert result.before.valid and result.after.valid
+    assert result.before.opt_out and result.after.opt_out
+
+
 @pytest.mark.parametrize(
     "case", ["secure", "expired", "future", "invalid", "ds_mismatch", "alternative"]
 )
@@ -272,6 +333,94 @@ def test_independent_delv_checks_transformed_keys_delegation_and_answer(
             else:
                 assert b"resolution failed" in combined, combined
                 assert b"fully validated" not in combined, combined
+        finally:
+            if process is not None and process.returncode is None:
+                process.kill()
+                await process.communicate()
+            await server.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("family", ["NSEC", "NSEC3"])
+@pytest.mark.parametrize("kind", ["nodata", "nxdomain"])
+@pytest.mark.parametrize("broken", [False, True])
+def test_independent_delv_checks_transformed_negative_proofs(
+    transformer, tmp_path, family, kind, broken
+):
+    from test_dnssec_denial import Zone
+
+    if shutil.which("delv") is None:
+        pytest.skip("independent BIND delv unavailable")
+    now = int(time.time())
+    zone = Zone(family, now=now)
+    mapping = transformer.keys(zone.keys)
+    key_sigs = dns.rrset.from_rdata(
+        ZONE, 60, signature(zone.keys, zone.private, zone.keys[0], now - 60, now + 600)
+    )
+    mapped_sigs = transformer.signatures(
+        zone.keys, mapping.synthetic, key_sigs, mapping, now=now
+    ).signatures
+    proofs = tuple(
+        (records, dns.rrset.from_rdata(records.name, 60, corrupt(sigs[0]) if broken else sigs[0]))
+        for records, sigs in zone.proofs
+    )
+    name = dns.name.from_text("www.example." if kind == "nodata" else "missing.example.")
+    qtype = dns.rdatatype.AAAA if kind == "nodata" else dns.rdatatype.A
+    converted = transformer.denial(name, qtype, kind, proofs, mapping, now=now)
+    soa, soa_sigs = zone.resign(
+        dns.rrset.from_text(ZONE, 60, "IN", "SOA", "ns.example. admin.example. 1 60 60 60 60")
+    )
+    changed_soa_sigs = transformer.signatures(soa, soa, soa_sigs, mapping, now=now).signatures
+
+    class View:
+        async def answer(self, query, *, deadline):
+            response = dns.message.make_response(query)
+            response.flags |= dns.flags.RA
+            response.flags &= ~dns.flags.AD
+            q = query.question[0]
+            if q.name == ZONE and q.rdtype == dns.rdatatype.DNSKEY:
+                response.answer.extend((mapping.synthetic, mapped_sigs))
+            else:
+                response.set_rcode(dns.rcode.NXDOMAIN if kind == "nxdomain" else 0)
+                response.authority.extend((soa, changed_soa_sigs))
+                for records, sigs in converted.evidence:
+                    response.authority.extend((records, sigs))
+            return response
+
+    anchor = tmp_path / "negative.anchor"
+    anchor.write_text(
+        'trust-anchors { "example." static-key 256 3 15 "'
+        + base64.b64encode(mapping.synthetic[0].key).decode()
+        + '"; };\n'
+    )
+
+    async def run():
+        server = transport(View())
+        host, port = await server.start("127.0.0.1", 0)
+        process = None
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "delv",
+                "@" + host,
+                "-p",
+                str(port),
+                "-a",
+                str(anchor),
+                "+root=example.",
+                str(name),
+                dns.rdatatype.to_text(qtype),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            output, error = await asyncio.wait_for(process.communicate(), 5)
+            combined = output + error
+            if broken:
+                assert b"resolution failed" in combined, combined
+                assert b"fully validated" not in combined, combined
+            else:
+                assert b"fully validated" in combined, combined
+                assert b"negative" in combined, combined
         finally:
             if process is not None and process.returncode is None:
                 process.kill()

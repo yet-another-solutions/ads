@@ -264,8 +264,8 @@ def test_aliasmode_fallback_is_final_name_and_original_port_only(terminal):
 
 def test_pinned_parser_aliasmode_parameter_gap_is_explicit():
     # RFC 9460 says ignore AliasMode parameters, but dnspython 2.8.0 rejects
-    # them on the wire. This is a capability-gap reproducer, NOT passing
-    # support or permission to sanitize input before DNSSEC verification.
+    # them on the wire. Preserve the native-library reproducer; dns_wire's
+    # separate lossless local recovery is covered in test_dns_wire.py.
     import dns.exception
 
     value = next(

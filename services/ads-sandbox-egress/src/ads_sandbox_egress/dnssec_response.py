@@ -13,6 +13,7 @@ import copy
 import dns.edns
 import dns.flags
 import dns.message
+import dns.name
 import dns.rcode
 import dns.rdatatype
 
@@ -177,6 +178,16 @@ def render(
     result = _base(query, safe_udp_payload=safe_udp_payload)
     result.set_rcode(candidate.rcode())
     wants_security = bool(query.ednsflags & dns.flags.DO)
+    explicit_names: set[dns.name.Name] = {query.question[0].name}
+    # A requested DNSSEC type remains an answer through a CNAME chain even
+    # without DO. Only follow actual aliases, not arbitrary matching types.
+    for _ in range(len(candidate.answer)):
+        prior = len(explicit_names)
+        for rrset in candidate.answer:
+            if rrset.rdtype == dns.rdatatype.CNAME and rrset.name in explicit_names:
+                explicit_names.update(item.target for item in rrset)
+        if len(explicit_names) == prior:
+            break
     for source, destination in (
         (candidate.answer, result.answer),
         (candidate.authority, result.authority),
@@ -188,7 +199,7 @@ def render(
                 or rrset.rdtype not in _SECURITY_RECORDS
                 or (
                     source is candidate.answer
-                    and rrset.name == query.question[0].name
+                    and rrset.name in explicit_names
                     and rrset.rdtype == query.question[0].rdtype
                 )
             ):
