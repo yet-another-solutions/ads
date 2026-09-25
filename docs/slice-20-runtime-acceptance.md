@@ -25,11 +25,27 @@ Branch: `feature/slice-20-egress-runtime`.
 | TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
-| Full local regression and review | Nox lint/deps/typecheck/test/package | Latest full collection: 5,163 passed, two bootstrap harness failures, two skipped, four subtests passed; harness corrected and 1,127 affected tests pass; full rerun pending |
+| Full local regression and review | Nox lint/deps/typecheck/test/package | Full rerun at `0f1697a`: 5,247 passed, two skipped, four subtests passed; subsequent anchor-boundary fix: all five gates and 1,129 affected tests passed |
 
 ## Component verification and review
 
 ### Answer authentication and full-regression correction
+
+Follow-up full local regression at `0f1697a952120343e427105c8f658d0113c82ac5`
+passed: **5,247 passed, two skipped, four subtests passed**, 2,088 warnings,
+1,678.53s, `slice20-full-current-tests.log`. This includes the CA harness
+correction and classifier. PostgreSQL cleanup again independently verified:
+port closed, no child processes, layers, containers or volumes, only 88 KiB
+of task-owned lock/configuration files after forced reset.
+
+Review then reproduced a most-specific-anchor bypass in both positive-DS
+and unsigned-delegation chain walks: a parent signer above a configured child
+anchor could be accepted. Both walks now reject those alternate paths. Two
+new real-acquisition regressions prove that the ordinary public-root path is
+cryptographically usable but cannot bypass the configured closer anchor.
+All five local Nox gates pass after this fix: **1,129 affected tests, no skips**,
+42.92s, `slice20-anchor-scope-nox.log`. This later fix is not falsely attributed
+to the earlier full-suite head. No CI or lab proof was used.
 
 `dnssec_answer` connects fresh upstream key acquisition with signed answer,
 negative and wildcard verification. It ignores upstream AD, retains successful
@@ -79,7 +95,8 @@ optional-key narrowing were corrected. New fixture failures were a random
 RRset wire-order assertion, mismatched response ID and an ADS-specific CD
 assertion incorrectly applied to independent delv; fixtures now preserve
 semantic records, echo the query ID and let delv control its own flags.
-The complete regression must be rerun; the earlier failed result is not green.
+At that checkpoint the full rerun remained pending; its successful follow-up
+is recorded above. The earlier failed run is retained, not relabeled green.
 
 Still open: complete cross-message acquisition/relationship integration,
 remaining contextual missing-key/DS/uncertain cases, faithful substitution,

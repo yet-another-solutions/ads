@@ -119,6 +119,7 @@ class PositiveChains:
         if zone in visiting or len(visiting) >= 32:
             raise RequestDenied("dnssec_chain_depth_or_cycle")
         visiting = visiting | {zone}
+        anchor_boundary = self.closest_anchor(zone)
         message = await self.resolver.exchange(zone, dns.rdatatype.DNSKEY, job)
         messages = {id(message): message}
         keys = exact(message, zone, dns.rdatatype.DNSKEY)
@@ -204,7 +205,11 @@ class PositiveChains:
                     _bounded(signatures, maximum=64)
                     for sig in signatures:
                         if isinstance(sig, dns.rdtypes.ANY.RRSIG.RRSIG) and (
-                            sig.signer != zone and zone.is_subdomain(sig.signer)
+                            sig.signer != zone
+                            and zone.is_subdomain(sig.signer)
+                            and (
+                                anchor_boundary is None or sig.signer.is_subdomain(anchor_boundary)
+                            )
                         ):
                             parent_names[sig.signer] = None
             for parent in parent_names:
@@ -254,6 +259,7 @@ class PositiveChains:
                 if isinstance(sig, dns.rdtypes.ANY.RRSIG.RRSIG)
                 and sig.signer != zone
                 and zone.is_subdomain(sig.signer)
+                and (anchor_boundary is None or sig.signer.is_subdomain(anchor_boundary))
             )
         )
         if not parents:
