@@ -29,6 +29,42 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Non-revocation certificate mirroring
+
+`CertificateMirror` now composes replacements for observed leaf expiry/future,
+hostname mismatch, EKU, unsupported critical extension, invalid certificate
+signature, unknown issuer and incomplete path; it also composes intermediate
+time defects using self-issued, differently-keyed bridges. The minted CA's
+path_length=0 is unchanged. The independent process-local unknown issuer is
+supplied by the owner, checked for matching key/expiry and never persisted.
+Successful observations must use stable pairs rather than this ephemeral path.
+
+Before returning a certificate, native verification must reproduce all expected
+error codes/depths. Self-signed trust failures and incomplete-issuer failures
+are separate classes; neither can substitute for the other.
+Missing/extra errors reject the candidate, never return a clean replacement.
+Incomplete supported mappings, including revocation, constraints/path length,
+key usage and stapled status, remain explicit incomplete-support exceptions,
+not relabelled as genuinely unmappable to claim success.
+
+Tests use actual native certificate observations, independent OpenSSL CLI checks,
+and real stdlib-client/native-server handshakes for expiry, hostname and invalid
+issuer signature. Simultaneous expiry/name failures are retained.
+No production origin/DNS/policy coordinator or full mirroring coverage is claimed.
+
+Review discovered different OpenSSL 3/4 handling of self-issued bridges carrying
+only an authority key ID. Supplying the correct authority certificate issuer and
+serial as well as the key ID makes both validators reproduce only the intended
+intermediate time failure. This changes no minted CA or trust setting.
+The certificate-level authority binding is applied to mirror construction;
+successful retained pairs keep their existing key-bound identity behavior.
+
+All five reviewed local Nox sessions passed. Affected egress/CA/commons/bootstrap
+selection: **620 passed, zero skips**, 13.41 seconds, including 21 mirror tests.
+The mirrored intermediate cases also pass under actual CA-Job minted/full-chain
+trust. The full workspace suite has not been rerun at this increment.
+No CI, merge, publication, lab operation or later slice was started.
+
 ### Approved full signing-chain trust
 
 The user approved sandbox trust of the complete configured signing hierarchy

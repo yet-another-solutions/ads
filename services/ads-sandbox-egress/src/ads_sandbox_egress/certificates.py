@@ -162,6 +162,10 @@ def certificate_builder(
     key: LeafKey,
     issuer: x509.Certificate,
     crl_url: str,
+    *,
+    subject: x509.Name | None = None,
+    cap_expiry: bool = True,
+    bind_issuer_certificate: bool = False,
 ) -> x509.CertificateBuilder:
     """Preserve subject/SAN/constraints. Replace issuer-bound locator material."""
     issuer_public_key = issuer.public_key()
@@ -169,12 +173,16 @@ def certificate_builder(
         raise TLSFailure("unsupported_minted_signer")
     builder = (
         x509.CertificateBuilder()
-        .subject_name(source.subject)
+        .subject_name(source.subject if subject is None else subject)
         .issuer_name(issuer.subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(source.not_valid_before_utc)
-        .not_valid_after(min(source.not_valid_after_utc, issuer.not_valid_after_utc))
+        .not_valid_after(
+            min(source.not_valid_after_utc, issuer.not_valid_after_utc)
+            if cap_expiry
+            else source.not_valid_after_utc
+        )
     )
     replaced = {
         ExtensionOID.AUTHORITY_KEY_IDENTIFIER,
@@ -190,7 +198,20 @@ def certificate_builder(
             builder = builder.add_extension(extension.value, extension.critical)
     return (
         builder.add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_public_key), False)
+        .add_extension(
+            (
+                x509.AuthorityKeyIdentifier(
+                    key_identifier=x509.SubjectKeyIdentifier.from_public_key(
+                        issuer_public_key
+                    ).digest,
+                    authority_cert_issuer=[x509.DirectoryName(issuer.issuer)],
+                    authority_cert_serial_number=issuer.serial_number,
+                )
+                if bind_issuer_certificate
+                else x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_public_key)
+            ),
+            False,
+        )
         .add_extension(
             x509.CRLDistributionPoints(
                 [
@@ -207,24 +228,28 @@ def certificate_builder(
     )
 
 
+def validate_crl_url(crl_url: str) -> None:
+    parsed = urlsplit(crl_url)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or not parsed.path.startswith("/")
+        or len(crl_url) > 1024
+        or not crl_url.isascii()
+        or any(ord(character) <= 32 or ord(character) == 127 for character in crl_url)
+    ):
+        raise ValueError("explicit local CRL distribution URL required")
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError("invalid CRL distribution port")
+
+
 class CertificatePairs:
     def __init__(self, store: IdentityStore, signer: EgressSigner, crl_url: str) -> None:
-        parsed = urlsplit(crl_url)
-        if (
-            parsed.scheme not in ("http", "https")
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-            or not parsed.path.startswith("/")
-            or len(crl_url) > 1024
-            or not crl_url.isascii()
-            or any(ord(character) <= 32 or ord(character) == 127 for character in crl_url)
-        ):
-            raise ValueError("explicit local CRL distribution URL required")
-        if parsed.port is not None and not 1 <= parsed.port <= 65535:
-            raise ValueError("invalid CRL distribution port")
+        validate_crl_url(crl_url)
         self.store, self.signer, self.crl_url = store, signer, crl_url
 
     def valid(self, destination: PairDestination, observed: OriginCertificate) -> FrontendIdentity:
