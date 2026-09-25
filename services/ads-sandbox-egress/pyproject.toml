@@ -12,6 +12,9 @@ dependencies = [
     "dishka==1.10.1",
     "dnspython==2.8.0",
     "h11==0.16.0",
+    "h2==4.4.1",
+    "hpack==4.2.0",
+    "hyperframe==6.1.0",
     "litestar==2.24.0",
     "msgspec==0.21.1",
 ]

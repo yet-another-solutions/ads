@@ -16,9 +16,9 @@ Branch: `feature/slice-20-egress-runtime`.
 | Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `test_policy.py` | Component tested; no production request handler yet |
 | Mandatory address classification and trusted infrastructure inventory | `destinations.py`, `test_destinations.py` | Component tested; manager provisioning still open |
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
-| Strict HTTP framing and trailers | `framing.py`, `http1.py`; raw headers/chunks, pipeline, real RST tests | HTTP/1 component tested; full two-leg orchestration and HTTP/2 open |
+| Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`; raw framing, real sockets and cross-stream tests | HTTP/1 and HTTP/2 components tested; full two-leg orchestration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 helper tested; HTTP/2/extended CONNECT adapter open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | HTTP/1 event channel only | Full handlers, HTTP/2, WebSocket, h2c and ALPN preservation open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | HTTP/1 event channel; HTTP/2 sans-I/O leg with strict serializer and h2c state seeding | Full handlers/WebSocket/h2c transition owner open; TLS ALPN component proved separately |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,51 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### HTTP/2 framing and stream isolation
+
+`HTTP2Connection` uses exactly pinned h2 4.4.1, hpack 4.2.0 and hyperframe 6.1.0.
+The dependency audit found that h2's public receive API terminates a connection
+for several HTTP message errors, including malformed content lengths. A narrow
+version-guarded adapter therefore changes the header/DATA dispatch hooks while
+retaining the library's frame parser, HPACK state, SETTINGS, flow windows and
+serialization. This uses identified private h2 hooks and state transitions,
+not a promise of a stable public API; dependency upgrades deliberately fail
+until that compatibility boundary is reviewed and retested. See the
+[h2 API and protocol errors](https://python-hyper.org/projects/hyper-h2/en/latest/api.html).
+
+ADS checks raw decoded fields without normalization hiding duplicate lengths.
+Malformed requests/responses/trailers reset their stream before invalid events
+are returned. HPACK is still consumed on reset streams; in-flight cancelled
+DATA preserves connection credit. Compression/frame failures remain
+connection-wide. Policy denial uses standard CANCEL, no synthetic status/body.
+Actual socket tests prove another stream completes after denial.
+
+The profile covers pseudo-header order/duplicates/role, unsupported CONNECT,
+Host/authority agreement, content lengths, header/count limits, HEAD/204/304,
+bounded informational responses, safe trailers and late truncation. DATA reads
+and writes are at most 16 KiB; consumer acknowledgment controls receive credit,
+and send-window retries cannot double-count content. Initial per-stream and
+connection windows bound unconsumed data; maximum concurrent streams is bounded.
+Sensitive credential/cookie fields are serialized using never-indexed HPACK,
+not inserted into the shared dynamic table.
+
+An explicitly authorized h2c owner can seed completed stream 1 on either leg,
+including HEAD semantics and bounded validated HTTP2-Settings. Later streams
+remain independent events. Extended WebSocket CONNECT parsing requires its
+negotiated setting and the exact supported protocol; parsing is NOT permission
+and no WebSocket session/tunnel is implemented by this codec.
+
+All five local Nox gates pass: **712 affected tests, zero skips**, 21.83 seconds,
+`slice20-http2-nox.log`, including 54 HTTP/2 cases. Focused type errors found
+during implementation were corrected before this complete gate run. No full
+workspace rerun, CI, image/native build or lab acceptance. Source review covered
+private-hook scope, compression continuity, invalid-event suppression, DATA
+credit, metadata cleanup, h2c HEAD and never-indexed credential serialization.
+
+Still open: socket/task/deadline owner, per-request policy/destination/helper
+integration, two-leg stream mapping/forwarding/cancellation, full h2c HTTP/1
+transition and WebSocket handler. The component is not the complete data plane.
 
 ### Durable local CRLs and certificate constraints
 
