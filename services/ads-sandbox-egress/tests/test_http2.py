@@ -16,6 +16,7 @@ from h2.events import (
     TrailersReceived,
 )
 from h2.exceptions import ProtocolError
+from h2.settings import SettingCodes
 from hyperframe.frame import ContinuationFrame, DataFrame, HeadersFrame, SettingsFrame
 
 from ads_sandbox_egress.http2 import HTTP2Connection
@@ -461,6 +462,15 @@ def test_extended_websocket_connect_requires_negotiated_setting_but_not_opaque_f
     peer.send_headers(5, request((b":protocol", b"arbitrary"), method=b"CONNECT"))
     events = feed(ads, peer.data_to_send())
     assert any(isinstance(event, StreamReset) for event in events)
+
+
+def test_extended_connect_setting_cannot_be_withdrawn():
+    ads, peer = pair()
+    peer.update_settings({SettingCodes.ENABLE_CONNECT_PROTOCOL: 1})
+    feed(ads, peer.data_to_send())
+    peer.update_settings({SettingCodes.ENABLE_CONNECT_PROTOCOL: 0})
+    with pytest.raises(ProtocolError):
+        feed(ads, peer.data_to_send())
 
 
 def test_dependency_gate_and_header_count_limits(monkeypatch):

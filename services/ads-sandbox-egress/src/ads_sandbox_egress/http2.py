@@ -28,6 +28,7 @@ from h2.events import (
     Event,
     InformationalResponseReceived,
     PriorityUpdated,
+    RemoteSettingsChanged,
     RequestReceived,
     ResponseReceived,
     StreamReset,
@@ -169,7 +170,11 @@ class HTTP2Connection(H2Connection):
                     if incoming
                     else bool(self.remote_settings.enable_connect_protocol)
                 )
-                if not enabled or pseudo.get(b":protocol") != b"websocket":
+                if (
+                    not enabled
+                    or pseudo.get(b":protocol") != b"websocket"
+                    or not pseudo.get(b":authority")
+                ):
                     raise RequestDenied("h2_unsupported_connect")
             elif b":protocol" in pseudo:
                 raise RequestDenied("h2_unexpected_protocol")
@@ -202,7 +207,14 @@ class HTTP2Connection(H2Connection):
                 return fields
             if status == 204 and lengths:
                 raise RequestDenied("h2_no_content_length")
-            if status in (204, 304) or self._methods.get(stream_id) == b"HEAD":
+            successful_connect = self._methods.get(stream_id) == b"CONNECT" and 200 <= status < 300
+            if successful_connect and lengths:
+                raise RequestDenied("h2_connect_content_length")
+            if (
+                status in (204, 304)
+                and not successful_connect
+                or self._methods.get(stream_id) == b"HEAD"
+            ):
                 expected = 0  # HEAD/304 length is metadata, not an incoming body.
         if sum(name == b"host" for name, _ in fields) > 1:
             raise RequestDenied("h2_duplicate_host")
@@ -304,7 +316,13 @@ class HTTP2Connection(H2Connection):
         if memoryview(data).nbytes > 16384:
             raise ValueError("bounded HTTP/2 read required")
         try:
-            return super().receive_data(data)
+            events = super().receive_data(data)
+            for event in events:
+                if isinstance(event, RemoteSettingsChanged):
+                    change = event.changed_settings.get(SettingCodes.ENABLE_CONNECT_PROTOCOL)
+                    if change is not None and change.original_value == 1 and change.new_value == 0:
+                        raise ProtocolError("HTTP/2 extended CONNECT cannot be disabled")
+            return events
         finally:
             self._forget_closed()
 

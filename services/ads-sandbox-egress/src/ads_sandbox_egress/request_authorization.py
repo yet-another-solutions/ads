@@ -147,7 +147,7 @@ class RequestHead:
             raise RequestDenied("http2_request_identity")
         upgrade: UpgradeTarget | None = None
         if pseudo[b":method"] == b"CONNECT":
-            if pseudo.get(b":protocol") != b"websocket":
+            if pseudo.get(b":protocol") != b"websocket" or not pseudo.get(b":authority"):
                 raise RequestDenied("generic_connect")
             upgrade = "websocket"
         elif b":protocol" in pseudo:
@@ -162,14 +162,24 @@ class RequestHead:
     def normalization_headers(self) -> Headers:
         if self.sub_protocol == "http/1.1":
             return self.headers
-        if self.upgrade is not None:
-            # Do not silently replace CONNECT with GET to appease a helper.
-            raise RequestDenied("extended_connect_normalizer_not_implemented")
         regular = tuple((name, value) for name, value in self.headers if not name.startswith(b":"))
         if not any(name == b"host" for name, _ in regular):
             value = next((value for name, value in self.headers if name == b":authority"), b"")
             regular = ((b"host", value),) + regular
         return regular
+
+    @property
+    def normalization_method(self) -> bytes:
+        # Explicitly approved helper-only adapter. CONNECT /path cannot reach
+        # this NGINX build's URI handler. Only the private no-body envelope uses
+        # GET; immutable head, policy method and upstream wire stay CONNECT.
+        if (
+            self.sub_protocol == "http/2"
+            and self.upgrade == "websocket"
+            and self.method == b"CONNECT"
+        ):
+            return b"GET"
+        return self.method
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +219,7 @@ class RequestAuthorizer:
         elif authority_port != target.port:
             raise RequestDenied("unnamed_destination_port")
         normalized = await self.normalizer.normalize(
-            head.method, head.target, head.normalization_headers()
+            head.normalization_method, head.target, head.normalization_headers()
         )
         if membership_name is not None:
             # Fresh DNS evidence is acquired AFTER the potentially slow helper,

@@ -23,9 +23,9 @@ def prepare(head: RequestHead, serialized: Headers) -> Upgrade:
     settings = [v for n, v in head.headers if n == b"http2-settings"]
     if len(settings) != 1:
         raise RequestDenied("h2c_settings_required")
-    frontend = HTTP2Connection(client=False)
+    frontend = HTTP2Connection(client=False, websocket=True)
     frontend.upgraded(head.method, settings[0])
-    origin = HTTP2Connection(client=True)
+    origin = HTTP2Connection(client=True, websocket=True)
     offered = origin.upgraded(head.method)
     assert offered is not None
     # The client's SETTINGS describe the frontend leg, not the separately

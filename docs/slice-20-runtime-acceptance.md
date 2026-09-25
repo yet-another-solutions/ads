@@ -18,7 +18,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary request owners, HTTP/1 WebSocket, h2c and real ECH/H2 integration tested; H2 WebSocket and graceful GOAWAY open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c and real ECH/H2 integration tested; graceful GOAWAY open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,41 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Approved helper adapter and HTTP/2 WebSocket ownership
+
+On 2026-09-25 at 18:49 MSK the user explicitly approved GET only in the
+private no-body NGINX envelope for HTTP/2 WebSocket extended CONNECT.
+`RequestHead.normalization_method` implements exactly that adaptation.
+Immutable original method, path, authority and headers are retained; policy
+still evaluates CONNECT and the origin still receives CONNECT plus
+`:protocol=websocket`. Tests use an actual NGINX result and verify that a
+GET-only rule or forbidden upgrade denies the original CONNECT before any
+origin contact. This approval does not address empty Host or asterisk targets.
+
+The H2 owner advertises extended CONNECT support, waits for the origin's
+independent setting, validates version/authority and negotiation, and buffers
+no more than its bounded receive window before a successful 2xx opening
+response. No WebSocket DATA is sent upstream until origin acceptance.
+Rejection/redirect remains a streamed genuine HTTP response. Successful
+streams retain their authorization across policy updates, preserve original
+frames/compression/masking, and use stream-local cancellation, flow credit,
+idle bounds and END_STREAM. No key/Accept synthesis is required by this
+mechanism, unlike the HTTP/1 handshake, per
+[RFC 8441](https://www.rfc-editor.org/rfc/rfc8441.html).
+
+Real socket/h2/WebSocket endpoint tests cover compression, fragmentation,
+ping/pong, full close/END_STREAM cleanup, one-megabyte messages, 200 and 204
+CONNECT success, separate stream IDs, new-request policy updates, malformed
+openings, unoffered subprotocol, origin setting absence, timeout/rejection
+without early-data leakage, paired resets and one-direction traffic.
+Unrelated streams cannot renew an idle WebSocket's budget. The codec also
+rejects withdrawing an already-enabled extended-CONNECT setting.
+
+All five local Nox gates pass: **811 affected tests, zero skips**, 35.42 seconds,
+`slice20-h2-websocket-nox.log`. No full-workspace rerun, CI, publication,
+lab operation or project-image build. Graceful GOAWAY, remaining helper
+compatibility, DNSSEC/ECH publication and runtime integration remain open.
 
 ### h2c transition ownership
 

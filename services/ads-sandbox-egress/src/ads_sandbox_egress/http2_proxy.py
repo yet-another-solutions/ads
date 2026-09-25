@@ -21,6 +21,7 @@ from h2.events import (
     DataReceived,
     Event,
     InformationalResponseReceived,
+    RemoteSettingsChanged,
     RequestReceived,
     ResponseReceived,
     StreamEnded,
@@ -29,6 +30,7 @@ from h2.events import (
     WindowUpdated,
 )
 
+from ads_sandbox_egress import websocket
 from ads_sandbox_egress.framing import Headers
 from ads_sandbox_egress.http2 import HTTP2Connection
 from ads_sandbox_egress.policy import RequestDenied
@@ -55,10 +57,13 @@ class _Leg:
         on_eof: Callable[[], None] | None = None,
     ) -> None:
         self.stream, self.receive, self.stop = stream, receive, stop
-        self.protocol = HTTP2Connection(client=client, maximum_streams=maximum_streams)
+        self.protocol = HTTP2Connection(
+            client=client, maximum_streams=maximum_streams, websocket=True
+        )
         self.idle_timeout = idle_timeout
         self.write_lock = asyncio.Lock()
         self.window_changed = asyncio.Event()
+        self.settings_received = asyncio.Event()
         self.task: asyncio.Task[None] | None = None
         self.closed = False
         self.last_activity = time.monotonic()
@@ -95,6 +100,8 @@ class _Leg:
                         raise RequestDenied("http2_connection_terminated")
                     if isinstance(event, WindowUpdated):
                         self.window_changed.set()
+                    if isinstance(event, RemoteSettingsChanged):
+                        self.settings_received.set()
                     self.receive(event)
                 await self.flush()
             normal_eof = True
@@ -107,6 +114,7 @@ class _Leg:
         finally:
             self.closed = True
             self.window_changed.set()
+            self.settings_received.set()
             if normal_eof and self.on_eof is not None:
                 self.on_eof()
             else:
@@ -184,8 +192,8 @@ class _Inbox:
         self.bytes += size
         self.ready.set()
 
-    async def take(self) -> Event:
-        async with asyncio.timeout(self.leg.idle_timeout):
+    async def take(self, *, idle: bool = True) -> Event:
+        async with asyncio.timeout(self.leg.idle_timeout if idle else None):
             while not self.events:
                 if self.closed:
                     raise RequestDenied("http2_stream_stopped")
@@ -450,11 +458,17 @@ class HTTP2Proxy:
             if exchange.cancelled:
                 return
             head = RequestHead.http2(exchange.headers, self.authorizer.connection)
-            if head.upgrade is not None:
-                raise RequestDenied("http2_websocket_owner_not_implemented")
+            is_websocket = head.upgrade == "websocket"
+            if is_websocket:
+                websocket.h2_request(head.headers)
             async with asyncio.timeout(self.authorization_timeout):
                 await self.authorizer.authorize(head)
             origin = await self._upstream()
+            if is_websocket:
+                async with asyncio.timeout(self.authorization_timeout):
+                    await origin.settings_received.wait()
+                if origin.closed or not origin.protocol.remote_settings.enable_connect_protocol:
+                    raise RequestDenied("websocket_origin_not_supported")
             async with origin.write_lock:
                 stream_id = origin.protocol.get_next_available_stream_id()
                 exchange.origin_id = stream_id
@@ -463,10 +477,13 @@ class HTTP2Proxy:
                 # Mapping exists BEFORE serialization can expose the stream.
                 origin.protocol.headers(stream_id, head.headers)
                 await origin._flush_locked()
-            async with asyncio.TaskGroup() as group:
-                upload = group.create_task(self._upload(exchange, origin))
-                group.create_task(self._response(exchange, origin, upload))
-            complete = exchange.upload_complete.is_set()
+            if is_websocket:
+                complete = await self._websocket(exchange, origin)
+            else:
+                async with asyncio.TaskGroup() as group:
+                    upload = group.create_task(self._upload(exchange, origin))
+                    group.create_task(self._response(exchange, origin, upload))
+                complete = exchange.upload_complete.is_set()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -479,6 +496,82 @@ class HTTP2Proxy:
                 await self._retire(exchange, complete=complete)
             except Exception:
                 self.stop.set()
+
+    async def _websocket(self, exchange: _Exchange, origin: _Leg) -> bool:
+        """One authorized CONNECT stream, never a whole-connection tunnel."""
+        assert exchange.outgoing is not None and exchange.origin_id is not None
+        async with asyncio.timeout(self.authorization_timeout):
+            while True:
+                event = await exchange.outgoing.take()
+                if isinstance(event, InformationalResponseReceived):
+                    await self.front.headers(exchange.frontend_id, tuple(event.headers))
+                elif isinstance(event, ResponseReceived):
+                    break
+                else:
+                    raise RequestDenied("websocket_response_headers_required")
+
+        status = int(dict(event.headers)[b":status"])
+        if not 200 <= status < 300:
+            # Preserve the genuine rejection/redirect response under ordinary
+            # streaming idle bounds, not the opening-handshake total deadline.
+            # Never upload buffered WebSocket bytes as an HTTP response body.
+            exchange.outgoing.events.appendleft(event)
+            noop = asyncio.create_task(asyncio.sleep(0))
+            try:
+                await self._response(exchange, origin, noop)
+            finally:
+                noop.cancel()
+                await asyncio.gather(noop, return_exceptions=True)
+            return False
+        websocket.h2_response(exchange.headers, tuple(event.headers))
+        await self.front.headers(exchange.frontend_id, tuple(event.headers))
+
+        activity = time.monotonic()
+        ended = 0
+        finished = asyncio.Event()
+
+        async def pump(inbox: _Inbox, destination: _Leg, stream_id: int, *, upload: bool) -> None:
+            nonlocal activity, ended
+            while True:
+                event = await inbox.take(idle=False)
+                if isinstance(event, DataReceived):
+                    try:
+                        await destination.data(stream_id, event.data)
+                        activity = time.monotonic()
+                    finally:
+                        inbox.leg.credit(event.flow_controlled_length, inbox.stream_id)
+                        await inbox.leg.flush()
+                elif isinstance(event, StreamEnded):
+                    await destination.data(stream_id, b"", end=True)
+                    if upload:
+                        exchange.upload_complete.set()
+                    ended += 1
+                    activity = time.monotonic()
+                    if ended == 2:
+                        finished.set()
+                    return
+                else:
+                    # WebSocket DATA retains original masking/frames. HTTP
+                    # trailers or a second response cannot escape into it.
+                    raise RequestDenied("websocket_stream_event")
+
+        async def watch() -> None:
+            while not finished.is_set():
+                remaining = max(0, activity + self.idle_timeout - time.monotonic())
+                try:
+                    async with asyncio.timeout(remaining):
+                        await finished.wait()
+                except TimeoutError:
+                    if time.monotonic() - activity >= self.idle_timeout:
+                        raise RequestDenied("websocket_stream_idle") from None
+
+        async with asyncio.TaskGroup() as group:
+            group.create_task(pump(exchange.incoming, origin, exchange.origin_id, upload=True))
+            group.create_task(
+                pump(exchange.outgoing, self.front, exchange.frontend_id, upload=False)
+            )
+            group.create_task(watch())
+        return True
 
     async def run(self) -> None:
         if self._running:

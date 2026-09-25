@@ -111,6 +111,17 @@ def request_headers(method: bytes, headers: Headers) -> Headers:
     return fields
 
 
+def _negotiated(request: Headers, fields: Headers) -> None:
+    selected = _protocols(fields)
+    if (
+        len(selected) > 1
+        or sum(n == b"sec-websocket-protocol" for n, _ in fields) > 1
+        or any(value not in _protocols(request) for value in selected)
+        or any(value not in _extensions(request) for value in _extensions(fields))
+    ):
+        raise RequestDenied("websocket_unoffered_negotiation")
+
+
 def response_headers(request: Headers, response: Headers) -> Headers:
     fields = transition_headers(response)
     if any(
@@ -120,15 +131,31 @@ def response_headers(request: Headers, response: Headers) -> Headers:
     expected = base64.b64encode(hashlib.sha1(_one(request, b"sec-websocket-key") + _GUID).digest())
     if _one(fields, b"sec-websocket-accept") != expected:
         raise RequestDenied("websocket_accept")
-    selected = _protocols(fields)
-    if (
-        len(selected) > 1
-        or sum(n == b"sec-websocket-protocol" for n, _ in fields) > 1
-        or any(value not in _protocols(request) for value in selected)
-        or any(value not in _extensions(request) for value in _extensions(fields))
-    ):
-        raise RequestDenied("websocket_unoffered_negotiation")
+    _negotiated(request, fields)
     return fields
+
+
+def h2_request(headers: Headers) -> None:
+    fields = validate_headers(headers, h2=True)
+    if (
+        _one(fields, b":method") != b"CONNECT"
+        or _one(fields, b":protocol") != b"websocket"
+        or not _one(fields, b":authority")
+        or _one(fields, b"sec-websocket-version") != b"13"
+        or any(n in (b"content-length", b"expect") for n, _ in fields)
+    ):
+        raise RequestDenied("websocket_h2_request")
+    _protocols(fields)
+    _extensions(fields)
+
+
+def h2_response(request: Headers, response: Headers) -> None:
+    fields = validate_headers(response, h2=True)
+    if any(n == b"content-length" for n, _ in fields):
+        raise RequestDenied("websocket_h2_response")
+    # RFC 8441 replaces the key/accept mechanism with :protocol. Do not
+    # synthesize a key, compute an Accept digest or require one from the origin.
+    _negotiated(request, fields)
 
 
 async def relay(front: HTTP1Channel, origin: HTTP1Channel, *, idle_timeout: float) -> None:
