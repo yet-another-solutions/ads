@@ -13,12 +13,12 @@ Branch: `feature/slice-20-egress-runtime`.
 | Obligation | Owning code / planned proof | Evidence state |
 | --- | --- | --- |
 | Immutable snapshot, process UUID, authenticated apply | Existing configuration/control; receiver tests | Existing component regression passed; production health integration open |
-| Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `test_policy.py` | Component tested; no production request handler yet |
+| Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `request_authorization.py`, request-owner tests | Ordinary request owners tested; absent-authority helper compatibility and transition owners open |
 | Mandatory address classification and trusted infrastructure inventory | `destinations.py`, `test_destinations.py` | Component tested; manager provisioning still open |
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
-| Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`; raw framing, real sockets and cross-stream tests | HTTP/1 and HTTP/2 components tested; full two-leg orchestration open |
-| Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 helper tested; HTTP/2/extended CONNECT adapter open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | HTTP/1 event channel; HTTP/2 sans-I/O leg with strict serializer and h2c state seeding | Full handlers/WebSocket/h2c transition owner open; TLS ALPN component proved separately |
+| Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
+| Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, native TLS integration | Ordinary request owners and real ECH/H2 integration tested; WebSocket/h2c and graceful GOAWAY open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,42 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Multiplexed two-leg owner and real ECH integration
+
+`HTTP2Proxy` composes the strict codec with per-request authorization, separate
+frontend/origin stream-ID maps, bounded per-stream queues, flow-controlled
+duplex forwarding and explicit stream custody. Denied requests emit no upstream
+HTTP bytes. Cancellation, authorization timeout, malformed responses and queue
+floods reset only the paired stream and return discarded DATA credit. Completed
+responses parsed before an origin EOF remain usable; truncated ones are reset.
+New requests never reconnect through an uninspected TLS session.
+
+Tests use stock h2 clients/origins over real sockets and real NGINX. Coverage
+includes a one-megabyte upload, policy changes during a held response, isolated
+frontend/origin resets, early finals, duplex response headers, cancellation
+before the task starts, queue floods, pending authorization with early body,
+and separate stream-ID spaces. The EOF test identifies requests by path rather
+than assuming concurrent helper completion preserves frontend stream order.
+
+A native OpenSSL ECH client also exercises actual frontend TLS, decrypted inner
+SNI and ordered ALPN offers, actual origin TLS, durable certificate substitution,
+NGINX, policy and the H2 owner. The owner adopts the exact origin session used
+for inspection; the denied first stream sends no origin request. A continuous
+download outlasting the TLS read-idle interval proves successful output renews
+idle activity without weakening separate handshake/header/stream deadlines.
+Only socket admission/original-destination binding and DNS acquisition are
+named external fixtures; this is not a kernel, bootstrap or lab proof.
+
+Review fixed empty END_STREAM serialization with a negative flow window after
+SETTINGS reduction, without granting data credit. Regression preserves the
+native state machine and uses its dedicated end-stream API.
+
+All five local Nox gates pass: **754 affected tests, zero skips**, 23.97 seconds,
+`slice20-h2-owner-nox.log`. No CI or full-workspace rerun at this milestone.
+Graceful GOAWAY/draining, h2c, WebSockets, helper compatibility cases and the
+remaining runtime/DNSSEC/custody obligations remain open. A reset for one of
+those unsupported cases is not evidence that the feature is implemented.
 
 ### Request authorization and two-leg HTTP/1 owner
 

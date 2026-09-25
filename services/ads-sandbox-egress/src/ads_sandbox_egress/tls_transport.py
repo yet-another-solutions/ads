@@ -41,6 +41,7 @@ class TLSStream:
         self._read_lock = asyncio.Lock()
         self._pending = bytearray()
         self._closed = False
+        self._read_budget: asyncio.Timeout | None = None
 
     @classmethod
     async def accept(
@@ -104,18 +105,31 @@ class TLSStream:
             # EOF without close_notify is truncation, not a successful TLS EOF.
             raise TLSFailure("tls_truncated")
         self.session.feed(encrypted)
+        self._activity()
+
+    def _activity(self) -> None:
+        # A multiplexed peer may receive a long download without sending more
+        # TLS application data. Successful writes are activity too, not a fixed
+        # total read deadline. HTTP header/handshake/stream deadlines remain
+        # separately bounded by their owners.
+        if self._read_budget is not None and not self._read_budget.expired():
+            self._read_budget.reschedule(asyncio.get_running_loop().time() + self.idle_timeout)
 
     async def read(self, maximum: int = 16384) -> bytes:
         if not 1 <= maximum <= 16384 or self._closed:
             raise TLSFailure("tls_stream_read_state")
         try:
-            async with self._read_lock, asyncio.timeout(self.idle_timeout):
-                while True:
-                    data = self.session.read(maximum)
-                    await self.drain()
-                    if data is not None:
-                        return data
-                    await self._receive()
+            async with self._read_lock, asyncio.timeout(self.idle_timeout) as budget:
+                self._read_budget = budget
+                try:
+                    while True:
+                        data = self.session.read(maximum)
+                        await self.drain()
+                        if data is not None:
+                            return data
+                        await self._receive()
+                finally:
+                    self._read_budget = None
         except BaseException:
             self.close()
             raise
@@ -137,11 +151,13 @@ class TLSStream:
             encrypted = self.session.drain()
             if encrypted:
                 self.writer.write(encrypted)
+                self._activity()
             while self._pending:
                 data = bytes(self._pending[:16384])
                 del self._pending[:16384]
                 self.session.write(data)
                 self.writer.write(self.session.drain())
+                self._activity()
             async with asyncio.timeout(self.idle_timeout):
                 await self.writer.drain()
         except BaseException:

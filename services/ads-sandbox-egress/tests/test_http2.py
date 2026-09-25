@@ -475,6 +475,20 @@ def test_dependency_gate_and_header_count_limits(monkeypatch):
         HTTP2Connection(client=False)
 
 
+def test_empty_end_stream_does_not_need_positive_window_after_settings_reduction():
+    ads, peer = pair(client=True)
+    ads.headers(1, request((b"content-length", b"3"), method=b"POST"))
+    ads.data(1, b"abc")
+    peer.receive_data(ads.data_to_send())
+    settings = SettingsFrame(0)
+    settings.settings[4] = 0
+    feed(ads, settings.serialize())
+    assert ads.local_flow_control_window(1) == -3
+    ads.data(1, b"", end=True)
+    events = peer.receive_data(ads.data_to_send())
+    assert any(isinstance(event, StreamEnded) for event in events)
+
+
 @pytest.mark.anyio
 async def test_real_socket_stream_denial_leaves_another_exchange_alive():
     done = asyncio.Event()

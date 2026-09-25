@@ -330,12 +330,17 @@ class HTTP2Connection(H2Connection):
         if message is None:
             raise RequestDenied("h2_data_without_headers")
         # Check window first: a retry after backpressure must not count twice.
-        if len(data) > self.local_flow_control_window(stream_id):
+        if len(data) > max(0, self.local_flow_control_window(stream_id)):
             raise RequestDenied("h2_send_window_unavailable")
         message.body.add(len(data))
         if end:
             message.body.finish()
-        super().send_data(stream_id, data, end_stream=end)
+        if not data and end:
+            # SETTINGS can reduce a stream window below zero. Empty EOS
+            # consumes no flow credit; h2's explicit end_stream supports it.
+            super().end_stream(stream_id)
+        else:
+            super().send_data(stream_id, data, end_stream=end)
         self._forget_closed()
 
     def deny(self, stream_id: int) -> None:

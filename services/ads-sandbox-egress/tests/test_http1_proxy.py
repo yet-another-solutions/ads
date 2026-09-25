@@ -76,10 +76,13 @@ class Lab:
     connected: list = field(default_factory=list)
     tasks: set = field(default_factory=set)
     errors: list = field(default_factory=list)
+    owners: list = field(default_factory=list)
 
 
 @asynccontextmanager
-async def proxy_lab(normalizer, origin_handler, configured=None, target=None):
+async def proxy_lab(
+    normalizer, origin_handler, configured=None, target=None, proxy_type=HTTP1Proxy
+):
     """Only the admitted socket/connector and DNS acquisition are fixtures.
 
     The production identity/membership/policy/NGINX/HTTP/framing/stream owners
@@ -126,13 +129,15 @@ async def proxy_lab(normalizer, origin_handler, configured=None, target=None):
         membership = ConnectionMembership(resolver, boundary)
         authorizer = RequestAuthorizer(target, policies, membership, normalizer)
         try:
-            await HTTP1Proxy(
+            proxy = proxy_type(
                 OwnedStream.tcp(reader, writer),
                 authorizer,
                 connect,
                 idle_timeout=1,
                 authorization_timeout=1,
-            ).run()
+            )
+            lab.owners.append(proxy)
+            await proxy.run()
         finally:
             await membership.close()
 
