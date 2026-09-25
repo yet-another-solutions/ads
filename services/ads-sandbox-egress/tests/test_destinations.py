@@ -118,7 +118,7 @@ def test_membership_concurrency_expiry_failure_and_cancellation():
             fail = False
             gate = asyncio.Event()
 
-            async def resolve(self, name):
+            async def resolve(self, name, *, authority_port, protocol):
                 self.calls += 1
                 await self.gate.wait()
                 if self.fail:
@@ -129,29 +129,33 @@ def test_membership_concurrency_expiry_failure_and_cancellation():
 
         resolver = Resolver()
         cache = ConnectionMembership(resolver, boundary(), clock=lambda: now[0])
-        first = asyncio.create_task(cache.require("example.com", address, 443, 443))
-        second = asyncio.create_task(cache.require("example.com", address, 443, 443))
+        first = asyncio.create_task(
+            cache.require("example.com", address, 443, 443, protocol="https")
+        )
+        second = asyncio.create_task(
+            cache.require("example.com", address, 443, 443, protocol="https")
+        )
         await asyncio.sleep(0)
         first.cancel()
         resolver.gate.set()
         await asyncio.gather(first, return_exceptions=True)
         await second
         assert resolver.calls == 1  # Bogus authentication does not block membership.
-        await cache.require("example.com", address, 443, 443)
+        await cache.require("example.com", address, 443, 443, protocol="https")
         assert resolver.calls == 1
         now[0] = 101
         resolver.fail = True
         with pytest.raises(RequestDenied, match="lookup_failed"):
-            await cache.require("example.com", address, 443, 443)
+            await cache.require("example.com", address, 443, 443, protocol="https")
         assert resolver.calls == 2
         resolver.fail = False
         resolver.expires = 101  # Zero TTL is usable only for this transaction.
-        await cache.require("example.com", address, 443, 443)
-        await cache.require("example.com", address, 443, 443)
+        await cache.require("example.com", address, 443, 443, protocol="https")
+        await cache.require("example.com", address, 443, 443, protocol="https")
         assert resolver.calls == 4
         await cache.close()
         with pytest.raises(RequestDenied, match="connection_closed"):
-            await cache.require("example.com", address, 443, 443)
+            await cache.require("example.com", address, 443, 443, protocol="https")
 
     asyncio.run(run())
 
@@ -166,18 +170,18 @@ def test_service_endpoint_is_bound_to_original_service_and_both_ports():
                 "example.com", frozenset(), frozenset((endpoint,)), 0, True, "insecure"
             )
 
-            async def resolve(self, name):
+            async def resolve(self, name, *, authority_port, protocol):
                 return self.result
 
         resolver = Resolver()
         cache = ConnectionMembership(resolver, boundary())
-        await cache.require("example.com", address, 8443, 443)
+        await cache.require("example.com", address, 8443, 443, protocol="https")
         for actual, authority in ((443, 443), (8443, 80), (9443, 443)):
             with pytest.raises(RequestDenied):
-                await cache.require("example.com", address, actual, authority)
+                await cache.require("example.com", address, actual, authority, protocol="https")
         resolver.result = replace(resolver.result, complete=False)
         with pytest.raises(RequestDenied, match="incomplete"):
-            await cache.require("example.com", address, 8443, 443)
+            await cache.require("example.com", address, 8443, 443, protocol="https")
         await cache.close()
 
     asyncio.run(run())

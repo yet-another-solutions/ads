@@ -59,7 +59,7 @@ class Resolver:
         self.authentication = "insecure"
         self.fail = False
 
-    async def resolve(self, name):
+    async def resolve(self, name, *, authority_port, protocol):
         self.calls.append(name)
         if self.fail:
             raise OSError("private resolver detail")

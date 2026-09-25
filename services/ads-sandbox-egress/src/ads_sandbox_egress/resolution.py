@@ -8,6 +8,7 @@ upstream sets AD. No completed resolver result is cached here.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import dataclass
 
@@ -54,6 +55,26 @@ class ResolutionJob:
     subqueries: int = 0
     endpoints: int = 0
 
+    def __post_init__(self) -> None:
+        if (
+            not math.isfinite(self.deadline)
+            or self.deadline <= 0
+            or any(
+                type(value) is not int or value < 0 for value in (self.subqueries, self.endpoints)
+            )
+        ):
+            raise ValueError("invalid shared resolution job")
+
+
+@dataclass(frozen=True, slots=True)
+class AcquiredService:
+    owner: dns.name.Name
+    target: dns.name.Name
+    record: dns.rdtypes.svcbbase.SVCBBase
+    addresses: frozenset[Address]
+    expires_at: float
+    fallback: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class AcquiredAnswer:
@@ -62,6 +83,8 @@ class AcquiredAnswer:
     messages: tuple[dns.message.Message, ...]
     addresses: frozenset[Address]
     expires_at: float
+    direct_addresses: frozenset[Address] = frozenset()
+    services: tuple[AcquiredService, ...] = ()
     # DNSSEC classification and synthesis are deliberately NOT inferred here.
 
 
@@ -166,41 +189,70 @@ class UpstreamResolver:
                                 for address in parameter.addresses:
                                     self.boundary.addresses.require_public(address)
 
-    async def acquire(self, name: str, rdtype: dns.rdatatype.RdataType) -> AcquiredAnswer:
+    async def acquire(
+        self,
+        name: str,
+        rdtype: dns.rdatatype.RdataType,
+        *,
+        job: ResolutionJob | None = None,
+    ) -> AcquiredAnswer:
         if rdtype in (dns.rdatatype.AXFR, dns.rdatatype.IXFR):
             raise RequestDenied("unsupported_dns_query")
         query_name = dns.name.from_text(name)
         self._name(query_name)
-        job = ResolutionJob(time.monotonic() + self.limits.deadline)
+        job = job or ResolutionJob(time.monotonic() + self.limits.deadline)
+        # Queue time, sibling address queries and DNSSEC dependencies never
+        # receive a renewed deadline. The local cap may only shorten it.
+        deadline = min(job.deadline, time.monotonic() + self.limits.deadline)
         messages: list[dns.message.Message] = []
         addresses: set[Address] = set()
-        expires = [float("inf")]
+        service_results: list[AcquiredService] = []
 
         async def follow(
             current: dns.name.Name,
             kind: dns.rdatatype.RdataType,
             visited: frozenset[dns.name.Name],
             depth: int,
-        ) -> None:
+            dependency_expiry: float = float("inf"),
+            alias_record: dns.rdtypes.svcbbase.SVCBBase | None = None,
+        ) -> tuple[frozenset[Address], float]:
             if current in visited:
                 raise RequestDenied("dns_alias_loop")
             if depth > self.limits.aliases:
                 raise RequestDenied("dns_alias_limit")
             visited = visited | {current}
-            response = await self.exchange(current, kind, job)
-            messages.append(response)
+            try:
+                response = await self.exchange(current, kind, job)
+            except RequestDenied as exc:
+                if str(exc) != "dns_upstream_unavailable" or alias_record is None:
+                    raise
+                # No invented response: retain the actual alias evidence and
+                # independently resolve the permitted final-name fallback.
+                response = None
+            if response is not None:
+                messages.append(response)
+            code = response.rcode() if response is not None else dns.rcode.SERVFAIL
             now = time.monotonic()
+            resolved: set[Address] = set()
+            expires = dependency_expiry
+            if code != dns.rcode.NOERROR:
+                # Preserve failure/negative data for classification, never
+                # obtain positive relationship evidence from its Answer section.
+                if alias_record is None or code == dns.rcode.NXDOMAIN:
+                    return frozenset(), now
             next_name: dns.name.Name | None = None
             services: list[dns.rdtypes.svcbbase.SVCBBase] = []
-            for rrset in response.answer:
-                expires[0] = min(expires[0], now + rrset.ttl)
+            for rrset in (
+                response.answer if response is not None and code == dns.rcode.NOERROR else ()
+            ):
                 for record in rrset:
                     if (
                         rrset.name == current
                         and rrset.rdtype == kind
                         and isinstance(record, (dns.rdtypes.IN.A.A, dns.rdtypes.IN.AAAA.AAAA))
                     ):
-                        addresses.add(self.boundary.addresses.require_public(record.address))
+                        resolved.add(self.boundary.addresses.require_public(record.address))
+                        expires = min(expires, now + rrset.ttl)
                     elif (
                         rrset.name == current
                         and isinstance(record, dns.rdtypes.ANY.CNAME.CNAME)
@@ -209,6 +261,7 @@ class UpstreamResolver:
                         if next_name is not None and next_name != record.target:
                             raise RequestDenied("conflicting_dns_alias")
                         next_name = record.target
+                        expires = min(expires, now + rrset.ttl)
                     elif (
                         isinstance(record, dns.rdtypes.ANY.DNAME.DNAME)
                         and current != rrset.name
@@ -218,32 +271,112 @@ class UpstreamResolver:
                         if next_name is not None and next_name != redirected:
                             raise RequestDenied("conflicting_dns_alias")
                         next_name = redirected
-                    elif rrset.name == current and isinstance(
-                        record, dns.rdtypes.svcbbase.SVCBBase
+                        expires = min(expires, now + rrset.ttl)
+                    elif (
+                        rrset.name == current
+                        and rrset.rdtype == kind
+                        and isinstance(record, dns.rdtypes.svcbbase.SVCBBase)
                     ):
                         services.append(record)
+                        expires = min(expires, now + rrset.ttl)
             if next_name is not None:
-                await follow(next_name, kind, visited, depth + 1)
+                if resolved or services:
+                    raise RequestDenied("conflicting_dns_alias")
+                branch, branch_expiry = await follow(
+                    next_name, kind, visited, depth + 1, expires, alias_record
+                )
+                resolved.update(branch)
+                expires = min(expires, branch_expiry)
             aliases = [service for service in services if service.priority == 0]
             if aliases:
                 if len(aliases) != 1 or len(services) != 1:
                     raise RequestDenied("conflicting_service_alias")
                 if aliases[0].target != dns.name.root:
-                    await follow(aliases[0].target, kind, visited, depth + 1)
+                    branch, branch_expiry = await follow(
+                        aliases[0].target, kind, visited, depth + 1, expires, aliases[0]
+                    )
+                    resolved.update(branch)
+                    expires = min(expires, branch_expiry)
             else:
                 for service in services:
                     job.endpoints += 1
                     if job.endpoints > self.limits.endpoints:
                         raise RequestDenied("dns_endpoint_limit")
                     target = current if service.target == dns.name.root else service.target
+                    target_addresses: set[Address] = set()
+                    target_expiry = expires
                     for family in (dns.rdatatype.A, dns.rdatatype.AAAA):
                         # Address lookup starts a new record-type branch; only
                         # alias transitions consume depth, not this dependency.
-                        await follow(target, family, frozenset(), depth)
+                        try:
+                            branch, branch_expiry = await follow(
+                                target, family, frozenset(), depth, expires
+                            )
+                        except RequestDenied as exc:
+                            if str(exc) != "dns_upstream_unavailable":
+                                raise
+                            continue
+                        target_addresses.update(branch)
+                        # An empty optional family does not create evidence or
+                        # erase a successful independently resolved family.
+                        if branch:
+                            target_expiry = min(target_expiry, branch_expiry)
+                    addresses.update(target_addresses)
+                    service_results.append(
+                        AcquiredService(
+                            current, target, service, frozenset(target_addresses), target_expiry
+                        )
+                    )
+                if alias_record is not None and next_name is None:
+                    # RFC 9460 section 3: SVCB-optional final-QNAME fallback
+                    # after AliasMode, at the original authority port. It is
+                    # not a direct address of the original authority.
+                    job.endpoints += 1
+                    if job.endpoints > self.limits.endpoints:
+                        raise RequestDenied("dns_endpoint_limit")
+                    fallback_addresses: set[Address] = set()
+                    fallback_expiry = expires
+                    for family in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                        try:
+                            branch, branch_expiry = await follow(
+                                current, family, frozenset(), depth, expires
+                            )
+                        except RequestDenied as exc:
+                            if str(exc) != "dns_upstream_unavailable":
+                                raise
+                            continue
+                        fallback_addresses.update(branch)
+                        if branch:
+                            fallback_expiry = min(fallback_expiry, branch_expiry)
+                    addresses.update(fallback_addresses)
+                    service_results.append(
+                        AcquiredService(
+                            current,
+                            current,
+                            alias_record,
+                            frozenset(fallback_addresses),
+                            fallback_expiry,
+                            True,
+                        )
+                    )
+            addresses.update(resolved)
+            return frozenset(resolved), expires
 
         try:
-            async with asyncio.timeout(self.limits.deadline):
-                await follow(query_name, rdtype, frozenset(), 0)
+            async with asyncio.timeout_at(deadline):
+                direct, expires = await follow(query_name, rdtype, frozenset(), 0)
         except TimeoutError:
             raise RequestDenied("dns_resolution_deadline") from None
-        return AcquiredAnswer(query_name, rdtype, tuple(messages), frozenset(addresses), expires[0])
+        if time.monotonic() >= deadline:
+            raise RequestDenied("dns_resolution_deadline")
+        return AcquiredAnswer(
+            query_name,
+            rdtype,
+            tuple(messages),
+            frozenset(addresses),
+            min(expires, *(service.expires_at for service in service_results))
+            if service_results
+            else expires,
+            direct,
+            tuple(service_results),
+        )

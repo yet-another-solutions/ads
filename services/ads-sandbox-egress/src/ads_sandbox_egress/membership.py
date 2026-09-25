@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from ads_sandbox_egress.destinations import Address, DestinationBoundary
+from ads_sandbox_egress.destinations import Address, DestinationBoundary, dns_name
 from ads_sandbox_egress.policy import RequestDenied, canonical_host
 
 
@@ -36,7 +36,9 @@ class ResolutionEvidence:
 
 
 class EvidenceResolver(Protocol):
-    async def resolve(self, name: str) -> ResolutionEvidence: ...
+    async def resolve(
+        self, name: str, *, authority_port: int, protocol: str
+    ) -> ResolutionEvidence: ...
 
 
 class ConnectionMembership:
@@ -53,12 +55,13 @@ class ConnectionMembership:
             raise ValueError("invalid connection evidence bounds")
         self.resolver, self.boundary = resolver, boundary
         self.cap, self.maximum, self.clock = ttl_cap, max_names, clock
-        self._cache: dict[str, tuple[ResolutionEvidence, float]] = {}
-        self._inflight: dict[str, asyncio.Task[ResolutionEvidence]] = {}
+        self._cache: dict[tuple[str, int, str], tuple[ResolutionEvidence, float]] = {}
+        self._inflight: dict[tuple[str, int, str], asyncio.Task[ResolutionEvidence]] = {}
         self._closed = False
 
-    async def _lookup(self, name: str) -> ResolutionEvidence:
-        result = await self.resolver.resolve(name)
+    async def _lookup(self, key: tuple[str, int, str]) -> ResolutionEvidence:
+        name, authority_port, protocol = key
+        result = await self.resolver.resolve(name, authority_port=authority_port, protocol=protocol)
         if (
             not result.complete
             or result.name != name
@@ -70,39 +73,50 @@ class ConnectionMembership:
             self.boundary.require_public(str(address))
         for endpoint in result.service_endpoints:
             if endpoint.service != name or not (
-                1 <= endpoint.port <= 65535 and 1 <= endpoint.authority_port <= 65535
+                1 <= endpoint.port <= 65535 and endpoint.authority_port == authority_port
             ):
                 raise RequestDenied("invalid_service_evidence")
-            canonical_host(endpoint.target)
+            dns_name(endpoint.target)
             self.boundary.require_public(str(endpoint.address))
         now = self.clock()
         if not self._closed and result.expires_at > now:
-            self._cache[name] = (result, min(result.expires_at, now + self.cap))
+            self._cache[key] = (result, min(result.expires_at, now + self.cap))
         return result
 
     async def require(
-        self, name: str, original: Address, original_port: int, authority_port: int
+        self,
+        name: str,
+        original: Address,
+        original_port: int,
+        authority_port: int,
+        *,
+        protocol: str,
     ) -> None:
         if self._closed:
             raise RequestDenied("connection_closed")
         name = canonical_host(name)
+        if protocol not in ("http", "https") or not all(
+            type(port) is int and 1 <= port <= 65535 for port in (original_port, authority_port)
+        ):
+            raise RequestDenied("invalid_membership_scope")
+        key = (name, authority_port, protocol)
         self.boundary.require_public(str(original))
         now = self.clock()
         self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
-        cached = self._cache.get(name)
+        cached = self._cache.get(key)
         if cached is not None:
             result = cached[0]
         else:
-            task = self._inflight.get(name)
+            task = self._inflight.get(key)
             if task is None:
                 if len(set(self._cache) | set(self._inflight)) >= self.maximum:
                     raise RequestDenied("connection_evidence_capacity")
-                task = asyncio.create_task(self._lookup(name))
-                self._inflight[name] = task
+                task = asyncio.create_task(self._lookup(key))
+                self._inflight[key] = task
 
                 def finished(done: asyncio.Task[ResolutionEvidence]) -> None:
-                    if self._inflight.get(name) is done:
-                        del self._inflight[name]
+                    if self._inflight.get(key) is done:
+                        del self._inflight[key]
                     # Consume detached exceptions if the last waiter was cancelled.
                     if not done.cancelled():
                         done.exception()

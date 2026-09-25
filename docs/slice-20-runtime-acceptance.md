@@ -29,6 +29,34 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Fresh protocol-scoped destination membership
+
+The real `FreshMembership` adapter now connects bounded upstream acquisition
+and DNSSEC classification to the connection-local membership cache. Direct
+address evidence and service-target evidence retain separate provenance,
+authority ports, HTTPS query scope and dependency expiry. Hints and unsolicited
+Additional records cannot create membership; every discovered address is still
+inspected. HTTP does not silently gain HTTPS service-upgrade semantics.
+
+The original deadline and query budget cover sibling address queries and
+cryptographic dependencies. Optional lookup failures supply no positive
+evidence; complete independent public relationships remain usable despite
+bogus or indeterminate authentication. Cache keys include protocol and authority
+port, while request policy still evaluates the selected network port.
+Parameter-free AliasMode final-name fallback preserves the original port.
+
+All five local Nox gates passed: **1,166 affected tests, zero skips**, 44.32s
+test time, `slice20-membership-final-nox.log`. Real local DNS and NGINX adapters
+exercise original authority and endpoint policy. Full-workspace evidence above
+predates this milestone and is not attributed to it.
+
+The pinned dnspython parser rejects wire AliasMode parameters, although
+[RFC 9460](https://www.rfc-editor.org/rfc/rfc9460) requires recipients to ignore
+them. A reproducer explicitly records this unresolved compatibility limitation;
+rejection is not support. No input rewriting before DNSSEC verification,
+dependency-global parser patch or protocol narrowing has been introduced.
+Synthetic DNS publication and full runtime integration remain open.
+
 ### Answer authentication and full-regression correction
 
 Follow-up full local regression at `0f1697a952120343e427105c8f658d0113c82ac5`

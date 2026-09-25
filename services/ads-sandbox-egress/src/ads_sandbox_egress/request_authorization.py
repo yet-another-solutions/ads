@@ -237,7 +237,11 @@ class RequestAuthorizer:
             # Fresh DNS evidence is acquired AFTER the potentially slow helper,
             # immediately before the final no-await authorization decision.
             await self.membership.require(
-                membership_name, target.address, target.port, authority_port
+                membership_name,
+                target.address,
+                target.port,
+                authority_port,
+                protocol=target.protocol,
             )
         # No await between capturing this current revision and the decision.
         # A still-pending DNS/helper operation is NOT an authorized active flow.
