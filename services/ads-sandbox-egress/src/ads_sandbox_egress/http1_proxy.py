@@ -14,9 +14,10 @@ from collections.abc import Awaitable, Callable
 
 import h11
 
-from ads_sandbox_egress import websocket
+from ads_sandbox_egress import h2c, websocket
 from ads_sandbox_egress.framing import Headers, forwarding_headers, validate_headers
 from ads_sandbox_egress.http1 import HTTP1Channel
+from ads_sandbox_egress.http2_proxy import HTTP2Proxy
 from ads_sandbox_egress.policy import RequestDenied
 from ads_sandbox_egress.request_authorization import (
     ConnectionTarget,
@@ -71,6 +72,7 @@ class HTTP1Proxy:
         *,
         expects_continue: bool,
         websocket_request: Headers | None = None,
+        h2c_request: bool = False,
     ) -> tuple[bool, bool]:
         early = False
         switched = False
@@ -102,9 +104,14 @@ class HTTP1Proxy:
                     if final or informational > 16:
                         raise RequestDenied("unexpected_response_transition")
                     if event.status_code == 101:
-                        if websocket_request is None:
+                        if websocket_request is not None:
+                            fields = websocket.response_headers(
+                                websocket_request, tuple(event.headers)
+                            )
+                        elif h2c_request:
+                            fields = h2c.response_headers(tuple(event.headers))
+                        else:
                             raise RequestDenied("unrequested_response_transition")
-                        fields = websocket.response_headers(websocket_request, tuple(event.headers))
                         await upload_done.wait()
                         await front.send(
                             h11.InformationalResponse(
@@ -166,6 +173,7 @@ class HTTP1Proxy:
         )
         origin: HTTP1Channel | None = None
         clean = False
+        transferred = False
         try:
             while True:
                 request = await front.receive()
@@ -175,15 +183,14 @@ class HTTP1Proxy:
                 if not isinstance(request, h11.Request):
                     raise RequestDenied("request_headers_required")
                 head = RequestHead.http1(request, self.authorizer.connection)
-                if head.upgrade == "http/2":
-                    # Explicit incomplete feature, not an opaque forwarding
-                    # fallback or a claimed supported transition.
-                    raise RequestDenied("http1_transition_owner_not_implemented")
                 fields = (
                     websocket.request_headers(head.method, head.headers)
                     if head.upgrade == "websocket"
                     else serialized_headers(head.headers)
                 )
+                upgrade = h2c.prepare(head, fields) if head.upgrade == "http/2" else None
+                if upgrade is not None:
+                    fields = upgrade.headers
                 async with asyncio.timeout(self.authorization_timeout):
                     await self.authorizer.authorize(head)
                     if origin is None:
@@ -209,8 +216,27 @@ class HTTP1Proxy:
                         for name, value in head.headers
                     ),
                     websocket_request=fields if head.upgrade == "websocket" else None,
+                    h2c_request=upgrade is not None,
                 )
                 if switched:
+                    if upgrade is not None:
+                        assert self.upstream is not None
+                        owner = HTTP2Proxy(
+                            self.frontend.prefixed(front.take_switched_data()),
+                            self.authorizer,
+                            self.connect,
+                            idle_timeout=self.idle_timeout,
+                            authorization_timeout=self.authorization_timeout,
+                        )
+                        owner.adopt_h2c(
+                            self.upstream.prefixed(origin.take_switched_data()),
+                            head,
+                            upgrade.frontend,
+                            upgrade.origin,
+                        )
+                        transferred = True
+                        await owner.run()
+                        return
                     await websocket.relay(front, origin, idle_timeout=self.idle_timeout)
                     clean = True
                     return
@@ -245,7 +271,9 @@ class HTTP1Proxy:
             except Exception:
                 pass
         finally:
-            if not clean:
+            if transferred:
+                pass  # HTTP2Proxy took exclusive custody, including cancellation.
+            elif not clean:
                 self.frontend.abort()
                 if self.upstream is not None:
                     self.upstream.abort()

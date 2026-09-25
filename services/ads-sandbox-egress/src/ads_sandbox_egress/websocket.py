@@ -94,7 +94,7 @@ def request_headers(method: bytes, headers: Headers) -> Headers:
         method != b"GET"
         or _one(fields, b"sec-websocket-version") != b"13"
         or any(
-            n == b"transfer-encoding" or n == b"content-length" and v != b"0" for n, v in headers
+            n == b"transfer-encoding" or n == b"content-length" and int(v) != 0 for n, v in headers
         )
         or any(n in (b"sec-websocket-accept", b"expect") for n, _ in headers)
     ):

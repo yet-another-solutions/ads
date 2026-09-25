@@ -18,7 +18,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, native TLS integration | Ordinary request owners, HTTP/1 WebSocket and real ECH/H2 integration tested; h2c, H2 WebSocket and graceful GOAWAY open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary request owners, HTTP/1 WebSocket, h2c and real ECH/H2 integration tested; H2 WebSocket and graceful GOAWAY open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,38 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### h2c transition ownership
+
+The HTTP/1 owner now authorizes h2c as an initial HTTP/1 transition, completes
+the original upload and validates the genuine origin 101 before transferring
+both legs to the H2 owner. Stream 1 receives the original request's response;
+no request headers/body are replayed. The frontend applies the client's
+HTTP2-Settings while the origin advertises the proxy's own settings. Original
+method, target and request content are preserved. Parser leftovers are handed
+off once through bounded prefixed readers, including coalesced origin
+101/SETTINGS/response bytes.
+
+Every later stream uses the ordinary H2 authorization path and independent
+stream-ID mapping. Denied upgrade requests never open an origin; an origin
+rejection remains HTTP. Actual stock h2 endpoint tests cover GET, HEAD,
+uploaded POST, separate settings, initial response, later isolated denial,
+policy updates, malformed settings and malformed 101. A forced scheduling
+regression proves an ordinary origin opened while frontend startup yields
+cannot be mistaken for an adopted h2c origin or initialized twice.
+
+All five local Nox gates pass: **795 affected tests, zero skips**, 26.99 seconds,
+`slice20-h2c-reviewed-nox.log`. This includes concrete NGINX compatibility
+probes for path-form CONNECT and OPTIONS asterisk: they currently reject, and
+are explicitly blockers rather than passing support. The earlier real empty
+Host probe remains a blocker too. A helper-only method adapter requires an
+explicit contract decision; no silent CONNECT-to-GET rewrite was added.
+
+No full-workspace rerun, CI, image/rootfs/native/chart build, merge,
+publication or lab operation. The complete slice remains open: H2 WebSocket,
+graceful GOAWAY, helper compatibility, DNSSEC/ECH publication, remaining status
+and certificate integration, executable bootstrap, enforcement, custody,
+real health and source-only packaging still need implementation/proof.
 
 ### HTTP/1.1 WebSocket session ownership
 

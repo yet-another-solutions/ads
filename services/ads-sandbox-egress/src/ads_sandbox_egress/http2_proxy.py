@@ -80,7 +80,8 @@ class _Leg:
             await self._flush_locked()
 
     async def start(self) -> None:
-        self.protocol.initiate_connection()
+        if not self.protocol.streams:
+            self.protocol.initiate_connection()
         await self.flush()
         self.task = asyncio.create_task(self._read())
 
@@ -262,6 +263,7 @@ class HTTP2Proxy:
         self._origin_streams: dict[int, _Exchange] = {}
         self._tasks: set[asyncio.Task[None]] = set()
         self._running = False
+        self._upgraded = False
 
     def _completed_task(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
@@ -388,7 +390,7 @@ class HTTP2Proxy:
                 raise RequestDenied("http2_request_body_event")
 
     async def _response(
-        self, exchange: _Exchange, origin: _Leg, upload: asyncio.Task[None]
+        self, exchange: _Exchange, origin: _Leg, upload: asyncio.Task[None] | None
     ) -> None:
         assert exchange.outgoing is not None and exchange.origin_id is not None
         expects = any(
@@ -402,6 +404,7 @@ class HTTP2Proxy:
                 if isinstance(event, InformationalResponseReceived):
                     continued |= (b":status", b"100") in event.headers
                 elif expects and not continued and not exchange.upload_complete.is_set():
+                    assert upload is not None
                     upload.cancel()
                 await self.front.headers(exchange.frontend_id, tuple(event.headers))
             elif isinstance(event, DataReceived):
@@ -416,6 +419,7 @@ class HTTP2Proxy:
                 else:
                     await self.front.data(exchange.frontend_id, b"", end=True)
                 if not exchange.upload_complete.is_set():
+                    assert upload is not None
                     upload.cancel()
                 return
             else:
@@ -482,6 +486,13 @@ class HTTP2Proxy:
         self._running = True
         try:
             await self.front.start()
+            if self._upgraded:
+                assert self.origin is not None
+                await self.origin.start()
+                exchange = self._exchanges[1]
+                exchange.task = asyncio.create_task(self._upgrade_response(exchange))
+                self._tasks.add(exchange.task)
+                exchange.task.add_done_callback(self._completed_task)
             while not self.stop.is_set():
                 legs = (self.front,) if self.origin is None else (self.front, self.origin)
                 last_activity = max(leg.last_activity for leg in legs)
@@ -514,3 +525,60 @@ class HTTP2Proxy:
             await self.front.close()
             if self.origin is not None:
                 await self.origin.close()
+
+    def adopt_h2c(
+        self,
+        upstream: OwnedStream,
+        request: RequestHead,
+        frontend_protocol: HTTP2Connection,
+        origin_protocol: HTTP2Connection,
+    ) -> None:
+        """Take the original request's response, never replay its HTTP bytes.
+
+        Called by the HTTP/1 owner only after per-request policy, completed
+        upload and validated 101 on both legs. Later streams take _request.
+        """
+        if self._running or self.origin is not None or request.upgrade != "http/2":
+            raise RequestDenied("h2c_ownership_state")
+        if frontend_protocol.config.client_side or not origin_protocol.config.client_side:
+            raise RequestDenied("h2c_protocol_roles")
+        if set(frontend_protocol.streams) != {1} or set(origin_protocol.streams) != {1}:
+            raise RequestDenied("h2c_protocol_state")
+        self.front.protocol = frontend_protocol
+        self._upgraded = True
+        self.origin = _Leg(
+            upstream,
+            client=True,
+            receive=self._origin_event,
+            stop=self.stop,
+            maximum_streams=self.maximum_streams,
+            idle_timeout=self.idle_timeout,
+            on_eof=self._origin_eof,
+        )
+        self.origin.protocol = origin_protocol
+        exchange = _Exchange(1, request.headers, _Inbox(self.front, 1), origin_id=1)
+        exchange.outgoing = _Inbox(self.origin, 1)
+        exchange.upload_complete.set()
+        self._exchanges[1] = self._origin_streams[1] = exchange
+
+    async def _upgrade_response(self, exchange: _Exchange) -> None:
+        exchange.started = True
+        complete = False
+        try:
+            if exchange.cancelled:
+                return
+            assert self.origin is not None
+            await self._response(exchange, self.origin, None)
+            complete = True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            try:
+                _LOG.warning("http2_upgrade_reset reason=upstream")
+            except Exception:
+                pass
+        finally:
+            try:
+                await self._retire(exchange, complete=complete)
+            except Exception:
+                self.stop.set()

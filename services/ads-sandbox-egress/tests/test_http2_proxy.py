@@ -7,7 +7,7 @@ from h2.events import DataReceived, RequestReceived, ResponseReceived, StreamEnd
 from hyperframe.frame import HeadersFrame
 
 from ads_commons.egress import ProjectEgressSnapshot
-from ads_sandbox_egress.http2_proxy import HTTP2Proxy
+from ads_sandbox_egress.http2_proxy import HTTP2Proxy, _Leg
 from test_http1_proxy import close_client, proxy_lab, settings
 from test_normalization import nginx_helper as nginx_helper
 
@@ -422,4 +422,35 @@ async def test_origin_eof_preserves_complete_queued_response_but_resets_truncate
                 for e in client.events
             )
         finally:
+            await close_client(client.writer)
+
+
+@pytest.mark.anyio
+async def test_origin_opened_during_front_start_is_not_mistaken_for_h2c(nginx_helper, monkeypatch):
+    actual_start = _Leg.start
+    reached = asyncio.Event()
+    release = asyncio.Event()
+
+    async def interleaved_start(leg):
+        await actual_start(leg)
+        if not leg.protocol.config.client_side:
+            reached.set()
+            await release.wait()
+
+    monkeypatch.setattr(_Leg, "start", interleaved_start)
+    origin = Origin()
+    async with proxy_lab(nginx_helper, origin.handle, settings(), proxy_type=HTTP2Proxy) as lab:
+        client = await Client.open(lab.address)
+        try:
+            await reached.wait()
+            await client.request(1)
+            await client.until(lambda events: ended(events, 1))
+            release.set()
+            await asyncio.sleep(0)
+            await client.request(3)
+            await client.until(lambda events: ended(events, 3))
+            assert len(lab.connected) == 1
+            assert list(origin.requests) == [1, 3]
+        finally:
+            release.set()
             await close_client(client.writer)

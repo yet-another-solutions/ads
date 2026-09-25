@@ -248,6 +248,7 @@ def test_extension_and_subprotocol_validation_without_payload_transforms():
         (b"sec-websocket-extensions", b'permessage-deflate; client_max_window_bits="15"'),
     )
     assert request_headers(b"GET", request)
+    assert request_headers(b"GET", request + ((b"content-length", b"000"),))
     assert response_headers(
         request,
         RESPONSE

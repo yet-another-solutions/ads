@@ -64,6 +64,17 @@ def test_real_helper_rejects_bad_target_without_fallback(nginx_helper):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("method,target", [(b"CONNECT", b"/chat"), (b"OPTIONS", b"*")])
+def test_real_helper_parser_compatibility_blockers_are_explicit(nginx_helper, method, target):
+    # Feasibility evidence, NOT accepted support for these valid protocol
+    # shapes. An adapter must be reviewed before these become success cases.
+    async def run():
+        with pytest.raises(RequestDenied, match="normalization_rejected"):
+            await nginx_helper.normalize(method, target, ((b"host", b"origin.example"),))
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize(
     "response",
     [
