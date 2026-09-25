@@ -100,7 +100,10 @@ def handle_exists(parent, saved, expected):
         ctypes.POINTER(FileHandle),
         ctypes.c_int,
     ]
-    parent_fd = os.open(parent, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    # mount_fd is resolved through fdget(), not fdget_raw(), on supported
+    # kernels. O_PATH here yields EBADF even though the descriptor is open.
+    # O_PATH is valid for the returned handle descriptor, not this mount anchor.
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         fd = libc.open_by_handle_at(parent_fd, ctypes.byref(value), os.O_PATH | os.O_CLOEXEC)
         if fd < 0:

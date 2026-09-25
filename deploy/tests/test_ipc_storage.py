@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ctypes
+import errno
+import fcntl
 import importlib.machinery
 import importlib.util
 import os
@@ -16,12 +19,59 @@ from ads_commons.sandbox.ipc_storage import decode_ipc_storage, decode_unused_ip
 
 
 @pytest.fixture
-def backing(ipc, captured, observer, tmp_path, monkeypatch):  # noqa: F811
+def storage_module():
     path = Path(__file__).parents[2] / "services/ads-ptp-tools/ads-ipc-storage"
     loader = importlib.machinery.SourceFileLoader("ipc_storage", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("error", [None, errno.ESTALE, errno.EBADF, errno.EPERM, errno.EIO])
+def test_handle_lookup_uses_readable_mount_anchor_and_only_estale_is_absence(
+    storage_module, tmp_path, monkeypatch, error
+):
+    descriptors = []
+
+    def lookup(mount_fd, handle, flags):
+        descriptors.append(mount_fd)
+        # Inspect a real descriptor, not just a mocked os.open argument.
+        actual_flags = fcntl.fcntl(mount_fd, fcntl.F_GETFL)
+        assert not actual_flags & os.O_PATH
+        assert actual_flags & os.O_ACCMODE == os.O_RDONLY
+        assert actual_flags & os.O_DIRECTORY
+        assert actual_flags & os.O_NOFOLLOW
+        assert not os.get_inheritable(mount_fd)
+        assert flags == os.O_PATH | os.O_CLOEXEC
+        assert handle._obj.handle_bytes == 2
+        if error is not None:
+            ctypes.set_errno(error)
+            return -1
+        fd = os.open(tmp_path, flags)
+        descriptors.append(fd)
+        return fd
+
+    monkeypatch.setattr(
+        storage_module.ctypes, "CDLL", lambda *a, **kw: SimpleNamespace(open_by_handle_at=lookup)
+    )
+    saved = {"type": 1, "bytes": "aabb"}
+    expected = storage_module.directory(tmp_path)
+    if error in (None, errno.ESTALE):
+        assert storage_module.handle_exists(tmp_path, saved, expected) is (error is None)
+    else:
+        with pytest.raises(OSError) as failure:
+            storage_module.handle_exists(tmp_path, saved, expected)
+        assert failure.value.errno == error
+    for fd in descriptors:
+        with pytest.raises(OSError) as closed:
+            os.fstat(fd)
+        assert closed.value.errno == errno.EBADF
+
+
+@pytest.fixture
+def backing(storage_module, ipc, captured, observer, tmp_path, monkeypatch):  # noqa: F811
+    module = storage_module
     folder = tmp_path / "volume"
     folder.mkdir()
     info = folder.stat()
