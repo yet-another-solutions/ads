@@ -10,6 +10,7 @@ from ads_commons.egress import (
     ProtocolSettings,
 )
 from ads_sandbox_egress.policy import (
+    MatchBudget,
     PolicyRequest,
     RequestDenied,
     ant_matches,
@@ -160,3 +161,17 @@ def test_identity_normalization_and_conflicts():
 def test_match_work_is_bounded():
     with pytest.raises(RequestDenied, match="path_match_limit"):
         ant_matches(b"/" + b"?" * 8190, b"/" + b"a" * 8190)
+
+
+def test_one_budget_across_patterns():
+    budget = MatchBudget(30)
+    assert ant_matches(b"/a", b"/a", budget=budget)
+    assert ant_matches(b"/a", b"/a", budget=budget)
+    with pytest.raises(RequestDenied, match="path_match_limit"):
+        ant_matches(b"/a", b"/a", budget=budget)
+
+
+@pytest.mark.parametrize("path", [b"", b"relative", b"/a\0", b"/" + b"a" * 8192])
+def test_invalid_path_cannot_bypass_empty_path_rules(path):
+    assert not permitted(snapshot(rule()), replace(REQUEST, normalized_path=path))
+    assert not permitted(snapshot(mode="blacklist"), replace(REQUEST, normalized_path=path))

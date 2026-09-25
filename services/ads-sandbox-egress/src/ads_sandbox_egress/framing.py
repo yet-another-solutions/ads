@@ -141,3 +141,78 @@ class BodyLength:
     def finish(self) -> None:
         if self.expected is not None and self.received != self.expected:
             raise RequestDenied("body_truncated")
+
+
+class ChunkedWire:
+    """Bounded raw framing observer; body bytes are never accumulated.
+
+    h11 remains the message parser. This checks wire chunk lines and trailers
+    before its normalization can hide bare LF, obs-fold or ambiguous trailers.
+    Bytes after the final trailer belong to the next independently gated cycle.
+    """
+
+    def __init__(self) -> None:
+        self.state = "size"
+        self.remaining = 0
+        self.line = bytearray()
+        self.trailers: list[tuple[bytes, bytes]] = []
+        self.trailer_bytes = 0
+
+    def feed(self, data: bytes) -> None:
+        index = 0
+        while index < len(data) and self.state != "done":
+            if self.state == "data":
+                consumed = min(self.remaining, len(data) - index)
+                self.remaining -= consumed
+                index += consumed
+                if self.remaining == 0:
+                    self.state = "data_end"
+                continue
+            char = data[index]
+            index += 1
+            self.line.append(char)
+            if len(self.line) > 8192:
+                raise RequestDenied("chunk_line_limit")
+            if char != 10:
+                continue
+            if len(self.line) < 2 or self.line[-2:] != b"\r\n":
+                raise RequestDenied("invalid_chunk_line")
+            line = bytes(self.line[:-2])
+            self.line.clear()
+            if self.state == "data_end":
+                if line:
+                    raise RequestDenied("invalid_chunk_terminator")
+                self.state = "size"
+            elif self.state == "size":
+                size, separator, extensions = line.partition(b";")
+                if separator:
+                    size = size.rstrip(b" \t")
+                if not re.fullmatch(rb"[0-9A-Fa-f]{1,16}", size):
+                    raise RequestDenied("invalid_chunk_size")
+                self.remaining = int(size, 16)
+                if self.remaining > 2**63 - 1:
+                    raise RequestDenied("chunk_size_limit")
+                if separator:
+                    # Chunk extensions have no authorization semantics. Validate
+                    # the complete token/quoted-string grammar, then discard.
+                    token = rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
+                    quoted = rb'"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t !-\x7e\x80-\xff])*"'
+                    extension = token + rb"(?:[ \t]*=[ \t]*(?:" + token + b"|" + quoted + rb"))?"
+                    if not re.fullmatch(
+                        rb"[ \t]*" + extension + rb"(?:[ \t]*;[ \t]*" + extension + rb")*[ \t]*",
+                        extensions,
+                    ):
+                        raise RequestDenied("invalid_chunk_extension")
+                self.state = "data" if self.remaining else "trailers"
+            elif self.state == "trailers":
+                self.trailer_bytes += len(line) + 2
+                if self.trailer_bytes > 16384:
+                    raise RequestDenied("trailer_limit")
+                if not line:
+                    validate_trailers(self.trailers)
+                    self.state = "done"
+                    continue
+                name, colon, value = line.partition(b":")
+                if not colon or not _TOKEN.fullmatch(name) or len(self.trailers) >= 32:
+                    raise RequestDenied("invalid_trailer_line")
+                self.trailers.append((name, value.strip(b" \t")))

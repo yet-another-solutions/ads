@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 from dataclasses import dataclass
 
-from ads_sandbox_egress.policy import RequestDenied, canonical_host
+from ads_sandbox_egress.policy import RequestDenied
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -107,7 +107,22 @@ class DestinationBoundary:
 
 def dns_name(value: str) -> str:
     # DNSSEC dependency lookups may legitimately address the root.
-    return "." if value == "." else canonical_host(value)
+    if value == ".":
+        return "."
+    name = value.lower().removesuffix(".")
+    # DNS owners include numeric labels and _service._transport names. They are
+    # not HTTP authorities. No search suffix, Unicode or escaped label folding.
+    if (
+        not name.isascii()
+        or len(name) > 253
+        or any(
+            not 1 <= len(label) <= 63
+            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in label)
+            for label in name.split(".")
+        )
+    ):
+        raise RequestDenied("invalid_dns_name")
+    return name
 
 
 @dataclass(frozen=True, slots=True)

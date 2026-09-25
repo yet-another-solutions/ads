@@ -97,7 +97,23 @@ def domain_matches(pattern: str, name: str) -> bool:
     return name == pattern
 
 
-def ant_matches(pattern: bytes, path: bytes, *, insensitive: bool = False) -> bool:
+@dataclass(slots=True)
+class MatchBudget:
+    remaining: int = 1_000_000
+
+    def consume(self, count: int) -> None:
+        self.remaining -= count
+        if self.remaining < 0:
+            raise RequestDenied("path_match_limit")
+
+
+def ant_matches(
+    pattern: bytes,
+    path: bytes,
+    *,
+    insensitive: bool = False,
+    budget: MatchBudget | None = None,
+) -> bool:
     """Byte-oriented Ant subset, no regex/variables/escaping extensions.
 
     ** consumes whole segments; * and ? never consume a slash. ASCII lowercasing
@@ -111,15 +127,13 @@ def ant_matches(pattern: bytes, path: bytes, *, insensitive: bool = False) -> bo
     if insensitive:
         pattern, path = pattern.lower(), path.lower()
     patterns, parts = pattern.split(b"/"), path.split(b"/")
-    work = 0
+    budget = budget if budget is not None else MatchBudget()
+    budget.consume(len(pattern) + len(path))
 
     def segment(glob: bytes, value: bytes) -> bool:
-        nonlocal work
         previous = [True] + [False] * len(value)
         for char in glob:
-            work += len(value) + 1
-            if work > 1_000_000:
-                raise RequestDenied("path_match_limit")
+            budget.consume(len(value) + 1)
             current = [previous[0] and char == ord("*")] + [False] * len(value)
             for j, actual in enumerate(value, 1):
                 current[j] = (
@@ -132,6 +146,7 @@ def ant_matches(pattern: bytes, path: bytes, *, insensitive: bool = False) -> bo
 
     reachable = {0}
     for glob in patterns:
+        budget.consume(len(parts) + len(reachable))
         if glob == b"**":
             reachable = set(range(min(reachable), len(parts) + 1)) if reachable else set()
         else:
@@ -165,6 +180,9 @@ def permitted(snapshot: ProjectEgressSnapshot | None, request: PolicyRequest) ->
         or request.sub_protocol not in ("http/1.1", "http/2", "websocket")
         or not 1 <= request.port <= 65535
         or request.upgrade not in (None, "http/2", "websocket")
+        or not request.normalized_path.startswith(b"/")
+        or len(request.normalized_path) > 8192
+        or b"\0" in request.normalized_path
         or (
             request.method == "CONNECT"
             and not (request.sub_protocol == "http/2" and request.upgrade == "websocket")
@@ -176,7 +194,9 @@ def permitted(snapshot: ProjectEgressSnapshot | None, request: PolicyRequest) ->
         return False
     settings = snapshot.settings
     whitelist = settings.mode == "whitelist"
+    budget = MatchBudget()
     for rule in settings.rules:
+        budget.consume(1)
         options = rule.protocol_settings
         if (
             rule.port != request.port
@@ -189,6 +209,7 @@ def permitted(snapshot: ProjectEgressSnapshot | None, request: PolicyRequest) ->
             ant_matches(
                 item.pattern.encode("utf-8"),
                 request.normalized_path,
+                budget=budget,
                 insensitive=(
                     not whitelist
                     if item.case_insensitive is msgspec.UNSET

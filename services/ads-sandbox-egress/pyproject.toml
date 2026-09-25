@@ -9,6 +9,8 @@ dependencies = [
     "ads-commons-beans",
     "cryptography==50.0.1",
     "dishka==1.10.1",
+    "dnspython==2.8.0",
+    "h11==0.16.0",
     "litestar==2.24.0",
     "msgspec==0.21.1",
 ]
