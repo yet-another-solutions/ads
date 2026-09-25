@@ -20,7 +20,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1, HTTP/2, approved empty/absent authority and extended CONNECT adapters tested; OPTIONS asterisk is explicitly pathless |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
-| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, `dnssec_validation.py`, `dnssec_chain.py`, real DNS/BIND proofs | Durable signing identities and fresh positive-chain verification tested; unsigned/negative/wildcard proof processing, complete classification and publication open |
+| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, `dnssec_validation.py`, `dnssec_chain.py`, `dnssec_denial.py`, real DNS/BIND proofs | Signing identities, positive chains, negative/wildcard proof checks and direct unsigned-delegation acquisition tested; complete answer classification/transformation, flags and publication open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
 | TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
@@ -28,6 +28,64 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Signed denial proofs and direct unsigned delegation
+
+`dnssec_denial` verifies signed NSEC/NSEC3 integrity and proof relationships for
+NODATA (including empty non-terminals), NXDOMAIN, wildcard selection,
+wildcard NODATA and direct unsigned delegation. It uses supplied authenticated
+zone keys, never local stored-name absence. Proof checks retain the distinction
+between literal wildcard owners and expanded answer signatures, parent-side
+DS versus child SOA, CNAME owner semantics, DNAME descendant semantics, and
+delegation boundaries. Query meta-type ANY is not mistaken for a bitmap bit.
+
+NSEC3 checks include exact owner hashes, common algorithm/salt/iteration
+parameters, closest/next-closer and wildcard proofs, ignored unknown hash/flag
+values, and Opt-Out. Hash work is charged before processing untrusted iteration
+counts. Opt-Out is an explicit result marker, not full answer authentication;
+final response assembly must clear AD when required.
+The implementation follows [RFC 4035 sections 5.3.4/5.4](https://www.rfc-editor.org/rfc/rfc4035)
+and [RFC 5155 sections 8/9.2](https://www.rfc-editor.org/rfc/rfc5155).
+Exact/missing/invalid proof diagnosis and response flags remain the complete
+classifier's responsibility, not inferred from this component alone.
+
+The fresh chain owner now accepts verified parent no-DS proofs, including
+NSEC3 Opt-Out, even when the child has no DNSKEY answer. A signed island remains
+insecure and its acquired material is retained, without automatic child trust
+or manufactured DS. Missing/unusable denial evidence remains indeterminate.
+This handles direct observed delegation; complete unsigned-descendant discovery
+and complete answer authentication are still open.
+
+Eighty-five new tests cover signed proofs and chain integration. Eighteen
+independent BIND delv cases cover both NSEC families and Opt-Out, positive
+wildcards, DNAME-owner NODATA, genuinely unsigned children and corrupt proofs.
+Important diagnostic caveat: delv labels an Opt-Out NXDOMAIN proof “fully
+validated.” That display is not wire AD-bit evidence; ADS's Opt-Out marker
+remains asserted, and final AD construction is still unimplemented. No claim
+of universal validator diagnostics or completed flag handling.
+
+Review found and fixed:
+- Literal wildcard NSEC signatures were initially mistaken for expanded
+  answers; the signature checker now distinguishes those forms.
+- CNAME does not redirect descendants and DNAME does not redirect its owner;
+  new tests were corrected to the actual semantics, keeping cut protections.
+- Acquisition originally rejected literal wildcard DNS owners. The DNS-only
+  boundary now permits a sole leading `*` label, still checks infrastructure
+  suffixes, and leaves HTTP authority validation unchanged.
+- NSEC3 hostile hashing, wrong bitmaps/cuts, mixed proof parameters and duplicate
+  evidence remain rejected or explicitly unresolved, never unsigned success.
+
+The first RFC SDK fetch timed out; bounded direct RFC text retrieval succeeded.
+Initial focused failures and corrections are preserved in the session logs.
+All five local Nox gates pass: **1,030 affected tests, zero skips**, 39.08s,
+`slice20-dnssec-denial-nox.log`. Local DNS, delv, NGINX and OpenSSL fixtures
+closed; no containers created. No full current-workspace rerun/CI, project
+image build, merge/publication, lab action or later-slice work.
+
+Still open: complete answer classification and diagnostics, DNSSEC proof/record
+transformation with status preservation, durable DNSSEC/ECH publication,
+resolver relationship integration, remaining TLS statuses, executable
+bootstrap/custody/interception/health/packaging and final full regression/review.
 
 ### Positive upstream DNSSEC verification
 

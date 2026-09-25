@@ -54,8 +54,13 @@ def test_dns_service_and_numeric_owners_are_not_http_hosts():
     instance = resolver()
     instance._name(dns.name.from_text("_8443._https.example.com."))
     instance._name(dns.name.from_text("1234.example."))
+    instance._name(dns.name.from_text("*.wild.example."))
     with pytest.raises(RequestDenied, match="infrastructure"):
         instance._name(dns.name.from_text("_service._tcp.cluster.example."))
+    with pytest.raises(RequestDenied, match="infrastructure"):
+        instance._name(dns.name.from_text("*.cluster.example."))
+    with pytest.raises(RequestDenied, match="invalid_dns_name"):
+        instance._name(dns.name.from_text("x.*.example."))
 
 
 def test_wrong_record_family_not_positive_membership(monkeypatch):

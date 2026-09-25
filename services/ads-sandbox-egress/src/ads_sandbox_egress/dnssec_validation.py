@@ -87,10 +87,12 @@ class CryptoBudget:
 
     remaining: int = 128
 
-    def consume(self) -> None:
-        if self.remaining <= 0:
+    def consume(self, count: int = 1) -> None:
+        if type(count) is not int or count < 1:
+            raise ValueError("positive verification work required")
+        if self.remaining < count:
             raise RequestDenied("dnssec_crypto_budget")
-        self.remaining -= 1
+        self.remaining -= count
 
 
 def fingerprint(record: DNSKey | DS | RRSIG) -> str:
@@ -223,9 +225,11 @@ def check_signatures(
                 failures.append(Failure("signature_invalid", sig_id, key_id))
             else:
                 if sig.inception <= now <= sig.expiration:
-                    verified.append(
-                        VerifiedSignature(sig, key, sig.labels < len(records.name.labels) - 1)
+                    owner_labels = len(records.name.labels) - 1
+                    expanded = sig.labels < owner_labels and not (
+                        records.name.labels[0] == b"*" and sig.labels == owner_labels - 1
                     )
+                    verified.append(VerifiedSignature(sig, key, expanded))
     return SignatureCheck(tuple(verified), tuple(failures), tuple(unsupported), tuple(limitations))
 
 

@@ -16,6 +16,7 @@ from ads_sandbox_egress.dnssec_validation import CryptoBudget, check_signatures
 from ads_sandbox_egress.policy import RequestDenied
 from ads_sandbox_egress.resolution import ResolutionJob, ResolutionLimits
 from test_dns_transport import transport
+from test_dnssec_denial import Zone
 from test_dnssec_validation import corrupt, material, signature
 from test_resolution import resolver
 
@@ -303,5 +304,63 @@ def test_chain_expansion_limit_is_silent_denial_not_dnssec_diagnostic():
             await owner._zone(
                 CHILD, ResolutionJob(time.monotonic() + 5), CryptoBudget(), {}, frozenset((CHILD,))
             )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("family", ["NSEC", "NSEC3", "optout"])
+@pytest.mark.parametrize("signed_island", [False, True])
+def test_authenticated_no_ds_keeps_unsigned_and_signed_islands_insecure(family, signed_island):
+    fixture = PublicDNS()
+    zone = Zone(
+        "NSEC3" if family == "optout" else family, opt_out=family == "optout", now=fixture.now
+    )
+    fixture.keys[PARENT], fixture.private[PARENT] = zone.keys, zone.private
+    fixture.data[PARENT, dns.rdatatype.DNSKEY] = zone.resign(zone.keys)
+    ds = dns.dnssec.make_ds(PARENT, next(iter(zone.keys)), 2)
+    fixture.data[PARENT, dns.rdatatype.DS] = fixture.signed(
+        dns.rrset.from_rdata(PARENT, 60, ds), ROOT
+    )
+    child = dns.name.from_text("child.example.")
+    child_private, child_key = material()
+    child_keys = dns.rrset.from_rdata(child, 60, child_key)
+    child_sig = signature(
+        child_keys, child_private, child_key, fixture.now - 60, fixture.now + 600, child
+    )
+
+    class View:
+        async def answer(self, query, *, deadline):
+            question = query.question[0]
+            if question.name != child:
+                return await fixture.answer(query, deadline=deadline)
+            fixture.calls.append((question.name, question.rdtype))
+            response = dns.message.make_response(query)
+            if question.rdtype == dns.rdatatype.DNSKEY and signed_island:
+                response.answer.extend((child_keys, dns.rrset.from_rdata(child, 60, child_sig)))
+            elif question.rdtype == dns.rdatatype.DS:
+                for pair in zone.proofs:
+                    response.authority.extend(pair)
+            return response
+
+    async def run():
+        service = transport(View())
+        _, port = await service.start("127.0.0.1", 0)
+        try:
+            owner = PositiveChains(resolver(upstream_port=port), {ROOT: fixture.keys[ROOT]})
+            result = await owner.authenticate(
+                child, ResolutionJob(time.monotonic() + 5), budget=CryptoBudget()
+            )
+            assert result.state == "insecure" and result.trusted_keys is None
+            assert result.denials and result.denials[-1].valid
+            assert result.denials[-1].opt_out is (family == "optout")
+            acquired_child_keys = [
+                rrset
+                for message in result.messages
+                for rrset in message.answer
+                if rrset.name == child and rrset.rdtype == dns.rdatatype.DNSKEY
+            ]
+            assert bool(acquired_child_keys) is signed_island
+        finally:
+            await service.close()
 
     asyncio.run(run())

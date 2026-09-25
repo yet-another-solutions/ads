@@ -110,15 +110,18 @@ def dns_name(value: str) -> str:
     if value == ".":
         return "."
     name = value.lower().removesuffix(".")
-    # DNS owners include numeric labels and _service._transport names. They are
+    # DNS owners include literal wildcard, numeric and _service._transport names. They are
     # not HTTP authorities. No search suffix, Unicode or escaped label folding.
     if (
         not name.isascii()
         or len(name) > 253
         or any(
             not 1 <= len(label) <= 63
-            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in label)
-            for label in name.split(".")
+            or (
+                not (index == 0 and label == "*")
+                and any(char not in "abcdefghijklmnopqrstuvwxyz0123456789_-" for char in label)
+            )
+            for index, label in enumerate(name.split("."))
         )
     ):
         raise RequestDenied("invalid_dns_name")

@@ -1,9 +1,9 @@
-"""Fresh positive DNSSEC key-chain acquisition against explicit upstream anchors.
+"""Fresh DNSSEC key-chain acquisition against explicit upstream anchors.
 
 This component follows signed DS evidence, never guessed registrable domains.
-It deliberately reports indeterminate when missing positive material requires
-unsigned-delegation/negative-proof processing. It neither synthesizes records
-nor authenticates wildcard/negative answers. No persistent resolver cache.
+Authenticated no-DS delegation proofs may establish insecurity, including
+signed islands. Missing or unusable evidence remains indeterminate. It neither
+synthesizes records nor authenticates complete answers. No persistent cache.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import dns.rdtypes.ANY.DNSKEY
 import dns.rdtypes.ANY.RRSIG
 import dns.rrset
 
+from ads_sandbox_egress.dnssec_denial import DenialProof, validate_denial
 from ads_sandbox_egress.dnssec_validation import (
     CryptoBudget,
     DSCheck,
@@ -47,6 +48,7 @@ class ZoneAuthentication:
     signatures: tuple[SignatureCheck, ...] = ()
     delegations: tuple[DSCheck, ...] = ()
     limitation: str | None = None
+    denials: tuple[DenialProof, ...] = ()
 
 
 def exact(
@@ -115,6 +117,7 @@ class PositiveChains:
         sigs = exact(message, zone, dns.rdatatype.RRSIG, covers=dns.rdatatype.DNSKEY)
         checks: dict[int, SignatureCheck] = {}
         ds_checks: dict[int, DSCheck] = {}
+        denials: dict[int, DenialProof] = {}
 
         def result(
             state: State, trusted: dns.rrset.RRset | None = None, limitation: str | None = None
@@ -129,16 +132,18 @@ class PositiveChains:
                 tuple(checks.values()),
                 tuple(ds_checks.values()),
                 limitation,
+                tuple(denials.values()),
             )
             memo[zone] = value
             return value
 
         if message.rcode() != dns.rcode.NOERROR:
             return result("indeterminate", limitation="dnskey_resolution_failure")
-        if keys is None or not keys:
-            return result("indeterminate", limitation="dnskey_absence_requires_proof")
-        _bounded(keys, maximum=64)
+        if keys is not None:
+            _bounded(keys, maximum=64)
         if zone in self._anchors:
+            if keys is None or not keys:
+                return result("indeterminate", limitation="anchor_dnskey_absence_requires_proof")
             anchor = self._anchors[zone]
             if anchor.rdtype == dns.rdatatype.DS:
                 matched = check_ds(anchor, keys, budget=budget)
@@ -172,8 +177,67 @@ class PositiveChains:
         ds_sigs = exact(delegation, zone, dns.rdatatype.RRSIG, covers=dns.rdatatype.DS)
         if delegation.rcode() != dns.rcode.NOERROR:
             return result("indeterminate", limitation="delegation_resolution_failure")
-        if ds is None or not ds or ds_sigs is None:
+        if ds is None or not ds:
+            # No DS is not enough. Only a verified parent denial proof can
+            # establish an insecure delegation, even if child keys are absent.
+            proof_sets = tuple(
+                item
+                for item in delegation.authority
+                if item.rdtype in (dns.rdatatype.NSEC, dns.rdatatype.NSEC3)
+            )
+            if len(proof_sets) > 64:
+                raise RequestDenied("dnssec_denial_scope_or_limit")
+            parent_names: dict[dns.name.Name, None] = {}
+            for signatures in delegation.authority:
+                if signatures.rdtype == dns.rdatatype.RRSIG and signatures.covers in (
+                    dns.rdatatype.NSEC,
+                    dns.rdatatype.NSEC3,
+                ):
+                    _bounded(signatures, maximum=64)
+                    for sig in signatures:
+                        if isinstance(sig, dns.rdtypes.ANY.RRSIG.RRSIG) and (
+                            sig.signer != zone and zone.is_subdomain(sig.signer)
+                        ):
+                            parent_names[sig.signer] = None
+            for parent in parent_names:
+                parent_auth = await self._zone(parent, job, budget, memo, visiting)
+                messages.update((id(value), value) for value in parent_auth.messages)
+                checks.update((id(value), value) for value in parent_auth.signatures)
+                ds_checks.update((id(value), value) for value in parent_auth.delegations)
+                denials.update((id(value), value) for value in parent_auth.denials)
+                if parent_auth.state != "secure" or parent_auth.trusted_keys is None:
+                    continue
+                evidence = []
+                for rrset in proof_sets:
+                    if not rrset.name.is_subdomain(parent):
+                        continue
+                    sigsets = [
+                        item
+                        for item in delegation.authority
+                        if item.name == rrset.name
+                        and item.rdtype == dns.rdatatype.RRSIG
+                        and item.covers == rrset.rdtype
+                    ]
+                    evidence.append((rrset, sigsets[0] if len(sigsets) == 1 else None))
+                proof = validate_denial(
+                    zone,
+                    dns.rdatatype.DS,
+                    "unsigned_delegation",
+                    tuple(evidence),
+                    parent_auth.trusted_keys,
+                    now=time.time(),
+                    budget=budget,
+                )
+                denials[id(proof)] = proof
+                if proof.valid:
+                    return result("insecure")
+            # Cannot conclude bogus merely because an untrusted signer claimed
+            # a parent. Zone discovery/expected-proof processing is separate.
             return result("indeterminate", limitation="delegation_absence_requires_proof")
+        if ds_sigs is None:
+            return result("indeterminate", limitation="delegation_signature_requires_parent")
+        if keys is None or not keys:
+            return result("indeterminate", limitation="dnskey_absence_requires_proof")
         _bounded(ds_sigs, maximum=64)
         parents = tuple(
             dict.fromkeys(
@@ -195,6 +259,7 @@ class PositiveChains:
             messages.update((id(value), value) for value in parent_auth.messages)
             checks.update((id(value), value) for value in parent_auth.signatures)
             ds_checks.update((id(value), value) for value in parent_auth.delegations)
+            denials.update((id(value), value) for value in parent_auth.denials)
             if parent_auth.state != "secure" or parent_auth.trusted_keys is None:
                 continue
             ds_checked = check_signatures(
