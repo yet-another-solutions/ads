@@ -68,6 +68,7 @@ class HTTP1Channel:
         self._pending = bytearray()
         self._eof = False
         self._chunks: ChunkedWire | None = None
+        self._detached = False
 
     async def _receive_headers(self) -> None:
         # Absolute per-header deadline, not extended by arriving bytes.
@@ -100,6 +101,8 @@ class HTTP1Channel:
                 self._pending.extend(chunk)
 
     async def receive(self) -> h11.Event:
+        if self._detached:
+            raise RequestDenied("http1_ownership_transferred")
         try:
             if self._header:
                 await self._receive_headers()
@@ -131,6 +134,8 @@ class HTTP1Channel:
             raise RequestDenied("http1_protocol_failure") from exc
 
     async def send(self, event: h11.Event) -> None:
+        if self._detached:
+            raise RequestDenied("http1_ownership_transferred")
         try:
             data = self.connection.send(event)
             if data:
@@ -141,6 +146,8 @@ class HTTP1Channel:
             raise RequestDenied("http1_serialization_failure") from exc
 
     def next_cycle(self) -> None:
+        if self._detached:
+            raise RequestDenied("http1_ownership_transferred")
         trailing, closed = self.connection.trailing_data
         # A fresh parser retains both sides' completed-cycle legality, but h11's
         # own buffer must not parse pipelined headers before the strict raw gate.
@@ -152,3 +159,19 @@ class HTTP1Channel:
         self._eof = closed
         self._header = True
         self._chunks = None
+
+    def take_switched_data(self) -> bytes:
+        """Transfer buffered bytes once, only after both peers switched."""
+        if (
+            self._detached
+            or self.connection.our_state is not h11.SWITCHED_PROTOCOL
+            or self.connection.their_state is not h11.SWITCHED_PROTOCOL
+        ):
+            raise RequestDenied("http1_not_switched")
+        trailing, _ = self.connection.trailing_data
+        data = trailing + bytes(self._pending)
+        self._pending.clear()
+        self._detached = True
+        # Prevent a second transfer or re-entry into the HTTP parser.
+        self.connection = h11.Connection(self.connection.our_role)
+        return data

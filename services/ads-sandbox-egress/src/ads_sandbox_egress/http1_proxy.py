@@ -2,7 +2,7 @@
 
 The connector receives only the immutable original destination. For HTTPS it
 returns the SAME inspected origin TLS leg, never a fresh uninspected connection.
-Full Upgrade/WebSocket handlers remain a separate explicit implementation.
+WebSocket transitions have a dedicated handshake and stream owner.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 
 import h11
 
+from ads_sandbox_egress import websocket
 from ads_sandbox_egress.framing import Headers, forwarding_headers, validate_headers
 from ads_sandbox_egress.http1 import HTTP1Channel
 from ads_sandbox_egress.policy import RequestDenied
@@ -64,10 +65,17 @@ class HTTP1Proxy:
         self._running = False
 
     async def _exchange(
-        self, front: HTTP1Channel, origin: HTTP1Channel, *, expects_continue: bool
-    ) -> bool:
+        self,
+        front: HTTP1Channel,
+        origin: HTTP1Channel,
+        *,
+        expects_continue: bool,
+        websocket_request: Headers | None = None,
+    ) -> tuple[bool, bool]:
         early = False
+        switched = False
         upload_ended = False
+        upload_done = asyncio.Event()
 
         async def upload() -> None:
             nonlocal upload_ended
@@ -79,10 +87,11 @@ class HTTP1Proxy:
                     upload_ended = True
                 await origin.send(event)
                 if isinstance(event, h11.EndOfMessage):
+                    upload_done.set()
                     return
 
         async def response() -> None:
-            nonlocal early
+            nonlocal early, switched
             final = False
             continued = False
             informational = 0
@@ -90,8 +99,22 @@ class HTTP1Proxy:
                 event = await origin.receive()
                 if isinstance(event, h11.InformationalResponse):
                     informational += 1
-                    if final or event.status_code == 101 or informational > 16:
+                    if final or informational > 16:
                         raise RequestDenied("unexpected_response_transition")
+                    if event.status_code == 101:
+                        if websocket_request is None:
+                            raise RequestDenied("unrequested_response_transition")
+                        fields = websocket.response_headers(websocket_request, tuple(event.headers))
+                        await upload_done.wait()
+                        await front.send(
+                            h11.InformationalResponse(
+                                status_code=101,
+                                headers=list(fields),
+                                reason=event.reason,
+                            )
+                        )
+                        switched = True
+                        return
                     if event.status_code == 100:
                         continued = True
                     await front.send(
@@ -132,7 +155,7 @@ class HTTP1Proxy:
         async with asyncio.TaskGroup() as tasks:
             upload_task = tasks.create_task(upload())
             tasks.create_task(response())
-        return early
+        return early, switched
 
     async def run(self) -> None:
         if self._running:
@@ -152,10 +175,15 @@ class HTTP1Proxy:
                 if not isinstance(request, h11.Request):
                     raise RequestDenied("request_headers_required")
                 head = RequestHead.http1(request, self.authorizer.connection)
-                if head.upgrade is not None:
+                if head.upgrade == "http/2":
                     # Explicit incomplete feature, not an opaque forwarding
                     # fallback or a claimed supported transition.
                     raise RequestDenied("http1_transition_owner_not_implemented")
+                fields = (
+                    websocket.request_headers(head.method, head.headers)
+                    if head.upgrade == "websocket"
+                    else serialized_headers(head.headers)
+                )
                 async with asyncio.timeout(self.authorization_timeout):
                     await self.authorizer.authorize(head)
                     if origin is None:
@@ -170,17 +198,22 @@ class HTTP1Proxy:
                     h11.Request(
                         method=head.method,
                         target=head.target,
-                        headers=list(serialized_headers(head.headers)),
+                        headers=list(fields),
                     )
                 )
-                early = await self._exchange(
+                early, switched = await self._exchange(
                     front,
                     origin,
                     expects_continue=any(
                         name == b"expect" and value.lower() == b"100-continue"
                         for name, value in head.headers
                     ),
+                    websocket_request=fields if head.upgrade == "websocket" else None,
                 )
+                if switched:
+                    await websocket.relay(front, origin, idle_timeout=self.idle_timeout)
+                    clean = True
+                    return
                 if early:
                     # Relay the complete genuine origin response. Do not drain
                     # the denied upload, manufacture 100, or reuse its stream.

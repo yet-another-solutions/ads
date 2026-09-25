@@ -83,6 +83,7 @@ typecheck = [
 ]
 test = [
     "cffi==2.1.1",
+    "websockets==17.1",
     "playwright==1.59.0",
     "PyYAML==6.0.3",
     "pytest==9.1.1",

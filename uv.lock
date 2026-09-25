@@ -476,6 +476,7 @@ test = [
     { name = "pytest" },
     { name = "pyyaml" },
     { name = "testcontainers" },
+    { name = "websockets" },
 ]
 typecheck = [
     { name = "mypy" },
@@ -511,6 +512,7 @@ test = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pyyaml", specifier = "==6.0.3" },
     { name = "testcontainers", specifier = "==4.15.0" },
+    { name = "websockets", specifier = "==17.1" },
 ]
 typecheck = [
     { name = "mypy", specifier = "==2.3.1" },

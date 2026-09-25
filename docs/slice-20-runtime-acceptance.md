@@ -18,7 +18,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, native TLS integration | Ordinary request owners and real ECH/H2 integration tested; WebSocket/h2c and graceful GOAWAY open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, native TLS integration | Ordinary request owners, HTTP/1 WebSocket and real ECH/H2 integration tested; h2c, H2 WebSocket and graceful GOAWAY open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,40 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### HTTP/1.1 WebSocket session ownership
+
+The dedicated transition validates the GET/version/key/upgrade handshake,
+forbids request bodies and unsafe connection nominations, and applies the
+initial HTTP/1 rule's upgrade permission before any upstream bytes. A valid
+origin 101 must contain the matching Accept digest and only offered
+subprotocol/extension names. Syntax and singleton rules are checked before
+switching; unsupported extension-specific parameter semantics remain with the
+endpoints because ADS neither decodes nor transforms their frames. See
+[RFC 6455 opening handshake and intermediary requirements](https://www.rfc-editor.org/rfc/rfc6455.html).
+
+The bounded duplex handler retains the same original endpoints and preserves
+masked frames, fragmentation, negotiated compression and payload bytes.
+There is no message-content policy inspection, decompression, refragmentation,
+generic CONNECT fallback or new-destination capability. Successful activity in
+either direction renews idle time; stalled writes and complete inactivity
+remain bounded. A parser handoff consumes leftovers exactly once and prevents
+re-entry into HTTP parsing. Origin rejection/redirect remains HTTP and never
+enters upgraded mode; later HTTP requests are independently authorized.
+
+Independent websockets 17.1 endpoints prove negotiated compression,
+fragmentation, ping/pong, close, coalesced 101/frame input, a one-megabyte
+message and active-session survival across a policy update. Additional
+regressions cover invalid requests before origin contact, malformed origin
+101 without response leakage, forbidden upgrades, redirects, idle reset,
+one-direction activity, and one-time parser custody transfer.
+
+All five local Nox gates pass: **781 affected tests, zero skips**, 26.28 seconds,
+`slice20-websocket-nox.log`. Earlier focused collection found an extension
+regex error and a changed test-client enum API; both were corrected before
+the successful full gate rerun. No CI, full-workspace rerun, project image
+build, publication or lab action. HTTP/2 WebSocket normalization/ownership,
+h2c transition, graceful GOAWAY and the remaining slice obligations stay open.
 
 ### Multiplexed two-leg owner and real ECH integration
 
