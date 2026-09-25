@@ -3,7 +3,7 @@ import base64
 import hashlib
 import os
 import ssl
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -34,6 +34,19 @@ def native():
     return TLSLibrary(directory), directory, executable
 
 
+@dataclass(repr=False)
+class TLSFixture:
+    certificate: bytes = field(repr=False)
+    private_key: bytes = field(repr=False)
+    trust: Path
+
+    def __iter__(self):
+        return iter((self.certificate, self.private_key, self.trust))
+
+    def __repr__(self):
+        return "TLSFixture(private material redacted)"
+
+
 @pytest.fixture
 def identity(tmp_path):
     private = ec.generate_private_key(ec.SECP256R1())
@@ -47,7 +60,12 @@ def identity(tmp_path):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("secret.example")]), False)
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [x509.DNSName("secret.example"), x509.DNSName("cover.example")]
+            ),
+            False,
+        )
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
         .add_extension(
             x509.KeyUsage(True, False, False, False, False, True, True, False, False), True
@@ -61,7 +79,7 @@ def identity(tmp_path):
         serialization.NoEncryption(),
     )
     (tmp_path / "trusted.pem").write_bytes(cert)  # Public fixture only.
-    return cert, key, tmp_path / "trusted.pem"
+    return TLSFixture(cert, key, tmp_path / "trusted.pem")
 
 
 def test_hello_preserves_opaque_alpn_order_and_absence():
@@ -210,7 +228,7 @@ def test_memory_bio_limits_and_connection_admission(native):
         context.close()
 
 
-@pytest.mark.parametrize("mode", ["ech", "plain", "grease", "foreign"])
+@pytest.mark.parametrize("mode", ["ech", "plain", "grease", "foreign", "foreign-authenticated"])
 @pytest.mark.parametrize("selected", [b"h2", b"http/1.1", None])
 @pytest.mark.anyio
 async def test_production_transport_with_native_client(native, identity, mode, selected):
@@ -227,7 +245,10 @@ async def test_production_transport_with_native_client(native, identity, mode, s
             raise TLSFailure("foreign_ech_not_authorized")
         # Certificate/protocol coordinator is the named external boundary here.
         # The ECH/TLS transport and client are real, not capability-test doubles.
-        return FrontendIdentity((cert,), private, selected)
+        # Model an origin that only selects an actually offered protocol. With
+        # an unknown ECH key we see the deliberately different OUTER offers.
+        origin_selection = selected if selected in hello.protocols else None
+        return FrontendIdentity((cert,), private, origin_selection)
 
     async def accepted(reader, writer):
         stream = None
@@ -272,8 +293,8 @@ async def test_production_transport_with_native_client(native, identity, mode, s
         "h2,http/1.1",
         "-quiet",
     ]
-    if mode in ("ech", "foreign"):
-        client_key = library.generate_ech("cover.example") if mode == "foreign" else key
+    if mode in ("ech", "foreign", "foreign-authenticated"):
+        client_key = library.generate_ech("cover.example") if mode.startswith("foreign") else key
         args += [
             "-ech_config_list",
             base64.b64encode(client_key.configuration).decode(),
@@ -295,9 +316,17 @@ async def test_production_transport_with_native_client(native, identity, mode, s
         await process.stdin.drain()
         async with asyncio.timeout(5):
             outcome = await completed
-            if mode == "foreign":
+            if mode.startswith("foreign"):
                 assert isinstance(outcome, TLSFailure)
                 assert not observations[0].ech_accepted
+                if mode == "foreign-authenticated":
+                    # The coordinator permitted the outer handshake using a
+                    # trusted certificate valid for its cover name. Rejection
+                    # must now come from ECH, not the fixture's policy callback.
+                    assert observations[0].server_name == "cover.example"
+                    _, errors = await process.communicate()
+                    assert b"ech required" in errors.lower()
+                    assert process.returncode != 0
             else:
                 assert outcome is True
                 assert await process.stdout.readline() == b"application-response\n"

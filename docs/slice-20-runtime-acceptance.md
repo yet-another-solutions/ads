@@ -79,8 +79,26 @@ Review fixed listener teardown ordering so a live peer is aborted before
 awaiting server closure, and added a cumulative handshake-input limit in
 addition to pending-BIO bounds. After that review fix, the 244-test egress
 selection passed again in 9.64 seconds. Origin inspection subsequently added
-34 passing real validation/two-leg tests; combined Nox results are recorded
-at the next checkpoint.
+34 passing real validation/two-leg tests. A final review added three
+authenticated-outer/unknown-key ECH cases. The client receives a trusted
+certificate valid for its outer name, but the native protocol still aborts
+with `ech required` before application exchange. This is distinct from the
+fixture's earlier explicit foreign-key rejection and does not establish
+automatic retry or browser compatibility. Test fixture representations redact
+private key material, including when pytest reports an assertion failure.
+
+Final combined local Nox evidence: all five sessions passed; **281 egress tests
+passed, zero skips**, 10.31 seconds. The 62 TLS tests present before the final
+three review cases also passed on Python 3.12.13 in 1.73 seconds. No full
+workspace rerun or CI run was performed on this increment.
+
+Before wiring the certificate coordinator, one adopted-contract decision still
+requires explicit approval: the client-visible outcome for malformed origin
+certificates, failed upstream TLS handshakes, or validation states that cannot
+be faithfully mirrored. The reviewed proxy contract explicitly leaves that
+general outcome unagreed; do not silently treat generic untrusted substitution
+or connection reset as a fully implemented mirroring requirement. Low-level
+transport cleanup on exceptions is not such an outcome policy.
 
 ### Earlier component verification
 
