@@ -485,9 +485,11 @@ def unused_observe(observer, value, ipc, release):
         try:
             current = directory(path)
         except FileNotFoundError:
-            exists = handle_exists(path.parent, value["handle"], value["identity"])
-            require(not exists, "original backing renamed, not reclaimed")
-            return True
+            require(directory(path.parent) == value["parent"], "original parent unavailable")
+            # A deleted directory may remain addressable while a child is held
+            # open. Like a renamed directory, it is positively NOT reclaimed.
+            # Keep observing references; only ESTALE can establish absence.
+            return not handle_exists(path.parent, value["handle"], value["identity"])
         require(current == value["identity"], "original backing replaced")
         return False
 

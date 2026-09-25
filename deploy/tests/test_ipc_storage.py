@@ -184,10 +184,29 @@ def test_unused_backing_never_turns_path_absence_or_lost_boot_into_reclamation(
         f.folder.rename(f.folder.with_name("original-moved"))
         if fault == "replacement":
             f.folder.mkdir()
+        else:
+            report = f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+            assert report["observed"] and not report["reclaimed"]
+            return
     else:
         saved["parent"][1] += 1
     with pytest.raises((ValueError, FileNotFoundError)):
         f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+
+
+def test_unused_deleted_directory_with_live_handle_never_proves_reclamation(backing, monkeypatch):
+    f = backing
+    _, saved = unused_snapshot(f)
+    f.folder.rmdir()
+    monkeypatch.setattr(f.module, "handle_exists", lambda *a: True)
+    monkeypatch.setattr(f.ipc, "filesystem_references", lambda *a: (1, 0))
+    report = f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+    assert report["observed"] and not report["released"] and not report["reclaimed"]
+    monkeypatch.setattr(f.ipc, "filesystem_references", lambda *a: (0, 0))
+    report = f.module.unused_observe(f.observer, saved, f.ipc, f.release)
+    assert report["released"] and not report["reclaimed"]
+    monkeypatch.setattr(f.module, "handle_exists", lambda *a: False)
+    assert f.module.unused_observe(f.observer, saved, f.ipc, f.release)["reclaimed"]
 
 
 @pytest.mark.parametrize("fault", ["pv", "node", "scope", "filesystem"])
