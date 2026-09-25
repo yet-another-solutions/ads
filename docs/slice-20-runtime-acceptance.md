@@ -29,6 +29,36 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Minted-anchor compatibility decision
+
+`certificate_validation.py` supplies bounded native candidate-chain verification
+with only the supplied minted trust anchor, not origin extra trust. It reports
+all collected validation defects rather than treating a permissive observation
+callback as successful validation.
+
+Testing the actual CA-Job `mint()` output exposed a compatibility gap:
+
+- Installed OpenSSL verification with only the intermediate-signed minted CA
+  as its trust file fails at that CA with `unable to get issuer certificate`.
+- Explicit partial-chain trust allows the leaf, but CRL checking across the
+  chain reports missing issuer CRL at the intermediate-signed anchor.
+- A candidate self-signed public trust certificate using the SAME minted
+  egress key, subject, validity and path_length=0 passes ordinary and full-chain
+  CRL checks in the independent installed OpenSSL validator and the OpenSSL 4
+  native candidate validator. The original parent-signed certificate remains
+  intact and still verifies under its parent.
+
+The candidate is a test-only construction in `test_minted_anchor.py`, not a
+change to CA production output, a new signing key, installed trust, publication
+or lab PKI. Adopting it changes the public certificate representation and needs
+the user's explicit decision before CA-Job/artifact/bootstrap contracts change.
+It would still install only the one minted egress authority, not its parent
+or origin extra CAs. The reset-only unmappable-outcome approval is unrelated
+and remains valid; it is not permission to conceal this valid-chain gap.
+
+All five local Nox sessions passed after adding these checks: **299 egress
+tests passed, zero skips**, 11.08 seconds. No full workspace rerun or CI.
+
 ### Stable success pairs and approved unmappable outcomes
 
 The user approved reset-only handling for genuinely unmappable upstream TLS
