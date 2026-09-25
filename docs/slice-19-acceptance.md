@@ -79,12 +79,25 @@ rollback does not undo a database reset.
 
 ## Verification status
 
-Focused PostgreSQL, helper/wire, reset and Helm regressions have passed during
-implementation. The first cumulative run exposed a reset shared-metadata
-isolation defect; the fix and a dedicated cross-service test are present, with
-full cumulative re-verification pending. Final Nox lint/deps/typecheck/test/package,
-exact-head image/Helm/kernel CI and final review must all be recorded before
-claiming this continuation ready.
+The corrected cumulative Nox lint/deps/typecheck/test/package invocation passed:
+4,434 tests and four subtests passed, with two Keycloak TLS Testcontainers tests
+skipped because the Computer runner has no Docker executable. They remain in
+the suite and are applicable to Docker-equipped CI. The suite emitted 2,088
+existing framework/deprecation warnings. The test gate took 27m33s, so the CI
+Python job allowance is 60 minutes; application deadlines are unchanged.
+
+The first cumulative run exposed a reset shared-metadata isolation defect and
+older lifecycle expectations. Corrections retain all security assertions and
+add cross-service reset scope, explicit target/environment, original settlement
+versus retirement, maintenance exclusion and bounded scan progress regressions.
+The isolated reset and lifecycle correction suites each passed 41 tests; these
+overlap the cumulative total and must not be added to it.
+
+The Helm suite passed all 31 tests. Each temporary rootless PostgreSQL store was
+force-reset to a tiny empty store and its listener verified absent; additional
+isolated correction databases were deleted. Exact-head image/Helm/kernel CI and
+final PR review remain to be recorded separately before claiming this
+continuation ready.
 
 The privileged network-disabled kernel smoke programs are wired into the
 existing CI image job, not replaced by unit mocks. They have not been executed
