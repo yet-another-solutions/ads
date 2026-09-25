@@ -15,7 +15,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Immutable snapshot, process UUID, authenticated apply | Existing configuration/control; receiver tests | Existing component regression passed; production health integration open |
 | Complete ordered policy, names, absent identity, paths, transitions | `policy.py`, `request_authorization.py`, request-owner tests | Ordinary/transition owners, approved absent-authority helper and pathless OPTIONS tested; runtime integration open |
 | Mandatory address classification and trusted infrastructure inventory | `destinations.py`, `test_destinations.py` | Component tested; manager provisioning still open |
-| Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
+| Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, `resolver_membership.py`, real DNS/NGINX tests | Protocol/authority-scoped real evidence adapter tested; runtime ownership integration open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1, HTTP/2, approved empty/absent authority and extended CONNECT adapters tested; OPTIONS asterisk is explicitly pathless |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
@@ -28,6 +28,37 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Full rerun at `0f1697a`: 5,247 passed, two skipped, four subtests passed; subsequent anchor-boundary fix: all five gates and 1,129 affected tests passed |
 
 ## Component verification and review
+
+### Checked DNSSEC substitutions and client signaling
+
+`dnssec_transform.py` substitutes full DNSKEY identities, corresponding DS
+records and signatures, then verifies the candidate's cryptographic outcome.
+It retains signature timing, original TTL, wildcard labels, successful
+alternatives, invalid signatures, DS mismatch and key-eligibility defects.
+Missing or ambiguous key paths, unsupported constructions and malformed key
+material remain explicit synthesis limitations, not repaired data.
+
+Review found that ineligible flags/protocol previously prevented the validator
+from observing an additional corrupt signature. A bounded canonical-byte check
+now records that simultaneous defect without ever accepting an ineligible key.
+Independent BIND delv tests validate a transformed full chain with changed
+answer data, retain successful alternatives and reject expired/future/corrupt
+signatures and DS mismatch. The serving fixture is an external boundary, not
+the production view.
+
+`dnssec_response.py` implements DO/AD/CD and EDNS signaling for already-checked
+candidates, local synthesis fallback, and upstream-only resolution failures.
+Diagnostics distinguish local verification from upstream-reported EDE codes,
+omit untrusted free text, and never turn policy/resource denial into SERVFAIL.
+The view/publication owner remains responsible for full acquisition, outcome
+checking and durable commit before rendering.
+
+All five local Nox gates pass: **1,295 affected tests, zero skips**, 49.59s
+test time, `slice20-transform-response-nox.log`. Initial mypy annotations and
+the missing Playwright platform override were corrected locally; no CI was
+used. No test listeners remain and no containers were created at this milestone.
+Full response assembly, negative-proof substitution, stable-root chain
+publication, ECH publication and executable runtime integration remain open.
 
 ### Fresh protocol-scoped destination membership
 

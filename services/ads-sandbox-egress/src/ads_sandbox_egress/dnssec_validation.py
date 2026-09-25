@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import struct
 from dataclasses import dataclass
 from typing import Literal
 
@@ -25,6 +26,7 @@ import dns.rdtypes.ANY.DNSKEY
 import dns.rdtypes.ANY.DS
 import dns.rdtypes.ANY.RRSIG
 import dns.rrset
+from cryptography.exceptions import InvalidSignature
 
 from ads_sandbox_egress.policy import RequestDenied
 
@@ -128,6 +130,30 @@ def _algorithm_supported(algorithm: int) -> bool:
     return dns.dnssec.default_policy.ok_to_validate(probe)
 
 
+def _verify_ineligible_signature(records: dns.rrset.RRset, sig: RRSIG, key: DNSKey) -> None:
+    """Diagnose crypto under an ineligible key WITHOUT accepting its signature.
+
+    dnspython's high-level verifier filters these keys before crypto. Preserve
+    simultaneous defects using the unchanged RFC 4034 signed bytes, not a
+    repaired key/signature header. This helper never returns trusted evidence.
+    """
+    owner = records.name
+    if owner.is_wild() and sig.labels != len(owner.labels) - 2:
+        raise ValueError("wildcard labels")
+    if sig.labels < len(owner.labels) - 1:
+        owner = dns.name.Name((b"*",) + owner.labels[-sig.labels - 1 :])
+    wire = sig.to_wire()
+    assert wire is not None
+    data = wire[:18] + sig.signer.to_digestable()
+    prefix = owner.to_digestable() + struct.pack(
+        "!HHI", records.rdtype, records.rdclass, sig.original_ttl
+    )
+    for item in sorted(record.to_digestable() for record in records):
+        data += prefix + struct.pack("!H", len(item)) + item
+    public = dns.dnssecalgs.get_algorithm_cls_from_dnskey(key).public_cls.from_dnskey(key)
+    public.verify(sig.signature, data)
+
+
 def check_signatures(
     records: dns.rrset.RRset,
     signatures: dns.rrset.RRset | None,
@@ -205,26 +231,27 @@ def check_signatures(
             if key.protocol != 3:
                 failures.append(Failure("dnskey_protocol", sig_id, key_id))
                 eligible = False
-            if not eligible:
-                continue
             budget.consume()
             # Verify the signed bytes inside the signature's own time interval
             # too: an expired signature may independently also be corrupt.
             # Nothing signed is modified and "now" never authenticates a key.
             crypto_time = max(sig.inception, min(now, sig.expiration))
             try:
-                dns.dnssec.validate_rrsig(
-                    records,
-                    sig,
-                    {keys.name: dns.rrset.from_rdata(keys.name, keys.ttl, key)},
-                    now=crypto_time,
-                )
+                if eligible:
+                    dns.dnssec.validate_rrsig(
+                        records,
+                        sig,
+                        {keys.name: dns.rrset.from_rdata(keys.name, keys.ttl, key)},
+                        now=crypto_time,
+                    )
+                else:
+                    _verify_ineligible_signature(records, sig, key)
             except dns.exception.UnsupportedAlgorithm:
                 limitations.append(sig_id)
-            except (dns.exception.ValidationFailure, ValueError):
+            except (dns.exception.ValidationFailure, InvalidSignature, ValueError):
                 failures.append(Failure("signature_invalid", sig_id, key_id))
             else:
-                if sig.inception <= now <= sig.expiration:
+                if eligible and sig.inception <= now <= sig.expiration:
                     owner_labels = len(records.name.labels) - 1
                     expanded = sig.labels < owner_labels and not (
                         records.name.labels[0] == b"*" and sig.labels == owner_labels - 1
