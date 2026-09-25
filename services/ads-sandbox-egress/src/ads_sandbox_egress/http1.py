@@ -10,6 +10,7 @@ import asyncio
 import errno
 import socket
 import struct
+from typing import Any, Protocol
 
 import h11
 
@@ -17,7 +18,19 @@ from ads_sandbox_egress.framing import ChunkedWire, raw_http1_headers, validate_
 from ads_sandbox_egress.policy import RequestDenied
 
 
-def reset(writer: asyncio.StreamWriter) -> None:
+class ByteReader(Protocol):
+    async def read(self, maximum: int) -> bytes: ...
+
+
+class ByteWriter(Protocol):
+    @property
+    def transport(self) -> asyncio.WriteTransport: ...
+    def get_extra_info(self, name: str, default: Any = None) -> Any: ...
+    def write(self, data: bytes) -> None: ...
+    async def drain(self) -> None: ...
+
+
+def reset(writer: ByteWriter) -> None:
     """Abort without TLS close-notify or synthetic HTTP policy response."""
     sock = writer.get_extra_info("socket")
     try:
@@ -40,8 +53,8 @@ class HTTP1Channel:
 
     def __init__(
         self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
+        reader: ByteReader,
+        writer: ByteWriter,
         *,
         client: bool,
         idle_timeout: float = 30,

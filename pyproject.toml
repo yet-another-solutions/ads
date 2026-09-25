@@ -79,6 +79,7 @@ deps = [
 ]
 typecheck = [
     "mypy==2.3.1",
+    "types-cffi==2.1.0.20260827",
 ]
 test = [
     "cffi==2.1.1",
