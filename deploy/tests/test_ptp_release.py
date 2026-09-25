@@ -194,9 +194,24 @@ def fake_proc(tmp_path):
     (task / "fd").mkdir()
     (task / "ns/net").touch()
     (task / "mountinfo").write_text("")
-    (task / "stat").write_text("124 (task) S 0")
+    (task / "stat").write_text("124 (task) S 0 0 0 0 0 0")
     (proc / "123" / "cmdline").write_text("ordinary")
     return proc, task
+
+
+def test_only_positively_identified_kernel_threads_skip_userspace_namespaces(
+    release, snapshot, tmp_path
+):
+    proc, task = fake_proc(tmp_path)
+    (task / "ns/net").unlink()
+    (task / "stat").write_text("124 (kernel worker) S 0 0 0 0 0 2097152")
+    assert release.process_references(snapshot, time.monotonic() + 5, proc) == 0
+    (task / "stat").write_text("124 (userspace) S 0 0 0 0 0 0")
+    with pytest.raises(ValueError, match="task observation disappeared"):
+        release.process_references(snapshot, time.monotonic() + 5, proc)
+    (task / "stat").write_text("124 (incomplete) S")
+    with pytest.raises(ValueError, match="incomplete task status"):
+        release.process_references(snapshot, time.monotonic() + 5, proc)
 
 
 @pytest.mark.parametrize("kind", ["task", "fd", "mounted-fd", "mount", "runtime"])

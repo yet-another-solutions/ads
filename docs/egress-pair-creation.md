@@ -40,8 +40,11 @@ compute. Cleanup snapshots carry topic dispatch; capture cannot settle it.
 The outer SessionProvisioner records failure only under its existing exact
 claim. Any failure stops later stages. Shutdown stops creation workers before
 draining retained publishers; drain is not remote quiescence or release proof.
-Paired resume remains explicitly blocked until retained-state transfer and
-retirement are implemented.
+Paired resume requires a verified exclusive transfer from a sealed idle
+retirement. Preflight verifies the original workspace/PV/CSI, persistent state
+and wrapping-key identity before any new generation resources are dispatched.
+The original state provenance remains immutable; the new generation receives
+fresh transient controls, clones and relay custody.
 
 ## Ready transition
 
@@ -59,7 +62,10 @@ matching session/PVC/CA/state/IPC identities; and no legacy guest or IPC Deploym
 Missing, replaced, incomplete or inflight evidence cannot satisfy that gate.
 Only then does the existing atomic ready/attached transition proceed.
 
-This is code/CI creation integration. Teardown, node/runtime/storage release,
-retirement/transfer and protected credential-preserving resets remain required
-slice-19 work. Later-slice transport/data-plane and full live acceptance are not
-claimed by these simulated external ports.
+The subsequent lifecycle composes runtime/storage release, exact resource
+disposition and retirement/transfer; see
+[generation retirement](egress-generation-retirement.md). The separate
+[protected reset coordinator](../deploy/reset/README.md) fences writers before
+fresh schema initialization and restores owner-correct model configurations.
+These are code-level contracts. Later-slice transport/data-plane and full live
+acceptance are not claimed by simulated external ports.

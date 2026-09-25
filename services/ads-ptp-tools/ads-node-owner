@@ -22,7 +22,20 @@ from uuid import UUID
 
 LIMIT = 32768
 SCHEMA = "ads-node-owner-v1"
-OPERATIONS = {"pair-capture", "pair-observe", "ipc-capture", "ipc-observe"}
+OPERATIONS = {
+    "pair-capture",
+    "pair-observe",
+    "ipc-capture",
+    "ipc-observe",
+    "partial-capture",
+    "partial-observe",
+    "ipc-storage-capture",
+    "ipc-storage-observe",
+    "ipc-unused-capture",
+    "ipc-unused-observe",
+    "block-capture",
+    "block-observe",
+}
 
 
 def require(value, message):
@@ -67,7 +80,10 @@ def settings(path):
         "ads-ptp-attest",
         "ads-ptp-retire",
         "ads-ptp-release",
+        "ads-ptp-partial",
         "ads-ipc-release",
+        "ads-ipc-storage",
+        "ads-block-release",
         "ads-node-owner",
     ):
         protected(Path(__file__).with_name(name), executable=True)
@@ -116,7 +132,12 @@ def settings(path):
     if value["pair"] is not None:
         pair = value["pair"]
         require(
-            isinstance(pair, dict) and set(pair) == {"attestorConfig", "stateDir"},
+            isinstance(pair, dict)
+            and set(pair)
+            in (
+                {"attestorConfig", "stateDir"},
+                {"attestorConfig", "stateDir", "kubeletRoot"},
+            ),
             "exact pair observer configuration required",
         )
         plugin, attestor = load("ads-ptp"), load("ads-ptp-attest")
@@ -128,6 +149,8 @@ def settings(path):
             "pair scope mismatch",
         )
         plugin.private_directory(pair["stateDir"])
+        if "kubeletRoot" in pair:
+            load("ads-block-release").kubelet_root(pair["kubeletRoot"])
     if value["ipc"] is not None:
         ipc = load("ads-ipc-release")
         config = ipc.config(load("ads-ptp").read_record(protected(value["ipc"], private=True)))
@@ -154,7 +177,22 @@ def request(raw, config):
             "volume_uid",
             "boot_id",
             "inventory_sha256",
-        },
+        }
+        | (
+            {"pod_uids"}
+            if value.get("operation") in ("partial-capture", "partial-observe")
+            else set()
+        )
+        | (
+            {"volumes", "runtime_sha256"}
+            if value.get("operation") in ("block-capture", "block-observe")
+            else set()
+        )
+        | (
+            {"pv_uid"}
+            if value.get("operation") in ("ipc-unused-capture", "ipc-unused-observe")
+            else set()
+        ),
         "exact node request required",
     )
     require(
@@ -169,11 +207,22 @@ def request(raw, config):
             "canonical request identity required",
         )
     ipc = value["operation"].startswith("ipc-")
+    unused = value["operation"].startswith("ipc-unused-")
     require(config["ipc" if ipc else "pair"] is not None, "node role unavailable")
-    for key in ("pod_uid", "volume_uid"):
+    if value["operation"].startswith("partial-"):
+        load("ads-ptp-partial").pod_map(value["pod_uids"])
+    if value["operation"].startswith("block-"):
+        require("kubeletRoot" in config["pair"], "original kubelet root configuration required")
+        load("ads-block-release").names(value["volumes"])
+        require(
+            isinstance(value["runtime_sha256"], str)
+            and re.fullmatch(r"[0-9a-f]{64}", value["runtime_sha256"]),
+            "original private runtime capture binding required",
+        )
+    for key in ("pod_uid", "volume_uid", *(("pv_uid",) if unused else ())):
         require(
             isinstance(value[key], str) and str(UUID(value[key])) == value[key]
-            if ipc
+            if ipc and not (unused and key == "pod_uid")
             else value[key] is None,
             "exact IPC ownership required",
         )
@@ -219,14 +268,36 @@ def perform(raw, config):
     value = request(raw, config)
     identity = {key: value[key] for key in ("generation", "sandbox_id")}
     capture = value["operation"].endswith("capture")
-    if value["operation"].startswith("ipc-"):
+    if value["operation"].startswith("ipc-unused-"):
         report = helper(
-            "ads-ipc-release",
+            "ads-ipc-storage",
+            {
+                **identity,
+                "action": "unused-capture" if capture else "unused-observe",
+                "config": config["ipc"],
+                **{key: value[key] for key in ("volume_uid", "pv_uid", "inventory_sha256")},
+            },
+        )
+    elif value["operation"].startswith("ipc-"):
+        report = helper(
+            "ads-ipc-storage"
+            if value["operation"].startswith("ipc-storage-")
+            else "ads-ipc-release",
             {
                 **identity,
                 "action": "capture" if capture else "observe",
                 "config": config["ipc"],
                 **{key: value[key] for key in ("pod_uid", "volume_uid", "inventory_sha256")},
+            },
+        )
+    elif value["operation"].startswith("block-"):
+        report = helper(
+            "ads-block-release",
+            {
+                **identity,
+                **config["pair"],
+                "action": "capture" if capture else "observe",
+                **{k: value[k] for k in ("volumes", "runtime_sha256", "inventory_sha256")},
             },
         )
     else:
@@ -239,12 +310,14 @@ def perform(raw, config):
                     "stateDir": config["pair"]["stateDir"],
                 },
             )
+        partial = value["operation"].startswith("partial-")
         report = helper(
-            "ads-ptp-release",
+            "ads-ptp-partial" if partial else "ads-ptp-release",
             {
                 **identity,
-                **config["pair"],
+                **{key: config["pair"][key] for key in ("attestorConfig", "stateDir")},
                 "action": "capture" if capture else "observe",
+                **({"pod_uids": value["pod_uids"]} if partial else {}),
             },
         )
     require(

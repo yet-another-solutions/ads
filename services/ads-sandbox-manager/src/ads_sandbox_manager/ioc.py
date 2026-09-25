@@ -32,6 +32,7 @@ from ads_sandbox_manager.node_owner import HttpsNodeOwner, NodeOwnerSettings
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
+from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
 from ads_sandbox_manager.pair_runtime_teardown import PairNodeOwner, PairRuntimeTeardown
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
@@ -111,6 +112,17 @@ class AppProvider(Provider):
     recovery = provide(RecoveryService, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
+    def pair_resources(
+        self,
+        pair_runtime: PairRuntimeTeardown | None,
+        pair_cleanup_kube: PairCleanupKubernetes,
+        topics: TopicPreparation,
+    ) -> PairResourceTeardown | None:
+        if pair_runtime is None:
+            return None
+        return PairResourceTeardown(pair_runtime, pair_cleanup_kube, topics)
+
+    @provide(scope=Scope.APP)
     async def node_owner(self, settings: Settings) -> AsyncIterator[PairNodeOwner | None]:
         if settings.node_owner is None:
             yield None  # Isolated fixtures only; environment startup requires it.
@@ -123,7 +135,7 @@ class AppProvider(Provider):
             await owner.close()
 
     @provide(scope=Scope.APP)
-    def pair_runtime(
+    async def pair_runtime(
         self,
         settings: Settings,
         sessions: async_sessionmaker[AsyncSession],
@@ -131,10 +143,14 @@ class AppProvider(Provider):
         kube: KubeClient,
         storage: CleanupKubernetes,
         node_owner: PairNodeOwner | None,
-    ) -> PairRuntimeTeardown | None:
-        return PairRuntimeTeardown(
+    ) -> AsyncIterator[PairRuntimeTeardown | None]:
+        runtime = PairRuntimeTeardown(
             settings, sessions, repository, PairControlAdapter(kube), storage, node_owner
         )
+        try:
+            yield runtime
+        finally:
+            await runtime.drain()
 
     @provide(scope=Scope.APP)
     def pair_creation(

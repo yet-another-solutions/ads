@@ -1,0 +1,454 @@
+#!/usr/bin/env python3
+"""Capture original kubelet CSI mappings and positively observe kernel release.
+
+No CSI-driver-specific path, device allocation, deletion or caller-selected path.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import stat
+import sys
+import time
+from itertools import chain
+from pathlib import Path
+
+ROLES = {
+    "workspace": "guest",
+    "guest": "guest",
+    "egress": "egress",
+    "key": "egress",
+    "state": "egress",
+}
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name.replace("-", "_"), str(Path(__file__).with_name(name))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def present(path):
+    """Only ENOENT is absence. Permissions, I/O and path errors veto proof."""
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def names(volumes):
+    require(
+        isinstance(volumes, dict) and volumes and set(volumes) <= set(ROLES),
+        "bounded original Block volume roles required",
+    )
+    for value in volumes.values():
+        require(
+            isinstance(value, dict) and set(value) == {"name", "volume_uid", "pod_uid"},
+            "exact Block volume identity required",
+        )
+        require(
+            isinstance(value["name"], str)
+            and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", value["name"]),
+            "exact claim name required",
+        )
+        for key in ("volume_uid", "pod_uid"):
+            load("ads-ipc-release").uuid(value[key])
+    require(
+        len({v["volume_uid"] for v in volumes.values()}) == len(volumes),
+        "distinct original Block volumes required",
+    )
+    return volumes
+
+
+def kubelet_root(value):
+    path = Path(value)
+    info = path.lstat()
+    require(
+        path.is_absolute()
+        and path.resolve() == path
+        and stat.S_ISDIR(info.st_mode)
+        and info.st_uid == 0
+        and not info.st_mode & 0o022,
+        "protected original kubelet root required",
+    )
+    for parent in path.parents:
+        info = parent.stat()
+        require(
+            info.st_uid == 0 and not info.st_mode & 0o022,
+            "protected kubelet parent required",
+        )
+    return path
+
+
+def paths(root, pod_uid, pv_name):
+    base = root / "plugins/kubernetes.io/csi/volumeDevices"
+    return {
+        "pod": str(root / "pods" / pod_uid / "volumeDevices/kubernetes.io~csi" / pv_name),
+        "publish": str(base / "publish" / pv_name / pod_uid),
+        "global": str(base / pv_name / "dev"),
+        "staging": str(base / "staging" / pv_name),
+    }
+
+
+def private_runtime(root, scope, runtime_sha256, plugin, release):
+    candidates = []
+    for prefix, module in (("release-", release), ("partial-release-", load("ads-ptp-partial"))):
+        path = root / (prefix + scope["generation"] + ".json")
+        if not present(path):
+            continue
+        value = plugin.read_record(path)
+        report = module.report(value)
+        require(all(report[k] == v for k, v in scope.items()), "original runtime scope changed")
+        if report["inventory_sha256"] == runtime_sha256:
+            candidates.append(report)
+    require(len(candidates) == 1, "one exact original private runtime capture required")
+    report = candidates[0]
+    require(report["boot_id"] == release.boot_id(), "original runtime boot changed")
+    return report
+
+
+def capture(observer, root, scope, runtime, volumes, release, sysfs=Path("/sys/dev/block")):
+    ipc = load("ads-ipc-release")
+    pods = observer.pods()
+    originals = runtime["pod_uids"]
+    originals = set(originals.values() if isinstance(originals, dict) else originals)
+    result = {}
+    for role, requested in volumes.items():
+        require(
+            requested["pod_uid"] in originals, "volume consumer not in original runtime capture"
+        )
+        found = [p for p in pods if p["metadata"]["uid"] == requested["pod_uid"]]
+        require(len(found) == 1, "original Block consumer unavailable")
+        pod = found[0]
+        labels, spec = pod["metadata"].get("labels", {}), pod["spec"]
+        require(
+            pod["metadata"]["namespace"] == scope["namespace"]
+            and labels.get("ads.io/sandbox-id") == scope["sandbox_id"]
+            and labels.get("ads.io/attachment-generation") == scope["generation"]
+            and spec.get("nodeName") == scope["node"]
+            and not pod["metadata"].get("ownerReferences")
+            and not spec.get("hostPID")
+            and not spec.get("hostNetwork"),
+            "original Block consumer ownership changed",
+        )
+        claims = [
+            v["name"]
+            for v in spec["volumes"]
+            if v.get("persistentVolumeClaim", {}).get("claimName") == requested["name"]
+        ]
+        devices = [
+            d for c in spec["containers"] for d in c.get("volumeDevices", []) if d["name"] in claims
+        ]
+        require(len(claims) == len(devices) == 1, "one original block device mapping required")
+        pvc = ipc.load("ads-ipc-storage").volume(observer, "pvc", requested["name"])
+        require(
+            pvc["metadata"]["uid"] == requested["volume_uid"]
+            and pvc["spec"]["volumeMode"] == "Block"
+            and pvc["status"]["phase"] == "Bound",
+            "original bound Block claim required",
+        )
+        pv_name = pvc["spec"]["volumeName"]
+        require(re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", pv_name), "canonical PV name required")
+        pv = ipc.load("ads-ipc-storage").volume(observer, "pv", pv_name)
+        claim, csi = pv["spec"]["claimRef"], pv["spec"]["csi"]
+        require(
+            claim["uid"] == requested["volume_uid"]
+            and claim["name"] == requested["name"]
+            and claim["namespace"] == scope["namespace"]
+            and csi.get("driver")
+            and csi.get("volumeHandle"),
+            "original CSI backing identity changed",
+        )
+        mapping = paths(root, requested["pod_uid"], pv_name)
+        info = Path(mapping["pod"]).stat()
+        require(stat.S_ISBLK(info.st_mode), "original kernel Block mapping required")
+        major_minor = f"{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+        kernel = sysfs / major_minor
+        device = kernel.stat()
+        require(stat.S_ISDIR(device.st_mode), "original kernel device inventory required")
+        require(
+            Path(mapping["pod"]).stat().st_rdev == info.st_rdev
+            and ipc.load("ads-ipc-storage").volume(observer, "pvc", requested["name"]) == pvc
+            and ipc.load("ads-ipc-storage").volume(observer, "pv", pv_name) == pv
+            and [p for p in observer.pods() if p["metadata"]["uid"] == requested["pod_uid"]]
+            == [pod],
+            "kernel Block mapping changed during capture",
+        )
+        result[role] = {
+            "identity": {
+                **requested,
+                "pv_name": pv_name,
+                "pv_uid": ipc.uuid(pv["metadata"]["uid"]),
+                "volume_key": f"kubernetes.io/csi/{csi['driver']}^{csi['volumeHandle']}",
+            },
+            "device": info.st_rdev,
+            "kernel_identity": [device.st_dev, device.st_ino],
+            "paths": mapping,
+        }
+    require(release.boot_id() == runtime["boot_id"], "node boot changed during Block capture")
+    require(
+        len({entry["device"] for entry in result.values()}) == len(result)
+        and len({entry["identity"]["volume_key"] for entry in result.values()}) == len(result),
+        "private Block claims alias one backing device",
+    )
+    return {
+        **scope,
+        "boot_id": runtime["boot_id"],
+        "runtime_sha256": runtime["inventory_sha256"],
+        "volumes": result,
+    }
+
+
+def validate(value, scope, volumes, root):
+    require(
+        isinstance(value, dict)
+        and set(value) == set(scope) | {"boot_id", "runtime_sha256", "volumes"}
+        and all(value[k] == v for k, v in scope.items())
+        and isinstance(value["volumes"], dict)
+        and set(value["volumes"]) == set(volumes),
+        "original Block snapshot required",
+    )
+    load("ads-ipc-release").uuid(value["boot_id"])
+    require(
+        re.fullmatch(r"[0-9a-f]{64}", value["runtime_sha256"]), "original runtime digest required"
+    )
+    for role, entry in value["volumes"].items():
+        require(
+            isinstance(entry, dict)
+            and set(entry) == {"identity", "device", "kernel_identity", "paths"}
+            and isinstance(entry["identity"], dict)
+            and set(entry["identity"])
+            == {"name", "volume_uid", "pod_uid", "pv_name", "pv_uid", "volume_key"}
+            and all(entry["identity"][k] == v for k, v in volumes[role].items())
+            and type(entry["device"]) is int
+            and entry["device"] > 0
+            and isinstance(entry["kernel_identity"], list)
+            and len(entry["kernel_identity"]) == 2
+            and all(type(x) is int and x > 0 for x in entry["kernel_identity"])
+            and set(entry["paths"]) == {"pod", "publish", "global", "staging"}
+            and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", entry["identity"]["pv_name"])
+            and entry["paths"]
+            == paths(root, entry["identity"]["pod_uid"], entry["identity"]["pv_name"]),
+            "invalid original Block device capture",
+        )
+        load("ads-ipc-release").uuid(entry["identity"]["pv_uid"])
+    require(
+        len({entry["device"] for entry in value["volumes"].values()}) == len(volumes)
+        and len({entry["identity"]["volume_key"] for entry in value["volumes"].values()})
+        == len(volumes),
+        "private Block identities alias backing storage",
+    )
+    return value
+
+
+def report(value, counts=None):
+    return {
+        "schema": "ads-block-release-v1",
+        **{
+            key: value[key]
+            for key in (
+                "node",
+                "namespace",
+                "network",
+                "generation",
+                "sandbox_id",
+                "boot_id",
+                "runtime_sha256",
+            )
+        },
+        "inventory_sha256": digest(value),
+        "volumes": {role: entry["identity"] for role, entry in value["volumes"].items()},
+        "leftovers": counts,
+        "released": counts is not None and not any(counts.values()),
+    }
+
+
+def references(value, release, deadline, proc=Path("/proc"), sysfs=Path("/sys/dev/block")):
+    """Read every task's mount and device references; unreadable observations fail."""
+    devices = {e["device"] for e in value["volumes"].values()}
+    majors = {f"{os.major(d)}:{os.minor(d)}" for d in devices}
+    counts = dict.fromkeys(("mappings", "mounts", "descriptors", "holders"), 0)
+    steps = 0
+    ipc = load("ads-ipc-release")
+
+    def budget():
+        nonlocal steps
+        steps += 1
+        require(steps <= 1000000 and time.monotonic() < deadline, "Block scan budget exceeded")
+
+    for entry in value["volumes"].values():
+        budget()
+        for kind, raw in entry["paths"].items():
+            path = Path(raw)
+            if kind in ("pod", "publish"):
+                counts["mappings"] += present(path)
+            elif present(path):
+                require(stat.S_ISDIR(path.lstat().st_mode), "CSI mapping inventory changed")
+                for _ in path.iterdir():
+                    budget()
+                    counts["mappings"] += 1
+        device = entry["device"]
+        kernel = sysfs / f"{os.major(device)}:{os.minor(device)}"
+        if present(kernel):
+            info = kernel.stat()
+            require(
+                [info.st_dev, info.st_ino] == entry["kernel_identity"],
+                "captured Block device number reused",
+            )
+            for _ in (kernel / "holders").iterdir():
+                budget()
+                counts["holders"] += 1
+            # A kernel mapping is still storage use even without a userspace
+            # descriptor. These are kernel block interfaces, not CSI-driver
+            # allocation paths or assumptions about device names.
+            loop = kernel / "loop" / "backing_file"
+            if present(loop):
+                counts["mappings"] += bool(release.bounded_text(loop, 65536).strip())
+            slaves = kernel / "slaves"
+            if present(slaves):
+                for _ in slaves.iterdir():
+                    budget()
+                    counts["mappings"] += 1
+    for process in proc.iterdir():
+        if not process.name.isdigit():
+            continue
+        budget()
+        try:
+            for task in (process / "task").iterdir():
+                budget()
+                try:
+                    table = ipc.mounts(release.bounded_text(task / "mountinfo"))
+                    counts["mounts"] += sum(m["device"] in majors for m in table.values())
+                    for link in chain(
+                        (task / "cwd", task / "root", task / "exe"),
+                        (task / "fd").iterdir(),
+                        (process / "map_files").iterdir(),
+                    ):
+                        budget()
+                        try:
+                            info = link.stat()
+                        except FileNotFoundError:
+                            require(
+                                link.parent.name in ("fd", "map_files") and not present(link),
+                                "incomplete Block process reference",
+                            )
+                            continue
+                        counts["descriptors"] += (
+                            stat.S_ISBLK(info.st_mode) and info.st_rdev in devices
+                        ) or info.st_dev in devices
+                except FileNotFoundError:
+                    if present(task):
+                        status = (
+                            release.bounded_text(task / "stat", 65536).rsplit(")", 1)[1].split()[0]
+                        )
+                        require(status in ("Z", "X"), "Block task observation incomplete")
+        except FileNotFoundError:
+            require(not present(process), "Block process observation incomplete")
+    return counts
+
+
+def perform(request):
+    require(os.geteuid() == 0, "trusted node-root Block observer required")
+    require(
+        isinstance(request, dict)
+        and set(request)
+        == {
+            "action",
+            "attestorConfig",
+            "stateDir",
+            "kubeletRoot",
+            "generation",
+            "sandbox_id",
+            "volumes",
+            "runtime_sha256",
+            "inventory_sha256",
+        }
+        and request["action"] in ("capture", "observe"),
+        "exact Block observer request required",
+    )
+    plugin, attestor, release = load("ads-ptp"), load("ads-ptp-attest"), load("ads-ptp-release")
+    config = attestor.validate(plugin.read_record(Path(request["attestorConfig"])))
+    observer = attestor.Observer(config)
+    observer.deadline = time.monotonic() + 60
+    scope = {key: config[key] for key in ("node", "namespace", "network")}
+    scope.update(
+        {key: load("ads-ipc-release").uuid(request[key]) for key in ("generation", "sandbox_id")}
+    )
+    volumes = names(request["volumes"])
+    root = plugin.private_directory(request["stateDir"])
+    kubelet = kubelet_root(request["kubeletRoot"])
+    path = root / ("block-release-" + scope["generation"] + ".json")
+    with plugin.generation_lock(root, scope["generation"]) as fence:
+        require(
+            plugin.read_record(fence)
+            == {k: scope[k] for k in ("network", "generation", "sandbox_id")},
+            "permanent original attachment fence required",
+        )
+        runtime = private_runtime(root, scope, request["runtime_sha256"], plugin, release)
+        if request["action"] == "capture":
+            require(request["inventory_sha256"] is None, "capture cannot replace original binding")
+            saved = (
+                validate(plugin.read_record(path), scope, volumes, kubelet)
+                if present(path)
+                else validate(
+                    capture(observer, kubelet, scope, runtime, volumes, release),
+                    scope,
+                    volumes,
+                    kubelet,
+                )
+            )
+            require(
+                saved["boot_id"] == release.boot_id()
+                and saved["runtime_sha256"] == request["runtime_sha256"],
+                "captured Block runtime changed",
+            )
+            plugin.save_record(path, saved)
+            return report(saved)
+        saved = validate(plugin.read_record(path), scope, volumes, kubelet)
+        require(
+            digest(saved) == request["inventory_sha256"]
+            and saved["runtime_sha256"] == request["runtime_sha256"]
+            and saved["boot_id"] == release.boot_id(),
+            "original Block inventory changed",
+        )
+        first = references(saved, release, observer.deadline)
+        second = references(saved, release, observer.deadline)
+        require(saved["boot_id"] == release.boot_id(), "Block boot changed during observation")
+        return report(saved, {key: max(first[key], second[key]) for key in first})
+
+
+def main():
+    try:
+        print(json.dumps(perform(load("ads-ptp").decode(sys.stdin.buffer.read(65537)))))
+    except Exception as error:
+        print(
+            json.dumps(
+                {"error": "Block release observation failed", "details": type(error).__name__}
+            )
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

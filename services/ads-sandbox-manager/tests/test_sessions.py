@@ -327,6 +327,8 @@ async def test_resume_rejects_bad_bind_without_clone_attach_or_delete(sessions_h
 @pytest.mark.parametrize("fault", ["foreign", "filesystem", "class", "version"])
 async def test_initial_adoption_also_fails_closed(sessions_harness, fault):
     h, sid = sessions_harness, uuid4()
+    # Ownership rejection is independent of database cleanup latency.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def race(body):
         disk = h.kube.put(body)
@@ -347,6 +349,8 @@ async def test_initial_adoption_also_fails_closed(sessions_harness, fault):
 
 async def test_replacement_after_bind_is_rechecked_before_compute(sessions_harness):
     h, sid = sessions_harness, uuid4()
+    # Preserve the ownership assertion without a 100 ms cleanup deadline.
+    h.service.settings = replace(h.settings, control_seconds=10)
 
     async def replace_disk(_):
         row = await row_for(h, sid)

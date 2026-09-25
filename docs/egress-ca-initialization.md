@@ -94,8 +94,12 @@ object supplied by Helm. `sandbox.ca.signingSecret` must name the pre-provisione
 Secret in `sandbox.namespace`; empty defaults fail closed at manager startup.
 Additional public PEMs use a dedicated ConfigMap there, not the application
 namespace. Helm rejects accidental private-key PEMs in this public field.
-The CA Job gets no API token and a matching deny-all network policy; no manager
-Secret read/list/copy permission is added. Platform policies must not add a
+The CA Job gets no API token and a matching deny-all network policy. Slice 19
+explicitly authorizes the manager to get/create/delete Secrets in
+`sandbox.namespace` for paired custody, without list/watch/update/patch.
+This namespace-scoped grant also permits reading the configured signer there;
+that consequence was explicitly accepted. Manager application code still never
+discovers, copies or relocates signing custody. Platform policies must not add a
 conflicting broad network allow.
 
 The trusted normal-runtime initializer requires `SYS_ADMIN` only for its two

@@ -10,7 +10,7 @@ from kubernetes.client.exceptions import ApiException
 
 from ads_sandbox_manager.egress_state_objects import identity as egress_state_identity
 from ads_sandbox_manager.egress_state_store import state_from_snapshot
-from ads_sandbox_manager.kube import KubeClient
+from ads_sandbox_manager.kube import KubeClient, timestamp
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_ipc_inputs import ipc_identity
 from ads_sandbox_manager.pair_objects import (
@@ -292,6 +292,34 @@ class PairControlAdapter:
         assert node is not None
         return node
 
+    async def partial_node(self, pair: PairBinding, uids: dict[str, str]) -> str:
+        """Resolve only the exact issued subset, without inventing missing Pods."""
+        if (
+            not uids
+            or not set(uids) <= set(COMPUTE_ROLES)
+            or any(not isinstance(uid, str) or not uid.strip() for uid in uids.values())
+            or len(set(uids.values())) != len(uids)
+        ):
+            raise ValueError("exact nonempty partial Pod UID map required")
+        node = None
+        for _ in range(2):
+            for role, uid in sorted(uids.items()):
+                desired = compute_identity(self.kube.settings, pair, role)
+                observed = await self.kube._get(
+                    self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+                )
+                if observed is None:
+                    raise RuntimeError("original partial Pod placement unavailable")
+                self._identity(observed, desired, uid)
+                actual = observed.get("spec", {}).get("nodeName")
+                if not isinstance(actual, str) or not actual.strip():
+                    raise RuntimeError("original partial Pod is not assigned")
+                if node is not None and node != actual:
+                    raise RuntimeError("partial Pod placement changed or spans nodes")
+                node = actual
+        assert node is not None
+        return node
+
     async def delete_compute(self, pair: PairBinding, role: str, uid: str, *, node: str) -> bool:
         """UID/RV-fenced removal; True means API absence only, never runtime release.
 
@@ -334,6 +362,109 @@ class PairControlAdapter:
         """Remove only the captured IPC Pod; API absence is not runtime release."""
         desired = ipc_identity(self.kube.settings, pair, "pod")
         return await self._delete_pod(desired, uid, node=node)
+
+    def _runtime_identity(self, pair: PairBinding, role: str) -> Object:
+        return (
+            ipc_identity(self.kube.settings, pair, "pod")
+            if role == "ipc"
+            else compute_identity(self.kube.settings, pair, role)
+        )
+
+    def _unscheduled(self, observed: Object, desired: Object, uid: str) -> Object | None:
+        self._identity(observed, desired, uid)
+        spec = observed.get("spec")
+        if not isinstance(spec, dict) or not isinstance(spec.get("nodeName", ""), str):
+            raise RuntimeError("invalid original Pod scheduling state")
+        node = spec.get("nodeName", "")
+        if node:
+            if not node.strip():
+                raise RuntimeError("invalid original Pod node")
+            return None  # Scheduled: requires the real node inventory, not this path.
+        status = observed.get("status", {})
+        if (
+            not isinstance(status, dict)
+            or status.get("phase", "") not in ("", "Pending")
+            or any(
+                status.get(key)
+                for key in (
+                    "containerStatuses",
+                    "initContainerStatuses",
+                    "ephemeralContainerStatuses",
+                )
+            )
+            or any(
+                condition.get("type") == "PodScheduled" and condition.get("status") == "True"
+                for condition in status.get("conditions", [])
+            )
+        ):
+            raise RuntimeError("unscheduled Pod has contradictory runtime status")
+        deleted = observed["metadata"].get("deletionTimestamp")
+        if deleted is not None and (not isinstance(deleted, str) or timestamp(deleted) is None):
+            raise RuntimeError("invalid original Pod deletion timestamp")
+        return {
+            "uid": uid,
+            "resource_version": observed["metadata"]["resourceVersion"],
+            "node": "",
+            "deletion_timestamp": deleted,
+        }
+
+    async def unscheduled_pod(self, pair: PairBinding, role: str, uid: str) -> Object | None:
+        """Positive original scheduling state, never a 404/phase-only shortcut.
+
+        A non-deleting observation can race binding; persist it before a
+        UID/resource-version conditional DELETE, then require the actual delete
+        response. A deleting unscheduled Pod cannot subsequently be bound.
+        """
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("original runtime Pod UID required")
+        desired = self._runtime_identity(pair, role)
+        observed = await self.kube._get(
+            self.kube.core.read_namespaced_pod, desired["metadata"]["name"]
+        )
+        if observed is None:
+            raise RuntimeError("missing Pod is not never-scheduled evidence")
+        return self._unscheduled(observed, desired, uid)
+
+    async def delete_unscheduled(self, pair: PairBinding, role: str, captured: Object) -> Object:
+        """Return only an actual original unscheduled DELETE response.
+
+        Caller must commit a claim-fenced dispatch first and retain its original
+        invocation through cancellation. Conflicts, 404 and lost replies are
+        not success; this method does not retry or infer a response from reads.
+        No force deletion, finalizer stripping, creation or node mutation.
+        """
+        if (
+            not isinstance(captured, dict)
+            or set(captured) != {"uid", "resource_version", "node", "deletion_timestamp"}
+            or captured["node"] != ""
+            or captured["deletion_timestamp"] is not None
+            or any(
+                not isinstance(captured[key], str) or not captured[key].strip()
+                for key in ("uid", "resource_version")
+            )
+        ):
+            raise ValueError("original non-deleting unscheduled capture required")
+        desired = self._runtime_identity(pair, role)
+        response = await self.kube._call(
+            self.kube.core.delete_namespaced_pod,
+            desired["metadata"]["name"],
+            self.namespace,
+            body={
+                "apiVersion": "v1",
+                "kind": "DeleteOptions",
+                "propagationPolicy": "Foreground",
+                "preconditions": {
+                    "uid": captured["uid"],
+                    "resourceVersion": captured["resource_version"],
+                },
+            },
+        )
+        if not isinstance(response, dict):
+            raise RuntimeError("original unscheduled DELETE response unavailable")
+        result = self._unscheduled(response, desired, captured["uid"])
+        if result is None:
+            raise RuntimeError("DELETE response does not prove an unscheduled Pod")
+        return result
 
     async def _delete_pod(self, desired: Object, uid: str, *, node: str) -> bool:
         if (
@@ -391,6 +522,76 @@ class PairControlAdapter:
         except Exception:
             raise RuntimeError("relay custody observation failed") from None
         return None if observed is None else self._identity(observed, desired, uid)
+
+    async def dispose_secret(
+        self,
+        pair: PairBinding,
+        key: str,
+        uid: str,
+        *,
+        persistent: Object | None = None,
+        retain: bool = False,
+    ) -> bool:
+        """Fixed original metadata only; never return key bytes or force finalizers."""
+        if not isinstance(uid, str) or not uid.strip():
+            raise ValueError("original custody UID required")
+        if key == "relay-custody" and not retain:
+            desired = custody_identity(self.kube.settings, pair)
+        elif key.startswith("relay-input/") and not retain:
+            desired = input_identity(self.kube.settings, pair, key.removeprefix("relay-input/"))
+        elif key == "state-key":
+            state = state_from_snapshot(persistent)
+            if (state.namespace, state.session_id, state.sandbox_id, state.project_id) != (
+                self.namespace,
+                pair.session_id,
+                pair.sandbox_id,
+                pair.project_id,
+            ):
+                raise RuntimeError("persistent custody disposition scope changed")
+            if state.key_uid != uid:
+                raise RuntimeError("persistent custody UID changed")
+            desired = egress_state_identity(state, "key")
+        else:
+            raise ValueError("unsupported per-pair credential disposition")
+        name = desired["metadata"]["name"]
+        try:
+            observed = await self.kube._get(self.kube.core.read_namespaced_secret, name)
+            if observed is None:
+                if retain:
+                    raise RuntimeError("retained custody disappeared")
+                return True
+            self._identity(observed, desired, uid)
+            if retain:
+                if observed["metadata"].get("deletionTimestamp"):
+                    raise RuntimeError("retained custody is terminating")
+                return True
+            if not observed["metadata"].get("deletionTimestamp"):
+                try:
+                    await self.kube._call(
+                        self.kube.core.delete_namespaced_secret,
+                        name,
+                        self.namespace,
+                        body={
+                            "apiVersion": "v1",
+                            "kind": "DeleteOptions",
+                            "preconditions": {
+                                "uid": uid,
+                                "resourceVersion": observed["metadata"]["resourceVersion"],
+                            },
+                        },
+                    )
+                except ApiException as exc:
+                    if exc.status == 409:
+                        return False
+                    if exc.status != 404:
+                        raise
+            remaining = await self.kube._get(self.kube.core.read_namespaced_secret, name)
+            if remaining is None:
+                return True
+            self._identity(remaining, desired, uid)
+            return False
+        except Exception:
+            raise RuntimeError("original credential disposition failed") from None
 
     async def observe_relay_input(
         self,

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, UniqueConstraint, select
+from sqlalchemy import DateTime, Index, UniqueConstraint, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -129,7 +129,12 @@ class PairIntent(Base):
 
     __tablename__ = "sandbox_pair_intent"
     __table_args__ = (
-        UniqueConstraint("sandbox_id", name="sandbox_pair_intent_sandbox"),
+        Index(
+            "sandbox_pair_intent_sandbox",
+            "sandbox_id",
+            unique=True,
+            postgresql_where=text("retired_at IS NULL"),
+        ),
         UniqueConstraint(
             "session_id", "claim_owner", "claim_changed", name="sandbox_pair_intent_claim"
         ),
@@ -156,6 +161,8 @@ class PairIntent(Base):
     volume_resources: Mapped[dict[str, Any]] = mapped_column(JSONB, default=new_volume_resources)
     topics_dispatch: Mapped[str] = mapped_column(default="unissued")
     cleanup_journal: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retained_from: Mapped[UUID | None]
 
     def binding(self) -> PairBinding:
         return PairBinding(self.session_id, self.sandbox_id, self.project_id, self.generation)
@@ -170,8 +177,8 @@ class PairIntentRepository:
 
     Lock the session first, then the intent, in the existing lifecycle order.
     No transaction here performs Kubernetes, Kafka, filesystem, or token I/O.
-    Retirement/recreation is deliberately unavailable until runtime-release
-    evidence and cleanup are integrated; old ownership is never overwritten.
+    Retirement and retained transfer use separate proof-checked repositories;
+    this creator never overwrites or revives old ownership.
     """
 
     async def _owned(
@@ -199,6 +206,16 @@ class PairIntentRepository:
 
     @staticmethod
     def _validate(intent: PairIntent) -> None:
+        if intent.retained_from is not None and (
+            not isinstance(intent.retained_from, UUID)
+            or intent.retained_from == intent.generation
+            or intent.egress_state_id is None
+        ):
+            raise RuntimeError("invalid retained generation provenance")
+        if intent.retired_at is not None and (
+            not intent.creation_fenced or intent.cleanup_journal is None
+        ):
+            raise RuntimeError("retired pair lacks permanent fence and journal")
         if intent.topics_dispatch not in ("unissued", "inflight", "settled"):
             raise RuntimeError("corrupt paired topic dispatch")
         if intent.egress_state_id is not None and not isinstance(intent.egress_state_id, UUID):
@@ -231,7 +248,7 @@ class PairIntentRepository:
             or intent.claim_changed != row.status_changed_at
         ):
             raise PairClaimLost("prior pair requires fenced retirement")
-        if intent.creation_fenced:
+        if intent.creation_fenced or intent.retired_at is not None:
             raise PairClaimLost("pair creation is fenced")
 
     async def begin(
@@ -242,17 +259,31 @@ class PairIntentRepository:
         *,
         namespace: str,
         golden_version: str,
+        resume: bool = False,
     ) -> PairIntent:
         if not namespace or not golden_version:
             raise ValueError("pair namespace and builder version are required")
         row = await self._owned(db, expected, owner)
         intent = await db.scalar(
             select(PairIntent)
-            .where(PairIntent.sandbox_id == row.sandbox_id)
+            .where(PairIntent.sandbox_id == row.sandbox_id, PairIntent.retired_at.is_(None))
             .with_for_update()
             .execution_options(populate_existing=True)
         )
+        retained = None
         if intent is None:
+            previous = await db.scalar(
+                select(PairIntent.generation)
+                .where(PairIntent.sandbox_id == row.sandbox_id)
+                .limit(1)
+            )
+            if previous is not None and not resume:
+                raise PairClaimLost("retired sandbox requires explicit ownership transfer")
+            if resume:
+                from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+                from ads_sandbox_manager.pair_transfer import PairTransferRepository
+
+                retained = await PairTransferRepository(LifecycleRepository()).available(db, row)
             intent = PairIntent(
                 generation=uuid4(),
                 session_id=row.session_id,
@@ -266,11 +297,25 @@ class PairIntentRepository:
             )
             db.add(intent)
             await db.flush()
+            if retained is not None:
+                await PairTransferRepository(LifecycleRepository()).inherit(
+                    db, row, intent, *retained
+                )
+        if resume != (intent.retained_from is not None):
+            raise PairClaimLost("paired resume mode differs from committed generation")
         self._matches(intent, row, owner)
         if intent.namespace != namespace or intent.golden_version != golden_version:
             raise RuntimeError("pair builder configuration changed")
         self._validate(intent)
+        await self._transfer(db, intent)
         return intent
+
+    @staticmethod
+    async def _transfer(db: AsyncSession, intent: PairIntent) -> None:
+        from ads_sandbox_manager.lifecycle_store import LifecycleRepository
+        from ads_sandbox_manager.pair_transfer import PairTransferRepository
+
+        await PairTransferRepository(LifecycleRepository()).verify(db, intent)
 
     async def bind(
         self,
@@ -312,6 +357,7 @@ class PairIntentRepository:
             raise PairClaimLost("pair intent missing")
         self._matches(intent, row, owner)
         self._validate(intent)
+        await self._transfer(db, intent)
         return intent
 
     async def snapshot(self, db: AsyncSession, generation: UUID) -> PairIntent | None:
@@ -375,6 +421,8 @@ class PairIntentRepository:
         if intent is None:
             raise PairClaimLost("pair intent missing")
         self._validate(intent)
+        if intent.retired_at is not None:
+            raise PairClaimLost("retired generation cannot settle writes")
         if (
             intent.binding(),
             intent.namespace,

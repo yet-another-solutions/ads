@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""Observe original local IPC backing; never delete storage or accept caller paths."""
+
+from __future__ import annotations
+
+import ctypes
+import errno
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import stat
+import sys
+import time
+from pathlib import Path
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name.replace("-", "_"), str(Path(__file__).with_name(name))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def digest(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def directory(path):
+    """No symlink traversal, mount substitution or shared-root capture."""
+    path = Path(path)
+    require(
+        path.is_absolute()
+        and path != Path("/")
+        and ".." not in path.parts
+        and path.resolve() == path,
+        "canonical dedicated backing required",
+    )
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode), "original backing directory required")
+    return [info.st_dev, info.st_ino]
+
+
+class FileHandle(ctypes.Structure):
+    _fields_ = [
+        ("handle_bytes", ctypes.c_uint),
+        ("handle_type", ctypes.c_int),
+        ("f_handle", ctypes.c_ubyte * 128),
+    ]
+
+
+def filesystem_handle(path):
+    """Capture a Linux export handle, including the filesystem's inode generation."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.name_to_handle_at.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.POINTER(FileHandle),
+        ctypes.POINTER(ctypes.c_int),
+        ctypes.c_int,
+    ]
+    value, mount_id = FileHandle(), ctypes.c_int()
+    value.handle_bytes = 128
+    if libc.name_to_handle_at(
+        -100, os.fsencode(path), ctypes.byref(value), ctypes.byref(mount_id), 0
+    ):
+        raise OSError(ctypes.get_errno(), "filesystem export handle unavailable")
+    require(0 < value.handle_bytes <= 128, "bounded filesystem handle required")
+    return {"type": value.handle_type, "bytes": bytes(value.f_handle[: value.handle_bytes]).hex()}
+
+
+def handle_exists(parent, saved, expected):
+    """A rename is still addressable. Only ESTALE proves original inode removal."""
+    require(
+        isinstance(saved, dict)
+        and set(saved) == {"type", "bytes"}
+        and type(saved["type"]) is int
+        and isinstance(saved["bytes"], str),
+        "original filesystem handle required",
+    )
+    raw = bytes.fromhex(saved["bytes"])
+    require(0 < len(raw) <= 128 and raw.hex() == saved["bytes"], "canonical handle required")
+    value = FileHandle()
+    value.handle_bytes, value.handle_type = len(raw), saved["type"]
+    value.f_handle[: len(raw)] = raw
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.open_by_handle_at.argtypes = [
+        ctypes.c_int,
+        ctypes.POINTER(FileHandle),
+        ctypes.c_int,
+    ]
+    # mount_fd is resolved through fdget(), not fdget_raw(), on supported
+    # kernels. O_PATH here yields EBADF even though the descriptor is open.
+    # O_PATH is valid for the returned handle descriptor, not this mount anchor.
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        fd = libc.open_by_handle_at(parent_fd, ctypes.byref(value), os.O_PATH | os.O_CLOEXEC)
+        if fd < 0:
+            error = ctypes.get_errno()
+            if error == errno.ESTALE:
+                return False
+            raise OSError(error, "original filesystem handle observation unavailable")
+        try:
+            info = os.fstat(fd)
+            require(
+                stat.S_ISDIR(info.st_mode) and [info.st_dev, info.st_ino] == expected,
+                "filesystem handle resolved to a different backing",
+            )
+            return True
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent_fd)
+
+
+def volume(observer, kind, name):
+    cfg = observer.config
+    return observer.command(
+        cfg["kubectl"],
+        "--kubeconfig=" + cfg["kubeconfig"],
+        "--insecure-skip-tls-verify=false",
+        "--request-timeout=3s",
+        *(("-n", cfg["namespace"]) if kind == "pvc" else ()),
+        "get",
+        kind,
+        name,
+        "-o",
+        "json",
+    )
+
+
+def capture(observer, runtime, ipc):
+    # Runtime capture has already proved this exact mounted subtree and native
+    # namespace. Re-read the live Pod/PVC and correlate the actual host backing.
+    ipc.exact_pod(observer, runtime)
+    name = "ads-sandbox-ipc-" + runtime["sandbox_id"]
+    pvc = volume(observer, "pvc", name)
+    require(
+        pvc["metadata"]["uid"] == runtime["volume_uid"] and pvc["status"]["phase"] == "Bound",
+        "original bound IPC claim required",
+    )
+    pv_name = pvc["spec"]["volumeName"]
+    pv = volume(observer, "pv", pv_name)
+    spec = pv["spec"]
+    claim = spec["claimRef"]
+    require(
+        claim["uid"] == runtime["volume_uid"]
+        and claim["name"] == name
+        and claim["namespace"] == runtime["namespace"]
+        and spec["persistentVolumeReclaimPolicy"] == "Delete"
+        and not spec.get("csi"),
+        "original local Delete backing required",
+    )
+    sources = [key for key in ("local", "hostPath") if key in spec]
+    require(len(sources) == 1, "one supported local backing required")
+    source = sources[0]
+    raw = spec[source]["path"]
+    require(isinstance(raw, str) and str(Path(raw)) == raw, "canonical backing path required")
+    path = Path(raw)
+    identity = directory(path)
+    require(identity == runtime["filesystem"]["root_identity"], "backing differs from mounted IPC")
+    parent = directory(path.parent)
+    require(parent[0] == identity[0], "dedicated subtree, not a filesystem root, required")
+    handle = filesystem_handle(path)
+    require(handle_exists(path.parent, handle, identity), "original handle cannot be reopened")
+    result = {
+        "runtime": runtime,
+        "runtime_sha256": ipc.report(runtime)["inventory_sha256"],
+        "pv_name": pv_name,
+        "pv_uid": ipc.uuid(pv["metadata"]["uid"]),
+        "source": source,
+        "path": raw,
+        "parent": parent,
+        "identity": identity,
+        "handle": handle,
+    }
+    # No capture after a backing/API replacement during the observation.
+    again = volume(observer, "pv", pv_name)
+    require(
+        again["metadata"]["uid"] == result["pv_uid"]
+        and again["spec"] == spec
+        and volume(observer, "pvc", name)["spec"] == pvc["spec"]
+        and directory(path) == identity
+        and directory(path.parent) == parent,
+        "backing changed during capture",
+    )
+    ipc.exact_pod(observer, runtime)
+    return result
+
+
+def validate(value, wanted, ipc):
+    require(
+        isinstance(value, dict)
+        and set(value)
+        == {
+            "runtime",
+            "runtime_sha256",
+            "pv_name",
+            "pv_uid",
+            "source",
+            "path",
+            "parent",
+            "identity",
+            "handle",
+        },
+        "exact retained backing capture required",
+    )
+    runtime = ipc.validate_snapshot(value["runtime"], wanted)
+    require(
+        value["runtime_sha256"] == ipc.report(runtime)["inventory_sha256"]
+        and value["identity"] == runtime["filesystem"]["root_identity"]
+        and value["source"] in ("local", "hostPath")
+        and isinstance(value["pv_name"], str)
+        and value["pv_name"]
+        and isinstance(value["path"], str)
+        and str(Path(value["path"])) == value["path"]
+        and Path(value["path"]).is_absolute()
+        and value["path"] != "/"
+        and ".." not in Path(value["path"]).parts
+        and isinstance(value["parent"], list)
+        and len(value["parent"]) == 2
+        and all(type(n) is int and n > 0 for n in value["parent"])
+        and value["parent"][0] == value["identity"][0],
+        "invalid original backing capture",
+    )
+    ipc.uuid(value["pv_uid"])
+    handle = value["handle"]
+    require(
+        isinstance(handle, dict)
+        and set(handle) == {"type", "bytes"}
+        and type(handle["type"]) is int
+        and isinstance(handle["bytes"], str),
+        "retained filesystem handle required",
+    )
+    raw = bytes.fromhex(handle["bytes"])
+    require(0 < len(raw) <= 128 and raw.hex() == handle["bytes"], "canonical handle required")
+    return value
+
+
+def report(value, *, observed=False, released=False, reclaimed=False):
+    runtime = value["runtime"]
+    return {
+        "schema": "ads-ipc-storage-v1",
+        **{
+            key: runtime[key]
+            for key in (
+                "node",
+                "namespace",
+                "generation",
+                "sandbox_id",
+                "boot_id",
+                "pod_uid",
+                "volume_uid",
+            )
+        },
+        "pv_uid": value["pv_uid"],
+        "runtime_sha256": value["runtime_sha256"],
+        "inventory_sha256": digest(value),
+        "observed": observed,
+        "released": released,
+        "reclaimed": reclaimed,
+    }
+
+
+def observe(observer, value, ipc, release):
+    runtime = value["runtime"]
+    require(release.boot_id() == runtime["boot_id"], "original boot changed")
+    path = Path(value["path"])
+
+    def absent():
+        require(directory(path.parent) == value["parent"], "backing parent changed")
+        try:
+            current = directory(path)
+        except FileNotFoundError:
+            # A missing/unmounted parent is never reclaimed backing.
+            require(directory(path.parent) == value["parent"], "backing parent unavailable")
+            return not handle_exists(path.parent, value["handle"], value["identity"])
+        require(current == value["identity"], "backing path was replaced")
+        return False
+
+    before = absent()
+    runtime_report = ipc.observe(observer, runtime, release)
+    after = absent()
+    require(release.boot_id() == runtime["boot_id"], "boot changed during backing observation")
+    released = runtime_report["observed_runtime_released"]
+    return report(value, observed=True, released=released, reclaimed=released and before and after)
+
+
+def unused_scope(request, settings, ipc):
+    return {
+        "node": settings["node"],
+        "namespace": settings["namespace"],
+        **{
+            key: ipc.uuid(request[key])
+            for key in ("generation", "sandbox_id", "volume_uid", "pv_uid")
+        },
+    }
+
+
+def unused_capture(observer, wanted, ipc, release):
+    """Resolve backing and node from actual original APIs, never caller paths."""
+    name = "ads-sandbox-ipc-" + wanted["sandbox_id"]
+    pvc = volume(observer, "pvc", name)
+    require(
+        pvc["metadata"]["uid"] == wanted["volume_uid"]
+        and pvc["status"]["phase"] == "Bound"
+        and pvc["spec"].get("volumeMode", "Filesystem") == "Filesystem",
+        "original bound filesystem IPC claim required",
+    )
+    pv_name = pvc["spec"]["volumeName"]
+    pv = volume(observer, "pv", pv_name)
+    spec = pv["spec"]
+    require(
+        pv["metadata"]["uid"] == wanted["pv_uid"]
+        and spec["claimRef"]["uid"] == wanted["volume_uid"]
+        and spec["claimRef"]["name"] == name
+        and spec["claimRef"]["namespace"] == wanted["namespace"]
+        and spec["persistentVolumeReclaimPolicy"] == "Delete"
+        and not spec.get("csi"),
+        "original local Delete backing required",
+    )
+    terms = spec.get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms")
+    require(
+        terms
+        == [
+            {
+                "matchExpressions": [
+                    {
+                        "key": "kubernetes.io/hostname",
+                        "operator": "In",
+                        "values": [wanted["node"]],
+                    }
+                ]
+            }
+        ],
+        "exact original backing node affinity required",
+    )
+    sources = [key for key in ("local", "hostPath") if key in spec]
+    require(len(sources) == 1, "one local backing source required")
+    source = sources[0]
+    raw = spec[source]["path"]
+    require(isinstance(raw, str) and str(Path(raw)) == raw, "canonical backing path required")
+    path = Path(raw)
+    identity, parent = directory(path), directory(path.parent)
+    require(identity[0] == parent[0], "dedicated subtree, not a filesystem root, required")
+    table = ipc.mounts(release.bounded_text(Path("/proc/self/mountinfo")))
+    device = f"{os.major(identity[0])}:{os.minor(identity[0])}"
+    candidates = [
+        entry
+        for entry in table.values()
+        if entry["device"] == device and ipc.beneath(raw, entry["target"])
+    ]
+    require(candidates, "backing host mount unavailable")
+    mount = max(candidates, key=lambda entry: len(entry["target"]))
+    root = str(Path(mount["root"]) / path.relative_to(mount["target"]))
+    require(root != "/" and raw != mount["target"], "dedicated backing subtree required")
+    handle = filesystem_handle(path)
+    require(handle_exists(path.parent, handle, identity), "original handle cannot be reopened")
+    result = {
+        **wanted,
+        "boot_id": release.boot_id(),
+        "pv_name": pv_name,
+        "source": source,
+        "path": raw,
+        "parent": parent,
+        "identity": identity,
+        "handle": handle,
+        "filesystem": {"device": device, "root": root, "target": raw, "root_identity": identity},
+    }
+    again_pvc, again_pv = volume(observer, "pvc", name), volume(observer, "pv", pv_name)
+    require(
+        again_pvc["metadata"]["uid"] == wanted["volume_uid"]
+        and again_pvc["spec"] == pvc["spec"]
+        and again_pv["metadata"]["uid"] == wanted["pv_uid"]
+        and again_pv["spec"] == spec
+        and directory(path) == identity
+        and directory(path.parent) == parent,
+        "original unused backing changed during capture",
+    )
+    return result
+
+
+def unused_validate(value, wanted, ipc):
+    require(
+        isinstance(value, dict)
+        and set(value)
+        == set(wanted)
+        | {
+            "boot_id",
+            "pv_name",
+            "source",
+            "path",
+            "parent",
+            "identity",
+            "handle",
+            "filesystem",
+        }
+        and all(value.get(key) == expected for key, expected in wanted.items()),
+        "exact original unused backing scope required",
+    )
+    ipc.uuid(value["boot_id"])
+    require(
+        value["source"] in ("local", "hostPath")
+        and isinstance(value["pv_name"], str)
+        and value["pv_name"]
+        and isinstance(value["path"], str)
+        and str(Path(value["path"])) == value["path"]
+        and Path(value["path"]).is_absolute()
+        and value["path"] != "/"
+        and ".." not in Path(value["path"]).parts
+        and all(
+            isinstance(value[key], list)
+            and len(value[key]) == 2
+            and all(type(n) is int and n > 0 for n in value[key])
+            for key in ("identity", "parent")
+        )
+        and value["parent"][0] == value["identity"][0],
+        "invalid unused backing identity",
+    )
+    fs = value["filesystem"]
+    require(
+        isinstance(fs, dict)
+        and set(fs) == {"device", "root", "target", "root_identity"}
+        and fs["root_identity"] == value["identity"]
+        and fs["target"] == value["path"]
+        and fs["device"] == f"{os.major(value['identity'][0])}:{os.minor(value['identity'][0])}"
+        and isinstance(fs["root"], str)
+        and fs["root"].startswith("/")
+        and fs["root"] != "/"
+        and ".." not in Path(fs["root"]).parts,
+        "original unused subtree identity required",
+    )
+    handle = value["handle"]
+    require(
+        isinstance(handle, dict)
+        and set(handle) == {"type", "bytes"}
+        and type(handle["type"]) is int
+        and isinstance(handle["bytes"], str),
+        "original filesystem handle required",
+    )
+    raw = bytes.fromhex(handle["bytes"])
+    require(0 < len(raw) <= 128 and raw.hex() == handle["bytes"], "canonical handle required")
+    return value
+
+
+def unused_report(value, *, observed=False, released=False, reclaimed=False):
+    return {
+        "schema": "ads-ipc-unused-storage-v1",
+        **{
+            key: value[key]
+            for key in (
+                "node",
+                "namespace",
+                "generation",
+                "sandbox_id",
+                "boot_id",
+                "volume_uid",
+                "pv_uid",
+            )
+        },
+        "inventory_sha256": digest(value),
+        "observed": observed,
+        "released": released,
+        "reclaimed": reclaimed,
+    }
+
+
+def unused_observe(observer, value, ipc, release):
+    require(release.boot_id() == value["boot_id"], "original boot changed")
+    path = Path(value["path"])
+
+    def absent():
+        require(directory(path.parent) == value["parent"], "original parent changed")
+        try:
+            current = directory(path)
+        except FileNotFoundError:
+            require(directory(path.parent) == value["parent"], "original parent unavailable")
+            # A deleted directory may remain addressable while a child is held
+            # open. Like a renamed directory, it is positively NOT reclaimed.
+            # Keep observing references; only ESTALE can establish absence.
+            return not handle_exists(path.parent, value["handle"], value["identity"])
+        require(current == value["identity"], "original backing replaced")
+        return False
+
+    before = absent()
+    process_refs, mounts = ipc.filesystem_references(
+        value["filesystem"], observer.deadline, release
+    )
+    after = absent()
+    require(release.boot_id() == value["boot_id"], "boot changed during backing observation")
+    released = not process_refs and not mounts
+    return unused_report(
+        value, observed=True, released=released, reclaimed=released and before and after
+    )
+
+
+def unused_perform(request):
+    require(os.geteuid() == 0, "trusted node-root storage observer required")
+    require(
+        isinstance(request, dict)
+        and set(request)
+        == {
+            "action",
+            "config",
+            "generation",
+            "sandbox_id",
+            "volume_uid",
+            "pv_uid",
+            "inventory_sha256",
+        }
+        and request["action"] in ("unused-capture", "unused-observe"),
+        "exact unused storage request required",
+    )
+    ipc, plugin = load("ads-ipc-release"), load("ads-ptp")
+    attestor, release = load("ads-ptp-attest"), load("ads-ptp-release")
+    settings = ipc.config(plugin.read_record(Path(request["config"])))
+    wanted = unused_scope(request, settings, ipc)
+    root = plugin.private_directory(settings["stateDir"])
+    observer = attestor.Observer(settings)
+    observer.deadline = time.monotonic() + 60
+    path = root / ("ipc-unused-storage-" + wanted["generation"] + ".json")
+    with plugin.generation_lock(root, wanted["generation"]):
+        if request["action"] == "unused-capture":
+            require(request["inventory_sha256"] is None, "capture cannot replace original binding")
+            if path.exists() or path.is_symlink():
+                saved = unused_validate(plugin.read_record(path), wanted, ipc)
+            else:
+                saved = unused_validate(unused_capture(observer, wanted, ipc, release), wanted, ipc)
+            require(release.boot_id() == saved["boot_id"], "original boot changed")
+            plugin.save_record(path, saved)
+            return unused_report(saved)
+        saved = unused_validate(plugin.read_record(path), wanted, ipc)
+        require(digest(saved) == request["inventory_sha256"], "original backing digest required")
+        return unused_observe(observer, saved, ipc, release)
+
+
+def perform(request):
+    if isinstance(request, dict) and request.get("action") in ("unused-capture", "unused-observe"):
+        return unused_perform(request)
+    require(os.geteuid() == 0, "trusted node-root storage observer required")
+    require(
+        isinstance(request, dict)
+        and set(request)
+        == {
+            "action",
+            "config",
+            "generation",
+            "sandbox_id",
+            "pod_uid",
+            "volume_uid",
+            "inventory_sha256",
+        }
+        and request["action"] in ("capture", "observe"),
+        "exact storage request required",
+    )
+    ipc, plugin = load("ads-ipc-release"), load("ads-ptp")
+    attestor, release = load("ads-ptp-attest"), load("ads-ptp-release")
+    settings = ipc.config(plugin.read_record(Path(request["config"])))
+    wanted = ipc.scope(request, settings)
+    root = plugin.private_directory(settings["stateDir"])
+    observer = attestor.Observer(settings)
+    observer.deadline = time.monotonic() + 60
+    path = root / ("ipc-storage-" + wanted["generation"] + ".json")
+    with plugin.generation_lock(root, wanted["generation"]):
+        if request["action"] == "capture":
+            require(request["inventory_sha256"] is None, "capture cannot replace original binding")
+            if path.exists() or path.is_symlink():
+                saved = validate(plugin.read_record(path), wanted, ipc)
+            else:
+                runtime = ipc.validate_snapshot(
+                    plugin.read_record(root / ("ipc-release-" + wanted["generation"] + ".json")),
+                    wanted,
+                )
+                require(release.boot_id() == runtime["boot_id"], "original boot changed")
+                saved = validate(capture(observer, runtime, ipc), wanted, ipc)
+            require(release.boot_id() == saved["runtime"]["boot_id"], "original boot changed")
+            plugin.save_record(path, saved)
+            return report(saved)
+        saved = validate(plugin.read_record(path), wanted, ipc)
+        require(digest(saved) == request["inventory_sha256"], "original backing digest required")
+        return observe(observer, saved, ipc, release)
+
+
+def main():
+    try:
+        print(json.dumps(perform(load("ads-ptp").decode(sys.stdin.buffer.read(65537)))))
+    except Exception as error:
+        print(
+            json.dumps({"error": "IPC storage observation failed", "details": type(error).__name__})
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()

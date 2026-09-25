@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_sandbox_manager.ca import CaEnsure
+from ads_sandbox_manager.cleanup import CleanupAdapter
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.egress_compute_publication import EgressComputePublication
 from ads_sandbox_manager.egress_state_kube import EgressStateAdapter
@@ -16,6 +18,7 @@ from ads_sandbox_manager.egress_state_publication import EgressStatePublication
 from ads_sandbox_manager.egress_state_store import EgressStateRepository
 from ads_sandbox_manager.golden import GoldenEnsure
 from ads_sandbox_manager.kube import KubeClient
+from ads_sandbox_manager.lifecycle_store import LifecycleRepository
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_compute_kube import PairComputeAdapter
 from ads_sandbox_manager.pair_compute_publication import PairComputePublication
@@ -24,8 +27,10 @@ from ads_sandbox_manager.pair_ipc_kube import PairIpcAdapter
 from ads_sandbox_manager.pair_ipc_publication import PairIpcPublication
 from ads_sandbox_manager.pair_ipc_store import PairIpcRepository
 from ads_sandbox_manager.pair_kube import PairControlAdapter
+from ads_sandbox_manager.pair_retirement import PairRetirementRepository
 from ads_sandbox_manager.pair_runtime import pair_runtime
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
+from ads_sandbox_manager.pair_transfer import PairTransferRepository
 from ads_sandbox_manager.pair_volume_kube import PairVolumeAdapter
 from ads_sandbox_manager.pair_volume_publication import PairVolumePublication
 from ads_sandbox_manager.pair_volume_store import PairVolumeRepository
@@ -51,6 +56,7 @@ class PairCreation:
         topics: PairTopics,
     ) -> None:
         self.settings, self.sessions, self.topics = settings, sessions, topics
+        self.storage = CleanupAdapter(kube)
         self.runtime = pair_runtime(settings)  # Fail before any resource API call.
         self.repository = repository = PairIntentRepository()
         controls = PairControlAdapter(kube)
@@ -181,13 +187,78 @@ class PairCreation:
         if any(value["dispatch"] != "settled" or not value["uid"] for value in entries.values()):
             raise PairClaimLost("paired publication is not settled and UID bound")
 
+    async def _retained(self, row: SandboxSession) -> None:
+        assert row.claimed_by is not None
+        transfers = PairTransferRepository(LifecycleRepository())
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            intent = await self.repository.begin(
+                db,
+                row,
+                row.claimed_by,
+                namespace=self.settings.namespace,
+                golden_version=self.settings.golden_version,
+                resume=True,
+            )
+            receipt = await transfers.verify(db, intent)
+            assert receipt is not None
+            if receipt.validated_at is not None:
+                return
+            original = await PairRetirementRepository(LifecycleRepository()).verify(
+                db,
+                receipt.predecessor,
+            )
+            assert intent.egress_state_id is not None
+            persistent = await self.state.repository.owned(
+                db,
+                row,
+                row.claimed_by,
+                intent.generation,
+                intent.egress_state_id,
+            )
+        # Exact custody content/fingerprint is verified by the existing state
+        # adapter. The original kernel release remains in the retired journal;
+        # current APIs only veto changed binding or a contradictory new user.
+        if await self.volumes.kube.observe_retained(intent) != receipt.workspace["uid"]:
+            raise PairClaimLost("retained workspace observation differs")
+        if await self.state.kube.observe_volume(persistent) != persistent.volume_uid:
+            raise PairClaimLost("retained state volume observation differs")
+        for role in ("workspace", "state"):
+            target = (
+                original.journal["storage_capture"].get(role)
+                or original.journal["partial_storage"].get(role)
+                or original.journal["unused_storage"].get(role, {}).get("capture", {}).get("target")
+            )
+            if target is None or not target["retain"]:
+                raise PairClaimLost("retained storage has no original release target")
+            current = await self.storage.capture(
+                {key: target[key] for key in ("kind", "name", "uid", "retain")}
+            )
+            if any(
+                current.get(key) != target.get(key)
+                for key in (
+                    "uid",
+                    "pv_uid",
+                    "pv_name",
+                    "volume_key",
+                    "delete_policy",
+                    "reclaim_guard",
+                )
+            ) or not await self.storage.unreferenced(target):
+                raise PairClaimLost("retained original backing changed or acquired another user")
+        async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
+            intent = await self.repository.owned(db, row, row.claimed_by, intent.generation)
+            receipt = await transfers.verify(db, intent)
+            assert receipt is not None
+            if receipt.validated_at is None:
+                receipt.validated_at = datetime.now(UTC)
+
     async def build(self, row: SandboxSession, *, resume: bool) -> SandboxSession:
         config = self.settings.session_objects
         assert config is not None
-        if resume:
-            raise PairClaimLost("paired resume requires explicit retained-state transfer")
         async with asyncio.timeout(config.create_seconds):
-            intent = await self.controls.prepare(row)
+            if resume:
+                await self._retained(row)
+            intent = await self.controls.prepare(row, resume=resume)
             if not all(intent.control_uids.values()) or set(intent.control_dispatch.values()) != {
                 "settled"
             }:

@@ -14,6 +14,30 @@ rules:
     resources: ["persistentvolumeclaims"]
     verbs: ["get"]
 ---
+# Read only the original PV's immutable backing identity. No list, mutation,
+# Secret access, or wildcard permission is required.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ads-node-owner-storage-observer
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ads-node-owner-storage-observer
+subjects:
+  - kind: ServiceAccount
+    name: NODE_OWNER_SERVICE_ACCOUNT
+    namespace: NAMESPACE
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ads-node-owner-storage-observer
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

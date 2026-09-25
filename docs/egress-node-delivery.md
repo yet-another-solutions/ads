@@ -40,6 +40,15 @@ exchange; a digest by itself still provides no authentication.
   inventory.
 - `ipc-observe`: observe that exact IPC capture, without conflating it with the
   private-pair inventory.
+- `partial-capture`: fence admission and capture the exact nonempty original
+  private role/UID map through `ads-ptp-partial`.
+- `partial-observe`: observe that same retained partial inventory, boot and
+  digest. The separate partial report cannot satisfy a full four-Pod contract.
+- `ipc-storage-capture` / `ipc-storage-observe`: capture the original local IPC
+  filesystem identity and positively observe its release and reclamation.
+- `block-capture` / `block-observe`: bind original CSI Block backing and kernel
+  identities to the existing private runtime capture; observe original mapping,
+  mount, process and dependent-device references. See `egress-block-storage.md`.
 
 The service substitutes all configuration paths server-side. Only those fixed
 helpers can be executed, without a shell or inherited caller environment.
@@ -61,13 +70,15 @@ Run the service as an actual host systemd service, not in a private PID or mount
 namespace. Extract the scripts from the reviewed immutable CI-built
 `ads-ptp-tools` image. Do not build an image on a lab host. Install the
 `ads-ptp`, `ads-ptp-attest`, `ads-ptp-retire`, `ads-ptp-release`,
-`ads-ipc-release` and `ads-node-owner` scripts together in `/usr/local/bin`,
+`ads-ptp-partial`, `ads-ipc-release`, `ads-ipc-storage`, `ads-block-release` and
+`ads-node-owner` scripts together in `/usr/local/bin`,
 root-owned mode 0755, including protected parent directories.
 
 Use `deploy/node-owner/ads-node-owner.service`. The host must already have the
 supported CRI, kubectl, crictl and existing protected observer configurations.
 The sample `deploy/node-owner/rbac.yaml` grants only namespaced Pod observation
-and PVC reads to a dedicated kubeconfig identity. Substitute the two named
+and PVC reads plus cluster-scoped get-only PV access to a dedicated kubeconfig
+identity. Substitute the two named
 placeholders explicitly; it is not a cluster-admin bootstrap. The manager gets
 no node/PV mutation or pods/exec permission from this channel.
 
@@ -86,7 +97,8 @@ Create `/etc/ads-node-owner/config.json` root-owned mode 0600 with exactly:
   "manager_fingerprints": ["64-lowercase-hex-characters"],
   "pair": {
     "attestorConfig": "/etc/ads-ptp/attestor.json",
-    "stateDir": "/var/lib/ads-ptp"
+    "stateDir": "/var/lib/ads-ptp",
+    "kubeletRoot": "/var/lib/kubelet"
   },
   "ipc": null
 }

@@ -102,6 +102,74 @@ def test_observe_requires_original_boot_and_digest(service, node_request, config
             service.request(json.dumps({**node_request, field: None}).encode(), config)
 
 
+@pytest.mark.parametrize("phase", ["capture", "observe"])
+def test_unused_backing_has_no_invented_pod_or_caller_path(
+    service, node_request, config, monkeypatch, phase
+):
+    config["ipc"] = "/platform/ipc"
+    node_request.update(
+        operation="ipc-unused-" + phase,
+        volume_uid=str(uuid4()),
+        pv_uid=str(uuid4()),
+        boot_id=str(uuid4()) if phase == "observe" else None,
+        inventory_sha256="a" * 64 if phase == "observe" else None,
+    )
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return {
+            **{
+                key: node_request[key]
+                for key in (
+                    "node",
+                    "namespace",
+                    "generation",
+                    "sandbox_id",
+                    "boot_id",
+                    "inventory_sha256",
+                )
+            },
+        }
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-ipc-storage"
+    assert calls[0][1]["action"] == "unused-" + phase
+    assert "pod_uid" not in calls[0][1] and "path" not in calls[0][1]
+    for change in ({"pod_uid": str(uuid4())}, {"pv_uid": None}, {"path": "/arbitrary"}):
+        with pytest.raises(ValueError):
+            service.request(json.dumps({**node_request, **change}).encode(), config)
+
+
+@pytest.mark.parametrize("action", ["capture", "observe"])
+def test_storage_calls_only_fixed_ipc_backing_observer(
+    service, node_request, config, monkeypatch, action
+):
+    config["ipc"] = "/platform/ipc"
+    node_request.update(
+        operation="ipc-storage-" + action,
+        pod_uid=str(uuid4()),
+        volume_uid=str(uuid4()),
+        boot_id=str(uuid4()) if action == "observe" else None,
+        inventory_sha256="a" * 64 if action == "observe" else None,
+    )
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return {**node_request}
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-ipc-storage"
+    assert calls[0][1]["config"] == config["ipc"]
+    assert calls[0][1]["action"] == action
+    config["ipc"] = None
+    with pytest.raises(ValueError):
+        service.perform(json.dumps(node_request).encode(), config)
+
+
 @pytest.mark.parametrize(
     "fault", ["owner", "write", "private", "executable", "directory", "symlink", "parent"]
 )
@@ -180,6 +248,7 @@ def test_startup_binds_protected_helpers_and_observer_scope(service, startup):
         "ads-ptp-attest",
         "ads-ptp-retire",
         "ads-ptp-release",
+        "ads-ptp-partial",
         "ads-ipc-release",
         "ads-node-owner",
     ):
@@ -217,3 +286,94 @@ def test_service_entrypoint_refuses_nonroot_before_configuration(service, monkey
     monkeypatch.setattr(service.os, "geteuid", lambda: 1001)
     with pytest.raises(ValueError, match="node-root"):
         service.main()
+
+
+@pytest.mark.parametrize("action", ["capture", "observe"])
+def test_partial_operations_keep_exact_uid_map_and_fixed_helper(
+    service, node_request, config, monkeypatch, action
+):
+    node_request.update(operation="partial-" + action, pod_uids={"guest": str(uuid4())})
+    if action == "observe":
+        node_request.update(boot_id=str(uuid4()), inventory_sha256="b" * 64)
+    calls = []
+    report = {
+        **{
+            key: node_request[key]
+            for key in ("node", "namespace", "network", "generation", "sandbox_id", "pod_uids")
+        },
+        "boot_id": node_request["boot_id"] or str(uuid4()),
+        "inventory_sha256": node_request["inventory_sha256"] or "a" * 64,
+    }
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return report
+
+    monkeypatch.setattr(service, "helper", helper)
+    result = service.perform(json.dumps(node_request).encode(), config)
+    assert result["report"] == report
+    assert [name for name, _ in calls] == (
+        ["ads-ptp-retire", "ads-ptp-partial"] if action == "capture" else ["ads-ptp-partial"]
+    )
+    assert calls[-1][1] == {
+        "generation": node_request["generation"],
+        "sandbox_id": node_request["sandbox_id"],
+        **config["pair"],
+        "action": action,
+        "pod_uids": node_request["pod_uids"],
+    }
+
+
+@pytest.mark.parametrize("uids", [{}, {"ipc": str(uuid4())}, {"guest": "wrong"}, []])
+def test_partial_request_cannot_hide_or_replace_original_roles(service, node_request, config, uids):
+    node_request.update(operation="partial-capture", pod_uids=uids)
+    with pytest.raises(ValueError):
+        service.request(json.dumps(node_request).encode(), config)
+
+
+def test_nonpartial_request_cannot_supply_partial_map(service, node_request, config):
+    node_request["pod_uids"] = {"guest": str(uuid4())}
+    with pytest.raises(ValueError):
+        service.request(json.dumps(node_request).encode(), config)
+
+
+@pytest.mark.parametrize("action", ["capture", "observe"])
+def test_block_operations_use_only_original_scope_and_configured_kubelet_root(
+    service, node_request, config, monkeypatch, action
+):
+    config["pair"]["kubeletRoot"] = "/platform/kubelet"
+    node_request.update(
+        operation="block-" + action,
+        runtime_sha256="a" * 64,
+        volumes={
+            "workspace": {"name": "claim", "volume_uid": str(uuid4()), "pod_uid": str(uuid4())}
+        },
+    )
+    if action == "observe":
+        node_request.update(boot_id=str(uuid4()), inventory_sha256="b" * 64)
+    calls = []
+
+    def helper(name, payload):
+        calls.append((name, payload))
+        return dict(node_request)
+
+    monkeypatch.setattr(service, "helper", helper)
+    service.perform(json.dumps(node_request).encode(), config)
+    assert len(calls) == 1 and calls[0][0] == "ads-block-release"
+    assert calls[0][1] == {
+        **config["pair"],
+        "action": action,
+        **{
+            key: node_request[key]
+            for key in (
+                "generation",
+                "sandbox_id",
+                "volumes",
+                "runtime_sha256",
+                "inventory_sha256",
+            )
+        },
+    }
+    node_request["kubeletRoot"] = "/caller-path"
+    with pytest.raises(ValueError):
+        service.request(json.dumps(node_request).encode(), config)

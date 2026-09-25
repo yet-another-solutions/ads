@@ -58,6 +58,7 @@ async def paired(life):
 def assert_capture(work, h):
     assert work.pair_snapshot == {
         "generation": str(h.pair.generation),
+        "retained_from": None,
         "session_id": str(h.pair.session_id),
         "sandbox_id": str(h.pair.sandbox_id),
         "project_id": str(h.pair.project_id),
@@ -171,16 +172,24 @@ async def test_other_lifecycle_claims_capture_pair_before_work_is_committed(pair
                 [sandbox_targets(row, retain=True)[0]],
             )
         else:
-            work = await h.lifecycle_repository.reap(
-                db,
-                row.session_id,
-                row.sandbox_id,
-                pvc.pvc_id,
-                now,
-                h.settings.idle_seconds,
-                h.settings.detached_seconds,
-                30,
-            )
+            # Stopped/detached labels alone no longer authorize paired reap.
+            # This fixture has no retired-generation proof. The complete
+            # retained expiry path is exercised by test_pair_disposal.
+            with pytest.raises(RuntimeError, match="no retired original generation"):
+                await h.lifecycle_repository.reap(
+                    db,
+                    row.session_id,
+                    row.sandbox_id,
+                    pvc.pvc_id,
+                    now,
+                    h.settings.idle_seconds,
+                    h.settings.detached_seconds,
+                    30,
+                )
+            assert pvc.state == "detached" and row.status == "stopped"
+            assert not h.cleanup.deleted and not h.kube.calls
+            assert not await works(h)
+            return
         assert work is not None
     assert_capture(work, h)
     await h.lifecycle.execute(work.work_id)
