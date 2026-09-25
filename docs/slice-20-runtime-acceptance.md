@@ -20,7 +20,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1, HTTP/2, approved empty/absent authority and extended CONNECT adapters tested; OPTIONS asterisk is explicitly pathless |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
-| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, real BIND delv chain proofs | Durable signing identities/component proofs implemented; upstream classification, delegation/negative proofs and publication open |
+| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, `dnssec_validation.py`, `dnssec_chain.py`, real DNS/BIND proofs | Durable signing identities and fresh positive-chain verification tested; unsigned/negative/wildcard proof processing, complete classification and publication open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
 | TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
@@ -28,6 +28,58 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Positive upstream DNSSEC verification
+
+`dnssec_validation` verifies actual RRSIG bytes and full-key DS relationships
+with bounded RRsets/wire size and a shared cryptographic-operation budget.
+Validation support is separate from synthetic-key-generation support: RSA/SHA1
+(including NSEC3 identifier), RSA/SHA256/SHA512, ECDSA P-256/P-384, Ed25519 and
+Ed448 tests use real keys/signatures. Validation follows the installed
+dnspython policy; unsupported-only DS paths stay distinguishable from supported
+failures. Short-tag collisions do not hide the valid full key.
+
+Successful alternatives remain successful while failed alternatives and their
+full signature/key fingerprints remain available. Expiration, future inception,
+bad signature, missing signature/key, zone-key flags, protocol, signer scope and
+DS mismatch are distinct evidence. Expired signatures are also checked within
+their signed interval to retain an independent corruption defect; they never
+become valid now. Wrapped/ambiguous signature serial-time intervals are an
+explicit local limitation, not falsely diagnosed upstream corruption.
+Wildcard-derived signatures remain marked as requiring separate proof.
+
+`PositiveChains` uses the actual `UpstreamResolver` with the original deadline,
+subquery and address-inspection gates, CD/DO acquisition, fresh DNSKEY/DS queries
+and explicit copied upstream DNSKEY/DS trust anchors. It follows observed
+strict-ancestor DS signers, not guessed registrable domains. A child DNSKEY set
+is trusted only after its parent DS and a matching key authenticate that set.
+There is no AD trust shortcut and no implicit use of the sandbox synthetic root.
+Only secure results expose trusted keys. Authenticated unsupported-only DS is
+insecure for this validator; missing DS/DNSKEY evidence, unusable configured
+anchors and unimplemented unsigned/negative proofs remain indeterminate.
+Supported failing paths are not hidden by unrelated unsupported records.
+
+Request-local memoization does not survive the call; a new authentication
+reacquires all evidence. Shared ancestors are retained once per result rather
+than copied exponentially across alternate paths. Depth/cycle, query/crypto
+budgets and expired resolution deadlines deny, not synthesize diagnostic success.
+Wildcard DS/DNSKEY material cannot establish an exact positive delegation.
+
+Seventy-four added tests cover these boundaries, including real local DNS
+acquisition and five independent BIND delv comparisons for valid/expired,
+valid-alternative/all-bad signatures and DS mismatch. DNS serving fixtures are
+named external boundaries, not a claimed production synthetic view. The
+positive-chain component is not yet wired into a complete DNS answer classifier.
+Unsigned delegation and signed-island handling, NSEC/NSEC3, negative/wildcard
+proofs, missing-material expectation proofs, flag/EDE construction, faithful
+synthesis, answer/ECH publication and runtime upstream-anchor provisioning
+remain open. No final synthetic-view or production compatibility claim.
+
+Review added ambiguous evidence, wildcard-chain, deadline and expansion-gate
+regressions. Initial typing defects were fixed before tests; no security test
+was removed. All five local Nox gates pass: **945 affected tests, zero skips**,
+40.10s, `slice20-dnssec-chain-nox.log`. No latest full-workspace rerun/CI,
+project image build, merge/publication or lab action. Local fixtures closed.
 
 ### Approved no-authority helper and pathless OPTIONS
 
