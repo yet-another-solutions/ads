@@ -15,11 +15,15 @@ import dns.rdatatype
 import dns.rrset
 import pytest
 
+from ads_sandbox_egress.dnssec_answer import AnswerAuthentication
+from ads_sandbox_egress.dnssec_chain import PositiveChains
 from ads_sandbox_egress.dnssec_denial import has_type, validate_denial
 from ads_sandbox_egress.dnssec_validation import CryptoBudget
 from ads_sandbox_egress.policy import RequestDenied
+from ads_sandbox_egress.resolution import ResolutionJob
 from test_dns_transport import transport
 from test_dnssec_validation import NOW, ZONE, corrupt, material, signature
+from test_resolution import resolver
 
 
 class Zone:
@@ -325,6 +329,20 @@ def test_independent_delv_authenticates_denial_and_unsigned_boundary(tmp_path, f
         host, port = await service.start("127.0.0.1", 0)
         process = None
         try:
+            if case != "unsigned":
+                # Compare the integrated message classifier, not only the
+                # low-level proof checker, with the independent validator.
+                owner = AnswerAuthentication(
+                    PositiveChains(resolver(upstream_port=port), {dns.name.root: root_keys})
+                )
+                query = dns.message.make_query(qname, qtype, want_dnssec=True)
+                original = await View().answer(query, deadline=time.monotonic() + 5)
+                authentication = await owner.classify(
+                    original, ResolutionJob(time.monotonic() + 5), budget=CryptoBudget()
+                )
+                assert authentication.state == (
+                    "bogus" if case == "corrupt" else "insecure" if checked.opt_out else "secure"
+                )
             process = await asyncio.create_subprocess_exec(
                 "delv",
                 "@" + host,

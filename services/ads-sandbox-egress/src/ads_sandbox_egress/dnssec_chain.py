@@ -88,6 +88,14 @@ class PositiveChains:
         # sandbox IdentityStore or its generated DNSSEC root.
         self._anchors = anchors
 
+    def closest_anchor(self, name: dns.name.Name) -> dns.name.Name | None:
+        """Most-specific configured trust boundary, without exposing key state."""
+        return max(
+            (anchor for anchor in self._anchors if name.is_subdomain(anchor)),
+            key=lambda anchor: len(anchor.labels),
+            default=None,
+        )
+
     async def authenticate(
         self, zone: dns.name.Name, job: ResolutionJob, *, budget: CryptoBudget
     ) -> ZoneAuthentication:

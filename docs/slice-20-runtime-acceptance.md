@@ -20,14 +20,72 @@ Branch: `feature/slice-20-egress-runtime`.
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1, HTTP/2, approved empty/absent authority and extended CONNECT adapters tested; OPTIONS asterisk is explicitly pathless |
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
-| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, `dnssec_validation.py`, `dnssec_chain.py`, `dnssec_denial.py`, real DNS/BIND proofs | Signing identities, positive chains, negative/wildcard proof checks and direct unsigned-delegation acquisition tested; complete answer classification/transformation, flags and publication open |
+| Synthetic DNSSEC, flags, defects and independent validation | `dnssec_identity.py`, `dnssec_validation.py`, `dnssec_chain.py`, `dnssec_denial.py`, `dnssec_answer.py`, real DNS/BIND proofs | Signed answers, aliases, negative/wildcard proofs, unsigned discovery and contextual missing-signature checks tested; complete synthesis, diagnostic assembly, flags and publication open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
 | TLS certificate pairs and defect mirroring | `origin_tls.py`, `certificates.py`, `certificate_mirror.py`, `crl.py`, `crl_http.py`; real validators/sockets/TLS clients | Stable success pairs, selected defects and durable local CRL component tested; remaining status/combinations and runtime ownership open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
-| Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
+| Full local regression and review | Nox lint/deps/typecheck/test/package | Latest full collection: 5,163 passed, two bootstrap harness failures, two skipped, four subtests passed; harness corrected and 1,127 affected tests pass; full rerun pending |
 
 ## Component verification and review
+
+### Answer authentication and full-regression correction
+
+`dnssec_answer` connects fresh upstream key acquisition with signed answer,
+negative and wildcard verification. It ignores upstream AD, retains successful
+and failed alternatives, classifies only records related to the query, and
+keeps authentication separate from membership or publication. Alias NXDOMAIN
+requires both the alias and terminal denial. Unsigned synthesized CNAME inherits
+only an exact authenticated DNAME substitution, including explicit CNAME queries;
+a contradictory signed CNAME does not bypass that relationship.
+
+Missing signatures trigger bounded SOA candidate discovery. An untrusted SOA
+is not an unsigned-zone assertion: the corresponding parent no-DS proof must
+authenticate first. With a secure ancestor, every closer potential cut needs
+authenticated DS or no-DS evidence before a missing signature is labeled bogus.
+Missing proof stays indeterminate. Most-specific configured upstream anchors
+cannot be bypassed by an ancestor signature or an insecure-parent hint.
+All discovery shares the original query/crypto/deadline budgets; evidence is
+request-local, not a completed-answer cache.
+
+Eighty new classifier cases exercise actual local UDP/TCP and cryptography;
+five add independent BIND delv positive comparisons. Fifteen existing independent
+denial/wildcard scenarios now additionally check the integrated classifier.
+The previous Opt-Out negative-display caveat remains: delv display is not AD
+wire evidence. The implementation does not yet synthesize or serve these
+authenticated results.
+
+The complete Nox test collection started at `26c61db` finished with **5,163
+passed, two failed, two skipped, four subtests passed**, 2,088 warnings,
+1,652.99 seconds. Two newly added classifier files were not in that collection
+and did not replace existing source while it ran. Both failures were in
+`test_ca_stream_failure_prevents_init_and_readiness`: its harness still expected
+the replaced `/bin/sh` trust installer and did not supply the approved
+base-owned Python installer source. The fixture now loads the actual installer,
+retains the stream/init/readiness/update assertions, and adds installer failure
+alongside CA-stream failure. No production trust check was relaxed.
+
+The two existing Keycloak tests still skip without an actual Docker executable;
+the Podman PostgreSQL fixture overrides were used without faking Docker.
+The temporary PostgreSQL container and volumes were removed, its isolated VFS
+store force-reset, port verified closed, and filesystem independently checked:
+only an 88 KiB lock/configuration skeleton remained. No test helper listener
+or process remains.
+
+Incremental Nox lint, deps, typecheck, test and package passed after fixes.
+Latest affected tests: **1,127 passed, zero skipped**, 42.26 seconds,
+`slice20-answer-reviewed-nox.log`. Lint's import ordering and mypy's mutable
+optional-key narrowing were corrected. New fixture failures were a random
+RRset wire-order assertion, mismatched response ID and an ADS-specific CD
+assertion incorrectly applied to independent delv; fixtures now preserve
+semantic records, echo the query ID and let delv control its own flags.
+The complete regression must be rerun; the earlier failed result is not green.
+
+Still open: complete cross-message acquisition/relationship integration,
+remaining contextual missing-key/DS/uncertain cases, faithful substitution,
+expiry/flag/EDE construction, durable DNSSEC/ECH publication, membership adapter,
+runtime/custody/interception/health/packaging and final regression/review.
+Slice 20 remains open. No CI, images, merge, publication or lab work.
 
 ### Signed denial proofs and direct unsigned delegation
 
