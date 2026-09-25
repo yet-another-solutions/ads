@@ -16,6 +16,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from h2.connection import ConnectionState
 from h2.events import (
     ConnectionTerminated,
     DataReceived,
@@ -32,7 +33,7 @@ from h2.events import (
 
 from ads_sandbox_egress import websocket
 from ads_sandbox_egress.framing import Headers
-from ads_sandbox_egress.http2 import HTTP2Connection
+from ads_sandbox_egress.http2 import GracefulShutdown, HTTP2Connection
 from ads_sandbox_egress.policy import RequestDenied
 from ads_sandbox_egress.request_authorization import (
     ConnectionTarget,
@@ -121,12 +122,15 @@ class _Leg:
                 self.stop.set()
 
     def deny(self, stream_id: int) -> None:
+        if self.protocol.state_machine.state is ConnectionState.CLOSED:
+            self.window_changed.set()
+            return  # Fatal connection failure cannot serialize stream frames.
         if stream_id in self.protocol.streams and not self.protocol.streams[stream_id].closed:
             self.protocol.deny(stream_id)
         self.window_changed.set()
 
     def credit(self, count: int, stream_id: int) -> None:
-        if count:
+        if count and self.protocol.state_machine.state is not ConnectionState.CLOSED:
             self.protocol.acknowledge_received_data(count, stream_id)
 
     async def headers(self, stream_id: int, headers: Headers, *, end: bool = False) -> None:
@@ -160,13 +164,25 @@ class _Leg:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
                 await self.window_changed.wait()
 
-    async def close(self) -> None:
-        self.closed = True
-        self.window_changed.set()
-        self.stream.abort()
-        if self.task is not None:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
+    async def close(self, *, graceful: bool = False) -> None:
+        try:
+            if graceful:
+                self.protocol.begin_shutdown()
+                await self.flush()
+                self.closed = True
+                async with asyncio.timeout(self.idle_timeout):
+                    await self.stream.finish()
+            else:
+                self.stream.abort()
+        except BaseException:
+            self.stream.abort()
+            raise
+        finally:
+            self.closed = True
+            self.window_changed.set()
+            if self.task is not None:
+                self.task.cancel()
+                await asyncio.gather(self.task, return_exceptions=True)
 
 
 class _Inbox:
@@ -272,10 +288,33 @@ class HTTP2Proxy:
         self._tasks: set[asyncio.Task[None]] = set()
         self._running = False
         self._upgraded = False
+        self._drain_started: float | None = None
+        self._graceful = False
+        self._control_task: asyncio.Task[None] | None = None
 
     def _completed_task(self, task: asyncio.Task[None]) -> None:
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
+            self.stop.set()
+        if self._drain_started is not None and not self._tasks and not self.stop.is_set():
+            self._graceful = True
+            self.stop.set()
+
+    def _drain(self, origin_last: int | None = None) -> None:
+        if self._drain_started is None:
+            self._drain_started = time.monotonic()
+        self.front.protocol.begin_shutdown()
+        if self._control_task is None or self._control_task.done():
+            self._control_task = asyncio.create_task(self.front.flush())
+            self._tasks.add(self._control_task)
+            self._control_task.add_done_callback(self._completed_task)
+        for exchange in tuple(self._exchanges.values()):
+            if exchange.origin_id is None or (
+                origin_last is not None and exchange.origin_id > origin_last
+            ):
+                self._cancel(exchange)
+        if not self._tasks:
+            self._graceful = True
             self.stop.set()
 
     def _cancel(self, exchange: _Exchange) -> None:
@@ -293,8 +332,10 @@ class HTTP2Proxy:
 
     def _frontend_event(self, event: Event) -> None:
         exchange: _Exchange | None
-        if isinstance(event, RequestReceived):
-            if len(self._exchanges) >= self.maximum_streams:
+        if isinstance(event, GracefulShutdown):
+            self._drain()
+        elif isinstance(event, RequestReceived):
+            if self._drain_started is not None or len(self._exchanges) >= self.maximum_streams:
                 self.front.deny(event.stream_id)
                 return
             exchange = _Exchange(
@@ -319,6 +360,9 @@ class HTTP2Proxy:
                     self._cancel(exchange)
 
     def _origin_event(self, event: Event) -> None:
+        if isinstance(event, GracefulShutdown):
+            self._drain(event.last_stream_id)
+            return
         if isinstance(
             event,
             (
@@ -590,6 +634,16 @@ class HTTP2Proxy:
                 legs = (self.front,) if self.origin is None else (self.front, self.origin)
                 last_activity = max(leg.last_activity for leg in legs)
                 remaining = max(0, last_activity + self.idle_timeout - time.monotonic())
+                if self._drain_started is not None:
+                    # Active WebSockets cannot hold shutdown forever. This is
+                    # an absolute, nonrenewable graceful-drain budget.
+                    remaining = min(
+                        remaining,
+                        max(
+                            0,
+                            self._drain_started + self.idle_timeout - time.monotonic(),
+                        ),
+                    )
                 try:
                     async with asyncio.timeout(remaining):
                         await self.stop.wait()
@@ -598,26 +652,42 @@ class HTTP2Proxy:
                     if (
                         time.monotonic() - max(leg.last_activity for leg in current)
                         >= self.idle_timeout
+                        or self._drain_started is not None
+                        and time.monotonic() - self._drain_started >= self.idle_timeout
                     ):
                         break
         finally:
-            exchanges = tuple(self._exchanges.values())
-            for exchange in exchanges:
-                self._cancel(exchange)
-            tasks = tuple(self._tasks)
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            for exchange in exchanges:
-                if not exchange.retired:
-                    exchange.incoming.discard()
-                    if exchange.outgoing is not None:
-                        exchange.outgoing.discard()
-            self._exchanges.clear()
-            self._origin_streams.clear()
-            await self.front.close()
-            if self.origin is not None:
-                await self.origin.close()
+            # Freeze the chosen shutdown outcome BEFORE cancellation callbacks.
+            # A deadline/error must not be promoted to graceful completion
+            # merely because cancelling its unfinished tasks empties the set.
+            self.stop.set()
+            try:
+                exchanges = tuple(self._exchanges.values())
+                for exchange in exchanges:
+                    try:
+                        self._cancel(exchange)
+                    except Exception:
+                        self._graceful = False
+                tasks = tuple(self._tasks)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                for exchange in exchanges:
+                    if not exchange.retired:
+                        exchange.incoming.discard()
+                        if exchange.outgoing is not None:
+                            exchange.outgoing.discard()
+            except BaseException:
+                self._graceful = False
+                raise
+            finally:
+                self._exchanges.clear()
+                self._origin_streams.clear()
+                legs = (self.front,) if self.origin is None else (self.front, self.origin)
+                await asyncio.gather(
+                    *(leg.close(graceful=self._graceful) for leg in legs),
+                    return_exceptions=True,
+                )
 
     def adopt_h2c(
         self,

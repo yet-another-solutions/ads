@@ -38,7 +38,7 @@ from h2.exceptions import InvalidBodyLengthError, ProtocolError, StreamClosedErr
 from h2.settings import SettingCodes, Settings
 from h2.stream import StreamInputs, StreamState
 from hpack import NeverIndexedHeaderTuple
-from hyperframe.frame import DataFrame, Frame, HeadersFrame, RstStreamFrame
+from hyperframe.frame import DataFrame, Frame, GoAwayFrame, HeadersFrame, RstStreamFrame
 
 from ads_sandbox_egress.framing import BodyLength, Headers, validate_headers, validate_trailers
 from ads_sandbox_egress.policy import RequestDenied, authority, consistent_identity
@@ -50,6 +50,11 @@ _METHOD = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 @dataclass(slots=True)
 class _Message:
     body: BodyLength
+
+
+@dataclass
+class GracefulShutdown(Event):
+    last_stream_id: int
 
 
 class HTTP2Connection(H2Connection):
@@ -89,6 +94,34 @@ class HTTP2Connection(H2Connection):
         self._methods: dict[int, bytes] = {}
         self._informationals: dict[tuple[bool, int], int] = {}
         self.websocket = websocket
+        self.peer_last_stream: int | None = None
+        self.local_last_stream: int | None = None
+
+    def _receive_goaway_frame(self, frame: GoAwayFrame) -> tuple[list[Frame], list[Event]]:
+        # Pinned h2 closes its state machine and discards output on ANY GOAWAY.
+        # NO_ERROR instead fences new streams while existing streams retain
+        # normal frame/HPACK/window processing. Errors keep native fatal scope.
+        if self.peer_last_stream is not None and frame.last_stream_id > self.peer_last_stream:
+            raise ProtocolError("HTTP/2 increasing GOAWAY last stream")
+        self.peer_last_stream = frame.last_stream_id
+        if frame.error_code != ErrorCodes.NO_ERROR:
+            return super()._receive_goaway_frame(frame)
+        # Never expose the peer's arbitrary diagnostic bytes.
+        return [], [GracefulShutdown(frame.last_stream_id)]
+
+    def begin_shutdown(self) -> None:
+        """Send a conservative no-replay watermark in THIS leg's ID space."""
+        if self.local_last_stream is None:
+            self.local_last_stream = self.highest_inbound_stream_id
+            self._prepare_for_sending(
+                [
+                    GoAwayFrame(
+                        stream_id=0,
+                        last_stream_id=self.local_last_stream,
+                        error_code=ErrorCodes.NO_ERROR,
+                    )
+                ]
+            )
 
     def upgraded(self, method: bytes, settings: bytes | None = None) -> bytes | None:
         """Seed stream 1 ONLY after the owner's independently authorized h2c.
@@ -269,6 +302,13 @@ class HTTP2Connection(H2Connection):
         # the peer's HPACK changes and will retain connection-state accounting.
         if stream.closed:
             return stream.receive_headers(headers, "END_STREAM" in frame.flags, None)
+        if (
+            not self.config.client_side
+            and self.local_last_stream is not None
+            and frame.stream_id > self.local_last_stream
+        ):
+            # Decompression above is mandatory even for discarded late frames.
+            return [], [self._message_reset(frame.stream_id, "connection_draining")]
         try:
             fields = self._headers(
                 frame.stream_id, tuple(headers), end="END_STREAM" in frame.flags, incoming=True
@@ -328,6 +368,12 @@ class HTTP2Connection(H2Connection):
 
     def headers(self, stream_id: int, values: Headers, *, end: bool = False) -> None:
         """Safe outbound headers after the owner has authorized the exchange."""
+        if (
+            self.config.client_side
+            and self.peer_last_stream is not None
+            and stream_id not in self.streams
+        ):
+            raise RequestDenied("h2_peer_draining")
         fields = self._headers(stream_id, values, end=end, incoming=False)
         # With normalization disabled, explicitly retain HPACK's never-index
         # protection instead of letting credentials enter a shared table.

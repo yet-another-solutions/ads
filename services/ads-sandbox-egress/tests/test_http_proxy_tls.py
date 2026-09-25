@@ -6,6 +6,7 @@ import os
 import pytest
 from cryptography.hazmat.primitives import serialization
 from h2.events import DataReceived
+from hyperframe.frame import GoAwayFrame
 
 from ads_commons.egress import ProjectEgressSnapshot
 from ads_sandbox_egress.certificates import CertificatePairs, PairDestination
@@ -23,6 +24,7 @@ from test_certificates import pair_signer as pair_signer
 from test_certificates import pair_state as pair_state
 from test_http1_proxy import PUBLIC, Resolver, settings
 from test_http2_proxy import Client, Origin, ended, headers, reset
+from test_http2_shutdown import DrainingClient
 from test_normalization import nginx_helper as nginx_helper
 from test_origin_tls import certificate_fixture
 from test_tls import native as native
@@ -34,8 +36,9 @@ def anyio_backend():
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("graceful", [False, True])
 async def test_ech_tls_http2_real_policy_and_original_origin_session(
-    native, tmp_path, pair_signer, pair_state, nginx_helper
+    native, tmp_path, pair_signer, pair_state, nginx_helper, graceful
 ):
     library, directory, executable = native
     server_context, root, _, _ = certificate_fixture(tmp_path, "valid")
@@ -163,7 +166,7 @@ async def test_ech_tls_http2_real_policy_and_original_origin_session(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        client = Client(process.stdout, process.stdin)
+        client = (DrainingClient if graceful else Client)(process.stdout, process.stdin)
         client.protocol.initiate_connection()
 
         async def request(stream_id, path):
@@ -197,6 +200,12 @@ async def test_ech_tls_http2_real_policy_and_original_origin_session(
         await asyncio.gather(continue_download(), client.until(lambda events: ended(events, 5)))
         assert not reset(client.events, 5)
         assert names == ["origin.example"] and not errors
+        if graceful:
+            origin.writer.write(GoAwayFrame(0, last_stream_id=3, error_code=0).serialize())
+            await origin.writer.drain()
+            await client.until(lambda events: bool(client.goaways))
+            assert await asyncio.wait_for(process.stdout.read(), 2) == b""
+            assert owners[0]._graceful
     finally:
         listener.close()
         origin_listener.close()

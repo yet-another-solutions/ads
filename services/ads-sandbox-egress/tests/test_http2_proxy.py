@@ -127,6 +127,8 @@ class Origin:
                         self.protocol.reset_stream(event.stream_id)
                     elif path == b"/duplex":
                         self.protocol.send_data(event.stream_id, b"done", end_stream=True)
+                    elif path == b"/silent":
+                        pass  # Response deliberately controlled by lifecycle tests.
                     elif path != b"/early":
                         self.protocol.send_headers(event.stream_id, [(b":status", b"200")])
                         body = (

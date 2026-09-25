@@ -18,7 +18,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | Connection-local TTL evidence, shared misses, no stale fallback | `membership.py`, asynchronous destination tests | Cache component tested; real evidence adapter still open |
 | Strict HTTP framing and trailers | `framing.py`, `http1.py`, `http2.py`, two-leg owners; raw framing and real sockets | Ordinary streaming owners tested; complete transition/bootstrap integration open |
 | Disposable NGINX normalization and real protocol adapters | `normalization.py`, installed NGINX/Lua socket tests | HTTP/1 and ordinary HTTP/2 adapters tested; empty Host, asterisk and extended CONNECT compatibility open |
-| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c and real ECH/H2 integration tested; graceful GOAWAY open |
+| HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | `http1_proxy.py`, `http2_proxy.py`, `websocket.py`, `h2c.py`, native TLS integration | Ordinary owners, both WebSocket mechanisms, h2c, graceful GOAWAY and real ECH/H2 integration tested; complete runtime integration open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
 | ECH termination, durable publication and retained keys | `tls.py`, `tls_transport.py`, identity store and actual native clients | Production transport component implemented; DNS publication/key lifecycle integration remains open |
@@ -28,6 +28,40 @@ Branch: `feature/slice-20-egress-runtime`.
 | Full local regression and review | Nox lint/deps/typecheck/test/package | Five local gates pass for component increment; full run 4,585 passed, two skipped, four subtests passed |
 
 ## Component verification and review
+
+### Graceful HTTP/2 shutdown
+
+The version-pinned h2 adapter now distinguishes NO_ERROR GOAWAY from fatal
+connection errors. Native h2 closes its state machine and discards output for
+either; the narrow GOAWAY hook instead retains parsing, HPACK and flow control
+for accepted streams, fences new streams and enforces nonincreasing peer
+last-stream IDs. Fatal errors retain connection-wide reset semantics.
+See [RFC 9113 shutdown rules](https://www.rfc-editor.org/rfc/rfc9113.html).
+
+Each terminated leg uses its own conservative last-stream watermark. Origin
+IDs are never copied into frontend GOAWAY. Pending/unprocessed exchanges are
+cancelled, already accepted streams can finish, and ADS does not reconnect or
+replay requests. Late higher stream headers still consume HPACK but never
+reach upstream. Arbitrary GOAWAY diagnostic bytes are neither forwarded nor
+logged. An absolute drain budget cannot be renewed by active traffic.
+Completed drains use normal stream finish/TLS close-notify; timeout/fatal
+drains reset incomplete traffic.
+
+Tests use real sockets and a test endpoint that handles GOAWAY directly through
+hyperframe while stock h2 processes all other frames. This explicit endpoint
+shim is necessary because stock h2 cannot continue receiving accepted streams
+after GOAWAY; the test endpoint does not use the ADS codec or owner.
+Coverage includes late streams/HPACK, watermark separation, idle drain, client
+GOAWAY, rejected streams, active-drain timeout, fatal GOAWAY with queued DATA,
+and actual native ECH/TLS graceful completion.
+
+Review caught and fixed two cleanup races: cancelled tasks must not promote a
+deadline to graceful success, and fatal native connection state must not emit
+RST/WINDOW_UPDATE while tearing down. Both socket owners are now released in
+an unconditional final custody block. The failed first gate run is retained
+in `slice20-goaway-nox.log`; the corrected rerun passes all five gates with
+**820 affected tests, zero skips**, 37.46s, `slice20-goaway-reviewed-nox.log`.
+No full-workspace rerun/CI or publication/lab action at this checkpoint.
 
 ### Approved helper adapter and HTTP/2 WebSocket ownership
 
