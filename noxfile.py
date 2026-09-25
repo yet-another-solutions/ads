@@ -11,6 +11,7 @@ _SRC = (
     "charts/ads/package_release.py",
     "charts/ads/tests",
     "deploy/tests",
+    "deploy/reset",
     "deploy/keycloak/tests",
     "services/ads-sandbox-base/scripts/ads-session-device-check",
     "services/ads-sandbox-base/scripts/ads-sandbox-runtime",
