@@ -21,7 +21,7 @@ Branch: `feature/slice-20-egress-runtime`.
 | HTTP/1.1 and HTTP/2 streaming, resets, upgrades and ALPN | HTTP/1 event channel only | Full handlers, HTTP/2, WebSocket, h2c and ALPN preservation open |
 | DNS traversal, all-endpoint inspection, budgets and UDP/TCP | `resolution.py`, `dns_transport.py`; real sockets and explicit external view fixture | Acquisition and transport tested; complete relationship evidence/view integration open |
 | Synthetic DNSSEC, flags, defects and independent validation | DNSSEC; independent validators | Open |
-| ECH termination, durable publication and retained keys | `identity_store.py` implements storage primitives; no ECH adapter | Encrypted/authenticated persistence tested; ECH termination/publication open |
+| ECH termination, durable publication and retained keys | Identity store and real Python/CFFI native ECH capability tests | Python ECH capability proved; production transport and DNS key lifecycle integration open |
 | TLS certificate pairs and defect mirroring | TLS inspection; real validation clients | Open |
 | State custody, block mounts, startup/teardown and health | Local SQLite owner/integrity tests, not block-device custody | VM/bootstrap/fencing/enforcement integration open |
 | Entrypoint and source-only packaging integration | Runtime and Containerfile/workflow definitions | Open |
@@ -87,6 +87,16 @@ older authentic snapshot. External custody/fencing remains mandatory.
 
 ## Feasibility observations
 
+Follow-up: the user asked to solve the Python ECH problem first. A public-ABI
+CFFI binding to isolated, verified prebuilt OpenSSL 4.0.2 libraries now proves
+genuine ECH, inner ClientHello access, pause/resume around a real upstream TLS
+connection, ALPN preservation and late certificate installation locally.
+Eight native capability tests and the 216-test focused egress suite passed;
+all five Nox gates passed. See [Python ECH proof](slice-20-ech-python-proof.md).
+No CI exception or local native build was needed. The initial observations
+below about standard wrapper methods remain true, but their implied blocker
+is superseded by this demonstrated route.
+
 The initial Computer interpreter is Python 3.14.3 linked to OpenSSL 3.5.5.
 Its `ssl.SSLContext` has no ECH API. This is a concrete observation about the
 available interpreter, not a claim that ECH cannot be implemented.
@@ -98,9 +108,9 @@ An isolated inspection of pyOpenSSL 26.4.0 with cryptography 50.0.1 reported
 bundled OpenSSL 4.0.2 but no exposed ECH or ClientHello callback APIs.
 Its native extension did not export the ECH functions as usable dynamic
 symbols. No private-symbol/address manipulation was attempted. The configured
-system package repositories offer OpenSSL 3.5.5. A selected, tested Python
-server adapter with pre-handshake inner-name/ALPN inspection and actual ECH
-client interoperability is still missing.
+system package repositories offer OpenSSL 3.5.5. A separate signed-package
+download/extraction subsequently supplied OpenSSL 4.0.2 for the Python CFFI
+proof, without changing those system packages.
 
 An actual `nft list ruleset` inside a fresh privileged local network namespace
 failed with `Unable to initialize Netlink socket: Protocol not supported`,
@@ -130,8 +140,8 @@ runtime image definition, transparent interception, production enforcement
 health, HTTP/2 handler, WebSocket/h2c handler, two-leg TLS certificate substitution,
 DNSSEC validator/synthetic signer or ECH terminator is claimed.
 
-Before assembly, resolve the Python-compatible ECH server capability and its
-non-publishing proof path without unauthorized local native/project builds.
+The Python-compatible ECH server capability is proved; next turn the tested
+public-ABI sequence into the bounded production TLS adapter.
 Independently finish service-target/port/TTL evidence construction and DNSSEC
 classification/synthesis; wire these into the mandatory view/evidence interfaces,
 then complete handlers, bootstrap/custody and real health. Trusted resolver
