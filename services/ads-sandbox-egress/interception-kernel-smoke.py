@@ -14,7 +14,7 @@ import subprocess
 from types import SimpleNamespace
 from uuid import uuid4
 
-from ads_sandbox_egress.interception import Interception, KernelBoundary, Network
+from ads_sandbox_egress.interception import Interception, KernelBoundary, Network, rules
 
 
 def run(*args):
@@ -74,6 +74,16 @@ async def main():
                 "02:12:34:56:78:90",
             )
         )
+        # Check the exact production batch first so CI reports nft diagnostics
+        # without exposing command output in the production runtime.
+        checked = subprocess.run(
+            ("nft", "--check", "-f", "-"),
+            input=rules(boundary.network).encode(),
+            capture_output=True,
+            check=False,
+            timeout=2,
+        )
+        assert checked.returncode == 0, checked.stderr[:4096]
         boundary.establish()
         origin_process = await asyncio.create_subprocess_exec(
             "ip",

@@ -52,8 +52,8 @@ def test_rules_terminate_instead_of_forward(network):
     assert text.startswith("\ncreate table inet ads_egress\n")
     assert "hook forward priority -300; policy drop" in text
     assert "masquerade" not in text and "snat" not in text and "dnat" not in text
-    assert 'iifname "eth1" ip saddr 10.10.30.2 tcp redirect to :15001' in text
-    assert text.index("tcp dport 15002 return") < text.index("tcp redirect to :15001")
+    assert 'iifname "eth1" ip saddr 10.10.30.2 meta l4proto tcp redirect to :15001' in text
+    assert text.index("tcp dport 15002 return") < text.index("meta l4proto tcp redirect to :15001")
     assert not any("forward" in line and "accept" in line for line in text.splitlines())
 
 

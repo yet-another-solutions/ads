@@ -93,7 +93,7 @@ add rule inet ads_egress output oifname "{upstream}" accept
 {terminate} ip daddr {local} tcp dport {network.crl_port} return
 {terminate} udp dport 53 redirect to :53
 {terminate} tcp dport 53 redirect to :53
-{terminate} tcp redirect to :{network.proxy_port}
+{terminate} meta l4proto tcp redirect to :{network.proxy_port}
 """
 
 
