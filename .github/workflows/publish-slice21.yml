@@ -1,0 +1,264 @@
+name: publish-slice21
+run-name: Slice 21 manager and egress (${{ inputs.expected_sha }})
+
+# Temporary, explicit partial-publication path. No push/tag trigger and no
+# release/chart stamping: other services remain on their published versions.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed default-branch commit to test and publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: publish-slice21-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image_tag: ${{ steps.identity.outputs.image_tag }}
+      owner: ${{ steps.identity.outputs.owner }}
+    steps:
+      - name: Bind exact default-branch SHA and refuse consumed image tags
+        id: identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: python
+        run: |
+          import base64
+          import json
+          import os
+          import re
+          from urllib.error import HTTPError
+          from urllib.parse import urlencode
+          from urllib.request import Request, urlopen
+
+          sha = os.environ["GITHUB_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", os.environ["EXPECTED_SHA"]):
+              raise SystemExit("expected_sha must be a full commit SHA")
+          if sha != os.environ["EXPECTED_SHA"]:
+              raise SystemExit("dispatch SHA does not match reviewed SHA")
+          if os.environ["GITHUB_REF"] != "refs/heads/" + os.environ["DEFAULT_BRANCH"]:
+              raise SystemExit("dispatch only the reviewed default branch")
+          if os.environ["GITHUB_RUN_ATTEMPT"] != "1":
+              raise SystemExit("do not rerun a consumed publication attempt")
+          owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
+          tag = "slice21-" + sha
+          basic = base64.b64encode(
+              (os.environ["GITHUB_ACTOR"] + ":" + os.environ["GH_TOKEN"]).encode()
+          ).decode()
+          for image in ("ads-sandbox-manager", "ads-sandbox-egress"):
+              repository = owner + "/" + image
+              query = urlencode({"service": "ghcr.io", "scope": "repository:" + repository + ":pull"})
+              request = Request("https://ghcr.io/token?" + query,
+                                headers={"Authorization": "Basic " + basic})
+              with urlopen(request, timeout=20) as response:
+                  token = json.load(response)["token"]
+              request = Request(
+                  "https://ghcr.io/v2/" + repository + "/manifests/" + tag,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20):
+                      raise SystemExit("refusing to overwrite existing scoped image: " + image)
+              except HTTPError as error:
+                  if error.code != 404:
+                      raise
+                  errors = json.load(error).get("errors", [])
+                  if not errors or any(
+                      value.get("code") not in ("MANIFEST_UNKNOWN", "NAME_UNKNOWN")
+                      for value in errors
+                  ):
+                      raise SystemExit("registry absence was not positively identified")
+              print("Unused scoped image tag confirmed: " + image + ":" + tag)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+              stream.write("image_tag=" + tag + "\nowner=" + owner + "\n")
+
+  service-tests:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [ads-sandbox-manager, ads-sandbox-egress]
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Provision real egress TLS, DNS and normalization test clients
+        if: matrix.service == 'ads-sandbox-egress'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nginx libnginx-mod-http-lua bind9-dnsutils libzstd1 \
+            libfstrm0 libprotobuf-c1 liburcu8t64 libjemalloc2 liblmdb0
+          root="$RUNNER_TEMP/ads-openssl4"
+          mkdir -p "$root"
+          curl --fail --show-error --location \
+            https://deb.debian.org/debian/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
+            --output "$root/libssl.deb"
+          curl --fail --show-error --location \
+            https://deb.debian.org/debian/pool/main/o/openssl/openssl_4.0.2-1_amd64.deb \
+            --output "$root/openssl.deb"
+          echo "1e265574c02f4918092d2f09e63cf368b21f15108b667790633f038717ded260  $root/libssl.deb" | sha256sum --check
+          echo "657b368d7ae7c57cb85e24766a6e4f756b45e4f275dc991b2697b8cc648d7f6b  $root/openssl.deb" | sha256sum --check
+          dpkg-deb --extract "$root/libssl.deb" "$root"
+          dpkg-deb --extract "$root/openssl.deb" "$root"
+          echo "ADS_EGRESS_OPENSSL4_ROOT=$root" >> "$GITHUB_ENV"
+          bind_root="$RUNNER_TEMP/ads-bind920"
+          mkdir -p "$bind_root/bin"
+          curl --fail --show-error --location \
+            'https://deb.debian.org/debian/pool/main/b/bind9/bind9-dnsutils_9.20.23-1~deb13u1~bpo12+1_amd64.deb' \
+            --output "$bind_root/dnsutils.deb"
+          curl --fail --show-error --location \
+            'https://deb.debian.org/debian/pool/main/b/bind9/bind9-libs_9.20.23-1~deb13u1~bpo12+1_amd64.deb' \
+            --output "$bind_root/libs.deb"
+          echo "68a0a6f16dcc8c483a714211088e87c7c6b9965bff382d1cbd28921fae38ee2d  $bind_root/dnsutils.deb" | sha256sum --check
+          echo "d7b783972b10cfc5375c9f017825ab5d48c3fe2e5ab4a3db56a21ef8651843d5  $bind_root/libs.deb" | sha256sum --check
+          dpkg-deb --extract "$bind_root/dnsutils.deb" "$bind_root"
+          dpkg-deb --extract "$bind_root/libs.deb" "$bind_root"
+          printf '#!/bin/sh\nexport LD_LIBRARY_PATH="%s/usr/lib/x86_64-linux-gnu"\nexec "%s/usr/bin/delv" "$@"\n' \
+            "$bind_root" "$bind_root" > "$bind_root/bin/delv"
+          chmod 755 "$bind_root/bin/delv"
+          "$bind_root/bin/delv" -v
+          echo "$bind_root/bin" >> "$GITHUB_PATH"
+      - name: Install pinned dependencies
+        run: uv sync --frozen --group test --group lint
+      - name: Scoped lint and complete service suite
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          uv run --no-sync ruff check "services/$SERVICE/src" "services/$SERVICE/tests"
+          uv run --no-sync ruff format --check "services/$SERVICE/src" "services/$SERVICE/tests"
+          uv run --no-sync pytest "services/$SERVICE/tests" --junitxml=service-tests.xml
+      - uses: azure/setup-helm@v4
+        if: matrix.service == 'ads-sandbox-manager'
+        with:
+          version: v3.16.4
+      - name: Scoped workflow and manager RBAC tests
+        if: matrix.service == 'ads-sandbox-manager'
+        run: |
+          uv run --no-sync pytest deploy/tests/test_slice21_publish.py \
+            charts/ads/tests/test_chart.py::ChartTests::test_runtime_class_overhead_read_is_manager_get_only
+      - name: Retain service test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slice21-tests-${{ matrix.service }}
+          path: service-tests.xml
+          if-no-files-found: error
+
+  publish-image:
+    needs: [preflight, service-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: ads-sandbox-manager
+            platforms: linux/amd64,linux/arm64
+          - service: ads-sandbox-egress
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: docker/setup-qemu-action@v4
+        if: matrix.service == 'ads-sandbox-manager'
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push only selected service
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Containerfile
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: ghcr.io/${{ needs.preflight.outputs.owner }}/${{ matrix.service }}:${{ needs.preflight.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.preflight.outputs.image_tag }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=publish-${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=publish-${{ matrix.service }}
+      - name: Record immutable image identity
+        env:
+          IMAGE: ghcr.io/${{ needs.preflight.outputs.owner }}/${{ matrix.service }}
+          IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          evidence = {name: os.environ[name] for name in
+                      ("IMAGE", "IMAGE_TAG", "DIGEST", "GITHUB_SHA", "GITHUB_RUN_ID")}
+          pathlib.Path("image.json").write_text(json.dumps(evidence, indent=2) + "\n")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slice21-image-${{ matrix.service }}
+          path: image.json
+          if-no-files-found: error
+
+  summary:
+    needs: [preflight, service-tests, publish-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slice21-image-*
+          path: images
+      - name: Record partial-publication boundary
+        env:
+          IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          evidence = [json.loads(path.read_text()) for path in pathlib.Path("images").glob("*/image.json")]
+          assert {item["IMAGE"].rsplit("/", 1)[-1] for item in evidence} == {
+              "ads-sandbox-manager", "ads-sandbox-egress"}
+          assert len(evidence) == 2
+          assert all(item["GITHUB_SHA"] == os.environ["GITHUB_SHA"] for item in evidence)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
+              stream.write("# Slice 21 partial publication\n\n")
+              stream.write("Manager and egress service suites only; not full workspace regression.\n\n")
+              for item in evidence:
+                  stream.write("- `" + item["IMAGE"] + ":" + item["IMAGE_TAG"] + "`: `" + item["DIGEST"] + "`\n")
+              stream.write("\nNo Git tag, GitHub Release, chart, golden/base image or other service was published. ")
+              stream.write("Preserve other live versions and apply the reviewed get-only RuntimeClass RBAC separately. ")
+              stream.write("This publication does not close slice 21.\n")
+          PY
