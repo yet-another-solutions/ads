@@ -10,6 +10,7 @@ import msgspec
 from ads_commons.egress import (
     EgressApplied,
     EgressApply,
+    EgressDNSAnchor,
     EgressPing,
     EgressStaleResponse,
     ServiceOriginTokens,
@@ -72,6 +73,28 @@ class HttpsEgressTransport:
         if response.status_code != 200:
             raise ValueError("egress ping failed")
         return msgspec.json.decode(response.content, type=EgressPing)
+
+    async def anchor(self) -> EgressDNSAnchor:
+        token = await asyncio.to_thread(self.tokens.exchange_service, "ads-sandbox-egress")
+        async with httpx2.AsyncClient(
+            timeout=self.timeout_seconds,
+            verify=self.verify,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "GET",
+                self.base_url + "/dnssec-anchor",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response:
+                if response.status_code != 200:
+                    raise ValueError("egress anchor delivery failed")
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data.extend(chunk)
+                    if len(data) > 16384:
+                        raise ValueError("egress anchor response limit")
+        return msgspec.json.decode(data, type=EgressDNSAnchor)
 
     async def relays_healthy(self) -> bool:
         async with httpx2.AsyncClient(timeout=self.timeout_seconds, verify=self.verify) as client:

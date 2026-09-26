@@ -145,12 +145,17 @@ podman_cmd() {{
 
 
 @pytest.mark.parametrize("trust_status", [0, 1])
-def test_ca_stream_failure_prevents_init_and_readiness(tmp_path, trust_status):
+@pytest.mark.parametrize("install_status", [0, 1])
+def test_ca_stream_failure_prevents_init_and_readiness(tmp_path, trust_status, install_status):
     script = BOOT.read_text()
     startup = script[script.index("if podman_cmd container exists") : script.index("exec capsh")]
     startup = startup.replace("/usr/local/sbin/ads-sandbox-trust certificate", "trust_certificate")
     startup = startup.replace(
         "/usr/local/sbin/ads-agent-init", shlex.quote(str(BOOT.with_name("ads-agent-init")))
+    )
+    startup = startup.replace(
+        "/usr/local/sbin/ads-install-egress-trust",
+        shlex.quote(str(BOOT.with_name("ads-install-egress-trust"))),
     )
     harness = f"""
 set -euo pipefail
@@ -166,8 +171,9 @@ podman_cmd() {{
     container) return 0;;
     inspect) echo nested-v1;;
     exec)
-      if [[ "$2" == -i && "$4" == /bin/sh ]]; then
+      if [[ "$2" == -i && "$4" == python3 && "$5" == -c ]]; then
         cat > trusted-certificate
+        return {install_status}
       elif [[ "$2" == -i ]]; then
         cat > initialized
       fi
@@ -180,9 +186,10 @@ podman_cmd() {{
         ["bash", "-c", harness], cwd=tmp_path, capture_output=True, text=True, check=False
     )
     assert (tmp_path / "trusted-certificate").read_text() == "ONLY-MINTED-CA"
-    assert (tmp_path / "ready").exists() is (trust_status == 0)
-    assert (tmp_path / "initialized").exists() is (trust_status == 0)
-    assert (result.returncode == 0) is (trust_status == 0)
+    success = trust_status == install_status == 0
+    assert (tmp_path / "ready").exists() is success
+    assert (tmp_path / "initialized").exists() is success
+    assert (result.returncode == 0) is success
     calls = (tmp_path / "calls").read_text()
     assert "update-ca-certificates" in calls
 

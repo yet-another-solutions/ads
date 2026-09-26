@@ -4,22 +4,34 @@ from dishka import Provider, Scope, make_async_container, provide
 from dishka.integrations.litestar import LitestarProvider, setup_dishka
 from litestar import Litestar
 
+from ads_commons.egress import EgressDNSAnchor
 from ads_commons_beans import JwtVerifier
+from ads_sandbox_egress.anchor import AnchorService
 from ads_sandbox_egress.configuration import (
     ConfigurationService,
     LocalHealth,
     PairIdentity,
     PolicyStore,
 )
-from ads_sandbox_egress.control import configure, ping
+from ads_sandbox_egress.control import anchor, configure, ping
 
 
 class ControlProvider(Provider):
     def __init__(
-        self, pair: PairIdentity, store: PolicyStore, health: LocalHealth, verifier: JwtVerifier
+        self,
+        pair: PairIdentity,
+        store: PolicyStore,
+        health: LocalHealth,
+        verifier: JwtVerifier,
+        dns_anchor: EgressDNSAnchor | None,
     ) -> None:
         super().__init__()
         self._pair, self._store, self._health, self._verifier = pair, store, health, verifier
+        self._anchor = AnchorService(pair, dns_anchor)
+
+    @provide(scope=Scope.APP)
+    def anchor(self) -> AnchorService:
+        return self._anchor
 
     @provide(scope=Scope.APP)
     def pair(self) -> PairIdentity:
@@ -41,7 +53,11 @@ class ControlProvider(Provider):
 
 
 def create_app(
-    pair: PairIdentity, store: PolicyStore, health: LocalHealth, verifier: JwtVerifier
+    pair: PairIdentity,
+    store: PolicyStore,
+    health: LocalHealth,
+    verifier: JwtVerifier,
+    dns_anchor: EgressDNSAnchor | None = None,
 ) -> Litestar:
     """No permissive defaults: the full runtime must supply its real local health port.
 
@@ -50,7 +66,7 @@ def create_app(
     and pass the exact same PolicyStore to its application traffic handlers.
     """
     container = make_async_container(
-        ControlProvider(pair, store, health, verifier), LitestarProvider()
+        ControlProvider(pair, store, health, verifier, dns_anchor), LitestarProvider()
     )
 
     async def shutdown() -> None:
@@ -58,7 +74,7 @@ def create_app(
         await container.close()
 
     app = Litestar(
-        route_handlers=[configure, ping],
+        route_handlers=[configure, ping, anchor],
         request_max_body_size=1024 * 1024,
         on_shutdown=[shutdown],
         openapi_config=None,

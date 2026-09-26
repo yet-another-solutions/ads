@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -103,16 +104,68 @@ def test_chain_exact_expiry_key_separation_and_extra_trust():
         {"critical": False},
         {"ca": False, "path_length": None},
         {"signing": False},
-        {"after": datetime.now(UTC) - timedelta(hours=1)},
-        {"before": datetime.now(UTC) + timedelta(hours=1)},
+        {"after": -timedelta(hours=1)},
+        {"before": timedelta(hours=1)},
         {"unsupported": True},
         {"eku": True},
     ],
 )
 def test_unsuitable_intermediate_fails_closed(changes):
+    # Collection can precede execution by more than the validity offset.
+    now = datetime.now(UTC)
+    changes = {
+        name: now + value if isinstance(value, timedelta) else value
+        for name, value in changes.items()
+    }
     root, parent, key = hierarchy(**changes)
     with pytest.raises(ValueError):
         mint(bundle(root, parent), key_pem(key))
+
+
+def test_future_intermediate_rejection_survives_delayed_collection(monkeypatch):
+    from ads_sandbox_ca import certificates as implementation
+
+    later = datetime.now(UTC) + timedelta(hours=2)
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return later.astimezone(tz)
+
+    monkeypatch.setattr(sys.modules[__name__], "datetime", Later)
+    monkeypatch.setattr(implementation, "datetime", Later)
+    parameters = test_unsuitable_intermediate_fails_closed.pytestmark[0].args[1]
+    for changes in parameters:
+        test_unsuitable_intermediate_fails_closed(changes)
+
+
+@pytest.mark.parametrize(
+    ("offset", "valid"),
+    [
+        (timedelta(seconds=-1), False),
+        (timedelta(), True),
+        (timedelta(hours=1, seconds=-1), True),
+        (timedelta(hours=1), False),
+    ],
+)
+def test_intermediate_validity_boundaries(monkeypatch, offset, valid):
+    from ads_sandbox_ca import certificates as implementation
+
+    before = datetime.now(UTC).replace(microsecond=0)
+    root, parent, key = hierarchy(before=before, after=before + timedelta(hours=1))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return (before + offset).astimezone(tz)
+
+    monkeypatch.setattr(implementation, "datetime", Clock)
+    if valid:
+        child = x509.load_pem_x509_certificate(mint(bundle(root, parent), key_pem(key)).certificate)
+        child.verify_directly_issued_by(parent)
+    else:
+        with pytest.raises(ValueError, match="CA is not currently valid"):
+            mint(bundle(root, parent), key_pem(key))
 
 
 def test_root_only_mismatched_key_wrong_chain_and_early_ancestor_rejected():

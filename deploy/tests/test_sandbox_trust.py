@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import os
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,13 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 assert spec is not None
 trust = importlib.util.module_from_spec(spec)
 loader.exec_module(trust)
+install_loader = importlib.machinery.SourceFileLoader(
+    "sandbox_trust_install", str(HELPER.with_name("ads-install-egress-trust"))
+)
+install_spec = importlib.util.spec_from_loader(install_loader.name, install_loader)
+assert install_spec is not None
+installer = importlib.util.module_from_spec(install_spec)
+install_loader.exec_module(installer)
 
 
 @pytest.mark.parametrize("mode", [stat.S_IFREG, stat.S_IFLNK])
@@ -86,13 +94,14 @@ def test_mount_is_readonly_noload_and_validation_failure_unmounts(tmp_path, monk
     ]
 
 
-def test_boot_installs_only_minted_ca_inside_rootless_container_before_ready():
+def test_boot_installs_validated_signing_chain_inside_rootless_container_before_ready():
     boot = HELPER.with_name("ads-sandbox-boot").read_text()
     assert boot.index("ads-sandbox-trust mount") < boot.index(
         "\n/usr/local/sbin/ads-session-device-check"
     )
     assert boot.index("ads-sandbox-trust certificate") < boot.index("touch /run/ads-sandbox-ready")
     assert "certificate | podman_cmd exec -i dev-sandbox" in boot
+    assert 'python3 -c "$(</usr/local/sbin/ads-install-egress-trust)"' in boot
     assert "signing-chain.pem" not in boot and "egress-only-trust.pem" not in boot
     assert "chroot " not in boot
     assert "CA device without trusted attempt identity" in boot
@@ -102,3 +111,34 @@ def test_boot_installs_only_minted_ca_inside_rootless_container_before_ready():
         "COPY libraries/ads-commons/src/ads_commons/egress_trust.py "
         "/usr/local/lib/ads-trust/ads_egress_trust.py"
     ) in base
+    assert "COPY services/ads-sandbox-base/scripts/ads-install-egress-trust " in base
+
+
+@pytest.mark.parametrize("value", [b"", b"PRIVATE KEY", b"x" * (2 * 1024**2 + 1)])
+def test_inner_installer_rejects_invalid_or_oversized_bundle_before_effects(tmp_path, value):
+    target = tmp_path / "trust"
+    with pytest.raises(ValueError):
+        installer.install(value, target)
+    assert not target.exists()
+
+
+def test_inner_installer_rejects_duplicate_and_mixed_pem_before_effects(tmp_path):
+    pem = b"-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----\n"
+    for value in (pem * 3, pem * 3 + b"PRIVATE KEY"):
+        with pytest.raises(ValueError):
+            installer.install(value, tmp_path / "trust")
+    assert not (tmp_path / "trust").exists()
+
+
+def test_inner_update_failure_propagates_and_temporary_files_are_removed(tmp_path, monkeypatch):
+    # Structural transport fixture only; real X509 validation belongs to load_public.
+    bundle = b"".join(
+        b"-----BEGIN CERTIFICATE-----\n" + data + b"\n-----END CERTIFICATE-----\n"
+        for data in (b"YWJj", b"ZGVm", b"Z2hp")
+    )
+    update = Mock(side_effect=subprocess.CalledProcessError(1, "update-ca-certificates"))
+    monkeypatch.setattr(installer.subprocess, "run", update)
+    with pytest.raises(subprocess.CalledProcessError):
+        installer.install(bundle, tmp_path)
+    assert not list((tmp_path / "ads-egress").glob(".pending-*"))
+    update.assert_called_once_with(("update-ca-certificates", "--fresh"), check=True, timeout=30)

@@ -15,6 +15,7 @@ from uuid import UUID
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509.oid import ExtensionOID
 
 CERTIFICATE = re.compile(
     rb"-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----"
@@ -91,10 +92,11 @@ class PublicTrust:
     manifest: Manifest
     certificate: x509.Certificate
     pem: bytes
+    signing_chain: tuple[x509.Certificate, ...]
 
 
 def load_public(directory: Path, attempt: UUID) -> PublicTrust:
-    """Guest path reads only the minted CA and its manifest, never extra/parent trust."""
+    """Validate the minted identity and complete signing hierarchy, never extra trust."""
     description = manifest(directory, "public", attempt)
     pem = read_file(directory, "trusted-egress-ca.pem", 65536)
     certificates = public_certificates(pem)
@@ -116,7 +118,42 @@ def load_public(directory: Path, attempt: UUID) -> PublicTrust:
         != description.fingerprint
     ):
         raise ValueError("minted CA certificate does not match its committed identity")
-    return PublicTrust(description, certificate, pem)
+    chain = public_certificates(read_file(directory, "signing-chain.pem", 1048576))
+    if (
+        not 2 <= len(chain) <= 16
+        or chain[0].not_valid_after_utc != description.not_after
+        or len({item.public_bytes(serialization.Encoding.DER) for item in [certificate, *chain]})
+        != len(chain) + 1
+    ):
+        raise ValueError("invalid signing hierarchy length, identity or expiry")
+    certificate.verify_directly_issued_by(chain[0])
+    now = datetime.now(UTC)
+    for index, parent in enumerate(chain):
+        constraints = parent.extensions.get_extension_for_class(x509.BasicConstraints)
+        usage = parent.extensions.get_extension_for_class(x509.KeyUsage)
+        limit = constraints.value.path_length
+        if (
+            not constraints.critical
+            or not constraints.value.ca
+            or not usage.value.key_cert_sign
+            or limit is not None
+            and limit < index + 1
+            or not parent.not_valid_before_utc <= now < parent.not_valid_after_utc
+            or parent.not_valid_after_utc < description.not_after
+            or any(
+                extension.critical
+                and extension.oid not in (ExtensionOID.BASIC_CONSTRAINTS, ExtensionOID.KEY_USAGE)
+                or extension.oid in (ExtensionOID.NAME_CONSTRAINTS, ExtensionOID.EXTENDED_KEY_USAGE)
+                for extension in parent.extensions
+            )
+        ):
+            raise ValueError("invalid egress CA hierarchy")
+        issuer = chain[index + 1] if index + 1 < len(chain) else parent
+        parent.verify_directly_issued_by(issuer)
+    complete = b"".join(
+        item.public_bytes(serialization.Encoding.PEM) for item in [certificate, *chain]
+    )
+    return PublicTrust(description, certificate, complete, tuple(chain))
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,29 +181,8 @@ def load_egress(public: Path, private: Path, attempt: UUID) -> EgressTrust:
         der, spki
     ):
         raise ValueError("CA clone certificate/key mismatch")
-    chain = public_certificates(read_file(public, "signing-chain.pem"))
-    if len(chain) < 2 or chain[0].not_valid_after_utc != trusted.manifest.not_after:
-        raise ValueError("signing intermediate expiry mismatch")
-    trusted.certificate.verify_directly_issued_by(chain[0])
-    now = datetime.now(UTC)
-    for index, certificate in enumerate(chain):
-        constraints = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
-        usage = certificate.extensions.get_extension_for_class(x509.KeyUsage)
-        limit = constraints.value.path_length
-        if (
-            not constraints.critical
-            or not constraints.value.ca
-            or not usage.value.key_cert_sign
-            or limit is not None
-            and limit < index + 1
-            or not certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc
-            or certificate.not_valid_after_utc < trusted.manifest.not_after
-        ):
-            raise ValueError("invalid egress CA hierarchy")
-        issuer = chain[index + 1] if index + 1 < len(chain) else certificate
-        certificate.verify_directly_issued_by(issuer)
     extra = public_certificates(read_file(public, "egress-only-trust.pem"), optional=True)
     for certificate in extra:
         if not certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
             raise ValueError("additional upstream trust must contain CA certificates")
-    return EgressTrust(trusted, key, tuple(chain), tuple(extra))
+    return EgressTrust(trusted, key, trusted.signing_chain, tuple(extra))

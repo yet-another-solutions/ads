@@ -114,6 +114,13 @@ class EgressPing(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     healthy: bool
 
 
+class EgressDNSAnchor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    project_id: UUID
+    sandbox_id: UUID
+    fingerprint: Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+    dnskey: Annotated[str, msgspec.Meta(min_length=1, max_length=8192)]
+
+
 class EgressStale(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     code: Literal["stale_revision"]
     received_revision: Revision

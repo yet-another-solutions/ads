@@ -1,0 +1,43 @@
+#!/usr/bin/python3
+"""Base-owned public-anchor installer launcher. Mutable code stays rootless."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    data = sys.stdin.buffer.read(16385)
+    if len(data) > 16384:
+        raise ValueError("anchor input limit")
+    value = json.loads(data)
+    if value.get("sandbox_id") != os.environ["ADS_SANDBOX_ID"]:
+        raise ValueError("anchor sandbox mismatch")
+    script = Path("/usr/local/sbin/ads-install-dnssec-anchor").read_text()
+    subprocess.run(
+        [
+            "/usr/local/sbin/ads-sandbox-runtime",
+            "podman",
+            "exec",
+            "-i",
+            "dev-sandbox",
+            "python3",
+            "-c",
+            script,
+        ],
+        input=data,
+        check=True,
+        timeout=8,
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        print("DNSSEC trust installation failed", file=sys.stderr)
+        sys.exit(1)

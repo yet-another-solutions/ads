@@ -1,0 +1,88 @@
+#!/usr/bin/python3
+"""Runs inside the rootless execution sandbox; installs only its public ADS root."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import struct
+import sys
+import tempfile
+from pathlib import Path
+from uuid import UUID
+
+
+def install(
+    data: bytes,
+    path: Path = Path("/etc/bind/bind.keys"),
+    command_path: Path = Path("/usr/local/bin/delv"),
+) -> str:
+    if not 1 <= len(data) <= 16384:
+        raise ValueError("anchor input limit")
+    value = json.loads(data)
+    if not isinstance(value, dict) or set(value) != {
+        "project_id",
+        "sandbox_id",
+        "fingerprint",
+        "dnskey",
+    }:
+        raise ValueError("anchor shape")
+    for name in ("project_id", "sandbox_id"):
+        if str(UUID(value[name])) != value[name]:
+            raise ValueError("anchor identity")
+    fields = value["dnskey"].split(" ")
+    if len(fields) < 4 or fields[:3] != ["257", "3", "15"]:
+        raise ValueError("root algorithm")
+    encoded = "".join(fields[3:])
+    key = base64.b64decode(encoded, validate=True)
+    if len(key) != 32 or base64.b64encode(key).decode() != encoded:
+        raise ValueError("root public key")
+    fingerprint = hashlib.sha256(b"\0" + struct.pack("!HBB", 257, 3, 15) + key).hexdigest()
+    if fingerprint != value["fingerprint"]:
+        raise ValueError("root fingerprint")
+    text = 'trust-anchors {\n  "." static-key 257 3 15 "' + encoded + '";\n};\n'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".ads-root-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        if path.read_text() != text:
+            raise ValueError("anchor readback failed")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    # Modern delv embeds its default public anchor and no longer necessarily
+    # reads bind.keys. Managed default must explicitly select the installed
+    # sandbox root. Explicit user-selected anchors remain user responsibility.
+    script = (
+        "#!/usr/bin/python3\nimport os, sys\n"
+        + f"os.execv('/usr/bin/delv', ['delv', '-a', {str(path)!r}, *sys.argv[1:]])\n"
+    )
+    command_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".ads-delv-", dir=command_path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(script)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o755)
+            os.fsync(stream.fileno())
+        os.replace(temporary, command_path)
+        if command_path.read_text() != script:
+            raise ValueError("managed validator readback failed")
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return fingerprint
+
+
+if __name__ == "__main__":
+    print(install(sys.stdin.buffer.read(16385)))

@@ -62,7 +62,7 @@ def main() -> None:
             check_readonly()
             if not os.path.ismount(PUBLIC) or not os.statvfs(PUBLIC).f_flag & os.ST_RDONLY:
                 raise RuntimeError("public CA filesystem is not mounted read-only")
-            # This is the ONLY certificate streamed into the rootless sandbox trust.
+            # Only the validated signing hierarchy, never egress-only extra trust.
             sys.stdout.buffer.write(load_public(PUBLIC, attempt).pem)
         else:
             raise ValueError("invalid trust helper operation")

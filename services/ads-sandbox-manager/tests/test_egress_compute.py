@@ -37,6 +37,7 @@ def runtime():
         "https://auth.test/realms/ads",
         "https://auth.test/realms/ads/.well-known/openid-configuration",
         uuid4(),
+        "egress-enforcement",
     )
 
 
@@ -99,7 +100,6 @@ def test_fixed_isolated_kata_pod_and_control_identity(object_settings, pair, sta
         not {
             "args",
             "envFrom",
-            "volumeMounts",
             "readinessProbe",
             "startupProbe",
             "livenessProbe",
@@ -116,7 +116,10 @@ def test_fixed_isolated_kata_pod_and_control_identity(object_settings, pair, sta
         "privileged": False,
         "readOnlyRootFilesystem": True,
         "allowPrivilegeEscalation": False,
-        "capabilities": {"drop": ["ALL"], "add": ["SYS_ADMIN", "NET_ADMIN", "NET_RAW"]},
+        "capabilities": {
+            "drop": ["ALL"],
+            "add": ["SYS_ADMIN", "NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE"],
+        },
         "seccompProfile": {"type": "Unconfined"},
         "appArmorProfile": {"type": "Unconfined"},
     }
@@ -162,6 +165,7 @@ def test_fixed_isolated_kata_pod_and_control_identity(object_settings, pair, sta
     assert "wrapping.key" not in json.dumps(pod)
     assert base64.b64encode(bytes(range(32))).decode() not in json.dumps(pod)
     assert spec["volumes"] == [
+        {"name": "runtime", "emptyDir": {"medium": "Memory", "sizeLimit": "32Mi"}},
         {
             "name": "state",
             "persistentVolumeClaim": {"claimName": identity(state, "volume")["metadata"]["name"]},
@@ -177,6 +181,21 @@ def test_fixed_isolated_kata_pod_and_control_identity(object_settings, pair, sta
             for name, role in (("ca-public", "egress"), ("ca-private", "key"))
         ],
     ]
+    assert container["volumeMounts"] == [
+        {"name": "runtime", "mountPath": "/run/ads-egress", "readOnly": False}
+    ]
+    assert env["CREATOR_GENERATION"]["value"] == str(state.creator_generation)
+    assert env["NAMESPACE"]["value"] == object_settings.namespace
+    assert env["ENFORCEMENT"]["valueFrom"] == {
+        "configMapKeyRef": {
+            "name": "egress-enforcement",
+            "key": "enforcement.json",
+            "optional": False,
+        }
+    }
+    assert env["TLS_CA_PEM"]["valueFrom"] == {
+        "secretKeyRef": {"name": runtime.tls_secret, "key": "ca.crt", "optional": True}
+    }
     assert container["volumeDevices"] == [
         {"name": name, "devicePath": env[variable]["value"]}
         for name, variable in (
