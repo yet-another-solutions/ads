@@ -213,6 +213,17 @@ class PairComputeAdapter:
                 return False
             if default_requests:
                 resources.pop("requests")
+            for mount, required_mount in zip(
+                container.get("volumeMounts", []), wanted.get("volumeMounts", []), strict=False
+            ):
+                if not isinstance(mount, dict):
+                    return False
+                if "readOnly" in required_mount:
+                    # The API omits the false default, but true must remain
+                    # explicit. Never let integer/string lookalikes compare equal.
+                    if mount.get("readOnly", False) is not required_mount["readOnly"]:
+                        return False
+                    mount.setdefault("readOnly", False)
         for volume, wanted in zip(
             actual.get("volumes", []), expected.get("volumes", []), strict=False
         ):
