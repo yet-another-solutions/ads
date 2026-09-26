@@ -47,6 +47,8 @@ def configure(controls, kind, role):
             sessionAffinity="None",
         )
     if kind == "PodGroup":
+        # Native v1alpha2 API defaults observed in the integrated lab.
+        observed["spec"].update(podGroupTemplateRef=None, disruptionMode="Pod")
         sdk, resource, verb = adapter.custom, "custom_object", "get"
     elif kind == "Service":
         sdk, resource, verb = adapter.kube.core, "service", "read"
@@ -126,6 +128,51 @@ async def test_policy_and_group_fields_cannot_be_dropped_or_widened(controls, ki
     observed["spec"]["unexpected"] = {}
     with pytest.raises(RuntimeError, match="incompatible"):
         await adapter.ensure(pair, kind, role)
+
+
+@pytest.mark.parametrize("role", ["guest", "egress"])
+@pytest.mark.parametrize(
+    "defaults",
+    [
+        {},
+        {"podGroupTemplateRef": None},
+        {"disruptionMode": "Pod"},
+        {"podGroupTemplateRef": None, "disruptionMode": "Pod"},
+    ],
+)
+async def test_podgroup_accepts_only_absent_or_native_defaults(controls, role, defaults):
+    adapter, pair = controls
+    observed, _, create, _ = configure(controls, "PodGroup", role)
+    observed["spec"] = {**adapter._desired(pair, "PodGroup", role)["spec"], **defaults}
+    original = deepcopy(observed)
+    assert await adapter.ensure(pair, "PodGroup", role, "owned-uid") == "owned-uid"
+    assert observed == original
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("role", ["guest", "egress"])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("podGroupTemplateRef", {"workloadName": "foreign", "podGroupTemplateName": "other"}),
+        ("podGroupTemplateRef", {}),
+        ("podGroupTemplateRef", False),
+        ("disruptionMode", "All"),
+        ("disruptionMode", None),
+        ("disruptionMode", ""),
+        ("schedulingPolicy", {"gang": {"minCount": 1}}),
+        ("schedulingPolicy", {"basic": {}}),
+        ("schedulingConstraints", {}),
+        ("schedulingConstraints", {"topology": [{"key": "topology.kubernetes.io/zone"}]}),
+    ],
+)
+async def test_podgroup_defaults_do_not_allow_changed_placement(controls, role, field, value):
+    adapter, pair = controls
+    observed, _, create, _ = configure(controls, "PodGroup", role)
+    observed["spec"][field] = value
+    with pytest.raises(RuntimeError, match="incompatible"):
+        await adapter.ensure(pair, "PodGroup", role, "owned-uid")
+    create.assert_not_called()
 
 
 @pytest.mark.parametrize(
