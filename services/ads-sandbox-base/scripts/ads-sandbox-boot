@@ -79,10 +79,10 @@ if [[ ${ADS_SANDBOX_NETWORK_MODE:-none} == private ]]; then
 fi
 
 if [[ -n ${ADS_CA_ATTEMPT:-} ]]; then
-  # Only the minted public CA, never parent/company bundles. Mutable inner
+  # Validated minted CA plus its signing hierarchy, never extra upstream CAs. Mutable inner
   # software runs through rootless Podman, never chroot/exec as guest root.
   /usr/local/sbin/ads-sandbox-trust certificate | podman_cmd exec -i dev-sandbox \
-    /bin/sh -ec 'mkdir -p /usr/local/share/ca-certificates; cat > /usr/local/share/ca-certificates/ads-egress.crt; update-ca-certificates'
+    python3 -c "$(</usr/local/sbin/ads-install-egress-trust)"
 fi
 
 # Keep initialization code in the base image, never in the writable rootfs.

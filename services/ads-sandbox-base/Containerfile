@@ -55,9 +55,13 @@ COPY services/ads-sandbox-base/scripts/ads-sandbox-network /usr/local/sbin/ads-s
 COPY services/ads-sandbox-base/scripts/ads-agent-init /usr/local/sbin/ads-agent-init
 COPY services/ads-sandbox-base/scripts/ads-sandbox-shutdown /usr/local/sbin/ads-sandbox-shutdown
 COPY services/ads-sandbox-base/scripts/ads-sandbox-trust /usr/local/sbin/ads-sandbox-trust
+COPY services/ads-sandbox-base/scripts/ads-install-egress-trust /usr/local/sbin/ads-install-egress-trust
+COPY services/ads-sandbox-base/scripts/ads-sandbox-dnssec /usr/local/sbin/ads-sandbox-dnssec
+COPY services/ads-sandbox-base/scripts/ads-install-dnssec-anchor /usr/local/sbin/ads-install-dnssec-anchor
 COPY libraries/ads-commons/src/ads_commons/egress_trust.py /usr/local/lib/ads-trust/ads_egress_trust.py
 
 RUN chmod 0644 /usr/local/sbin/ads-agent-init /usr/local/sbin/ads-sandbox-shutdown \
+    && chmod 0755 /usr/local/sbin/ads-sandbox-dnssec \
     && chmod 0755 /usr/local/sbin/ads-sandbox-boot /usr/local/sbin/ads-session-exec /usr/local/sbin/ads-session-device-check /usr/local/sbin/ads-sandbox-runtime /usr/local/sbin/ads-sandbox-network /usr/local/sbin/ads-sandbox-trust /usr/local/sbin/pause \
     && test -x /usr/local/sbin/pause
 

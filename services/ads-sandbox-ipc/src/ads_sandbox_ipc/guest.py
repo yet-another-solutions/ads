@@ -37,6 +37,10 @@ class Kubernetes(Protocol):
     async def clear_pid(self, pod: Pod) -> None: ...
 
 
+class GuestTrust(Protocol):
+    async def install(self, pod: Pod) -> None: ...
+
+
 class CappedOutput:
     def __init__(self, limit: int) -> None:
         self.limit = limit
@@ -56,12 +60,15 @@ class CappedOutput:
 class GuestExecutor:
     """Exec/PID lifecycle, isolated from Kafka and authentication."""
 
-    def __init__(self, settings: Settings, kube: Kubernetes, store: PidStore) -> None:
+    def __init__(
+        self, settings: Settings, kube: Kubernetes, store: PidStore, trust: GuestTrust | None = None
+    ) -> None:
         self.settings = settings
         self.kube = kube
         self.store = store
         self.pod: Pod | None = None
         self.clean = True
+        self.trust = trust
 
     async def prepare(self) -> bool:
         pod = await self.kube.ready_pod()
@@ -77,6 +84,8 @@ class GuestExecutor:
             await self.kube.kill_tree(pod, pid)
         await self.kube.clear_pid(pod)
         self.store.clear()
+        if self.trust is not None:
+            await self.trust.install(pod)
         self.pod = pod
         ping = SandboxRequest(uuid4(), uuid4(), uuid4(), "shell", "true")
         result = await self.execute(ping, asyncio.Event())

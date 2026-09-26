@@ -34,10 +34,12 @@ def outputs(tmp_path):
 def test_initializer_outputs_are_accepted_with_guest_egress_trust_separation(outputs):
     public, private, attempt, material, parent, company = outputs
     guest = load_public(public, attempt)
-    assert guest.pem == material.certificate
+    assert guest.pem == material.certificate + material.chain
     assert guest.certificate.not_valid_after_utc == parent.not_valid_after_utc
     assert company.public_bytes(PEM) not in guest.pem
-    assert parent.public_bytes(PEM) not in guest.pem
+    assert parent.public_bytes(PEM) in guest.pem
+    assert material.private_key not in guest.pem
+    assert guest.signing_chain[-1].issuer == guest.signing_chain[-1].subject
     egress = load_egress(public, private, attempt)
     assert egress.public == guest
     assert egress.additional_trust == (company,)
@@ -49,14 +51,13 @@ def test_initializer_outputs_are_accepted_with_guest_egress_trust_separation(out
     assert "private_key=" not in repr(egress)
 
 
-def test_guest_never_reads_parent_extra_or_private_files(outputs):
+def test_guest_never_reads_extra_or_private_files(outputs):
     public, private, attempt, material, *_ = outputs
-    (public / "signing-chain.pem").unlink()
     (public / "egress-only-trust.pem").unlink()
     for path in private.iterdir():
         path.unlink()
     private.rmdir()
-    assert load_public(public, attempt).pem == material.certificate
+    assert load_public(public, attempt).pem == material.certificate + material.chain
     with pytest.raises(FileNotFoundError):
         load_egress(public, private, attempt)
 
@@ -141,7 +142,26 @@ def test_egress_rejects_private_material_in_public_bundle(outputs):
     with pytest.raises(ValueError, match="public certificates"):
         load_egress(public, private, attempt)
     # Guest trust intentionally does not depend on the egress-only bundle.
-    assert load_public(public, attempt).pem == material.certificate
+    assert load_public(public, attempt).pem == material.certificate + material.chain
+
+
+@pytest.mark.parametrize("mutation", ["missing", "incomplete", "duplicate", "extra", "private"])
+def test_guest_rejects_invalid_signing_chain(outputs, mutation):
+    public, _, attempt, material, parent, company = outputs
+    path = public / "signing-chain.pem"
+    if mutation == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(
+            {
+                "incomplete": parent.public_bytes(PEM),
+                "duplicate": material.chain + material.chain,
+                "extra": material.chain + company.public_bytes(PEM),
+                "private": material.private_key,
+            }[mutation]
+        )
+    with pytest.raises((ValueError, InvalidSignature, FileNotFoundError)):
+        load_public(public, attempt)
 
 
 def test_egress_rejects_wrong_parent_chain_and_identical_directories(outputs):
@@ -150,6 +170,8 @@ def test_egress_rejects_wrong_parent_chain_and_identical_directories(outputs):
     (public / "signing-chain.pem").write_bytes(bundle(root, parent))
     with pytest.raises((ValueError, InvalidSignature)):
         load_egress(public, private, attempt)
+    with pytest.raises((ValueError, InvalidSignature)):
+        load_public(public, attempt)
     with pytest.raises(ValueError, match="separate"):
         load_egress(public, public, attempt)
 

@@ -137,6 +137,11 @@ jobs:
             context: .
             platforms: linux/amd64,linux/arm64
             pack: "false"
+          - image: ads-sandbox-egress
+            file: services/ads-sandbox-egress/Containerfile
+            context: .
+            platforms: linux/amd64
+            pack: "false"
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
             context: .

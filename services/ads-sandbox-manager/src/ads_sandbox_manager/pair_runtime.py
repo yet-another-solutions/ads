@@ -53,7 +53,7 @@ def pair_runtime(settings: Settings) -> PairRuntime:
             )
             != 3
             or type(raw["state_bytes"]) is not int
-            or not 0 < raw["state_bytes"] < 2**63
+            or not 64 * 1024**2 <= raw["state_bytes"] <= 64 * 1024**3
         ):
             raise ValueError
         return PairRuntime(guest, relay, egress, raw["state_bytes"])

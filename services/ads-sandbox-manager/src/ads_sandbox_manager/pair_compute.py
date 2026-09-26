@@ -77,6 +77,7 @@ def private_guest_pod(
     container["env"].extend(
         [
             {"name": "ADS_SANDBOX_NETWORK_MODE", "value": "private"},
+            {"name": "ADS_SANDBOX_ID", "value": str(pair.sandbox_id)},
             {"name": "ADS_ATTACHMENT_GENERATION", "value": str(pair.generation)},
             {"name": "ADS_PRIVATE_MTU", "value": str(runtime.transport_mtu - 110)},
         ]
