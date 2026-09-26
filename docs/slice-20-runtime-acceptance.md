@@ -10,6 +10,75 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Requirement and proof map
 
+### Frozen completion review, 2026-09-26
+
+This section supersedes the chronological implementation notes and historical
+map below. The remaining scope is exactly the four items in Project file
+`architecture/egress-execution/slice-20-frozen-completion-handoff.md`.
+Local tests are scoped only; full regression and actual image/kernel proof
+belong to the unchanged nonpublishing composite GitHub CI. Slice 20 remains
+open until that final exact-head gate and evidence/cleanup closure succeed.
+
+| Frozen item | Review and evidence |
+| --- | --- |
+| Current CI outcome and repairs | [Run 36228941295](https://github.com/yet-another-solutions/ads/actions/runs/36228941295) ended cancelled at `be9d5a9`. Its logs show a stale Helm fixture missing the required enforcement ConfigMap and an egress smoke whose PID-1 entrypoint entered the very namespace against which its guard compared. Fixes preserve production validation, the namespace guard, all workflow gates and triggers. Python reached 56% before cancellation, without a completed regression result. No cause for that cancellation is inferred. |
+| Existing runtime/support completion | Reviewed the certificate/status, executable ownership, durable identity and existing packaging paths listed below. Receipt-time status validation and independent delegated-responder authority/time classification were corrected. Scoped tests preserve their assertions and all production deadlines. |
+| Final exact-head proof | Pending GitHub CI after the complete candidate is pushed and the same draft PR #136 is reopened. Earlier component, baseline, interrupted and cancelled runs do not satisfy this item. Local nested-PID/netns guard proof passed; fresh NETLINK_NETFILTER still fails locally, so no local kernel-enforcement pass is claimed. |
+| Evidence, cleanup and closure | Project evidence retains initial CI run/jobs/full logs, failed scoped attempts, passing results and commits. New partial-start tests verify helper PIDs, TCP and UDP listeners and SQLite ownership are released. No local container store, loop device, lab mutation or image build was created in this continuation. Final cleanup and canonical tracker submission remain pending. |
+
+Reviewed existing contract paths, without introducing another work item:
+
+- Certificate/status composition: `certificate_mirror.py`, `certificate_status.py`,
+  `ocsp_status.py`, `ocsp_signature.py`, `ocsp_der.py`, `crl_status.py` and
+  `status_acquisition.py`. Direct/scoped/base/delta/indirect CRL scope, reason
+  coverage, issuer/serial/signature binding and unavailable-evidence refusal
+  remain intact. RSA-PSS parameters, multi-response selection, delegated
+  authority, simultaneous certificate defects and independent OpenSSL checks
+  are covered by the existing scoped test modules. The new combined delegated
+  expiry/absent-EKU case confirms neither defect masks the other. Status-only
+  issuer twins stay private composition inputs, never TLS chain or trust.
+  Missing/ambiguous signer or locator evidence, malformed status, unavailable
+  algorithms and exhausted bounds cannot produce a good verdict; refusal is
+  not presented as implementation of a new protocol or unsupported algorithm.
+- Executable integration: `runtime.py` registers cleanup before each owned
+  asynchronous startup, and closes policy admission before reverse teardown.
+  Six real-composition cases cover ordinary shutdown and failures after helper,
+  DNS, interception, health and discovery startup. External kernel/block/JWKS
+  boundaries remain named fixtures; NGINX, crypto, encrypted state, listeners
+  and HTTPS are real. Existing `test_interception.py`, `test_connections.py`,
+  helper and custody tests retain single health-worker ownership, task limits,
+  reset-only failure and exact storage identity checks. A failed helper never
+  provides a raw-path or forwarding fallback.
+- Durable identity: `runtime_identity.py`, `dnssec_view.py`,
+  `dnssec_lifecycle.py`, `ech_lifecycle.py` and `identity_store.py` retain
+  initial-only stable-root creation, authenticated replacement recovery,
+  commit-before-response publication, secure-only old/new overlap, frozen
+  pre-transition horizons and dependency-bound retirement. Existing lifecycle,
+  view and independent BIND/native ECH proofs cover mixed cached records,
+  stale/foreign configuration, restart and defective views; their assertions
+  will run again in final CI. Persisted evidence is not used as a resolver cache.
+- Packaging/configuration: manager `EgressRuntime` still requires an explicit
+  enforcement ConfigMap; the chart fixture now supplies it instead of relaxing
+  the constructor. Runtime main-thread TLS preload, distinct private/control
+  binding, creator/attachment custody, authenticated public-anchor delivery and
+  IPC pinning/installation remain intact. The CI image uses the existing
+  pinned native library and real import/entrypoint/kernel gates. No publication,
+  infrastructure configuration or slice-21/22 transport work is included.
+
+Scoped continuation results before final CI: 46 status/CRL tests, 44
+runtime/OCSP/composer tests, 22 DER/PSS/simultaneous-certificate tests, and the
+single failing Helm settings/object-builder case passed with no skips.
+Targeted mypy passed for both changed production modules. Initial failures
+were Playwright's unsupported local platform before collection, the new test's
+patched helper factory access, and a pre-signing OCSP fixture clock. The local
+platform override and fixture corrections do not change production checks.
+
+### Historical implementation chronology
+
+The sections below record milestones at their original commits, including
+then-open work subsequently implemented. They are not the current acceptance
+map or permission to restore superseded testing/publication instructions.
+
 ### Stopped at user request, 2026-09-26
 
 The user redirected work to applying needed fixtures, pushing the feature
