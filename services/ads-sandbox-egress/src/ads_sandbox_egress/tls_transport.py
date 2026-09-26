@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ads_sandbox_egress.http1 import reset
+from ads_sandbox_egress.http1 import ByteReader, reset
 from ads_sandbox_egress.tls import ClientHello, TLSContext, TLSFailure, TLSSession, UnmappableTLS
 
 _LOG = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class FrontendIdentity:
 class TLSStream:
     def __init__(
         self,
-        reader: asyncio.StreamReader,
+        reader: ByteReader,
         writer: asyncio.StreamWriter,
         session: TLSSession,
         *,
@@ -46,7 +46,7 @@ class TLSStream:
     @classmethod
     async def accept(
         cls,
-        reader: asyncio.StreamReader,
+        reader: ByteReader,
         writer: asyncio.StreamWriter,
         context: TLSContext,
         prepare: Callable[[ClientHello], Awaitable[FrontendIdentity]],

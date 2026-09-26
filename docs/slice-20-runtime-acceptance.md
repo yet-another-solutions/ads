@@ -29,6 +29,50 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Durable ECH, checked synthetic view and connection owner, 2026-09-26
+
+`ech_lifecycle.py` persists immutable configuration generations, installs the
+real native context before exposure, recovers interrupted stage advancement
+without regenerating keys, and retains old keys through all committed DNS
+TTL/handshake dependencies. Genuine native ECH clients prove old/new overlap,
+recovery, retirement and rejection of foreign/stale configurations.
+
+`dnssec_view.py` joins fresh upstream evidence, contextual classification,
+checked transformations, an independently verified stable ADS root bridge,
+ECH substitution and durable generation publication before rendering. Direct
+DS queries acquire child DNSKEY evidence within the original budget. BIND delv
+validates through the real serving view. Signed-island descendants remain
+insecure; complete missing-key evidence under authenticated parent expectation
+is distinct from acquisition uncertainty. Missing-key substitution cannot
+accidentally match a synthetic short key tag.
+
+`connections.py` owns bounded admitted TCP connections, protocol detection,
+effective ECH inner identity, origin TLS observation, certificate selection and
+per-request HTTP authorization. A secure request adopts exactly the inspected
+origin TLS stream. New production connections bind the upstream interface and
+verify the original peer; test sockets replace only that external boundary.
+Real NGINX, TLS/ECH, HTTP/1 and HTTP/2 tests cover deny-all, identities, protocol
+selection, same-session reuse, stream-local denial and certificate time errors.
+This is not kernel interception or executable bootstrap proof.
+
+All five local Nox gates passed, **1,118 tests, zero skips**, 60.81s test
+elapsed (`s20-integrated-nox-pass.log`). Earlier fixture failures are retained:
+the independent H2 client must not drain an empty write after clean GOAWAY,
+and eager-task done callbacks need a scheduling barrier before fixture cleanup
+assertions. A regression retains errors for nonempty writes. No existing
+security assertion or deadline was removed/increased.
+
+The original-order full regression is independently running against immutable
+`6aa5992` plus the restored CA timing patch, not this new source. The prior
+idle-orphan case passed in that run; the entire result is still pending.
+No CI, merge, publication, lab or later-slice work.
+
+Still open: cache-compatible DNSSEC rollover/retirement and installed client
+anchor, upstream status acquisition/stapling and remaining certificate
+combinations, block custody and executable runtime/health, original-destination
+kernel interception, trusted input provisioning and source-only packaging,
+then complete review and exact-final-head regression/proofs.
+
 ### Alias assembly, negative proofs and local wire compatibility
 
 Acquisition retains receive timestamps. `resolution_answer.py` assembles

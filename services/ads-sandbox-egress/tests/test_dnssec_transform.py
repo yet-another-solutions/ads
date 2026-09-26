@@ -155,10 +155,19 @@ def test_nonrepresentable_signature_is_explicit_not_repaired(transformer, case):
         sig = sig.replace(inception=NOW + 50, expiration=NOW)
     else:
         sig = sig.replace(signer=dns.name.from_text("other."))
-    with pytest.raises(DNSSECUnrepresentable):
-        transformer.signatures(
+    if case == "missing":
+        result = transformer.signatures(
             original, original, dns.rrset.from_rdata(original.name, 60, sig), keys, now=NOW
         )
+        assert not result.before.valid and not result.after.valid
+        assert [f.defect for f in result.before.failures] == ["dnskey_missing"]
+        assert [f.defect for f in result.after.failures] == ["dnskey_missing"]
+        assert result.signatures[0].signature == sig.signature
+    else:
+        with pytest.raises(DNSSECUnrepresentable):
+            transformer.signatures(
+                original, original, dns.rrset.from_rdata(original.name, 60, sig), keys, now=NOW
+            )
 
 
 def test_budget_and_deadline_do_not_become_synthesis_fallback(transformer):

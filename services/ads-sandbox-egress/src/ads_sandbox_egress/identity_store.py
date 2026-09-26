@@ -389,6 +389,71 @@ class IdentityStore:
             self._commit_inventory()
         self._sync_directory()
 
+    def publication_head(self, prefix: str) -> tuple[str, bytes, float] | None:
+        """Authenticated immutable journal head; never a resolver-answer lookup.
+
+        Callers use fixed, module-owned prefixes and zero-padded sequence names.
+        Expired heads remain readable for recovery, not eligible DNS responses.
+        """
+        self._name(prefix)
+        if not prefix.endswith("/"):
+            raise ValueError("publication prefix must end with slash")
+        self._verify_inventory()
+        row = (
+            self._connection()
+            .execute(
+                "SELECT name,content,retain_until FROM publications "
+                "WHERE name>=? AND name<? ORDER BY name DESC LIMIT 1",
+                (prefix, prefix + "~"),
+            )
+            .fetchone()
+        )
+        return None if row is None else (row[0], row[1], row[2])
+
+    def dependency_horizon(self, name: str) -> float:
+        """Conservative absolute horizon of every retained publication dependency."""
+        self.key(name)
+        row = (
+            self._connection()
+            .execute(
+                "SELECT MAX(p.retain_until) FROM dependencies d "
+                "JOIN publications p ON d.publication=p.name WHERE d.key_name=?",
+                (name,),
+            )
+            .fetchone()
+        )
+        return 0.0 if row[0] is None else float(row[0])
+
+    def key_names(self, kind: str) -> tuple[str, ...]:
+        """Authenticated inventory, including tombstones; never return key bytes."""
+        if kind not in ("root", "dnssec", "ech", "tls"):
+            raise ValueError("unknown key kind")
+        self._verify_inventory()
+        return tuple(
+            row[0]
+            for row in self._connection().execute(
+                "SELECT name FROM keys WHERE kind=? ORDER BY name", (kind,)
+            )
+        )
+
+    def prune_publications(self, prefix: str, *, now: float) -> None:
+        """Prune expired generations but retain the journal head and every live row."""
+        if prefix.startswith("crl/"):
+            raise ValueError("CRLs require their dedicated lifecycle")
+        if not math.isfinite(now) or now <= 0:
+            raise ValueError("invalid publication retention clock")
+        head = self.publication_head(prefix)
+        if head is None:
+            return
+        db = self._connection()
+        with db:
+            query = "SELECT name FROM publications WHERE name>=? AND name<? AND retain_until<?"
+            parameters = (prefix, head[0], now)
+            db.execute("DELETE FROM dependencies WHERE publication IN (" + query + ")", parameters)
+            db.execute("DELETE FROM publications WHERE name IN (" + query + ")", parameters)
+            self._commit_inventory()
+        self._sync_directory()
+
     @staticmethod
     def _crl_prefix(issuer: str) -> str:
         if re.fullmatch("[0-9a-f]{64}", issuer) is None:

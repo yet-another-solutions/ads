@@ -58,6 +58,24 @@ class DrainingClient(Client):
                 await self.flush()
 
 
+@pytest.mark.anyio
+async def test_independent_client_empty_flush_after_clean_eof_has_no_write():
+    class ClosedWriter:
+        def write(self, data):
+            raise ConnectionResetError("closed subprocess stdin")
+
+        async def drain(self):
+            raise AssertionError("must not drain without outgoing bytes")
+
+    client = DrainingClient(None, ClosedWriter())
+    # A decoded GOAWAY has no required ACK. Empty flush must not turn its
+    # already-received success into an unrelated subprocess-pipe error.
+    await client.flush()
+    client.protocol.initiate_connection()
+    with pytest.raises(ConnectionResetError):
+        await client.flush()  # Real pending frames still propagate errors.
+
+
 def test_codec_goaway_fences_new_streams_without_discarding_queued_data():
     ads, peer = pair(client=True)
     ads.headers(1, request(), end=True)

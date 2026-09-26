@@ -17,6 +17,7 @@ from typing import Literal
 import dns.message
 import dns.name
 import dns.rcode
+import dns.rdataclass
 import dns.rdatatype
 import dns.rdtypes.ANY.DNSKEY
 import dns.rdtypes.ANY.RRSIG
@@ -249,8 +250,20 @@ class PositiveChains:
             return result("indeterminate", limitation="delegation_absence_requires_proof")
         if ds_sigs is None:
             return result("indeterminate", limitation="delegation_signature_requires_parent")
-        if keys is None or not keys:
-            return result("indeterminate", limitation="dnskey_absence_requires_proof")
+        missing_keys = keys is None or not keys
+        if missing_keys:
+            # A bare empty response or duplicate RRsets is not evidence of
+            # absence. Require a complete, exact-apex NODATA response and then
+            # authenticate positive parent DS before diagnosing a missing key.
+            soa = [
+                rrset
+                for rrset in message.authority
+                if rrset.rdtype == dns.rdatatype.SOA and rrset.name == zone
+            ]
+            if message.answer or len(soa) != 1 or len(soa[0]) != 1:
+                return result("indeterminate", limitation="dnskey_absence_requires_proof")
+            keys = dns.rrset.RRset(zone, dns.rdataclass.IN, dns.rdatatype.DNSKEY)
+        assert keys is not None
         _bounded(ds_sigs, maximum=64)
         parents = tuple(
             dict.fromkeys(
@@ -289,7 +302,12 @@ class PositiveChains:
                 # locally unsupported paths, not an inference from absent data.
                 return result("insecure", limitation="unsupported_only_delegation")
             if not matched.matched:
-                return result("bogus", limitation="delegation_key_mismatch")
+                return result(
+                    "bogus",
+                    limitation="authenticated_delegation_missing_dnskey"
+                    if missing_keys
+                    else "delegation_key_mismatch",
+                )
             selected = dns.rrset.from_rdata(zone, keys.ttl, *matched.matched)
             checked = check_signatures(keys, sigs, selected, now=time.time(), budget=budget)
             checks[id(checked)] = checked
@@ -310,5 +328,8 @@ class PositiveChains:
         ):
             return result("indeterminate", limitation="parent_evidence_incomplete")
         if "insecure" in parent_states:
-            return result("indeterminate", limitation="unsigned_chain_processing_required")
+            # The authenticated unsigned boundary is retained in the acquired
+            # parent messages. A signed descendant cannot acquire a trusted
+            # path by adding its own DS; no child anchor is synthesized here.
+            return result("insecure", limitation="signed_island_below_unsigned_cut")
         return result("bogus", limitation="no_valid_parent_path")

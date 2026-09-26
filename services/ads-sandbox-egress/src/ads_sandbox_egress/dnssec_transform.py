@@ -88,6 +88,17 @@ def _corrupt(value: bytes) -> bytes:
     return bytes((value[0] ^ 1,)) + value[1:]
 
 
+def _absent_tag(keys: KeySubstitution, algorithm: int, original: int) -> int:
+    """Preserve absent-key structure, including accidental substitute tag collisions."""
+    occupied = {dns.dnssec.key_id(key) for key in keys.synthetic if key.algorithm == algorithm}
+    # At most 64 mapped keys; a missing tag always exists without new key material.
+    for offset in range(len(occupied) + 1):
+        candidate = (original + offset) % 65536
+        if candidate not in occupied:
+            return candidate
+    raise DNSSECUnrepresentable("no absent DNSKEY tag")
+
+
 class DNSSECTransformer:
     def __init__(
         self, identities: DNSSECIdentities, job: ResolutionJob, budget: CryptoBudget
@@ -154,10 +165,18 @@ class DNSSECTransformer:
                 if key.algorithm == signature.algorithm
                 and dns.dnssec.key_id(key) == signature.key_tag
             ]
-            if len(candidates) != 1 or signature.signer != keys.original.name:
-                # Missing keys and ambiguous tag-collision paths require a
-                # separate structural construction, not invented key material.
-                raise DNSSECUnrepresentable("missing or ambiguous signature key")
+            if signature.signer != keys.original.name or len(candidates) > 1:
+                raise DNSSECUnrepresentable("ambiguous signature key or signer scope")
+            if not candidates:
+                # Keep the signature's bytes and defects without claiming to
+                # sign as a missing key. Avoid introducing a candidate solely
+                # because a generated substitute happens to share its short tag.
+                absent = signature.replace(
+                    key_tag=_absent_tag(keys, signature.algorithm, signature.key_tag)
+                )
+                assert isinstance(absent, dns.rdtypes.ANY.RRSIG.RRSIG)
+                converted.append(absent)
+                continue
             identity = keys.for_key(candidates[0])
             signing_set = copy.deepcopy(synthetic)
             signing_set.ttl = signature.original_ttl
@@ -221,8 +240,15 @@ class DNSSECTransformer:
                 if key.algorithm == delegation.algorithm
                 and dns.dnssec.key_id(key) == delegation.key_tag
             ]
-            if len(candidates) != 1:
-                raise DNSSECUnrepresentable("missing or ambiguous delegation key")
+            if len(candidates) > 1:
+                raise DNSSECUnrepresentable("ambiguous delegation key")
+            if not candidates:
+                absent = delegation.replace(
+                    key_tag=_absent_tag(keys, delegation.algorithm, delegation.key_tag)
+                )
+                assert isinstance(absent, DS)
+                converted.append(absent)
+                continue
             key = candidates[0]
             self.budget.consume(2)
             expected = dns.dnssec.make_ds(

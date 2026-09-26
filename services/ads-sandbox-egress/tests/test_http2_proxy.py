@@ -42,8 +42,10 @@ class Client:
         return self
 
     async def flush(self):
-        self.writer.write(self.protocol.data_to_send())
-        await self.writer.drain()
+        data = self.protocol.data_to_send()
+        if data:
+            self.writer.write(data)
+            await self.writer.drain()
 
     async def until(self, predicate):
         async with asyncio.timeout(3):
