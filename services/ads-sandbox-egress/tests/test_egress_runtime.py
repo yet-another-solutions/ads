@@ -26,8 +26,9 @@ def free_port():
         return probe.getsockname()[1]
 
 
+@pytest.mark.parametrize("failure", [None, "helper", "dns", "interception", "health", "discovery"])
 def test_real_runtime_control_health_and_reverse_cleanup(
-    environment, pair_signer, native, tmp_path, monkeypatch
+    environment, pair_signer, native, tmp_path, monkeypatch, failure
 ):
     """Fake block/kernel/Keycloak boundaries only; real executable composition,
     SQLite, crypto, NGINX, DNS listeners, interception listener and HTTPS."""
@@ -71,7 +72,7 @@ def test_real_runtime_control_health_and_reverse_cleanup(
         ),
     )
     boundary = SimpleNamespace(network=network, check=lambda: True)
-    servers, helpers = [], []
+    servers, helpers, processes = [], [], []
     original_server, original_helper = runtime.uvicorn.Server, runtime.Helper
 
     def server(config):
@@ -87,6 +88,8 @@ def test_real_runtime_control_health_and_reverse_cleanup(
     keys = Keys(settings.pair.ipc_service_subject)
 
     async def verifier(settings):
+        if failure == "discovery":
+            raise RuntimeError("injected partial startup failure")
         return keys.verifier  # Named external JWKS, real signature/claim validation.
 
     start = runtime.DNSTransport.start
@@ -99,6 +102,28 @@ def test_real_runtime_control_health_and_reverse_cleanup(
     monkeypatch.setattr(runtime, "Helper", helper)
     monkeypatch.setattr(runtime, "verifier", verifier)
     monkeypatch.setattr(runtime.DNSTransport, "start", dns_start)
+    helper_start = original_helper.start
+
+    async def start_helper(self):
+        await helper_start(self)
+        processes.append(self.process)
+        if failure == "helper":
+            raise RuntimeError("injected partial startup failure")
+
+    monkeypatch.setattr(original_helper, "start", start_helper)
+    if failure in ("dns", "interception", "health"):
+        owner, method = {
+            "dns": (runtime.DNSTransport, "start"),
+            "interception": (runtime.Interception, "start"),
+            "health": (runtime.EnforcementHealth, "healthy"),
+        }[failure]
+        original = getattr(owner, method)
+
+        async def fail_after_start(self, *args):
+            await original(self, *args)
+            raise RuntimeError("injected partial startup failure")
+
+        monkeypatch.setattr(owner, method, fail_after_start)
     cert, key, context = runtime.tls_files(settings, directory)
 
     async def run():
@@ -159,11 +184,29 @@ def test_real_runtime_control_health_and_reverse_cleanup(
                 servers[0].should_exit = True
             async with asyncio.timeout(10):
                 await task
-        assert helpers[0].process is None
+
+    if failure:
+        with pytest.raises(RuntimeError, match="injected partial startup failure"):
+            asyncio.run(run())
+    else:
+        asyncio.run(run())
+    assert helpers[0].process is None
+    assert processes
+    for process in processes:
+        assert process.poll() is not None
         with pytest.raises(ProcessLookupError):
             os.kill(process.pid, 0)
-        for port in (control, proxy, crl, dns):
-            with socket.socket() as probe:
-                assert probe.connect_ex(("127.0.0.1", port)) != 0
-
-    asyncio.run(run())
+    for port in (control, proxy, crl, dns):
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0
+    # DNS UDP must also release its socket, and encrypted state must no longer
+    # be held by the exited owner after any partial-start failure.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", dns))
+    recovered = runtime.IdentityStore(
+        custody.state_directory,
+        settings.devices.identity,
+        settings.wrapping_key,
+        capacity=settings.devices.state_bytes // 2,
+    )
+    recovered.close()
