@@ -5,6 +5,16 @@ import shutil
 import pytest
 
 from ads_sandbox_egress.helper import Helper
+from ads_sandbox_egress.normalization import nginx_configuration
+
+
+def test_single_process_helper_keeps_existing_identity_without_chown(tmp_path):
+    configuration = nginx_configuration(tmp_path)
+    assert "\nuser root;\n" in configuration
+    assert "\nmaster_process off;\n" in configuration
+    assert f"listen unix:{tmp_path}/normalize.sock;" in configuration
+    for name in ("client_body", "proxy", "fastcgi", "uwsgi", "scgi"):
+        assert f"{name}_temp_path {tmp_path}/" in configuration
 
 
 @pytest.mark.skipif(shutil.which("nginx") is None, reason="real NGINX/Lua unavailable")

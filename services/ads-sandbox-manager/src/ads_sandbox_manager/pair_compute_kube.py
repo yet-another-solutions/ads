@@ -233,6 +233,33 @@ class PairComputeAdapter:
                     return False
         return bool(actual == expected)
 
+    async def _admitted_spec_matches(self, observed: Object, desired: Object) -> bool:
+        """Validate admission overhead against the selected RuntimeClass, never ignore it."""
+        spec = observed.get("spec", {})
+        if "overhead" not in spec:
+            return self._spec_matches(observed, desired)
+        name = desired["spec"].get("runtimeClassName")
+        if not isinstance(name, str) or not name or spec.get("runtimeClassName") != name:
+            return False
+        runtime = await self.kube.runtime_class(name)
+        if runtime is None:
+            return False
+        meta = runtime.get("metadata", {})
+        overhead = runtime.get("overhead", {}).get("podFixed")
+        if (
+            meta.get("name") != name
+            or not isinstance(meta.get("uid"), str)
+            or not meta["uid"].strip()
+            or meta.get("deletionTimestamp")
+            or not isinstance(overhead, dict)
+            or not overhead
+            or spec["overhead"] != overhead
+        ):
+            return False
+        expected = deepcopy(desired)
+        expected["spec"]["overhead"] = overhead
+        return self._spec_matches(observed, expected)
+
     async def observe(
         self,
         pair: PairBinding,
@@ -255,7 +282,7 @@ class PairComputeAdapter:
         if (
             observed["metadata"].get("deletionTimestamp")
             or observed["metadata"].get("annotations")
-            or not self._spec_matches(observed, desired)
+            or not await self._admitted_spec_matches(observed, desired)
         ):
             raise RuntimeError("deleting or incompatible pair Pod")
         if role == "egress":
