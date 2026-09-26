@@ -97,6 +97,8 @@ jobs:
         service: [ads-sandbox-manager, ads-sandbox-egress]
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
+      # Manager tests reuse these fixtures without selecting the commons suite.
+      PYTHONPATH: libraries/ads-commons/tests
     steps:
       - uses: actions/checkout@v7
         with:

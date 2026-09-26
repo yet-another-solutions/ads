@@ -48,6 +48,7 @@ def test_only_manager_and_egress_complete_service_suites_run_before_push():
         "ads-sandbox-manager",
         "ads-sandbox-egress",
     ]
+    assert tests["env"]["PYTHONPATH"] == "libraries/ads-commons/tests"
     run = next(
         step["run"] for step in tests["steps"] if step.get("name", "").startswith("Scoped lint")
     )
