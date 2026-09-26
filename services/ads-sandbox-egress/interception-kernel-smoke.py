@@ -18,7 +18,10 @@ from ads_sandbox_egress.interception import Interception, KernelBoundary, Networ
 
 
 def run(*args):
-    return subprocess.run(args, capture_output=True, check=True, timeout=5).stdout
+    result = subprocess.run(args, capture_output=True, check=False, timeout=5)
+    if result.returncode:
+        raise RuntimeError(f"fixture command {args!r} failed: {result.stderr[:4096]!r}")
+    return result.stdout
 
 
 async def main():

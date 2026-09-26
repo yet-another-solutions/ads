@@ -336,7 +336,7 @@ jobs:
             --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
             --entrypoint sh \
             -v "$PWD/services/ads-sandbox-egress/interception-kernel-smoke.py:/kernel-smoke.py:ro" \
-            ads-sandbox-egress:ci -c 'unshare --mount --net -- python /kernel-smoke.py & child=$!; wait "$child"'
+            ads-sandbox-egress:ci -c 'unshare --mount --net --mount-proc -- python /kernel-smoke.py & child=$!; wait "$child"'
 
   helm:
     runs-on: ubuntu-latest
