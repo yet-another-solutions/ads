@@ -328,13 +328,15 @@ jobs:
           test "$st" -eq 3
       - name: Prove egress-only interception kernel boundary
         if: matrix.image == 'ads-sandbox-egress'
+        # Keep container PID 1 outside the nested netns so the smoke's
+        # independent /proc/1 namespace guard remains meaningful.
         run: |
           docker run --rm --network none --read-only --tmpfs /run --tmpfs /tmp \
             --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add NET_RAW --cap-add NET_BIND_SERVICE \
             --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
-            --entrypoint unshare \
+            --entrypoint sh \
             -v "$PWD/services/ads-sandbox-egress/interception-kernel-smoke.py:/kernel-smoke.py:ro" \
-            ads-sandbox-egress:ci --mount --net -- python /kernel-smoke.py
+            ads-sandbox-egress:ci -c 'unshare --mount --net -- python /kernel-smoke.py & child=$!; wait "$child"'
 
   helm:
     runs-on: ubuntu-latest

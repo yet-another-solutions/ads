@@ -37,6 +37,7 @@ def paired_runtime_fixture():
             "image": "registry.test/egress@sha256:" + "b" * 64,
             "runtime_class": "kata-egress",
             "tls_secret": "egress-tls",
+            "enforcement_configmap": "egress-enforcement",
             "transport_mtu": 1450,
             "cpu_millis": 1000,
             "memory_mib": 512,
