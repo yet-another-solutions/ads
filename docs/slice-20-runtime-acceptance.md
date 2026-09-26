@@ -23,7 +23,7 @@ open until that final exact-head gate and evidence/cleanup closure succeed.
 | --- | --- |
 | Current CI outcome and repairs | [Run 36228941295](https://github.com/yet-another-solutions/ads/actions/runs/36228941295) ended cancelled at `be9d5a9`. Its logs show a stale Helm fixture missing the required enforcement ConfigMap and an egress smoke whose PID-1 entrypoint entered the very namespace against which its guard compared. Fixes preserve production validation, the namespace guard, all workflow gates and triggers. Python reached 56% before cancellation, without a completed regression result. No cause for that cancellation is inferred. |
 | Existing runtime/support completion | Reviewed the certificate/status, executable ownership, durable identity and existing packaging paths listed below. Receipt-time status validation and independent delegated-responder authority/time classification were corrected. Scoped tests preserve their assertions and all production deadlines. |
-| Final exact-head proof | Pending GitHub CI after the complete candidate is pushed and the same draft PR #136 is reopened. Earlier component, baseline, interrupted and cancelled runs do not satisfy this item. Local nested-PID/netns guard proof passed; fresh NETLINK_NETFILTER still fails locally, so no local kernel-enforcement pass is claimed. |
+| Final exact-head proof | Pending GitHub CI after the complete candidate is pushed to draft PR #136 using the approved duplicate-free recovery below. Earlier component, baseline, interrupted and cancelled runs do not satisfy this item. Local nested-PID/netns/proc guard proof passed; fresh NETLINK_NETFILTER still fails locally, so no local kernel-enforcement pass is claimed. |
 | Evidence, cleanup and closure | Project evidence retains initial CI run/jobs/full logs, failed scoped attempts, passing results and commits. New partial-start tests verify helper PIDs, TCP and UDP listeners and SQLite ownership are released. No local container store, loop device, lab mutation or image build was created in this continuation. Final cleanup and canonical tracker submission remain pending. |
 
 Reviewed existing contract paths, without introducing another work item:
@@ -72,6 +72,32 @@ Targeted mypy passed for both changed production modules. Initial failures
 were Playwright's unsupported local platform before collection, the new test's
 patched helper factory access, and a pre-signing OCSP fixture clock. The local
 platform override and fixture corrections do not change production checks.
+
+Continuation CI repairs preserve the existing gates and security assertions:
+
+- [Run 36229930823](https://github.com/yet-another-solutions/ads/actions/runs/36229930823)
+  passed Helm and built the egress image, then failed on Docker's inherited
+  read-only proc sysctls. The user cancelled it. Commit `581da4b` mounts a
+  private proc within the already-private mount/net namespace; the local
+  nested namespace/sysctl guard passes, without claiming netfilter proof.
+- [Run 36230218992](https://github.com/yet-another-solutions/ads/actions/runs/36230218992)
+  passed that setup, then failed installing the nft batch. The entire workflow
+  was cancelled immediately when that failure was observed. Commit `8dee4ef`
+  replaces the invalid bare TCP selector with `meta l4proto tcp`, retaining
+  REDIRECT destination capture, default-drop forwarding, listener-close
+  refusal, DNS/status exceptions, and the production command deadline.
+  The smoke checks the exact production batch first for bounded fixture-only
+  diagnostics. Its 26 scoped interception tests pass without skips.
+- Reopening after closed-PR pushes repeatedly created stale-head and current-head
+  runs. The stale runs were cancelled, but cancellation is not prevention.
+  GitHub retained the closed PR's old head even while its branch ref had moved.
+  On 2026-09-26 the user approved a one-time pause of only `ci.yml`, reopening
+  and reconciling the same draft PR, immediately restoring the workflow, then
+  one final-candidate push to the open PR. Subsequent intermediate work stays
+  local; only complete repair candidates are pushed. No workflow-file trigger
+  or gate is removed, and no publish workflow is involved.
+- Cancel the entire workflow immediately on any failed job, rather than
+  waiting for other jobs to finish. A cancelled run is never final proof.
 
 ### Historical implementation chronology
 
