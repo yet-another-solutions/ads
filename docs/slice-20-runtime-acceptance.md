@@ -99,6 +99,29 @@ Continuation CI repairs preserve the existing gates and security assertions:
 - Cancel the entire workflow immediately on any failed job, rather than
   waiting for other jobs to finish. A cancelled run is never final proof.
 
+Run [36230700789](https://github.com/yet-another-solutions/ads/actions/runs/36230700789)
+was the sole run on `ebdf95e`: all 30 non-Python jobs passed, including the
+actual egress kernel fence and cleanup. Full pytest completed with 5,786
+passed, two failed, no skips and four subtests passed. Both failures were
+independent `delv` cases containing invalid and valid alternative signatures.
+The user had paused monitoring and notified this session after completion.
+
+The exact CI BIND 9.18.39 package reproduced the ordering-dependent failure
+locally. Its [validator implementation](https://raw.githubusercontent.com/isc-projects/bind9/v9.18.39/lib/dns/validator.c)
+sets `val->failed` on cryptographic failure and stops signature iteration.
+Changing the bad signature's timestamp did not solve it; that experiment was
+reverted. No fixture or runtime change is retained. CI now provisions a
+checksum-pinned BIND 9.20.23 independent client in a private tool directory,
+using the Debian 12-compatible binaries without replacing system packages.
+Both unchanged alternative cases passed 12 repetitions with that client.
+The two affected DNSSEC modules passed all 175 scoped tests without skips.
+An initial local selection had 174 passes and one bind failure because its
+ephemeral TCP-selected port was already occupied by a platform UDP service;
+the isolated case and one complete scoped retry passed. That environmental
+attempt is retained in Project evidence, not represented as a clean first run.
+The full regression must pass again on the new complete head; the earlier
+30 successful jobs do not substitute for that exact-head proof.
+
 ### Historical implementation chronology
 
 The sections below record milestones at their original commits, including

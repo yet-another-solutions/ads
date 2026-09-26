@@ -29,7 +29,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y nginx libnginx-mod-http-lua bind9-dnsutils libzstd1
+          sudo apt-get install -y nginx libnginx-mod-http-lua bind9-dnsutils libzstd1 \
+            libfstrm0 libprotobuf-c1 liburcu8t64 libjemalloc2 liblmdb0
           root="$RUNNER_TEMP/ads-openssl4"
           mkdir -p "$root"
           curl --fail --show-error --location \
@@ -43,6 +44,26 @@ jobs:
           dpkg-deb --extract "$root/libssl.deb" "$root"
           dpkg-deb --extract "$root/openssl.deb" "$root"
           echo "ADS_EGRESS_OPENSSL4_ROOT=$root" >> "$GITHUB_ENV"
+          # BIND 9.18 stops at the first invalid signature, losing a valid
+          # alternative depending on RR ordering. Preserve the tests and use
+          # an independent validator that implements their required behavior.
+          bind_root="$RUNNER_TEMP/ads-bind920"
+          mkdir -p "$bind_root/bin"
+          curl --fail --show-error --location \
+            'https://deb.debian.org/debian/pool/main/b/bind9/bind9-dnsutils_9.20.23-1~deb13u1~bpo12+1_amd64.deb' \
+            --output "$bind_root/dnsutils.deb"
+          curl --fail --show-error --location \
+            'https://deb.debian.org/debian/pool/main/b/bind9/bind9-libs_9.20.23-1~deb13u1~bpo12+1_amd64.deb' \
+            --output "$bind_root/libs.deb"
+          echo "68a0a6f16dcc8c483a714211088e87c7c6b9965bff382d1cbd28921fae38ee2d  $bind_root/dnsutils.deb" | sha256sum --check
+          echo "d7b783972b10cfc5375c9f017825ab5d48c3fe2e5ab4a3db56a21ef8651843d5  $bind_root/libs.deb" | sha256sum --check
+          dpkg-deb --extract "$bind_root/dnsutils.deb" "$bind_root"
+          dpkg-deb --extract "$bind_root/libs.deb" "$bind_root"
+          printf '#!/bin/sh\nexport LD_LIBRARY_PATH="%s/usr/lib/x86_64-linux-gnu"\nexec "%s/usr/bin/delv" "$@"\n' \
+            "$bind_root" "$bind_root" > "$bind_root/bin/delv"
+          chmod 755 "$bind_root/bin/delv"
+          "$bind_root/bin/delv" -v
+          echo "$bind_root/bin" >> "$GITHUB_PATH"
       - name: Nox
         run: |
           uv sync --group dev --group lint --group deps --group typecheck --group test
