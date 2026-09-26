@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -29,7 +29,8 @@ def test_public_der_editor_retains_unexposed_signed_fields(material, pair_signer
     status[1] = sequence(0xA0, [sequence(0x30, response)])
     template = sequence(0x30, status).wire()
     source = preserve_fields(source, template, material.key)
-    inspected = inspect_status(source, material.leaf, material.issuer, now=material.now)
+    now = datetime.now(UTC)
+    inspected = inspect_status(source, material.leaf, material.issuer, now=now)
     expected = (
         {"future"}
         if defect == "produced"
@@ -45,11 +46,10 @@ def test_public_der_editor_retains_unexposed_signed_fields(material, pair_signer
         material.leaf,
         pair_signer.certificate,
         pair_signer.private_key,
-        now=material.now,
+        now=now,
     )
     assert (
-        inspect_status(result, material.leaf, pair_signer.certificate, now=material.now).defects
-        == expected
+        inspect_status(result, material.leaf, pair_signer.certificate, now=now).defects == expected
     )
     assert ocsp.load_der_ocsp_response(result).produced_at_utc == (
         ocsp.load_der_ocsp_response(source).produced_at_utc
@@ -83,7 +83,8 @@ def test_multiple_status_response_rebinds_selected_single_not_unrelated_records(
     response[1] = DER(4, sequence(0x30, basic).wire())
     status[1] = sequence(0xA0, [sequence(0x30, response)])
     original = preserve_fields(good, sequence(0x30, status).wire(), material.key, source_index=1)
-    checked = inspect_status(original, material.leaf, material.issuer, now=material.now)
+    now = datetime.now(UTC)
+    checked = inspect_status(original, material.leaf, material.issuer, now=now)
     assert checked.good and checked.index == 1
     substituted = substitute_status(
         original,
@@ -92,8 +93,8 @@ def test_multiple_status_response_rebinds_selected_single_not_unrelated_records(
         material.leaf,
         material.issuer,
         material.key,
-        now=material.now,
+        now=now,
     )
-    result = inspect_status(substituted, material.leaf, material.issuer, now=material.now)
+    result = inspect_status(substituted, material.leaf, material.issuer, now=now)
     assert result.good and result.index == 1
     assert len(tuple(ocsp.load_der_ocsp_response(substituted).responses)) == 2

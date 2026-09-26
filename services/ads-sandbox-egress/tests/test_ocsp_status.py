@@ -65,11 +65,11 @@ def wire(material, case="good"):
             .not_valid_before(now - timedelta(days=1))
             .not_valid_after(
                 now - timedelta(seconds=1)
-                if case == "delegated-expired"
+                if case in ("delegated-expired", "delegated-no-eku-expired")
                 else now + timedelta(days=1)
             )
         )
-        if case != "delegated-no-eku":
+        if case not in ("delegated-no-eku", "delegated-no-eku-expired"):
             builder = builder.add_extension(
                 x509.ExtendedKeyUsage([ExtendedKeyUsageOID.OCSP_SIGNING]), False
             )
@@ -136,10 +136,12 @@ def wire(material, case="good"):
         ("delegated-bad-ku", {"responder_authority"}),
         ("delegated-critical", {"responder_authority"}),
         ("delegated-expired", {"responder_time"}),
+        ("delegated-no-eku-expired", {"responder_authority", "responder_time"}),
     ],
 )
 def test_cryptographic_status_and_issuer_binding(material, case, defects):
-    result = inspect_status(wire(material, case), material.leaf, material.issuer, now=material.now)
+    original = wire(material, case)
+    result = inspect_status(original, material.leaf, material.issuer, now=datetime.now(UTC))
     assert result.defects == defects
     assert result.good is (not defects)
 

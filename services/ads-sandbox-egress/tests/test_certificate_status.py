@@ -131,10 +131,12 @@ def test_unimplemented_status_outcomes_never_become_good(material, pair_signer, 
         "delegated-expired",
         "delegated-critical",
         "delegated-bad-ku",
+        "delegated-no-eku-expired",
     ],
 )
 def test_delegated_status_defects_never_become_good(material, pair_signer, case):
     original = wire(material, case)
+    now = datetime.now(UTC)
     candidate = substitute_status(
         original,
         material.leaf,
@@ -142,12 +144,14 @@ def test_delegated_status_defects_never_become_good(material, pair_signer, case)
         material.leaf,
         pair_signer.certificate,
         pair_signer.private_key,
-        now=material.now,
+        now=now,
     )
-    before = inspect_status(original, material.leaf, material.issuer, now=material.now)
-    after = inspect_status(candidate, material.leaf, pair_signer.certificate, now=material.now)
+    before = inspect_status(original, material.leaf, material.issuer, now=now)
+    after = inspect_status(candidate, material.leaf, pair_signer.certificate, now=now)
     assert not before.good and not after.good
     assert before.defects == after.defects
+    if case == "delegated-no-eku-expired":
+        assert before.defects == {"responder_authority", "responder_time"}
 
 
 def test_missing_status_is_not_fabricated(material, pair_signer):

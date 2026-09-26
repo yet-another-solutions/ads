@@ -168,7 +168,6 @@ class StatusAcquisition:
                             raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
                         continue
                     issuer = chain[depth + 1]
-                    now = datetime.now(UTC)
                     must_staple = any(
                         extension.oid == ExtensionOID.TLS_FEATURE
                         for extension in certificate.extensions
@@ -187,7 +186,9 @@ class StatusAcquisition:
                         )
                         statuses[depth] = await self.fetch(urls[0], request, job=job)
                     if statuses[depth] is not None:
-                        result = inspect_status(statuses[depth], certificate, issuer, now=now)
+                        result = inspect_status(
+                            statuses[depth], certificate, issuer, now=datetime.now(UTC)
+                        )
                         if result.defects <= {"revoked"} and "revoked" in result.defects:
                             revoked.add(depth)
                     # Inspect every advertised full CRL endpoint; no good
@@ -216,7 +217,11 @@ class StatusAcquisition:
                             raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
                         crl_wires.append(await self.fetch(url, None, job=job))
                     if crl_wires and crl_set_revoked(
-                        tuple(crl_wires), certificate, issuer, now=now, signers=chain
+                        tuple(crl_wires),
+                        certificate,
+                        issuer,
+                        now=datetime.now(UTC),
+                        signers=chain,
                     ):
                         revoked.add(depth)
                 return replace(observed, staples=tuple(statuses), revoked=tuple(sorted(revoked)))

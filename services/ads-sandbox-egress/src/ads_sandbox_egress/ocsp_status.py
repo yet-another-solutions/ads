@@ -150,10 +150,11 @@ def inspect_status(
                         defects.add("responder_authority")
                 except x509.ExtensionNotFound:
                     pass
-                if not signer.not_valid_before_utc <= now <= signer.not_valid_after_utc:
-                    defects.add("responder_time")
             except (ValueError, InvalidSignature, x509.ExtensionNotFound):
                 defects.add("responder_authority")
+            # Authority failure must not hide a simultaneous time defect.
+            if not signer.not_valid_before_utc <= now <= signer.not_valid_after_utc:
+                defects.add("responder_time")
         try:
             _signature(response, signer)
         except InvalidSignature:

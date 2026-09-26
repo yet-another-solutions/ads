@@ -1,7 +1,7 @@
 import asyncio
 import ipaddress
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -225,6 +225,54 @@ def test_metadata_cannot_escape_public_destination_gate(material, url):
 
 def test_no_advertised_status_is_not_invented(material):
     assert status_urls(material.leaf) == ((), ())
+
+
+@pytest.mark.parametrize("kind", ["ocsp", "crl"])
+@pytest.mark.parametrize("expired", [False, True])
+def test_acquisition_validates_at_receipt_without_extending_deadline(
+    material, monkeypatch, kind, expired
+):
+    from ads_sandbox_egress import status_acquisition
+
+    material = advertised(
+        material,
+        ocsp_url="http://1.1.1.1/ocsp" if kind == "ocsp" else None,
+        crl_url="http://1.1.1.1/crl" if kind == "crl" else None,
+    )
+    observed = OriginCertificate(
+        (material.leaf.public_bytes(Encoding.DER),),
+        (material.leaf.public_bytes(Encoding.DER), material.issuer.public_bytes(Encoding.DER)),
+        (),
+        None,
+    )
+    clock = material.now - timedelta(seconds=1)
+
+    class Clock:
+        @staticmethod
+        def now(zone):
+            assert zone is UTC
+            return clock
+
+    monkeypatch.setattr(status_acquisition, "datetime", Clock)
+    acquisition = StatusAcquisition(resolver(), None, AsyncMock())
+    deadlines = []
+
+    async def fetch(url, body, *, job):
+        nonlocal clock
+        deadlines.append(job.deadline)
+        data = wire(material, "revoked") if kind == "ocsp" else crl(material, "revoked")
+        received = datetime.now(UTC)
+        clock = received + timedelta(hours=1) if expired else received
+        return data
+
+    monkeypatch.setattr(acquisition, "fetch", fetch)
+    if expired and kind == "crl":
+        with pytest.raises(UnmappableTLS, match="unavailable_status"):
+            asyncio.run(acquisition.acquire(observed))
+    else:
+        result = asyncio.run(acquisition.acquire(observed))
+        assert result.revoked == (() if expired else (0,))
+    assert len(deadlines) == 1
 
 
 def test_status_fetch_inspects_both_families_before_dial(monkeypatch):
