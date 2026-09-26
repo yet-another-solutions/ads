@@ -64,6 +64,8 @@ class OriginCertificate:
     built_chain: tuple[bytes, ...]
     issues: tuple[VerificationIssue, ...]
     selected_alpn: bytes | None
+    staples: tuple[bytes | None, ...] = ()
+    revoked: tuple[int, ...] = ()
 
     @property
     def verified(self) -> bool:
@@ -207,6 +209,7 @@ class OriginSession(TLSSession):
         try:
             self.name = canonical_host(name)
             ffi, ssl, crypto = self.library.ffi, self.library.ssl, self.library.crypto
+            self.library.require(ssl.SSL_ctrl(self._ssl, 65, 1, ffi.NULL), "origin_status_request")
             parameter = ssl.SSL_get0_param(self._ssl)
             self.library.require(parameter, "origin_verify_parameter")
             # STRICT plus TRUSTED_FIRST; no partial-chain or weak-signature
@@ -280,17 +283,24 @@ class OriginSession(TLSSession):
                 self.issues.append(issue)
         if len(self.issues) > 64:
             raise TLSFailure("origin_validation_limit")
+        from ads_sandbox_egress.tls_status import acquire_staples
+
         self.certificate = OriginCertificate(
             self._chain(library.ssl.SSL_get_peer_cert_chain(self._ssl)),
             built,
             tuple(self.issues),
             selected,
+            acquire_staples(self.library, self._ssl),
         )
         self.established = True
         return "complete"
 
     def resume(
-        self, certificate_chain: tuple[bytes, ...], private_key: bytes, alpn: bytes | None
+        self,
+        certificate_chain: tuple[bytes, ...],
+        private_key: bytes,
+        alpn: bytes | None,
+        staples: tuple[bytes | None, ...] = (),
     ) -> None:
         raise TLSFailure("origin_cannot_install_client_credentials")
 

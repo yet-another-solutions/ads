@@ -22,6 +22,8 @@ _SRC = (
     "services/ads-sandbox-base/shutdown-kernel-smoke.py",
     "services/ads-sandbox-base/scripts/ads-sandbox-trust",
     "services/ads-sandbox-base/scripts/ads-install-egress-trust",
+    "services/ads-sandbox-base/scripts/ads-install-dnssec-anchor",
+    "services/ads-sandbox-base/scripts/ads-sandbox-dnssec",
     "services/ads-ptp-tools/ads-ptp-canary",
     "services/ads-ptp-tools/ads-ptp",
     "services/ads-ptp-tools/ads-ptp-relay",

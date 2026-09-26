@@ -31,6 +31,7 @@ class EgressRuntime:
     keycloak_issuer: str
     keycloak_well_known_url: str
     ipc_service_subject: UUID
+    enforcement_configmap: str
 
     def __post_init__(self) -> None:
         if not isinstance(self.image, str) or not re.fullmatch(
@@ -92,6 +93,10 @@ class EgressRuntime:
                 raise ValueError("trusted HTTPS Keycloak endpoints required")
         if not isinstance(self.ipc_service_subject, UUID):
             raise ValueError("trusted IPC native service subject required")
+        if not isinstance(self.enforcement_configmap, str) or not re.fullmatch(
+            r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", self.enforcement_configmap
+        ):
+            raise ValueError("explicit enforcement ConfigMap required")
 
 
 def _secret(name: str, secret: str, key: str) -> Object:
@@ -150,6 +155,8 @@ def egress_pod(
         "SANDBOX_ID": str(pair.sandbox_id),
         "PROJECT_ID": str(pair.project_id),
         "ATTACHMENT_GENERATION": str(pair.generation),
+        "CREATOR_GENERATION": str(state.creator_generation),
+        "NAMESPACE": settings.namespace,
         "STATE_ID": str(state.state_id),
         "STATE_DEVICE": "/dev/ads-egress-state",
         "STATE_BYTES": str(state.storage_bytes),
@@ -208,6 +215,26 @@ def egress_pod(
                         _secret("WRAPPING_KEY_B64", custody, "wrapping.b64"),
                         _secret("TLS_CERT_PEM", runtime.tls_secret, "tls.crt"),
                         _secret("TLS_KEY_PEM", runtime.tls_secret, "tls.key"),
+                        {
+                            "name": "ADS_SANDBOX_EGRESS_ENFORCEMENT",
+                            "valueFrom": {
+                                "configMapKeyRef": {
+                                    "name": runtime.enforcement_configmap,
+                                    "key": "enforcement.json",
+                                    "optional": False,
+                                }
+                            },
+                        },
+                        {
+                            "name": "ADS_SANDBOX_EGRESS_TLS_CA_PEM",
+                            "valueFrom": {
+                                "secretKeyRef": {
+                                    "name": runtime.tls_secret,
+                                    "key": "ca.crt",
+                                    "optional": True,
+                                }
+                            },
+                        },
                     ],
                     "resources": {"requests": dict(budgets), "limits": dict(budgets)},
                     "ports": [{"name": "https", "containerPort": CONTROL_PORT, "protocol": "TCP"}],
@@ -219,7 +246,7 @@ def egress_pod(
                         "allowPrivilegeEscalation": False,
                         "capabilities": {
                             "drop": ["ALL"],
-                            "add": ["SYS_ADMIN", "NET_ADMIN", "NET_RAW"],
+                            "add": ["SYS_ADMIN", "NET_ADMIN", "NET_RAW", "NET_BIND_SERVICE"],
                         },
                         "seccompProfile": {"type": "Unconfined"},
                         "appArmorProfile": {"type": "Unconfined"},
@@ -232,9 +259,13 @@ def egress_pod(
                             ("ca-private", "/dev/ads-ca-private"),
                         )
                     ],
+                    "volumeMounts": [
+                        {"name": "runtime", "mountPath": "/run/ads-egress", "readOnly": False}
+                    ],
                 }
             ],
             "volumes": [
+                {"name": "runtime", "emptyDir": {"medium": "Memory", "sizeLimit": "32Mi"}},
                 {
                     "name": "state",
                     "persistentVolumeClaim": {

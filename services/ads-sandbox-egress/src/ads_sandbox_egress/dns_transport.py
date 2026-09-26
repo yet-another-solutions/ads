@@ -87,6 +87,16 @@ class DNSTransport:
         self._tasks: dict[asyncio.Task[None], Callable[[], None]] = {}
         self._writers: set[asyncio.StreamWriter] = set()
 
+    @property
+    def healthy(self) -> bool:
+        return (
+            not self._closed
+            and self._udp is not None
+            and not self._udp.is_closing()
+            and self._tcp is not None
+            and self._tcp.is_serving()
+        )
+
     def _warning(
         self,
         reason: str,

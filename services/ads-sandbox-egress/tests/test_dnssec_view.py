@@ -1,8 +1,10 @@
 import asyncio
-import base64
 import copy
+import runpy
 import shutil
 import time
+from pathlib import Path
+from uuid import uuid4
 
 import dns.asyncquery
 import dns.dnssec
@@ -12,8 +14,10 @@ import dns.name
 import dns.rcode
 import dns.rdatatype
 import dns.rrset
+import msgspec
 import pytest
 
+from ads_commons.egress import EgressDNSAnchor
 from ads_sandbox_egress.dnssec_answer import AnswerAuthentication
 from ads_sandbox_egress.dnssec_chain import PositiveChains
 from ads_sandbox_egress.dnssec_identity import DNSSECIdentities
@@ -199,9 +203,16 @@ def test_independent_delv_follows_stable_root_and_synthetic_delegations(state, t
     fixture.data[HOST, dns.rdatatype.A] = (fixture.a, fixture.answer_sigs)
     key = state[2].dnskey
     anchor = tmp_path / "sandbox-anchor.conf"
-    anchor.write_text(
-        f'trust-anchors {{ "." static-key {key.flags} {key.protocol} {key.algorithm} '
-        f'"{base64.b64encode(key.key).decode()}"; }};'
+    installer = runpy.run_path(
+        str(Path(__file__).parents[2] / "ads-sandbox-base/scripts/ads-install-dnssec-anchor")
+    )["install"]
+    assert (
+        installer(
+            msgspec.json.encode(EgressDNSAnchor(uuid4(), uuid4(), state[2].fingerprint, str(key))),
+            anchor,
+            tmp_path / "delv",
+        )
+        == state[2].fingerprint
     )
 
     async def run():
@@ -213,12 +224,10 @@ def test_independent_delv_follows_stable_root_and_synthetic_delegations(state, t
         process = None
         try:
             process = await asyncio.create_subprocess_exec(
-                "delv",
+                str(tmp_path / "delv"),
                 "@127.0.0.1",
                 "-p",
                 str(client_port),
-                "-a",
-                str(anchor),
                 HOST.to_text(),
                 "A",
                 "+root=.",

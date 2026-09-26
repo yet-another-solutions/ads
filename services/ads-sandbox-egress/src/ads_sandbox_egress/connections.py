@@ -14,6 +14,7 @@ import socket
 from collections.abc import Awaitable, Callable
 
 from ads_sandbox_egress.certificate_mirror import CertificateMirror
+from ads_sandbox_egress.certificate_status import CertificateStatusComposer
 from ads_sandbox_egress.certificates import CertificatePairs, PairDestination
 from ads_sandbox_egress.configuration import PolicyStore
 from ads_sandbox_egress.destinations import Address, DestinationBoundary
@@ -25,6 +26,7 @@ from ads_sandbox_egress.normalization import Normalizer
 from ads_sandbox_egress.origin_tls import OriginContext, inspect_origin
 from ads_sandbox_egress.policy import RequestDenied
 from ads_sandbox_egress.request_authorization import ConnectionTarget, RequestAuthorizer
+from ads_sandbox_egress.status_acquisition import StatusAcquisition
 from ads_sandbox_egress.streams import OwnedStream
 from ads_sandbox_egress.tls import ClientHello
 from ads_sandbox_egress.tls_transport import FrontendIdentity, TLSStream
@@ -91,13 +93,16 @@ class Connections:
         connect: SocketConnector,
         *,
         maximum: int = 128,
+        status_acquisition: StatusAcquisition | None = None,
     ) -> None:
         if not 1 <= maximum <= 128:
             raise ValueError("bounded connection admission required")
         self.policies, self.boundary, self.resolver = policies, boundary, resolver
         self.normalizer, self.ech, self.origin = normalizer, ech, origin
         self.pairs, self.mirror, self.connect = pairs, mirror, connect
+        self.certificates = CertificateStatusComposer(pairs, mirror)
         self.maximum = maximum
+        self.status_acquisition = status_acquisition
         self._tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -163,11 +168,9 @@ class Connections:
                     if selected not in (None, b"http/1.1", b"h2"):
                         raise RequestDenied("unsupported_origin_protocol")
                     destination = PairDestination(address, port, name)
-                    return (
-                        self.pairs.valid(destination, observed)
-                        if observed.verified
-                        else self.mirror.mirror(destination, observed)
-                    )
+                    if self.status_acquisition is not None:
+                        observed = await self.status_acquisition.acquire(observed)
+                    return self.certificates.compose(destination, observed)
 
                 stream = await TLSStream.accept(front.reader, writer, self.ech.context, prepare)
                 front = OwnedStream.tls(stream)

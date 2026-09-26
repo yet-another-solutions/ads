@@ -164,6 +164,7 @@ def pair_inputs():
             "memory_mib": 512,
             "resolver_ipv4": "10.96.0.10",
             "ipc_service_subject": "22222222-2222-4222-8222-222222222222",
+            "enforcement_configmap": "egress-enforcement",
         },
         "state_bytes": 1024**3,
     }

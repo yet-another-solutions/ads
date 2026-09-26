@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 
@@ -37,6 +38,8 @@ _PEM = serialization.Encoding.PEM
 _DER = serialization.Encoding.DER
 _ISSUER = frozenset((18, 19, 20, 21))
 _SUPPORTED = frozenset((7, 9, 10, 23, 25, 26, 32, 34, 39, 62, 64, 79, 81, 82, 89, 92)) | _ISSUER
+Issued = dict[int, tuple[x509.Certificate, ec.EllipticCurvePrivateKey, x509.Certificate]]
+StatusBuilder = Callable[[Issued], tuple[bytes | None, ...]]
 
 
 def _outcomes(issues: tuple[VerificationIssue, ...]) -> frozenset[tuple[int, int]]:
@@ -91,8 +94,23 @@ class CertificateMirror:
         return urlunsplit((parsed.scheme, parsed.netloc, f"/crl/{identity}.der", "", ""))
 
     def mirror(self, destination: PairDestination, observed: OriginCertificate) -> FrontendIdentity:
+        return self._mirror(destination, observed, None)
+
+    def for_status_composition(
+        self, destination: PairDestination, observed: OriginCertificate, status: StatusBuilder
+    ) -> FrontendIdentity:
+        return self._mirror(destination, observed, status)
+
+    def _mirror(
+        self,
+        destination: PairDestination,
+        observed: OriginCertificate,
+        status: StatusBuilder | None,
+    ) -> FrontendIdentity:
         self.signer.require_current()
-        if observed.verified:
+        if status is None and any(value is not None for value in observed.staples):
+            raise CertificateDefectRequiresMirror("origin_status_requires_composer")
+        if observed.verified and status is None:
             raise ValueError("successful origins require their stable certificate pair")
         if (
             not 1 <= len(observed.built_chain) <= 16
@@ -117,11 +135,16 @@ class CertificateMirror:
             if issue.code not in _SUPPORTED:
                 raise CertificateDefectRequiresMirror("certificate_condition_not_implemented")
             defects[issue.depth].add(issue.code)
-        revoked = any(issue.code == 23 for issue in observed.issues)
+        revoked_depths = set(observed.revoked) | {
+            issue.depth for issue in observed.issues if issue.code == 23
+        }
+        if any(type(depth) is not int or not 0 <= depth < len(source) for depth in revoked_depths):
+            raise CertificateDefectRequiresMirror("revocation_depth_unrepresentable")
+        revoked = bool(revoked_depths)
         if revoked and self.crls is None:
             raise CertificateDefectRequiresMirror("revocation_publication_not_implemented")
         # Do not strip a stapled-status obligation while mirroring another error.
-        if any(
+        if status is None and any(
             extension.oid == ExtensionOID.TLS_FEATURE
             for certificate in source
             for extension in certificate.extensions
@@ -153,11 +176,19 @@ class CertificateMirror:
         # Only reproduce the portion needed to carry the observed defects.
         # Self-issued (NOT self-signed) bridges retain path_length=0 on the
         # minted CA without introducing an unrelated path-length failure.
-        maximum = max(defects)
+        maximum = max(defects, default=0)
+        maximum = max(maximum, max(revoked_depths, default=0))
+        if status is not None:
+            maximum = max(
+                maximum,
+                max(
+                    (i for i, value in enumerate(observed.staples) if value is not None), default=0
+                ),
+            )
+            if maximum >= len(source):
+                raise CertificateDefectRequiresMirror("status_chain_mapping_unavailable")
         path_length_failure = any(issue.code == 25 for issue in observed.issues)
-        issued: dict[
-            int, tuple[x509.Certificate, ec.EllipticCurvePrivateKey, x509.Certificate]
-        ] = {}
+        issued: Issued = {}
         for depth in range(maximum, 0, -1):
             key = ec.generate_private_key(ec.SECP384R1())
             builder = certificate_builder(
@@ -199,14 +230,14 @@ class CertificateMirror:
             assert self.crls is not None
             now = datetime.now(UTC)
             for depth, (local_issuer, private_key, certificate) in issued.items():
-                if 23 in defects[depth] and 7 in defects[depth]:
+                if depth in revoked_depths and 7 in defects[depth]:
                     raise CertificateDefectRequiresMirror("revoked_bad_signature_requires_composer")
                 try:
                     authority = CRLAuthority(local_issuer, private_key)
                     publication = self.crls.publish(
                         authority,
                         now=now,
-                        revoke=certificate if 23 in defects[depth] else None,
+                        revoke=certificate if depth in revoked_depths else None,
                     )
                 except (ValueError, CRLUnavailable):
                     raise CertificateDefectRequiresMirror(
@@ -217,7 +248,11 @@ class CertificateMirror:
             chain,
             destination.server_name or str(destination.address),
             crls=tuple(published.values()) + self.issuer_crls,
-            check_revocation=revoked,
+            # Native chain findings use the same original full-chain check.
+            # Independently acquired CRL/OCSP findings are also represented by
+            # the published issuer-bound synthetic CRLs, but do not invent a
+            # mandatory CRL for the configured parent CA or trust root.
+            check_revocation=any(issue.code == 23 for issue in observed.issues),
         )
         if _outcomes(actual) != _outcomes(observed.issues):
             raise CertificateDefectRequiresMirror("synthetic_validation_outcome_mismatch")
@@ -227,4 +262,5 @@ class CertificateMirror:
                 _PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
             ),
             observed.selected_alpn,
+            () if status is None else status(issued),
         )

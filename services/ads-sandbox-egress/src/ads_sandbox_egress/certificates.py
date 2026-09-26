@@ -253,9 +253,22 @@ class CertificatePairs:
         self.store, self.signer, self.crl_url = store, signer, crl_url
 
     def valid(self, destination: PairDestination, observed: OriginCertificate) -> FrontendIdentity:
+        return self._valid(destination, observed, compose_status=False)
+
+    def for_status_composition(
+        self, destination: PairDestination, observed: OriginCertificate
+    ) -> FrontendIdentity:
+        """Unpublished candidate; caller must compose/check status before TLS."""
+        return self._valid(destination, observed, compose_status=True)
+
+    def _valid(
+        self, destination: PairDestination, observed: OriginCertificate, *, compose_status: bool
+    ) -> FrontendIdentity:
         self.signer.require_current()
         if not observed.verified:
             raise CertificateDefectRequiresMirror("origin_defect_requires_mirroring")
+        if not compose_status and any(status is not None for status in observed.staples):
+            raise CertificateDefectRequiresMirror("origin_status_requires_composer")
         try:
             source = x509.load_der_x509_certificate(observed.presented_chain[0])
             built = tuple(x509.load_der_x509_certificate(der) for der in observed.built_chain)
@@ -269,7 +282,9 @@ class CertificatePairs:
         # Stapled-status synthesis is not implemented by a successful-pair cache.
         # Its caller must acquire/check the status and use the appropriate
         # certificate/status composer rather than stripping Must-Staple.
-        if any(extension.oid == ExtensionOID.TLS_FEATURE for extension in source.extensions):
+        if not compose_status and any(
+            extension.oid == ExtensionOID.TLS_FEATURE for extension in source.extensions
+        ):
             raise CertificateDefectRequiresMirror("origin_status_requires_composer")
         name = (
             f"tls/{self.signer.fingerprint}/{destination.fingerprint()}/"

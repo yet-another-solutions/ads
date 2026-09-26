@@ -29,6 +29,54 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Component verification and review
 
+### Executable composition and public-anchor delivery, 2026-09-26
+
+Added the executable owner, strict manager settings, custody preflight and
+mount cleanup, fail-closed guest REDIRECT boundary, actual NGINX supervision,
+local enforcement health, authenticated public DNSSEC anchor delivery, durable
+IPC pinning and rootless inner installation before execution readiness.
+The manager supplies a required enforcement ConfigMap, creator identity and
+a bounded memory runtime directory; no infrastructure inventory or upstream
+DNSSEC root is invented. The new source-only amd64 Containerfile uses the
+verified OpenSSL 4.0.2 Debian package hash and has a nonpublishing CI matrix
+definition, not a built image claim.
+
+Real HTTPS composition tests exercise SQLite, native TLS, NGINX, DNS, CRL and
+interception listeners with explicit external block/kernel/Keycloak boundaries.
+The actual public-anchor installer produces a managed `delv` wrapper whose
+explicit anchor validates the serving synthetic DNS view independently.
+The wrapper is necessary for modern BIND's built-in default root behavior:
+[Debian delv manual](https://manpages.debian.org/testing/bind9-dnsutils/delv.1.en.html).
+No private DNSSEC/ECH key, wrapping key or extra upstream TLS anchor is exported.
+
+TLS status now includes real OpenSSL chain-staple acquisition/ownership and
+frontend installation, bound OCSP outcome substitution and independent CLI
+verification. Bounded upstream CRL/OCSP HTTP(S) acquisition rejects private
+destinations, redirects, malformed framing and oversized data; fresh full CRLs
+verify issuer signatures/time/serial and feed issuer-scoped local revocation.
+Unsupported status constructions remain explicit incomplete support, not proof
+that resetting supports them. Remaining combinations and client revocation
+integration still need completion.
+
+Milestone local gates before status-fetch addition: all five Nox gates,
+**1,829 tests, zero skips**, 84.37s. After status-fetch addition: **1,853 tests,
+zero skips**, 81.22s; deps/typecheck/package passed, lint found one long test
+literal (subsequently split, rerun pending). Initial failing logs retain the
+DNSKEY textual-base64 chunk issue, new manager-environment expectation and
+missing imported test fixture; no assertions or deadlines were relaxed.
+
+Fresh local kernel probe: `unshare --user --map-root-user --net nft list ruleset`
+fails `Unable to initialize Netlink socket: Protocol not supported`. Namespace
+creation works but NETLINK_NETFILTER does not; safe namespace setup cannot
+provide the missing kernel protocol. Kernel enforcement is not proved locally.
+Loop devices exist, but custody mounting has not yet been proved. No CI was
+started and no image was built locally.
+
+Open obligations remain: DNSSEC cache-compatible rotation/retirement, remaining
+TLS status/defect combinations, complete runtime failure and recovery review,
+kernel/custody proof, image proof and final exact-head whole-workspace gates.
+This is substantial runtime integration, not a slice-completion claim.
+
 ### Durable ECH, checked synthetic view and connection owner, 2026-09-26
 
 `ech_lifecycle.py` persists immutable configuration generations, installs the

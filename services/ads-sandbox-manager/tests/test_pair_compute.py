@@ -71,6 +71,7 @@ def test_private_guest_is_fixed_pod_not_workload_controller(guest_inputs):
         "ADS_SESSION_DEVICE": "/dev/ads-session",
         "ADS_CA_ATTEMPT": str(attempt),
         "ADS_SANDBOX_NETWORK_MODE": "private",
+        "ADS_SANDBOX_ID": str(pair.sandbox_id),
         "ADS_ATTACHMENT_GENERATION": str(pair.generation),
         "ADS_PRIVATE_MTU": "1340",
         **{

@@ -34,6 +34,7 @@ typedef struct X509_crl_st X509_CRL;
 typedef struct x509_store_ctx_st X509_STORE_CTX;
 typedef struct X509_VERIFY_PARAM_st X509_VERIFY_PARAM;
 typedef struct stack_st OPENSSL_STACK;
+typedef struct ocsp_response_st OCSP_RESPONSE;
 typedef struct ossl_echstore_st OSSL_ECHSTORE;
 typedef struct { uint16_t kem_id; uint16_t kdf_id; uint16_t aead_id; } OSSL_HPKE_SUITE;
 const char *OpenSSL_version(int);
@@ -42,6 +43,7 @@ const SSL_METHOD *TLS_client_method(void);
 SSL_CTX *SSL_CTX_new(const SSL_METHOD *);
 void SSL_CTX_free(SSL_CTX *);
 long SSL_CTX_ctrl(SSL_CTX *, int, long, void *);
+long SSL_CTX_callback_ctrl(SSL_CTX *, int, void (*)(void));
 uint64_t SSL_CTX_set_options(SSL_CTX *, uint64_t);
 int SSL_CTX_set_num_tickets(SSL_CTX *, size_t);
 int SSL_CTX_set_max_early_data(SSL_CTX *, uint32_t);
@@ -85,6 +87,9 @@ OPENSSL_STACK *OPENSSL_sk_new_null(void);
 int OPENSSL_sk_push(OPENSSL_STACK *, const void *);
 void OPENSSL_sk_free(OPENSSL_STACK *);
 int i2d_X509(const X509 *, unsigned char **);
+int i2d_OCSP_RESPONSE(const OCSP_RESPONSE *, unsigned char **);
+OCSP_RESPONSE *d2i_OCSP_RESPONSE(OCSP_RESPONSE **, const unsigned char **, long);
+void OCSP_RESPONSE_free(OCSP_RESPONSE *);
 int SSL_get_error(const SSL *, int);
 int SSL_use_certificate(SSL *, X509 *);
 int SSL_use_PrivateKey(SSL *, EVP_PKEY *);
@@ -133,6 +138,7 @@ class UnmappableReason(StrEnum):
     UPSTREAM_HANDSHAKE = "upstream_handshake"
     MALFORMED_CERTIFICATE = "malformed_certificate"
     UNREPRESENTABLE_VALIDATION = "unrepresentable_validation"
+    UNAVAILABLE_STATUS = "unavailable_status"
 
 
 class UnmappableTLS(TLSFailure):
@@ -370,6 +376,13 @@ class TLSContext:
             )
             ssl.SSL_CTX_set_client_hello_cb(self._context, self._hello_callback, ffi.NULL)
             ssl.SSL_CTX_set_alpn_select_cb(self._context, self._alpn_callback, ffi.NULL)
+            self._status_callback: Any = ffi.callback("int(SSL *, void *)", self._status, error=2)
+            library.require(
+                ssl.SSL_CTX_callback_ctrl(
+                    self._context, 63, ffi.cast("void (*)(void)", cast(Any, self._status_callback))
+                ),
+                "tls_status_callback",
+            )
         except BaseException:
             self.close()
             raise
@@ -379,6 +392,19 @@ class TLSContext:
     def _check_thread(self) -> None:
         if self._owner != threading.get_ident():
             raise TLSFailure("tls_thread_ownership")
+
+    def _status(self, connection: Any, unused: Any) -> int:
+        try:
+            self._check_thread()
+            session = self._sessions[connection]
+            if not session._ready:
+                return 2
+            from ads_sandbox_egress.tls_status import install_staples
+
+            install_staples(self.library, connection, session.staples)
+            return 0 if session.staples else 3
+        except Exception:
+            return 2
 
     def _hello(self, connection: Any, alert: Any, unused: Any) -> int:
         try:
@@ -428,6 +454,7 @@ class TLSContext:
 class TLSSession:
     """One bounded memory-BIO connection, paused before choosing a certificate."""
 
+    staples: tuple[bytes | None, ...] = ()
     BUFFER_LIMIT = 131072
 
     def __init__(self, context: NativeContext) -> None:
@@ -534,7 +561,11 @@ class TLSSession:
         return "complete"
 
     def resume(
-        self, certificate_chain: tuple[bytes, ...], private_key: bytes, alpn: bytes | None
+        self,
+        certificate_chain: tuple[bytes, ...],
+        private_key: bytes,
+        alpn: bytes | None,
+        staples: tuple[bytes | None, ...] = (),
     ) -> None:
         self._check()
         if self.hello is None or self._ready or self.established:
@@ -584,6 +615,9 @@ class TLSSession:
             crypto.BIO_free(bio)
         self.selected = alpn
         self._selection = ffi.new("unsigned char[]", alpn) if alpn else ffi.NULL
+        if len(staples) > len(certificate_chain):
+            raise TLSFailure("tls_status_chain_limit")
+        self.staples = staples
         self._ready = True
 
     def read(self, maximum: int = 16384) -> bytes | None:

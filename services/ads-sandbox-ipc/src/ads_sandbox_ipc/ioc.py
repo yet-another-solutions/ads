@@ -11,6 +11,7 @@ from ads_commons_beans import JwtVerifierSettings, TokenExchange, TokenExchangeS
 from ads_sandbox_ipc.auth import ClientCredentials, TokenMinter
 from ads_sandbox_ipc.config import Settings
 from ads_sandbox_ipc.controller import KafkaController
+from ads_sandbox_ipc.dnssec_trust import DNSSECInstallation
 from ads_sandbox_ipc.egress import EgressDelivery, RevisionFloor
 from ads_sandbox_ipc.egress_transport import HttpsEgressTransport
 from ads_sandbox_ipc.guest import GuestExecutor, Kubernetes
@@ -46,7 +47,29 @@ class AppProvider(Provider):
         return exchange
 
     store = provide(PidStore, scope=Scope.APP)
-    guest = provide(GuestExecutor, scope=Scope.APP)
+
+    @provide(scope=Scope.APP)
+    def guest(
+        self, settings: Settings, kube: Kubernetes, store: PidStore, tokens: TokenExchange
+    ) -> GuestExecutor:
+        pair = settings.egress
+        trust = (
+            None
+            if pair is None
+            else DNSSECInstallation(
+                settings,
+                HttpsEgressTransport(
+                    pair.base_url,
+                    pair.relay_urls,
+                    tokens,
+                    self._ssl(settings),
+                    settings.control_seconds,
+                ),
+                kube,
+            )
+        )
+        return GuestExecutor(settings, kube, store, trust)
+
     client_credentials = provide(ClientCredentials, scope=Scope.APP)
     publisher = provide(KafkaPublisher, scope=Scope.APP, provides=Publisher)
     service = provide(IpcService, scope=Scope.APP)

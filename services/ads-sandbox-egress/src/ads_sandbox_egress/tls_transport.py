@@ -25,6 +25,7 @@ class FrontendIdentity:
     certificate_chain: tuple[bytes, ...]
     private_key: bytes = field(repr=False)
     selected_alpn: bytes | None = None
+    staples: tuple[bytes | None, ...] = ()
 
 
 class TLSStream:
@@ -75,6 +76,7 @@ class TLSStream:
                             identity.certificate_chain,
                             identity.private_key,
                             identity.selected_alpn,
+                            identity.staples,
                         )
                     elif state == "complete":
                         return stream

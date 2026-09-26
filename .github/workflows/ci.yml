@@ -46,6 +46,7 @@ jobs:
           - services/ads-sandbox-ipc/Containerfile
           - services/ads-sandbox-manager/Containerfile
           - services/ads-sandbox-ca/Containerfile
+          - services/ads-sandbox-egress/Containerfile
           - services/ads-ptp-tools/Containerfile
           - services/ads-sandbox-golden/Containerfile
           - services/ads-sandbox-golden/Containerfile.inner
@@ -125,6 +126,11 @@ jobs:
             file: services/ads-sandbox-ca/Containerfile
             context: .
             smoke: "import ads_sandbox_ca; print(ads_sandbox_ca.__version__)"
+            pack: "false"
+          - image: ads-sandbox-egress
+            file: services/ads-sandbox-egress/Containerfile
+            context: .
+            smoke: "from pathlib import Path; import ads_sandbox_egress.runtime; from ads_sandbox_egress.tls import TLSLibrary; TLSLibrary(Path('/opt/ads-openssl/lib'))"
             pack: "false"
           - image: ads-ptp-tools
             file: services/ads-ptp-tools/Containerfile
