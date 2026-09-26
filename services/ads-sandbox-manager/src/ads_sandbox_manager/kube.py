@@ -56,6 +56,7 @@ class KubeClient:
         self.batch = client.BatchV1Api(self.api_client)
         self.storage = client.StorageV1Api(self.api_client)
         self.apps = client.AppsV1Api(self.api_client)
+        self.node = client.NodeV1Api(self.api_client)
 
     async def close(self) -> None:
         await asyncio.to_thread(self.api_client.close)
@@ -92,6 +93,14 @@ class KubeClient:
 
     async def named_pvc(self, name: str) -> Object | None:
         return await self._get(self.core.read_namespaced_persistent_volume_claim, name)
+
+    async def runtime_class(self, name: str) -> Object | None:
+        try:
+            return cast(Object, await self._call(self.node.read_runtime_class, name))
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
 
     async def deployment(self, name: str) -> Object | None:
         return await self._get(self.apps.read_namespaced_deployment, name)

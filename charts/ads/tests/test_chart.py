@@ -120,6 +120,30 @@ DISCOVERY = {
 
 
 class ChartTests(unittest.TestCase):
+    def test_runtime_class_overhead_read_is_manager_get_only(self):
+        docs = self.documents()
+        rules = [
+            (kind, name, rule)
+            for (kind, name), document in docs.items()
+            if kind in ("Role", "ClusterRole")
+            for rule in document["rules"]
+            if "runtimeclasses" in rule.get("resources", [])
+        ]
+        self.assertEqual(
+            rules,
+            [
+                (
+                    "ClusterRole",
+                    "ads-ads-sandbox-manager-observe",
+                    {
+                        "apiGroups": ["node.k8s.io"],
+                        "resources": ["runtimeclasses"],
+                        "verbs": ["get"],
+                    },
+                )
+            ],
+        )
+
     def test_node_owner_client_identity_is_only_mounted_by_manager(self):
         docs = self.documents(
             "--set",

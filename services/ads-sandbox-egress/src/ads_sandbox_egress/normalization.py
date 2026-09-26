@@ -24,6 +24,9 @@ def nginx_configuration(directory: Path) -> str:
     return f"""
 load_module /usr/lib/nginx/modules/ndk_http_module.so;
 load_module /usr/lib/nginx/modules/ngx_http_lua_module.so;
+# Single-process helper already runs as container root without CAP_CHOWN.
+# Keep its private temporary paths owned by that same identity.
+user root;
 daemon off;
 master_process off;
 pid {directory}/nginx.pid;
