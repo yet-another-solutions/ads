@@ -119,6 +119,13 @@ class PairControlAdapter:
     @staticmethod
     def _spec_matches(observed: Object, desired: Object) -> bool:
         actual = dict(observed.get("spec", {}))
+        if desired["kind"] == "PodGroup":
+            # Native v1alpha2 defaults only: no workload-template association
+            # and per-Pod disruption. Placement and gang policy remain exact.
+            if actual.pop("podGroupTemplateRef", None) is not None:
+                return False
+            if actual.pop("disruptionMode", "Pod") != "Pod":
+                return False
         if desired["kind"] == "Service":
             # Permit only API allocation/defaulting, never additive exposure,
             # changed selectors, widened ports, or alternate routing settings.
