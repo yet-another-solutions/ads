@@ -10,6 +10,44 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Requirement and proof map
 
+### Stopped at user request, 2026-09-26
+
+The user redirected work to applying needed fixtures, pushing the feature
+branch and stopping. Slice 20 remains OPEN. No PR/CI/merge/publication or lab
+work is authorized by that final instruction.
+
+Additional status implementation now handles strict RSA-PSS OCSP parameters,
+direct/scoped/indirect CRL issuer and entry binding, base/delta generations,
+reason coverage, hold removal and bounded FreshestCRL acquisition. Independent
+OpenSSL proofs cover PSS and direct scope/delta outcomes. Indirect signers must
+already have independently issuer-authenticated certificate evidence; absent
+signer/locator evidence remains unavailable, never a good status or chain repair.
+Combined intermediate time/CA/keyCertSign defects and revocation retain their
+wire defects; status-only issuer twins are not sent as TLS chain or trust.
+Existing CRLRepository current-authority and exact issuer binding checks remain.
+
+All five local Nox gates for these additions passed: **1,391 tests, no skips**,
+75.04 seconds. Helm lint/template and Hadolint passed locally. Actual netfilter
+and image proof have not run; source-only definitions are not successful CI.
+
+The full original-order run on 18f808e was interrupted at user request after
+reaching manager registry tests (about 62%), exit 130. It reported two failures:
+the egress publication fixture's positional wrapping-key environment assertion
+(corrected to select its exact name, preserving the key assertion), and
+test_retained_operation_has_its_own_deadline_and_late_sdk_is_ambiguous.
+The latter's fixture now starts its existing short budget at dispatch entry,
+not before unrelated SQL setup, with an additional 0.4-second delayed-setup
+case. Its original full-run cause remains unresolved without a completed
+traceback. No production deadlines or security assertions were relaxed.
+This is NOT a full-suite pass, and the
+original historical manager failure causes remain unknown.
+
+The OCSP PSS test also now samples its inspection clock after RSA generation
+and response signing, so producedAt cannot outrun a rounded fixture timestamp.
+Production future-time validation is unchanged. Final complete-head regression,
+remaining support review and actual kernel/image proof remain necessary before
+any slice-20 done update.
+
 ### Current review candidate, 2026-09-26
 
 This newest section overrides the historical table and component chronology below.

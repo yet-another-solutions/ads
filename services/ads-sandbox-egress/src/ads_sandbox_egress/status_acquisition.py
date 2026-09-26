@@ -19,11 +19,12 @@ import dns.rdatatype
 import h11
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import dsa, ec, ed448, ed25519, rsa
 from cryptography.x509 import ocsp
 from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
 
 from ads_sandbox_egress.certificates import CertificateDefectRequiresMirror
+from ads_sandbox_egress.crl_status import crl_set_revoked
+from ads_sandbox_egress.crl_status import extension as get_extension
 from ads_sandbox_egress.destinations import Address
 from ads_sandbox_egress.http1 import HTTP1Channel
 from ads_sandbox_egress.ocsp_status import inspect_status
@@ -48,8 +49,8 @@ def status_urls(certificate: x509.Certificate) -> tuple[tuple[str, ...], tuple[s
                     ocsp_urls.append(item.access_location.value)
         elif extension.oid == ExtensionOID.CRL_DISTRIBUTION_POINTS:
             for point in extension.value:
-                if point.relative_name is not None or point.crl_issuer is not None or point.reasons:
-                    raise CertificateDefectRequiresMirror("scoped_CRL_requires_composer")
+                if not point.full_name:
+                    raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
                 for item in point.full_name or ():
                     if not isinstance(item, x509.UniformResourceIdentifier):
                         raise CertificateDefectRequiresMirror("unsupported_CRL_locator")
@@ -62,68 +63,7 @@ def status_urls(certificate: x509.Certificate) -> tuple[tuple[str, ...], tuple[s
 def crl_revoked(
     wire: bytes, certificate: x509.Certificate, issuer: x509.Certificate, *, now: datetime
 ) -> bool:
-    if not 1 <= len(wire) <= 2 * 1024**2:
-        raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
-    try:
-        crl = x509.load_der_x509_crl(wire)
-        public = issuer.public_key()
-        if not isinstance(
-            public,
-            (
-                rsa.RSAPublicKey,
-                ec.EllipticCurvePublicKey,
-                dsa.DSAPublicKey,
-                ed25519.Ed25519PublicKey,
-                ed448.Ed448PublicKey,
-            ),
-        ):
-            raise CertificateDefectRequiresMirror("CRL_algorithm_requires_composer")
-        if (
-            crl.issuer != issuer.subject
-            or not crl.is_signature_valid(public)
-            or crl.next_update_utc is None
-            or not crl.last_update_utc <= now < crl.next_update_utc
-            or len(crl) > 100000
-        ):
-            raise ValueError
-        usage = issuer.extensions.get_extension_for_class(x509.KeyUsage).value
-        if not usage.crl_sign:
-            raise ValueError
-        for extension in crl.extensions:
-            if extension.oid in (
-                ExtensionOID.DELTA_CRL_INDICATOR,
-                ExtensionOID.ISSUING_DISTRIBUTION_POINT,
-            ):
-                raise CertificateDefectRequiresMirror("scoped_CRL_requires_composer")
-            if extension.critical:
-                raise CertificateDefectRequiresMirror("critical_CRL_requires_composer")
-            if extension.oid == ExtensionOID.AUTHORITY_KEY_IDENTIFIER and (
-                extension.value.key_identifier is not None
-                and extension.value.key_identifier
-                != x509.SubjectKeyIdentifier.from_public_key(issuer.public_key()).digest
-            ):
-                raise ValueError
-        entries = [entry for entry in crl if entry.serial_number == certificate.serial_number]
-        if len(entries) > 1:
-            raise ValueError
-        if not entries:
-            return False
-        entry = entries[0]
-        if entry.revocation_date_utc > now:
-            raise ValueError
-        if any(extension.critical for extension in entry.extensions):
-            raise CertificateDefectRequiresMirror("critical_CRL_entry_requires_composer")
-        try:
-            if (
-                entry.extensions.get_extension_for_class(x509.CRLReason).value.reason
-                == x509.ReasonFlags.remove_from_crl
-            ):
-                raise CertificateDefectRequiresMirror("delta_CRL_requires_composer")
-        except x509.ExtensionNotFound:
-            pass
-        return True
-    except (ValueError, TypeError, x509.ExtensionNotFound):
-        raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS) from None
+    return crl_set_revoked((wire,), certificate, issuer, now=now)
 
 
 class StatusAcquisition:
@@ -252,13 +192,33 @@ class StatusAcquisition:
                             revoked.add(depth)
                     # Inspect every advertised full CRL endpoint; no good
                     # alternative masks another authenticated revocation.
+                    crl_wires: list[bytes] = []
+                    delta_urls: set[str] = set()
                     for url in crls:
                         count += 1
                         if count > 16:
                             raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
                         wire = await self.fetch(url, None, job=job)
-                        if crl_revoked(wire, certificate, issuer, now=now):
-                            revoked.add(depth)
+                        crl_wires.append(wire)
+                        base = x509.load_der_x509_crl(wire)
+                        for source in (certificate, base):
+                            freshest = get_extension(source, x509.FreshestCRL)
+                            for point in freshest or ():
+                                if point.crl_issuer or not point.full_name:
+                                    raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
+                                for location in point.full_name:
+                                    if not isinstance(location, x509.UniformResourceIdentifier):
+                                        raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
+                                    delta_urls.add(location.value)
+                    for url in sorted(delta_urls):
+                        count += 1
+                        if count > 16:
+                            raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
+                        crl_wires.append(await self.fetch(url, None, job=job))
+                    if crl_wires and crl_set_revoked(
+                        tuple(crl_wires), certificate, issuer, now=now, signers=chain
+                    ):
+                        revoked.add(depth)
                 return replace(observed, staples=tuple(statuses), revoked=tuple(sorted(revoked)))
         except CertificateDefectRequiresMirror:
             raise

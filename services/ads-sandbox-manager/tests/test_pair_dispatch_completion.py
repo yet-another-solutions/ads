@@ -183,9 +183,26 @@ async def test_cancelled_drain_does_not_cancel_original_operation(controls):
         await release_and_drain(f)
 
 
-async def test_retained_operation_has_its_own_deadline_and_late_sdk_is_ambiguous(controls):
+@pytest.mark.parametrize("setup_delay", [0, 0.4])
+async def test_retained_operation_has_its_own_deadline_and_late_sdk_is_ambiguous(
+    controls, setup_delay
+):
     f = controls
-    f.service.settings = replace(f.service.settings, control_seconds=0.3)
+    original_dispatch = f.service._dispatch
+    original_begin = f.repo.begin
+
+    async def begin(*args, **kwargs):
+        await asyncio.sleep(setup_delay)
+        return await original_begin(*args, **kwargs)
+
+    async def dispatch(*args, **kwargs):
+        # Start the short retained-operation budget at that operation's entry,
+        # not before the unrelated durable intent/dispatch transactions.
+        f.service.settings = replace(f.service.settings, control_seconds=0.3)
+        return await original_dispatch(*args, **kwargs)
+
+    f.repo.begin = begin
+    f.service._dispatch = dispatch
     try:
         intent = await cancelled_caller(f)
         operation = next(iter(f.service._dispatches))

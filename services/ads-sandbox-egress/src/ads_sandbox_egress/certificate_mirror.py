@@ -189,13 +189,17 @@ class CertificateMirror:
                 raise CertificateDefectRequiresMirror("status_chain_mapping_unavailable")
         path_length_failure = any(issue.code == 25 for issue in observed.issues)
         issued: Issued = {}
+        # A status-only issuer twin carries the same subject/key/serial but
+        # current custody dates and CRL-storage CA capability. It is NEVER sent
+        # in the TLS chain or trusted. Wire issuer defects remain unchanged.
+        status_issuer = issuer
         for depth in range(maximum, 0, -1):
             key = ec.generate_private_key(ec.SECP384R1())
             builder = certificate_builder(
                 source[depth],
                 key,
                 issuer,
-                self._location(issuer),
+                self._location(status_issuer),
                 # A path-length failure must NOT be repaired by making all
                 # synthetic intermediates self-issued. Reproduce the original
                 # hierarchy's names/counting in that case. Added local CA levels
@@ -210,21 +214,26 @@ class CertificateMirror:
             # CRL publication still proves the exact issuer-signed serial/TBS.
             # The wire twin differs only in signature bytes and is validated
             # independently below; never bypass CRL issuer-binding checks.
-            issued[depth] = issuer, issuer_key, valid_bridge
+            issued[depth] = status_issuer, issuer_key, valid_bridge
             tail.insert(0, bridge.public_bytes(_PEM))
+            status_issuer = (
+                _status_issuer(valid_bridge, issuer_key, self.signer.certificate)
+                if revoked
+                else valid_bridge
+            )
             issuer, issuer_key = bridge, key
         leaf_key = _new_leaf_key(source[0])
         builder = certificate_builder(
             source[0],
             leaf_key,
             issuer,
-            self._location(issuer),
+            self._location(status_issuer),
             cap_expiry=False,
             bind_issuer_certificate=True,
         )
         valid_leaf = builder.sign(issuer_key, hashes.SHA384())
         leaf = _damaged(valid_leaf) if 7 in defects[0] else valid_leaf
-        issued[0] = issuer, issuer_key, valid_leaf
+        issued[0] = status_issuer, issuer_key, valid_leaf
         chain = (leaf.public_bytes(_PEM), *tail)
         published: dict[str, bytes] = {}
         if revoked:
@@ -271,3 +280,31 @@ def _damaged(certificate: x509.Certificate) -> x509.Certificate:
     if result.tbs_certificate_bytes != certificate.tbs_certificate_bytes:
         raise CertificateDefectRequiresMirror("signature_damage_changed_certificate")
     return result
+
+
+def _status_issuer(
+    certificate: x509.Certificate,
+    issuer_key: ec.EllipticCurvePrivateKey,
+    custody: x509.Certificate,
+) -> x509.Certificate:
+    now = datetime.now(UTC)
+    ca = certificate.extensions.get_extension_for_class(x509.BasicConstraints)
+    if ca.value.ca and certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc:
+        return certificate
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(certificate.subject)
+        .issuer_name(certificate.issuer)
+        .public_key(certificate.public_key())
+        .serial_number(certificate.serial_number)
+        .not_valid_before(custody.not_valid_before_utc)
+        .not_valid_after(custody.not_valid_after_utc)
+    )
+    for extension in certificate.extensions:
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=True, path_length=0)
+            if isinstance(extension.value, x509.BasicConstraints)
+            else extension.value,
+            extension.critical,
+        )
+    return builder.sign(issuer_key, hashes.SHA384())

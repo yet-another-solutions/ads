@@ -110,10 +110,14 @@ async def test_payload_reservation_commits_before_unlocked_io_and_no_ready(publi
             assert intent.compute_dispatch["Pod/egress"] == "inflight"
             assert intent.compute_uids["Pod/egress"] is None
             assert payload["state"] == state_snapshot(f.state)
+            environment = {
+                entry["name"]: entry
+                for entry in payload["manifest"]["spec"]["containers"][0]["env"]
+            }
             assert (
-                payload["manifest"]["spec"]["containers"][0]["env"][-3]["valueFrom"][
-                    "secretKeyRef"
-                ]["key"]
+                environment["ADS_SANDBOX_EGRESS_WRAPPING_KEY_B64"]["valueFrom"]["secretKeyRef"][
+                    "key"
+                ]
                 == "wrapping.b64"
             )
             seen.append(role)

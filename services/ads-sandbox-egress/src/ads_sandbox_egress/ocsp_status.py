@@ -11,11 +11,13 @@ from datetime import UTC, datetime
 
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
 from cryptography.x509 import ocsp
 from cryptography.x509.oid import ExtendedKeyUsageOID, SignatureAlgorithmOID
 
 from ads_sandbox_egress.ocsp_der import single_critical
+from ads_sandbox_egress.ocsp_signature import pss_parameters
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +38,12 @@ class StatusEvidence:
 
 def _signature(response: ocsp.OCSPResponse, signer: x509.Certificate) -> None:
     key = signer.public_key()
-    digest = response.signature_hash_algorithm
     if isinstance(key, rsa.RSAPublicKey):
         if response.signature_algorithm_oid == SignatureAlgorithmOID.RSASSA_PSS:
-            raise UnsupportedAlgorithm("OCSP RSA-PSS parameters unavailable")
+            scheme, pss_digest = pss_parameters(response.public_bytes(serialization.Encoding.DER))
+            key.verify(response.signature, response.tbs_response_bytes, scheme, pss_digest)
+            return
+        digest = response.signature_hash_algorithm
         if digest is None:
             raise UnsupportedAlgorithm("OCSP signature digest unavailable")
         if response.signature_algorithm_oid.dotted_string not in {
@@ -52,6 +56,7 @@ def _signature(response: ocsp.OCSPResponse, signer: x509.Certificate) -> None:
             raise UnsupportedAlgorithm("OCSP signer algorithm mismatch")
         key.verify(response.signature, response.tbs_response_bytes, padding.PKCS1v15(), digest)
     elif isinstance(key, ec.EllipticCurvePublicKey):
+        digest = response.signature_hash_algorithm
         if digest is None:
             raise UnsupportedAlgorithm("OCSP signature digest unavailable")
         if response.signature_algorithm_oid.dotted_string not in {
