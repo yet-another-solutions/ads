@@ -6,6 +6,7 @@ import asyncio
 import os
 import socket
 import ssl
+import sys
 import tempfile
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
@@ -259,18 +260,29 @@ def main() -> None:
     # them to the supervised NGINX child or retain redundant environment copies.
     for name in ("WRAPPING_KEY_B64", "TLS_CERT_PEM", "TLS_KEY_PEM"):
         os.environ.pop(PREFIX + name, None)
-    with ExitStack() as cleanup:
-        parent = Path("/run/ads-egress")
-        info = parent.lstat()
-        if parent.is_symlink() or not parent.is_dir() or info.st_uid != 0:
-            raise RuntimeError("owned private runtime mount required")
-        os.chmod(parent, 0o700)
-        directory = Path(
-            cleanup.enter_context(tempfile.TemporaryDirectory(prefix="run-", dir=parent))
-        )
-        cert, key, context = tls_files(settings, directory)
-        library = TLSLibrary(Path("/opt/ads-openssl/lib"))
-        boundary = KernelBoundary(settings.network)
-        boundary.establish()
-        custody = cleanup.enter_context(mounted_custody(settings.devices, directory))
-        asyncio.run(serve(settings, custody, directory, library, boundary, cert, key, context))
+    stage = "runtime-directory"
+    try:
+        with ExitStack() as cleanup:
+            parent = Path("/run/ads-egress")
+            info = parent.lstat()
+            if parent.is_symlink() or not parent.is_dir() or info.st_uid != 0:
+                raise RuntimeError("owned private runtime mount required")
+            os.chmod(parent, 0o700)
+            directory = Path(
+                cleanup.enter_context(tempfile.TemporaryDirectory(prefix="run-", dir=parent))
+            )
+            stage = "control-tls"
+            cert, key, context = tls_files(settings, directory)
+            stage = "native-tls"
+            library = TLSLibrary(Path("/opt/ads-openssl/lib"))
+            stage = "kernel-boundary"
+            boundary = KernelBoundary(settings.network)
+            boundary.establish()
+            stage = "block-custody"
+            custody = cleanup.enter_context(mounted_custody(settings.devices, directory))
+            stage = "serve"
+            asyncio.run(serve(settings, custody, directory, library, boundary, cert, key, context))
+    except Exception:
+        # Only a code-owned constant: never exception text, inputs or tracebacks.
+        print(f"egress runtime stage failed: {stage}", file=sys.stderr)
+        raise
