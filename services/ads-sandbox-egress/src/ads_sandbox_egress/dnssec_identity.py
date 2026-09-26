@@ -246,3 +246,53 @@ class DNSSECIdentities:
         )
         found = self._read(name, zone, original, "dnssec")
         return found if found is not None else self._prepare(name, zone, original, "dnssec")
+
+    def observed(self, zone: dns.name.Name, original: DNSKey) -> SigningIdentity:
+        """A fresh acquired key may start a new generation, never revive a tombstone."""
+        zone = _zone(zone)
+        prefix = (
+            "dnssec/"
+            + hashlib.sha256(_wire(zone)).hexdigest()
+            + "/"
+            + hashlib.sha256(_wire(original)).hexdigest()
+            + "/"
+        )
+        generations = [
+            int(name.removeprefix(prefix))
+            for name in self.store.key_names("dnssec")
+            if name.startswith(prefix)
+        ]
+        generation = max(generations, default=1)
+        if generations and self.store.key_stage(prefix + str(generation)) == "retired":
+            generation += 1
+        return self.mapped(zone, original, generation=generation)
+
+    def recover(self, name: str) -> SigningIdentity:
+        """Recover a journal dependency with its full stored original identity."""
+        try:
+            kind, public, _, _ = self.store.key(name)
+            data = json.loads(public)
+            if kind != "dnssec":
+                raise ValueError("not a mapped key")
+            zone = dns.name.from_wire(bytes.fromhex(data["zone"]), 0)[0]
+            wire = bytes.fromhex(data["original"])
+            original = dns.rdata.from_wire(
+                dns.rdataclass.IN, dns.rdatatype.DNSKEY, wire, 0, len(wire)
+            )
+            if not isinstance(original, DNSKey):
+                raise ValueError("not DNSKEY")
+            expected = (
+                "dnssec/"
+                + hashlib.sha256(_wire(zone)).hexdigest()
+                + "/"
+                + hashlib.sha256(_wire(original)).hexdigest()
+                + "/"
+            )
+            if not name.startswith(expected) or not name.removeprefix(expected).isdigit():
+                raise ValueError("mapping identity mismatch")
+            found = self._read(name, zone, original, "dnssec")
+            if found is None:
+                raise ValueError("missing mapping")
+            return found
+        except (ValueError, KeyError, TypeError):
+            raise StateUnavailable("invalid DNSSEC lifecycle dependency") from None

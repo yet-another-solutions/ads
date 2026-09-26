@@ -77,6 +77,11 @@ def wire(material, case="good"):
             builder = builder.add_extension(
                 x509.KeyUsage(False, False, False, False, False, False, False, False, False), True
             )
+        if case == "delegated-critical":
+            builder = builder.add_extension(
+                x509.UnrecognizedExtension(ObjectIdentifier("1.3.6.1.4.1.55555.2"), b"\x05\x00"),
+                True,
+            )
         signer = builder.sign(material.key, hashes.SHA256())
         extras = [signer]
     before = now + timedelta(minutes=1) if case == "future" else now - timedelta(minutes=1)
@@ -129,6 +134,7 @@ def wire(material, case="good"):
         ("critical", {"critical_extension"}),
         ("delegated-no-eku", {"responder_authority"}),
         ("delegated-bad-ku", {"responder_authority"}),
+        ("delegated-critical", {"responder_authority"}),
         ("delegated-expired", {"responder_time"}),
     ],
 )

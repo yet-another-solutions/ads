@@ -25,6 +25,24 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - name: Provision real egress TLS, DNS and normalization test clients
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y nginx libnginx-mod-http-lua bind9-dnsutils libzstd1
+          root="$RUNNER_TEMP/ads-openssl4"
+          mkdir -p "$root"
+          curl --fail --show-error --location \
+            https://deb.debian.org/debian/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
+            --output "$root/libssl.deb"
+          curl --fail --show-error --location \
+            https://deb.debian.org/debian/pool/main/o/openssl/openssl_4.0.2-1_amd64.deb \
+            --output "$root/openssl.deb"
+          echo "1e265574c02f4918092d2f09e63cf368b21f15108b667790633f038717ded260  $root/libssl.deb" | sha256sum --check
+          echo "657b368d7ae7c57cb85e24766a6e4f756b45e4f275dc991b2697b8cc648d7f6b  $root/openssl.deb" | sha256sum --check
+          dpkg-deb --extract "$root/libssl.deb" "$root"
+          dpkg-deb --extract "$root/openssl.deb" "$root"
+          echo "ADS_EGRESS_OPENSSL4_ROOT=$root" >> "$GITHUB_ENV"
       - name: Nox
         run: |
           uv sync --group dev --group lint --group deps --group typecheck --group test
@@ -300,6 +318,23 @@ jobs:
           st=$?
           set -e
           test "$st" -eq 1
+      - name: Egress fails closed without designated inputs and devices
+        if: matrix.image == 'ads-sandbox-egress'
+        run: |
+          set +e
+          docker run --rm --network none --read-only ads-sandbox-egress:ci
+          st=$?
+          set -e
+          test "$st" -eq 3
+      - name: Prove egress-only interception kernel boundary
+        if: matrix.image == 'ads-sandbox-egress'
+        run: |
+          docker run --rm --network none --read-only --tmpfs /run --tmpfs /tmp \
+            --cap-drop ALL --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add NET_RAW --cap-add NET_BIND_SERVICE \
+            --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
+            --entrypoint unshare \
+            -v "$PWD/services/ads-sandbox-egress/interception-kernel-smoke.py:/kernel-smoke.py:ro" \
+            ads-sandbox-egress:ci --mount --net -- python /kernel-smoke.py
 
   helm:
     runs-on: ubuntu-latest

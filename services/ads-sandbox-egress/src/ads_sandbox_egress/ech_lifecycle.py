@@ -88,6 +88,8 @@ class ECHLifecycle:
                 raise StateUnavailable("ECH retained publication mismatch")
             names = tuple(value["names"])
             keys = tuple(ECHKey.recover(self.store, name) for name in names)
+            if len({key.config_id for key in keys}) != len(keys):
+                raise StateUnavailable("ambiguous retained ECH configuration IDs")
             context = TLSContext(self.library, keys)
         except StateUnavailable:
             raise
@@ -151,7 +153,13 @@ class ECHLifecycle:
         self._time(now)
         if len(self._names) >= 64:
             raise StateUnavailable("ECH live key capacity")
-        key = self.library.generate_ech(self.public_name)
+        occupied = {ECHKey.recover(self.store, name).config_id for name in self._names}
+        for _ in range(16):
+            key = self.library.generate_ech(self.public_name)
+            if key.config_id not in occupied:
+                break
+        else:
+            raise StateUnavailable("ECH configuration ID allocation exhausted")
         name = "ech/" + hashlib.sha256(key.configuration).hexdigest()
         key.prepare(self.store, name)
         # Build before advancing/exposing anything. Failed install leaves only

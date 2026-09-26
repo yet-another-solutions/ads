@@ -140,3 +140,45 @@ def test_original_destination_comes_only_from_kernel_socket(network, defect):
     else:
         with pytest.raises(RequestDenied):
             original_destination(writer, network)
+
+
+def test_cancelled_checks_share_one_owned_worker(network):
+    import asyncio
+    import threading
+    from unittest.mock import AsyncMock
+
+    from ads_sandbox_egress.interception import Interception
+
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    def check():
+        calls.append(1)
+        started.set()
+        assert release.wait(2)
+        return True
+
+    async def run():
+        interception = Interception(
+            SimpleNamespace(network=network, check=check),
+            SimpleNamespace(close=AsyncMock()),
+        )
+        first = asyncio.create_task(interception.check())
+        try:
+            async with asyncio.timeout(1):
+                while not started.is_set():
+                    await asyncio.sleep(0.001)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            second = asyncio.create_task(interception.check())
+            await asyncio.sleep(0)
+            assert len(calls) == 1
+            release.set()
+            assert await second
+        finally:
+            release.set()
+            await interception.close()
+        assert interception._checking is None and calls == [1]
+
+    asyncio.run(run())

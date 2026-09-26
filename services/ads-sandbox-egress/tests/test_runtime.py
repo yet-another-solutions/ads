@@ -5,17 +5,16 @@ import socket
 import ssl
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import httpx2
 import pytest
 from cryptography.hazmat.primitives.serialization import Encoding
 
-from ads_commons_beans import JwtVerifier
 from ads_sandbox_egress import runtime
 from ads_sandbox_egress.custody import MountedCustody
 from ads_sandbox_egress.settings import load_settings
 from test_certificates import pair_signer as pair_signer
+from test_configuration_receiver import Keys, payload
 from test_settings import environment as environment
 from test_tls import identity as identity
 from test_tls import native as native
@@ -85,8 +84,10 @@ def test_real_runtime_control_health_and_reverse_cleanup(
         helpers.append(result)
         return result
 
+    keys = Keys(settings.pair.ipc_service_subject)
+
     async def verifier(settings):
-        return Mock(spec=JwtVerifier)
+        return keys.verifier  # Named external JWKS, real signature/claim validation.
 
     start = runtime.DNSTransport.start
 
@@ -122,6 +123,33 @@ def test_real_runtime_control_health_and_reverse_cleanup(
                     f"https://127.0.0.1:{control}/configuration", content=b"{}"
                 )
                 assert denied.status_code == 401
+                headers = {"Authorization": "Bearer " + keys.token()}
+                applied = await client.put(
+                    f"https://127.0.0.1:{control}/configuration",
+                    content=payload(settings.pair, 2),
+                    headers=headers,
+                )
+                assert applied.status_code == 200
+                assert applied.json()["instance_id"] == result.json()["instance_id"]
+                assert applied.json()["revision"] == 2
+                anchor = await client.get(
+                    f"https://127.0.0.1:{control}/dnssec-anchor", headers=headers
+                )
+                assert anchor.status_code == 200
+                assert anchor.json()["sandbox_id"] == str(settings.pair.sandbox_id)
+                assert set(anchor.json()) == {"project_id", "sandbox_id", "fingerprint", "dnskey"}
+                stale = await client.put(
+                    f"https://127.0.0.1:{control}/configuration",
+                    content=payload(settings.pair, 1),
+                    headers=headers,
+                )
+                assert stale.status_code == 409
+                invalid = await client.put(
+                    f"https://127.0.0.1:{control}/configuration",
+                    content=payload(settings.pair, 0),
+                    headers=headers,
+                )
+                assert invalid.status_code == 400
                 process.terminate()
                 await asyncio.to_thread(process.wait, 2)
                 unhealthy = await client.get(f"https://127.0.0.1:{control}/ping")

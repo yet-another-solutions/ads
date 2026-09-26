@@ -14,6 +14,7 @@ import logging
 import time
 from uuid import uuid4
 
+import dns.dnssec
 import dns.flags
 import dns.message
 import dns.name
@@ -28,6 +29,7 @@ from ads_sandbox_egress.dnssec_identity import (
     DNSSECIdentities,
     DNSSECUnrepresentable,
 )
+from ads_sandbox_egress.dnssec_lifecycle import DNSSECLifecycle, ZonePlan
 from ads_sandbox_egress.dnssec_response import diagnostics, fallback, render, resolution_failure
 from ads_sandbox_egress.dnssec_transform import DNSSECTransformer, KeySubstitution
 from ads_sandbox_egress.dnssec_validation import CryptoBudget
@@ -83,6 +85,7 @@ class SyntheticDNS:
         self.authentication, self.identities = authentication, identities
         self.resolver = authentication.chains.resolver
         self.store, self.ech = identities.store, ech
+        self.lifecycle = DNSSECLifecycle(identities)
         self.root = identities.root(expected_fingerprint=root_fingerprint)
         self.safe_udp_payload = safe_udp_payload
         if authentication.chains.closest_anchor(dns.name.root) != dns.name.root:
@@ -132,8 +135,13 @@ class SyntheticDNS:
             }
             for child in sorted(child_names - known_keys):
                 messages.append(await self.resolver.exchange(child, dns.rdatatype.DNSKEY, job))
-            transformed, candidate, dependencies, horizon = self._construct(
-                messages, original, root.trusted_keys, job, budget
+            transformed, candidate, dependencies, horizon, plans = self._construct(
+                messages,
+                original,
+                root.trusted_keys,
+                job,
+                budget,
+                overlap=authentication.state == "secure",
             )
             checker = AnswerAuthentication(
                 PositiveChains(
@@ -174,6 +182,10 @@ class SyntheticDNS:
             for name in dependencies:
                 if self.store.key(name)[3] == "published":
                     self.store.advance(name, "published", "active")
+            for plan in plans:
+                self.lifecycle.commit(plan)
+            self.store.prune_publications("dns-generation/", now=time.time())
+            self.ech.collect(now=time.time())
             if time.monotonic() >= deadline:
                 raise RequestDenied("dns_resolution_deadline")
             return render(query, candidate, checked, safe_udp_payload=self.safe_udp_payload)
@@ -193,7 +205,15 @@ class SyntheticDNS:
         root_keys: dns.rrset.RRset,
         job: ResolutionJob,
         budget: CryptoBudget,
-    ) -> tuple[dict[QueryKey, dns.message.Message], dns.message.Message, set[str], float]:
+        *,
+        overlap: bool = False,
+    ) -> tuple[
+        dict[QueryKey, dns.message.Message],
+        dns.message.Message,
+        set[str],
+        float,
+        tuple[ZonePlan, ...],
+    ]:
         if len(messages) > 256:
             raise RequestDenied("dns_candidate_message_limit")
         transformer = DNSSECTransformer(self.identities, job, budget)
@@ -224,6 +244,24 @@ class SyntheticDNS:
                         message.question[0].name, dns.rdataclass.IN, dns.rdatatype.DNSKEY
                     )
                     mappings[empty.name] = KeySubstitution(empty, copy.deepcopy(empty), ())
+        now = time.time()
+        # Retained keys NEVER fill missing fresh evidence or add a valid path
+        # to a defective view. Only the fully authenticated view admits overlap.
+        plans = tuple(
+            self.lifecycle.plan(zone, mapping.identities, now=now)
+            for zone, mapping in mappings.items()
+            if overlap and mapping.identities
+        )
+        old = {identity.zone: plan.overlap for plan in plans for identity in plan.overlap}
+        for zone, identities in old.items():
+            mapping = mappings[zone]
+            combined = copy.deepcopy(mapping.synthetic)
+            for identity in identities:
+                combined.add(identity.dnskey, combined.ttl)
+            tags = {(key.algorithm, dns.dnssec.key_id(key)) for key in combined}
+            if len(tags) != len(combined):
+                raise DNSSECUnrepresentable("overlap DNSKEY tag collision")
+            mappings[zone] = KeySubstitution(mapping.original, combined, mapping.identities)
         root_mapping = mappings.get(dns.name.root)
         if root_mapping is None or root_mapping.original != root_keys:
             raise DNSSECUnrepresentable("root generation evidence mismatch")
@@ -237,8 +275,8 @@ class SyntheticDNS:
         dependencies = {
             self.root.name,
             *(identity.name for m in mappings.values() for identity in m.identities),
+            *(identity.name for values in old.values() for identity in values),
         }
-        now = time.time()
         horizon = now + 1
         transformed: dict[QueryKey, dns.message.Message] = {}
 
@@ -264,7 +302,18 @@ class SyntheticDNS:
                     elif rrset.rdtype == dns.rdatatype.DS:
                         if rrset.name not in mappings:
                             raise DNSSECUnrepresentable("absent delegation key construction")
-                        changed = transformer.delegation(rrset, mappings[rrset.name]).records
+                        delegated = transformer.delegation(rrset, mappings[rrset.name])
+                        changed = delegated.records
+                        if not delegated.before.failures and delegated.before.matched:
+                            for identity in old.get(rrset.name, ()):
+                                for digest in {record.digest_type for record in rrset}:
+                                    budget.consume()
+                                    changed.add(
+                                        dns.dnssec.make_ds(
+                                            rrset.name, identity.dnskey, digest, validating=True
+                                        ),
+                                        changed.ttl,
+                                    )
                     elif rrset.rdtype in (dns.rdatatype.HTTPS, dns.rdatatype.SVCB):
                         publication = self.ech.rewrite(rrset, now=now)
                         changed = publication.records
@@ -295,12 +344,35 @@ class SyntheticDNS:
                             selected = dns.rrset.from_rdata(
                                 sigs.name, sigs.ttl, *(sig for sig in sigs if sig.signer == signer)
                             )
-                            signature = transformer.signatures(
+                            substitution = transformer.signatures(
                                 rrset, changed, selected, mapping, now=now
-                            ).signatures
+                            )
+                            signature = substitution.signatures
                             if signature is not None:
                                 for sig in signature:
                                     converted.add(sig, signature.ttl)
+                            if substitution.before.valid and not substitution.before.failures:
+                                # Double-sign the same transformed bytes and exact
+                                # supported upstream validity interval. No repair
+                                # signatures are emitted for an invalid RRset.
+                                for identity in old.get(signer, ()):
+                                    template = selected[0]
+                                    signing_set = copy.deepcopy(changed)
+                                    signing_set.ttl = template.original_ttl
+                                    if template.labels < len(signing_set.name.labels) - 1:
+                                        signing_set.name = dns.name.Name(
+                                            (b"*",)
+                                            + signing_set.name.labels[-template.labels - 1 :]
+                                        )
+                                    budget.consume()
+                                    converted.add(
+                                        identity.sign(
+                                            signing_set,
+                                            inception=template.inception,
+                                            expiration=template.expiration,
+                                        ),
+                                        selected.ttl,
+                                    )
                             for sig in selected:
                                 horizon = max(horizon, now + sig.original_ttl, sig.expiration)
                         target.append(converted)
@@ -311,7 +383,7 @@ class SyntheticDNS:
         for key, message in acquired.items():
             transformed[key] = convert(message)
         candidate = convert(original)
-        return transformed, candidate, dependencies, horizon
+        return transformed, candidate, dependencies, horizon, plans
 
     def _bridge(
         self,

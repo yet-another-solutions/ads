@@ -105,7 +105,7 @@ int SSL_ech_get1_status(SSL *, char **, char **);
 OSSL_ECHSTORE *OSSL_ECHSTORE_new(void *, const char *);
 void OSSL_ECHSTORE_free(OSSL_ECHSTORE *);
 int OSSL_ECHSTORE_read_pem(OSSL_ECHSTORE *, BIO *, int);
-int OSSL_ECHSTORE_new_config(OSSL_ECHSTORE *, uint16_t, uint8_t, const char *, OSSL_HPKE_SUITE);
+int OSSL_ECHSTORE_new_config(OSSL_ECHSTORE *, uint16_t, uint16_t, const char *, OSSL_HPKE_SUITE);
 int OSSL_ECHSTORE_write_pem(OSSL_ECHSTORE *, int, BIO *);
 int OSSL_ECHSTORE_num_keys(const OSSL_ECHSTORE *, int *);
 int SSL_CTX_set1_echstore(SSL_CTX *, OSSL_ECHSTORE *);
@@ -211,6 +211,10 @@ def parse_hello(
 class ECHKey:
     configuration: bytes
     private_pem: bytes = field(repr=False)
+
+    @property
+    def config_id(self) -> int:
+        return self.configuration[6]
 
     @classmethod
     def from_pem(cls, pem: bytes) -> ECHKey:

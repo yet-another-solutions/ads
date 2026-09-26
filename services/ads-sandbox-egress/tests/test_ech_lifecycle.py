@@ -41,6 +41,40 @@ def service_record(ttl=60):
     )
 
 
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_configuration_id_collision_is_bounded_before_durable_publication(
+    native, custody, monkeypatch, exhausted
+):
+    store = open_store(custody, create=True)
+    library = native[0]
+    life = owner(store, library, initialize=True)
+    original = life.configuration
+    old = ECHKey.recover(store, life._current)
+    real = library.generate_ech
+    calls = []
+
+    def generate(name):
+        calls.append(1)
+        return old if exhausted or len(calls) == 1 else real(name)
+
+    monkeypatch.setattr(library, "generate_ech", generate)
+    try:
+        if exhausted:
+            with pytest.raises(StateUnavailable, match="allocation"):
+                life.rotate(now=time.time())
+            assert calls == [1] * 16
+            assert life.configuration == original
+            assert len(store.key_names("ech")) == 1
+        else:
+            life.rotate(now=time.time())
+            assert life.configuration[6] != original[6]
+            assert 2 <= len(calls) <= 16
+            assert len(store.key_names("ech")) == 2
+    finally:
+        life.close()
+        store.close()
+
+
 def test_rewrite_preserves_parameters_and_retained_identity(native, custody):
     library, _, _ = native
     now = time.time()
@@ -295,6 +329,14 @@ async def test_real_cached_ech_survives_rotation_replacement_then_expires(
                 process.stdin.write(b"request\n")
                 await process.stdin.drain()
                 response = await process.stdout.readline()
+                if response != (b"inspected\n" if expected else b""):
+                    if process.returncode is None:
+                        process.kill()
+                    _, errors = await process.communicate()
+                    pytest.fail(
+                        f"ECH config ID={configuration[6]} old={old[6]} current={current[6]} "
+                        f"client failed: {errors!r}"
+                    )
                 assert response == (b"inspected\n" if expected else b"")
         finally:
             if process.returncode is None:

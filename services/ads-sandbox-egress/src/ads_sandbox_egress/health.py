@@ -15,6 +15,7 @@ from ads_sandbox_egress.crl import CRLAuthority, CRLRepository
 from ads_sandbox_egress.crl_http import LocalCRLService
 from ads_sandbox_egress.dns_transport import DNSTransport
 from ads_sandbox_egress.dnssec_identity import DNSSECIdentities, SigningIdentity
+from ads_sandbox_egress.dnssec_lifecycle import DNSSECLifecycle
 from ads_sandbox_egress.ech_lifecycle import ECHLifecycle
 from ads_sandbox_egress.helper import Helper
 from ads_sandbox_egress.identity_store import IdentityStore
@@ -49,13 +50,16 @@ class EnforcementHealth:
             listener = self.interception.listener
             if listener is None or not listener.is_serving() or not await self.helper.healthy():
                 return False
-            if not await asyncio.to_thread(self.interception.boundary.check):
+            if not await self.interception.check():
                 return False
             self.signer.require_current()
             # Actual encrypted inventory/key authentication and local signing,
             # independently verified; not a "configured" Boolean or remote query.
             root = DNSSECIdentities(self.state).root(expected_fingerprint=self.root.fingerprint)
-            now = int(time.time())
+            wall_clock = time.time()
+            DNSSECLifecycle(DNSSECIdentities(self.state)).collect(now=wall_clock)
+            self.ech.collect(now=wall_clock)
+            now = int(wall_clock)
             records = root.key_rrset(0)
             signature = root.sign(records, inception=now - 1, expiration=now + 5)
             dns.dnssec.validate(

@@ -150,8 +150,10 @@ class StatusAcquisition:
             self.resolver.boundary.addresses.require_public(str(address))
             addresses = {address}
         except ValueError:
-            answer = await self.resolver.acquire(host, dns.rdatatype.A, job=job)
-            addresses = set(answer.direct_addresses)
+            addresses = set()
+            for family in (dns.rdatatype.A, dns.rdatatype.AAAA):
+                answer = await self.resolver.acquire(host, family, job=job)
+                addresses.update(answer.direct_addresses)
         if not addresses:
             raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS)
         for address in addresses:

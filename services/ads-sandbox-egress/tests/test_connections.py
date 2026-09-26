@@ -65,8 +65,11 @@ async def connection_lab(
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
-            await close_client(w)
-            writers.discard(w)
+            try:
+                await close_client(w)
+            finally:
+                w.transport.abort()
+                writers.discard(w)
 
     def spawn(r, w):
         if closing:

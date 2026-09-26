@@ -69,7 +69,7 @@ class OriginCertificate:
 
     @property
     def verified(self) -> bool:
-        return not self.issues
+        return not self.issues and not self.revoked
 
 
 def _certificate_der(library: TLSLibrary, certificate: Any) -> bytes:

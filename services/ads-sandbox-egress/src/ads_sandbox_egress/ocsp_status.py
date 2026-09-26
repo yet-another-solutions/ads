@@ -15,12 +15,15 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, paddin
 from cryptography.x509 import ocsp
 from cryptography.x509.oid import ExtendedKeyUsageOID, SignatureAlgorithmOID
 
+from ads_sandbox_egress.ocsp_der import single_critical
+
 
 @dataclass(frozen=True, slots=True)
 class StatusEvidence:
     response: ocsp.OCSPResponse | None
     single: ocsp.OCSPSingleResponse | None
     defects: frozenset[str]
+    index: int = 0
 
     @property
     def good(self) -> bool:
@@ -86,14 +89,9 @@ def inspect_status(
         singles = tuple(response.responses)
         if len(singles) > 16 or len(response.certificates) > 16:
             return StatusEvidence(response, None, frozenset({"capacity"}))
-        if len(singles) != 1:
-            # Pinned cryptography does not expose per-SingleResponse
-            # extensions on a multiple-response object. Never ignore an
-            # uninspectable critical extension.
-            return StatusEvidence(response, None, frozenset({"unsupported"}))
         defects = set()
         selected = []
-        for single in singles:
+        for index, single in enumerate(singles):
             request = (
                 ocsp.OCSPRequestBuilder()
                 .add_certificate(certificate, issuer, single.hash_algorithm)
@@ -104,10 +102,10 @@ def inspect_status(
                 and single.issuer_name_hash == request.issuer_name_hash
                 and single.issuer_key_hash == request.issuer_key_hash
             ):
-                selected.append(single)
+                selected.append((index, single))
         if len(selected) != 1:
             return StatusEvidence(response, None, frozenset({"certificate_binding"}))
-        single = selected[0]
+        index, single = selected[0]
         candidates: list[x509.Certificate] = []
         for signer in (issuer, *response.certificates):
             identifier = x509.SubjectKeyIdentifier.from_public_key(signer.public_key()).digest
@@ -125,6 +123,19 @@ def inspect_status(
         if signer != issuer:
             try:
                 signer.verify_directly_issued_by(issuer)
+                understood = (
+                    x509.BasicConstraints,
+                    x509.KeyUsage,
+                    x509.ExtendedKeyUsage,
+                    x509.SubjectKeyIdentifier,
+                    x509.AuthorityKeyIdentifier,
+                    x509.OCSPNoCheck,
+                )
+                if any(
+                    extension.critical and not isinstance(extension.value, understood)
+                    for extension in signer.extensions
+                ):
+                    defects.add("responder_authority")
                 eku = signer.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
                 if ExtendedKeyUsageOID.OCSP_SIGNING not in eku:
                     defects.add("responder_authority")
@@ -150,7 +161,7 @@ def inspect_status(
             defects.add("expired")
         if any(extension.critical for extension in response.extensions):
             defects.add("critical_extension")
-        if any(extension.critical for extension in response.single_extensions):
+        if single_critical(wire, index):
             defects.add("critical_extension")
         if single.certificate_status == ocsp.OCSPCertStatus.REVOKED:
             defects.add("revoked")
@@ -158,8 +169,8 @@ def inspect_status(
                 defects.add("revocation_time")
         elif single.certificate_status == ocsp.OCSPCertStatus.UNKNOWN:
             defects.add("unknown")
-        return StatusEvidence(response, single, frozenset(defects))
+        return StatusEvidence(response, single, frozenset(defects), index)
     except UnsupportedAlgorithm:
         return StatusEvidence(None, None, frozenset({"unsupported"}))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, IndexError):
         return StatusEvidence(None, None, frozenset({"malformed"}))

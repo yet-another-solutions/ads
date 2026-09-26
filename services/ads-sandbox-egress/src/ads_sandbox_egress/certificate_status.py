@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -22,7 +23,9 @@ from ads_sandbox_egress.certificates import (
     CertificateDefectRequiresMirror,
     CertificatePairs,
     PairDestination,
+    certificate_builder,
 )
+from ads_sandbox_egress.ocsp_der import preserve_fields
 from ads_sandbox_egress.ocsp_status import inspect_status
 from ads_sandbox_egress.origin_tls import OriginCertificate
 from ads_sandbox_egress.tls_transport import FrontendIdentity
@@ -54,13 +57,49 @@ def substitute_status(
         "critical_extension",
         "freshness_unknown",
         "revocation_time",
+        "responder_authority",
+        "responder_time",
+        "certificate_binding",
     }
+    binding_failure = before.defects == {"certificate_binding"}
+    if binding_failure and response is not None:
+        values = tuple(response.responses)
+        single = values[0] if values else None
     if response is None or single is None or before.defects - supported:
         raise CertificateDefectRequiresMirror("OCSP_condition_requires_composer")
-    # producedAt is set by cryptography's signer. A future producedAt cannot
-    # be faithfully preserved with this API; do not repair it silently.
-    if response.produced_at_utc > now:
-        raise CertificateDefectRequiresMirror("OCSP_produced_at_requires_composer")
+    signing_certificate, signing_key = issuer, private
+    extras = []
+    if before.defects & {"responder_authority", "responder_time"}:
+        candidates = [
+            item
+            for item in response.certificates
+            if (
+                response.responder_name == item.subject
+                or response.responder_key_hash
+                == x509.SubjectKeyIdentifier.from_public_key(item.public_key()).digest
+            )
+        ]
+        if len(candidates) != 1:
+            raise CertificateDefectRequiresMirror("OCSP_delegated_identity_ambiguous")
+        delegated = candidates[0]
+        signing_key = ec.generate_private_key(ec.SECP384R1())
+        signed = certificate_builder(
+            delegated,
+            signing_key,
+            issuer,
+            "http://status.invalid/unused",
+            cap_expiry=False,
+            bind_issuer_certificate=True,
+        ).sign(private, hashes.SHA384())
+        try:
+            delegated.verify_directly_issued_by(source_issuer)
+        except (ValueError, InvalidSignature):
+            # Preserve unissued responder authority, not just absent EKU.
+            from ads_sandbox_egress.certificate_mirror import _damaged
+
+            signed = _damaged(signed)
+        signing_certificate = signed
+        extras = [signed]
     builder = (
         ocsp.OCSPResponseBuilder()
         .add_response(
@@ -73,18 +112,28 @@ def substitute_status(
             single.revocation_time_utc,
             single.revocation_reason,
         )
-        .responder_id(ocsp.OCSPResponderEncoding.HASH, issuer)
+        .responder_id(ocsp.OCSPResponderEncoding.HASH, signing_certificate)
     )
+    if extras:
+        builder = builder.certificates(extras)
     for extension in response.extensions:
         builder = builder.add_extension(extension.value, extension.critical)
-    if response.single_extensions:
-        raise CertificateDefectRequiresMirror("OCSP_single_extensions_require_composer")
-    result = builder.sign(private, hashes.SHA256()).public_bytes(Encoding.DER)
-    if "signature" in before.defects:
-        result = result[:-1] + bytes((result[-1] ^ 1,))
+    result = builder.sign(signing_key, hashes.SHA256()).public_bytes(Encoding.DER)
+    try:
+        result = preserve_fields(
+            result,
+            wire,
+            signing_key,
+            wrong_serial=(1 if candidate.serial_number != 1 else 2) if binding_failure else None,
+            invalid_signature="signature" in before.defects,
+            source_index=before.index,
+        )
+    except (ValueError, IndexError):
+        raise CertificateDefectRequiresMirror("OCSP_envelope_unrepresentable") from None
     after = inspect_status(result, candidate, issuer, now=now)
     if before.defects != after.defects or (
-        after.single is None or single.certificate_status != after.single.certificate_status
+        not binding_failure
+        and (after.single is None or single.certificate_status != after.single.certificate_status)
     ):
         raise CertificateDefectRequiresMirror("OCSP_substitution_outcome_changed")
     return result

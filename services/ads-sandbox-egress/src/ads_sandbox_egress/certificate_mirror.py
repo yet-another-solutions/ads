@@ -205,11 +205,12 @@ class CertificateMirror:
                 cap_expiry=False,
                 bind_issuer_certificate=True,
             )
-            signing_key = (
-                ec.generate_private_key(ec.SECP384R1()) if 7 in defects[depth] else issuer_key
-            )
-            bridge = builder.sign(signing_key, hashes.SHA384())
-            issued[depth] = issuer, issuer_key, bridge
+            valid_bridge = builder.sign(issuer_key, hashes.SHA384())
+            bridge = _damaged(valid_bridge) if 7 in defects[depth] else valid_bridge
+            # CRL publication still proves the exact issuer-signed serial/TBS.
+            # The wire twin differs only in signature bytes and is validated
+            # independently below; never bypass CRL issuer-binding checks.
+            issued[depth] = issuer, issuer_key, valid_bridge
             tail.insert(0, bridge.public_bytes(_PEM))
             issuer, issuer_key = bridge, key
         leaf_key = _new_leaf_key(source[0])
@@ -221,17 +222,15 @@ class CertificateMirror:
             cap_expiry=False,
             bind_issuer_certificate=True,
         )
-        signing_key = ec.generate_private_key(ec.SECP384R1()) if 7 in defects[0] else issuer_key
-        leaf = builder.sign(signing_key, hashes.SHA384())
-        issued[0] = issuer, issuer_key, leaf
+        valid_leaf = builder.sign(issuer_key, hashes.SHA384())
+        leaf = _damaged(valid_leaf) if 7 in defects[0] else valid_leaf
+        issued[0] = issuer, issuer_key, valid_leaf
         chain = (leaf.public_bytes(_PEM), *tail)
         published: dict[str, bytes] = {}
         if revoked:
             assert self.crls is not None
             now = datetime.now(UTC)
             for depth, (local_issuer, private_key, certificate) in issued.items():
-                if depth in revoked_depths and 7 in defects[depth]:
-                    raise CertificateDefectRequiresMirror("revoked_bad_signature_requires_composer")
                 try:
                     authority = CRLAuthority(local_issuer, private_key)
                     publication = self.crls.publish(
@@ -264,3 +263,11 @@ class CertificateMirror:
             observed.selected_alpn,
             () if status is None else status(issued),
         )
+
+
+def _damaged(certificate: x509.Certificate) -> x509.Certificate:
+    wire = certificate.public_bytes(serialization.Encoding.DER)
+    result = x509.load_der_x509_certificate(wire[:-1] + bytes((wire[-1] ^ 1,)))
+    if result.tbs_certificate_bytes != certificate.tbs_certificate_bytes:
+        raise CertificateDefectRequiresMirror("signature_damage_changed_certificate")
+    return result

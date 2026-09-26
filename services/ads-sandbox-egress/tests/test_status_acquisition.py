@@ -225,3 +225,40 @@ def test_metadata_cannot_escape_public_destination_gate(material, url):
 
 def test_no_advertised_status_is_not_invented(material):
     assert status_urls(material.leaf) == ((), ())
+
+
+def test_status_fetch_inspects_both_families_before_dial(monkeypatch):
+    from types import SimpleNamespace
+
+    import dns.rdatatype
+
+    from ads_sandbox_egress.resolution import ResolutionJob
+
+    upstream = resolver()
+    calls = []
+
+    async def acquire(host, family, *, job):
+        calls.append(family)
+        return SimpleNamespace(
+            direct_addresses=(
+                ipaddress.ip_address("1.1.1.1" if family == dns.rdatatype.A else "::1"),
+            )
+        )
+
+    monkeypatch.setattr(upstream, "acquire", acquire)
+    dial = AsyncMock()
+    acquisition = StatusAcquisition(upstream, None, dial)
+
+    async def run():
+        import time
+
+        from ads_sandbox_egress.policy import RequestDenied
+
+        with pytest.raises(RequestDenied):
+            await acquisition.fetch(
+                "http://status.example/crl", None, job=ResolutionJob(time.monotonic() + 10)
+            )
+        assert calls == [dns.rdatatype.A, dns.rdatatype.AAAA]
+        dial.assert_not_awaited()
+
+    asyncio.run(run())

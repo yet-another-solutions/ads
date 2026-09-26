@@ -10,6 +10,65 @@ Branch: `feature/slice-20-egress-runtime`.
 
 ## Requirement and proof map
 
+### Current review candidate, 2026-09-26
+
+This newest section overrides the historical table and component chronology below.
+The runtime now composes real policy/normalization, fresh destination membership,
+signed DNS publication, ECH and two-leg HTTP/TLS owners. A signed HTTPS response
+is fetched over TCP and its actual ECH configuration drives an independent
+OpenSSL client through fresh DNS membership and URL authorization to a real
+TLS origin. Kernel routing and external DNS/PKI are named test boundaries.
+
+DNSSEC observed-key rollover now commits per-zone overlap journals. During a
+fully secure transition, old/new DNSKEY, DS and signatures coexist through the
+pre-transition dependency horizon; continuing traffic cannot perpetually extend
+that overlap. Defective views never gain old-key repair signatures. Private
+keys retire only after all publication dependencies expire; recurrence of a
+retired upstream identity starts a new generation rather than reviving a
+tombstone. Tests cover mixed cached records, restart, clock rollback, stale
+plans, intentional bad signatures and dependency-safe erasure. Health performs
+retirement/pruning without treating persisted answers as resolver results.
+
+Status proof includes selected SingleResponse handling within multi-response
+OCSP, preservation of producedAt and critical SingleResponse extensions by a
+bounded DER envelope editor, delegated-responder authority/time defects,
+certificate-ID mismatch, signature/status/time failures, independent OpenSSL
+validation, and real client CRL download. Invalid-certificate-signature plus
+revocation uses a correctly issued TBS/serial twin for CRL publication, retaining
+the deliberately invalid wire signature. Native verification reports both
+findings. The dedicated CRL service admits OpenSSL's HTTP/1.0 bare-IP Host form
+without relaxing private source, path, framing or body restrictions.
+
+Runtime review fixed fractional-clock rollback from integer health timestamps,
+bounded ECH config-ID collisions before durable publication, the public ABI
+max_name_length width, single-owner health-check worker cancellation, complete
+A/AAAA status endpoint inspection, and cancellation cleanup of test TLS peers.
+ECH config-ID uniqueness is a local lifecycle constraint, not a claim that the
+earlier intermittent failure's exact cause was reproduced.
+
+Real local custody smoke passed on disposable loop/ext4 devices: RO clone
+validation, positively blank first initialization, encrypted identity restart,
+foreign filesystem refusal, reverse unmount and loop detach. No loop devices
+remained. The real netfilter gate still cannot run in Computer: even a fresh
+root user/network namespace cannot open NETLINK_NETFILTER. Its source smoke
+has live origin positive controls, transparent original-destination observation,
+closed-listener and forwarding-enabled negative paths, and explicit cleanup.
+It has NOT run successfully yet.
+
+All five local Nox gates on the candidate worktree passed with **1,878 tests,
+zero skips**, 88.44s. Original-order full regression on this candidate is next;
+the older 5,494-pass baseline is not substituted. Source-only CI/image/release
+matrix wiring is present; no workflow, image build, push, PR, merge, publication
+or lab action has run. The existing CI fallback is composite (Python, image
+lint/build/kernel and Helm), not a reason to skip any runnable local test.
+
+Remaining completion gates: exact-head full regression and final review;
+successful real netfilter/image verification; bounded status support review
+for scoped/delta CRLs, unusual OCSP signature parameters and simultaneous
+invalid-authority/revocation cases. Those current incomplete-support refusals
+are not silently relabeled as supported certificate mirroring. Slice 20 stays
+open until these gates are resolved; slices 21/22 remain untouched.
+
 | Obligation | Owning code / planned proof | Evidence state |
 | --- | --- | --- |
 | Immutable snapshot, process UUID, authenticated apply | Existing configuration/control; receiver tests | Existing component regression passed; production health integration open |

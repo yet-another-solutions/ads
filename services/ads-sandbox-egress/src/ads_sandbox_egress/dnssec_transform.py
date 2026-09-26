@@ -124,7 +124,7 @@ class DNSSECTransformer:
                 raise DNSSECUnrepresentable("unusable upstream DNSKEY material") from None
             # Charge key-generation work, not only signature verification.
             self.budget.consume()
-            mapped.append(self.identities.mapped(original.name, key))
+            mapped.append(self.identities.observed(original.name, key))
             self._deadline()
         synthetic = dns.rrset.from_rdata(
             original.name, original.ttl, *(identity.dnskey for identity in mapped)

@@ -436,6 +436,14 @@ class IdentityStore:
             )
         )
 
+    def key_stage(self, name: str) -> str:
+        """Read authenticated lifecycle metadata without opening a retired key."""
+        self._verify_inventory()
+        row = self._connection().execute("SELECT stage FROM keys WHERE name=?", (name,)).fetchone()
+        if row is None:
+            raise StateUnavailable("required persistent key unavailable")
+        return str(row[0])
+
     def prune_publications(self, prefix: str, *, now: float) -> None:
         """Prune expired generations but retain the journal head and every live row."""
         if prefix.startswith("crl/"):

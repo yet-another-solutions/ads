@@ -52,6 +52,7 @@ class LocalCRLService:
         self._failed = False
         self._authority = ""
         self._hosts: set[bytes] = set()
+        self._legacy_host = b""
 
     @property
     def healthy(self) -> bool:
@@ -80,6 +81,7 @@ class LocalCRLService:
         host = f"[{address}]" if address.version == 6 else str(address)
         self._authority = f"{host}:{port}"
         self._hosts = {self._authority.encode("ascii")}
+        self._legacy_host = host.encode("ascii")
         if port == 80:
             self._hosts.add(host.encode("ascii"))
         self._server = await asyncio.start_server(self._accept, sock=sock, limit=8192)
@@ -126,9 +128,12 @@ class LocalCRLService:
                 path = _PATH.fullmatch(request.target)
                 if (
                     request.method not in (b"GET", b"HEAD")
-                    or request.http_version != b"1.1"
+                    or request.http_version not in (b"1.0", b"1.1")
                     or len(hosts) != 1
-                    or hosts[0] not in self._hosts
+                    or (
+                        hosts[0] not in self._hosts
+                        and not (request.http_version == b"1.0" and hosts[0] == self._legacy_host)
+                    )
                     or path is None
                     or len(headers) > 32
                     or sum(len(name) + len(value) for name, value in headers) > 4096

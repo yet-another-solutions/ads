@@ -9,7 +9,6 @@ from cryptography.hazmat.primitives.serialization import Encoding
 
 from ads_sandbox_egress.certificate_status import CertificateStatusComposer, substitute_status
 from ads_sandbox_egress.certificates import (
-    CertificateDefectRequiresMirror,
     CertificatePairs,
     PairDestination,
 )
@@ -109,18 +108,46 @@ def test_substituted_status_keeps_exact_known_outcome(
         store.close()
 
 
-@pytest.mark.parametrize("case", ["delegated-no-eku", "delegated-expired", "wrong-cert"])
+@pytest.mark.parametrize("case", ["wrong-cert"])
 def test_unimplemented_status_outcomes_never_become_good(material, pair_signer, case):
-    with pytest.raises(CertificateDefectRequiresMirror):
-        substitute_status(
-            wire(material, case),
-            material.leaf,
-            material.issuer,
-            material.leaf,
-            pair_signer.certificate,
-            pair_signer.private_key,
-            now=material.now,
-        )
+    result = substitute_status(
+        wire(material, case),
+        material.leaf,
+        material.issuer,
+        material.leaf,
+        pair_signer.certificate,
+        pair_signer.private_key,
+        now=material.now,
+    )
+    assert inspect_status(
+        result, material.leaf, pair_signer.certificate, now=material.now
+    ).defects == {"certificate_binding"}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "delegated-no-eku",
+        "delegated-expired",
+        "delegated-critical",
+        "delegated-bad-ku",
+    ],
+)
+def test_delegated_status_defects_never_become_good(material, pair_signer, case):
+    original = wire(material, case)
+    candidate = substitute_status(
+        original,
+        material.leaf,
+        material.issuer,
+        material.leaf,
+        pair_signer.certificate,
+        pair_signer.private_key,
+        now=material.now,
+    )
+    before = inspect_status(original, material.leaf, material.issuer, now=material.now)
+    after = inspect_status(candidate, material.leaf, pair_signer.certificate, now=material.now)
+    assert not before.good and not after.good
+    assert before.defects == after.defects
 
 
 def test_missing_status_is_not_fabricated(material, pair_signer):

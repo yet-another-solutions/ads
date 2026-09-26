@@ -80,7 +80,7 @@ def rules(network: Network) -> str:
 create table inet ads_egress
 add chain inet ads_egress forward {{ type filter hook forward priority -300; policy drop; }}
 add chain inet ads_egress input {{ type filter hook input priority -300; policy drop; }}
-add chain inet ads_egress output {{ type filter hook output priority -300; policy drop; }}
+add chain inet ads_egress output {{ type filter hook output priority 0; policy drop; }}
 add chain inet ads_egress terminate {{ type nat hook prerouting priority -100; policy accept; }}
 add rule inet ads_egress input iifname "lo" accept
 add rule inet ads_egress input iifname "{upstream}" ct state established,related accept
@@ -247,6 +247,20 @@ class Interception:
     def __init__(self, boundary: KernelBoundary, connections: Connections) -> None:
         self.boundary, self.connections = boundary, connections
         self.listener: asyncio.Server | None = None
+        self._checking: asyncio.Task[bool] | None = None
+
+    async def check(self) -> bool:
+        # Cancellation of a caller does not cancel a running blocking operation.
+        # Reuse the single owned worker until completion instead of spawning an
+        # unbounded thread per timed-out ping. Retrieve every result/exception.
+        if self._checking is None:
+            self._checking = asyncio.create_task(asyncio.to_thread(self.boundary.check))
+        task = self._checking
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if task.done() and self._checking is task:
+                self._checking = None
 
     def _accept(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -256,7 +270,7 @@ class Interception:
             OwnedStream.tcp(reader, writer).abort()
 
     async def start(self) -> None:
-        if self.listener is not None or not await asyncio.to_thread(self.boundary.check):
+        if self.listener is not None or not await self.check():
             raise RuntimeError("verified guest boundary required before accepting")
         network = self.boundary.network
         self.listener = await asyncio.start_server(
@@ -274,4 +288,9 @@ class Interception:
             await self.listener.wait_closed()
             self.listener = None
         await self.connections.close()
+        if self._checking is not None:
+            try:
+                await asyncio.shield(self._checking)
+            finally:
+                self._checking = None
         # Deliberately retain the DROP fence and local termination rules.
