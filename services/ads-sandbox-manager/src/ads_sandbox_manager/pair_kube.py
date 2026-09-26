@@ -129,6 +129,11 @@ class PairControlAdapter:
         if desired["kind"] == "Service":
             # Permit only API allocation/defaulting, never additive exposure,
             # changed selectors, widened ports, or alternate routing settings.
+            # The API omits false on read; only that exact readiness default is
+            # equivalent. In particular, None or integer zero is not false.
+            if actual.get("publishNotReadyAddresses", False) is not False:
+                return False
+            actual["publishNotReadyAddresses"] = False
             cluster_ip = actual.pop("clusterIP", None)
             try:
                 ip_address(cluster_ip)

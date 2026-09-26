@@ -196,6 +196,30 @@ async def test_service_exposure_and_routing_cannot_be_changed(controls, field, v
         await adapter.ensure(pair, "Service", "egress")
 
 
+@pytest.mark.parametrize("role", ["egress", "guest-relay", "egress-relay"])
+@pytest.mark.parametrize("omitted", [True, False])
+async def test_service_accepts_absent_or_explicit_false_readiness(controls, role, omitted):
+    adapter, pair = controls
+    observed, _, create, _ = configure(controls, "Service", role)
+    if omitted:
+        del observed["spec"]["publishNotReadyAddresses"]
+    original = deepcopy(observed)
+    assert await adapter.ensure(pair, "Service", role, "owned-uid") == "owned-uid"
+    assert observed == original
+    create.assert_not_called()
+
+
+@pytest.mark.parametrize("role", ["egress", "guest-relay", "egress-relay"])
+@pytest.mark.parametrize("value", [True, None, 0, "", "false"])
+async def test_service_readiness_default_is_strictly_boolean_false(controls, role, value):
+    adapter, pair = controls
+    observed, _, create, _ = configure(controls, "Service", role)
+    observed["spec"]["publishNotReadyAddresses"] = value
+    with pytest.raises(RuntimeError, match="incompatible"):
+        await adapter.ensure(pair, "Service", role, "owned-uid")
+    create.assert_not_called()
+
+
 @pytest.mark.parametrize("kind,role", CASES)
 async def test_delete_is_uid_rv_fenced_and_requires_observed_absence(controls, kind, role):
     adapter, pair = controls
@@ -293,7 +317,12 @@ async def test_changed_required_spec_and_api_identity_are_rejected(controls, kin
     original = deepcopy(observed)
     for key in tuple(adapter._desired(pair, kind, role)["spec"]):
         observed["spec"] = deepcopy(original["spec"])
-        del observed["spec"][key]
+        if kind == "Service" and key == "publishNotReadyAddresses":
+            # Omitted false is a native API encoding, not a changed policy.
+            # Preserve this security rejection with the nondefault exposure.
+            observed["spec"][key] = True
+        else:
+            del observed["spec"][key]
         with pytest.raises(RuntimeError, match="incompatible"):
             await adapter.ensure(pair, kind, role)
     observed["spec"] = original["spec"]
