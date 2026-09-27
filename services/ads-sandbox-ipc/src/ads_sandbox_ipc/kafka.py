@@ -147,6 +147,7 @@ class KafkaRuntime:
             await seek.complete.wait()
             if self.config_consumer is not None:
                 async with asyncio.timeout(self.settings.startup_seconds):
+                    await self._initial_egress_health()
                     config_seek = SeekToEnd(self.config_consumer)
                     self.config_consumer.subscribe([EGRESS_CONFIG_TOPIC], listener=config_seek)
                     await self.config_consumer.start()
@@ -169,6 +170,22 @@ class KafkaRuntime:
         except BaseException:
             await self.stop()
             raise
+
+    async def _initial_egress_health(self) -> None:
+        delivery = self.service.egress
+        if delivery is None:
+            raise ValueError("paired IPC requires configuration delivery")
+        # Cold Pods must not spend the two configuration-delivery attempts.
+        # Subscribe only after health, then seek before requesting a fresh snapshot.
+        while True:
+            if self.service.failed or self.service.stopping or delivery.failed or delivery.stopped:
+                raise RuntimeError("paired IPC stopped during initial health")
+            healthy = await delivery.healthy()
+            if self.service.failed or self.service.stopping or delivery.failed or delivery.stopped:
+                raise RuntimeError("paired IPC stopped during initial health")
+            if healthy:
+                return
+            await asyncio.sleep(self.settings.poll_seconds)
 
     async def _consume(self, consumer: AIOKafkaConsumer) -> None:
         try:
