@@ -2,31 +2,30 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from uuid import UUID, uuid4
 
 import pytest
 
-from ads_commons.sandbox import SandboxPing, SandboxShutdown, SandboxShutdownAck, encode_inbound
+from ads_commons.egress import EgressApplied, EgressPing
+from ads_commons.sandbox import (
+    SandboxPing,
+    SandboxReady,
+    SandboxShutdown,
+    SandboxShutdownAck,
+    encode_inbound,
+)
+from ads_sandbox_ipc.config import EgressPair
 from ads_sandbox_ipc.controller import PING_REQUEST_TOPIC, READY_TOPIC
+from ads_sandbox_ipc.egress import EgressDelivery, RevisionFloor
 from ads_sandbox_ipc.kafka import KafkaRuntime, SeekToEnd
-from ipc_support import eventually
+from ipc_support import SUBJECT, eventually
 
 
-@pytest.mark.anyio
-async def test_config_subscription_seeks_before_fresh_service_request_and_fans_out(
-    ipc, monkeypatch
-):
-    from dataclasses import replace
-    from uuid import UUID, uuid4
-
-    import msgspec
-
-    from ads_commons.egress import EGRESS_CONFIG_TOPIC, EgressConfigRequest
-    from ads_sandbox_ipc.config import EgressPair
-    from ipc_support import SUBJECT
-
+@pytest.fixture
+def paired_runtime(ipc, monkeypatch, tmp_path):
     monkeypatch.setattr("ads_sandbox_ipc.kafka.AIOKafkaConsumer", FakeConsumer)
     pair = EgressPair(
         uuid4(),
@@ -34,12 +33,35 @@ async def test_config_subscription_seeks_before_fresh_service_request_and_fans_o
         ("https://local.test/health", "https://peer.test/health"),
         UUID(SUBJECT),
     )
-    settings = replace(ipc.settings, egress=pair)
+    ipc.settings = replace(ipc.settings, egress=pair)
+    ipc.service.settings = ipc.controller.settings = ipc.settings
+    instance = uuid4()
+    transport = SimpleNamespace(
+        ping=AsyncMock(return_value=EgressPing(instance, True)),
+        relays_healthy=AsyncMock(return_value=True),
+        apply=AsyncMock(side_effect=lambda body: EgressApplied(instance, body.snapshot.revision)),
+    )
+    ipc.service.egress = EgressDelivery(
+        pair.project_id, RevisionFloor(tmp_path / "floor", pair.project_id), transport, 0.1
+    )
     tokens = Mock()
     tokens.exchange_service.return_value = "fresh-service-ste"
+    producer = SimpleNamespace(start=AsyncMock(), stop=AsyncMock(), send_and_wait=AsyncMock())
+    return KafkaRuntime(ipc.settings, producer, ipc.controller, ipc.service, tokens)
+
+
+@pytest.mark.anyio
+async def test_config_subscription_seeks_before_fresh_service_request_and_fans_out(
+    ipc, paired_runtime
+):
+    import msgspec
+
+    from ads_commons.egress import EGRESS_CONFIG_TOPIC, EgressConfigRequest
+
+    runtime = paired_runtime
+    settings, tokens, producer = runtime.settings, runtime.tokens, runtime.producer
+    pair = settings.egress
     sent = []
-    producer = SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
-    runtime = KafkaRuntime(settings, producer, ipc.controller, ipc.service, tokens)
 
     async def send(topic, **kwargs):
         assert runtime.config_consumer.started
@@ -63,6 +85,178 @@ async def test_config_subscription_seeks_before_fresh_service_request_and_fans_o
             != (runtime.config_consumer.options["group_id"])
         )
     finally:
+        await runtime.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cold", ["egress", "relays"])
+async def test_initial_health_precedes_subscription_without_spending_delivery_attempts(
+    paired_runtime, ipc, cold
+):
+    from ads_commons.egress import ProjectEgressSettings, ProjectEgressSnapshot
+
+    runtime = paired_runtime
+    delivery = ipc.service.egress
+    transport = delivery.transport
+    ping = transport.ping.return_value
+    if cold == "egress":
+        transport.ping.side_effect = ConnectionError("cold egress")
+    else:
+        transport.relays_healthy.return_value = False
+    start = asyncio.create_task(runtime.start())
+    try:
+        await eventually(lambda: transport.ping.await_count >= 2)
+        assert not runtime.config_consumer.started and not runtime.config_consumer.topics
+        transport.apply.assert_not_awaited()
+        runtime.tokens.exchange_service.assert_not_called()
+        runtime.producer.send_and_wait.assert_not_awaited()
+        assert not delivery.failed and delivery.snapshot is None
+        assert not ipc.service.kafka_ready and not ipc.service.http_ready
+        assert not runtime.ping_consumer.started
+        assert not ipc.kube.calls and not ipc.publisher.messages
+
+        async def send(*args, **kwargs):
+            assert runtime.config_consumer.started and runtime.config_consumer.seeks
+            assert delivery.instance == ping.instance_id
+            transport.apply.assert_not_awaited()
+            await delivery.receive(
+                delivery.project_id, ProjectEgressSnapshot(1, ProjectEgressSettings(rules=()))
+            )
+
+        runtime.producer.send_and_wait.side_effect = send
+        transport.ping.side_effect = None
+        transport.relays_healthy.return_value = True
+        await start
+        await eventually(lambda: ipc.service.kafka_ready)
+        transport.apply.assert_awaited_once()
+        runtime.tokens.exchange_service.assert_called_once_with("ads")
+        runtime.producer.send_and_wait.assert_awaited_once()
+        assert ipc.publisher.messages == [SandboxReady(ipc.settings.sandbox_id)]
+        assert delivery.installed == EgressApplied(ping.instance_id, 1)
+    finally:
+        start.cancel()
+        await asyncio.gather(start, return_exceptions=True)
+        await runtime.stop()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("blocked", ["unhealthy", "hung"])
+async def test_initial_health_uses_existing_startup_deadline(paired_runtime, ipc, blocked):
+    runtime = paired_runtime
+    runtime.settings = replace(runtime.settings, startup_seconds=0.04)
+    transport = ipc.service.egress.transport
+    if blocked == "hung":
+        transport.ping.side_effect = asyncio.Event().wait
+    else:
+        transport.relays_healthy.return_value = False
+    with pytest.raises(TimeoutError):
+        await runtime.start()
+    assert not runtime.config_consumer.started and runtime.config_consumer.stopped
+    runtime.tokens.exchange_service.assert_not_called()
+    runtime.producer.send_and_wait.assert_not_awaited()
+    transport.apply.assert_not_awaited()
+    assert not ipc.service.kafka_ready and not ipc.service.http_ready
+    assert not ipc.kube.calls and not ipc.publisher.messages
+    assert ipc.service.stopping and ipc.service.egress.stopped
+    assert runtime.consumer.stopped and runtime.ping_consumer.stopped
+    runtime.producer.stop.assert_awaited_once()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "failure", ["service-failed", "service-stopping", "delivery-failed", "delivery-stopped"]
+)
+@pytest.mark.parametrize("during_health", [False, True])
+async def test_initial_health_never_overrides_failure_or_stop(
+    paired_runtime, ipc, failure, during_health
+):
+    runtime = paired_runtime
+    delivery = ipc.service.egress
+    target, attribute = failure.split("-")
+    obj = ipc.service if target == "service" else delivery
+    if during_health:
+
+        async def healthy():
+            setattr(obj, attribute, True)
+            return True
+
+        delivery.healthy = healthy
+    else:
+        setattr(obj, attribute, True)
+    with pytest.raises(RuntimeError, match="stopped during initial health"):
+        await runtime.start()
+    assert not runtime.config_consumer.started
+    runtime.tokens.exchange_service.assert_not_called()
+    delivery.transport.apply.assert_not_awaited()
+    assert not ipc.service.kafka_ready and not ipc.service.http_ready
+    assert not ipc.publisher.messages and not ipc.kube.calls
+
+
+@pytest.mark.anyio
+async def test_initial_health_cancellation_closes_runtime(paired_runtime, ipc):
+    runtime = paired_runtime
+    transport = ipc.service.egress.transport
+    transport.ping.side_effect = asyncio.Event().wait
+    start = asyncio.create_task(runtime.start())
+    await eventually(lambda: transport.ping.await_count > 0)
+    start.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start
+    assert not runtime.config_consumer.started and runtime.config_consumer.stopped
+    assert runtime.consumer.stopped and runtime.ping_consumer.stopped
+    runtime.tokens.exchange_service.assert_not_called()
+    transport.apply.assert_not_awaited()
+    assert ipc.service.stopping and ipc.service.egress.stopped
+    assert not ipc.service.kafka_ready and not ipc.service.http_ready
+    runtime.producer.stop.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_initial_health_missing_delivery_fails_closed(paired_runtime, ipc):
+    ipc.service.egress = None
+    with pytest.raises(ValueError, match="paired IPC requires configuration delivery"):
+        await paired_runtime.start()
+    assert not paired_runtime.config_consumer.started
+    paired_runtime.tokens.exchange_service.assert_not_called()
+    assert not ipc.service.kafka_ready and not ipc.service.http_ready
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("cause", ["shutdown", "consumer-failure"])
+async def test_initial_health_keeps_shutdown_and_consumer_failure_effective(
+    paired_runtime, ipc, cause
+):
+    from ads_commons.sandbox import encode_ready
+
+    runtime = paired_runtime
+    transport = ipc.service.egress.transport
+    transport.relays_healthy.return_value = False
+    start = asyncio.create_task(runtime.start())
+    try:
+        await eventually(lambda: transport.ping.await_count > 0)
+        if cause == "shutdown":
+            runtime.consumer.feed(
+                READY_TOPIC,
+                encode_ready(SandboxShutdown(ipc.settings.sandbox_id)),
+                ipc.keys.token(),
+            )
+        else:
+            runtime.consumer.failed = True
+        with pytest.raises(RuntimeError, match="stopped during initial health"):
+            await start
+        assert ipc.service.stopping
+        assert not runtime.config_consumer.started
+        runtime.tokens.exchange_service.assert_not_called()
+        transport.apply.assert_not_awaited()
+        assert not ipc.service.kafka_ready and not ipc.service.http_ready
+        assert not ipc.kube.calls
+        if cause == "shutdown":
+            assert ipc.publisher.messages == [SandboxShutdownAck(ipc.settings.sandbox_id)]
+        else:
+            assert ipc.service.failed and not ipc.publisher.messages
+    finally:
+        start.cancel()
+        await asyncio.gather(start, return_exceptions=True)
         await runtime.stop()
 
 

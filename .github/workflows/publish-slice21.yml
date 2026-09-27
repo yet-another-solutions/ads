@@ -1,5 +1,5 @@
 name: publish-slice21
-run-name: Slice 21 manager and egress (${{ inputs.expected_sha }})
+run-name: Slice 21 ${{ inputs.service_selection }} (${{ inputs.expected_sha }})
 
 # Temporary, explicit partial-publication path. No push/tag trigger and no
 # release/chart stamping: other services remain on their published versions.
@@ -10,6 +10,14 @@ on:
         description: Exact reviewed default-branch commit to test and publish
         required: true
         type: string
+      service_selection:
+        description: Publish only the reviewed affected services
+        required: true
+        type: choice
+        default: manager-egress
+        options:
+          - manager-egress
+          - ipc
 
 permissions:
   contents: read
@@ -26,11 +34,13 @@ jobs:
     outputs:
       image_tag: ${{ steps.identity.outputs.image_tag }}
       owner: ${{ steps.identity.outputs.owner }}
+      matrix: ${{ steps.identity.outputs.matrix }}
     steps:
       - name: Bind exact default-branch SHA and refuse consumed image tags
         id: identity
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          SERVICE_SELECTION: ${{ inputs.service_selection }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: python
@@ -52,12 +62,26 @@ jobs:
               raise SystemExit("dispatch only the reviewed default branch")
           if os.environ["GITHUB_RUN_ATTEMPT"] != "1":
               raise SystemExit("do not rerun a consumed publication attempt")
+          selections = {
+              "manager-egress": [
+                  {"service": "ads-sandbox-manager", "platforms": "linux/amd64,linux/arm64"},
+                  {"service": "ads-sandbox-egress", "platforms": "linux/amd64"},
+              ],
+              "ipc": [
+                  {"service": "ads-sandbox-ipc", "platforms": "linux/amd64,linux/arm64"},
+              ],
+          }
+          selection = os.environ["SERVICE_SELECTION"]
+          if selection not in selections:
+              raise SystemExit("unknown scoped service selection")
+          selected = selections[selection]
           owner = os.environ["GITHUB_REPOSITORY_OWNER"].lower()
           tag = "slice21-" + sha
           basic = base64.b64encode(
               (os.environ["GITHUB_ACTOR"] + ":" + os.environ["GH_TOKEN"]).encode()
           ).decode()
-          for image in ("ads-sandbox-manager", "ads-sandbox-egress"):
+          for item in selected:
+              image = item["service"]
               repository = owner + "/" + image
               query = urlencode({"service": "ghcr.io", "scope": "repository:" + repository + ":pull"})
               request = Request("https://ghcr.io/token?" + query,
@@ -86,6 +110,7 @@ jobs:
               print("Unused scoped image tag confirmed: " + image + ":" + tag)
           with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
               stream.write("image_tag=" + tag + "\nowner=" + owner + "\n")
+              stream.write("matrix=" + json.dumps({"include": selected}) + "\n")
 
   service-tests:
     needs: preflight
@@ -93,8 +118,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: true
-      matrix:
-        service: [ads-sandbox-manager, ads-sandbox-egress]
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     env:
       TESTCONTAINERS_RYUK_DISABLED: "true"
       # Manager tests reuse these fixtures without selecting the commons suite.
@@ -165,6 +189,9 @@ jobs:
         run: |
           uv run --no-sync pytest deploy/tests/test_slice21_publish.py \
             charts/ads/tests/test_chart.py::ChartTests::test_runtime_class_overhead_read_is_manager_get_only
+      - name: Scoped workflow tests for IPC selection
+        if: matrix.service == 'ads-sandbox-ipc'
+        run: uv run --no-sync pytest deploy/tests/test_slice21_publish.py
       - name: Retain service test report
         if: always()
         uses: actions/upload-artifact@v4
@@ -182,18 +209,13 @@ jobs:
       packages: write
     strategy:
       fail-fast: true
-      matrix:
-        include:
-          - service: ads-sandbox-manager
-            platforms: linux/amd64,linux/arm64
-          - service: ads-sandbox-egress
-            platforms: linux/amd64
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
       - uses: docker/setup-qemu-action@v4
-        if: matrix.service == 'ads-sandbox-manager'
+        if: contains(matrix.platforms, 'linux/arm64')
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
         with:
@@ -247,20 +269,25 @@ jobs:
       - name: Record partial-publication boundary
         env:
           IMAGE_TAG: ${{ needs.preflight.outputs.image_tag }}
+          SELECTED_MATRIX: ${{ needs.preflight.outputs.matrix }}
+          OWNER: ${{ needs.preflight.outputs.owner }}
         run: |
           python - <<'PY'
           import json, os, pathlib
           evidence = [json.loads(path.read_text()) for path in pathlib.Path("images").glob("*/image.json")]
-          assert {item["IMAGE"].rsplit("/", 1)[-1] for item in evidence} == {
-              "ads-sandbox-manager", "ads-sandbox-egress"}
-          assert len(evidence) == 2
+          selected = json.loads(os.environ["SELECTED_MATRIX"])["include"]
+          assert {item["IMAGE"] for item in evidence} == {
+              "ghcr.io/" + os.environ["OWNER"] + "/" + item["service"] for item in selected}
+          assert len(evidence) == len(selected)
           assert all(item["GITHUB_SHA"] == os.environ["GITHUB_SHA"] for item in evidence)
+          assert all(item["IMAGE_TAG"] == os.environ["IMAGE_TAG"] for item in evidence)
+          assert all(item["GITHUB_RUN_ID"] == os.environ["GITHUB_RUN_ID"] for item in evidence)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
               stream.write("# Slice 21 partial publication\n\n")
-              stream.write("Manager and egress service suites only; not full workspace regression.\n\n")
+              stream.write("Selected service suites only; not full workspace regression.\n\n")
               for item in evidence:
                   stream.write("- `" + item["IMAGE"] + ":" + item["IMAGE_TAG"] + "`: `" + item["DIGEST"] + "`\n")
               stream.write("\nNo Git tag, GitHub Release, chart, golden/base image or other service was published. ")
-              stream.write("Preserve other live versions and apply the reviewed get-only RuntimeClass RBAC separately. ")
+              stream.write("Preserve other live versions; apply only separately reviewed lab changes. ")
               stream.write("This publication does not close slice 21.\n")
           PY

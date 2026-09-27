@@ -1,4 +1,4 @@
-"""Guard the explicit, temporary two-service publication boundary."""
+"""Guard the explicit, temporary selected-service publication boundary."""
 
 import io
 import json
@@ -21,7 +21,15 @@ def test_scoped_publish_is_manual_sha_bound_and_never_replaces_full_workflows():
     value = workflow()
     assert set(value["on"]) == {"workflow_dispatch"}
     inputs = value["on"]["workflow_dispatch"]["inputs"]
-    assert set(inputs) == {"expected_sha"} and inputs["expected_sha"]["required"] == "true"
+    assert set(inputs) == {"expected_sha", "service_selection"}
+    assert inputs["expected_sha"]["required"] == "true"
+    assert inputs["service_selection"] == {
+        "description": "Publish only the reviewed affected services",
+        "required": "true",
+        "type": "choice",
+        "default": "manager-egress",
+        "options": ["manager-egress", "ipc"],
+    }
     assert value["concurrency"]["cancel-in-progress"] == "false"
     preflight = value["jobs"]["preflight"]["steps"][0]["run"]
     for guard in (
@@ -39,15 +47,13 @@ def test_scoped_publish_is_manual_sha_bound_and_never_replaces_full_workflows():
     assert (ROOT / ".github/workflows/ci.yml").is_file()
 
 
-def test_only_manager_and_egress_complete_service_suites_run_before_push():
+def test_only_selected_complete_service_suites_run_before_push():
     jobs = workflow()["jobs"]
     assert set(jobs) == {"preflight", "service-tests", "publish-image", "summary"}
     tests = jobs["service-tests"]
     assert tests["needs"] == "preflight"
-    assert tests["strategy"]["matrix"]["service"] == [
-        "ads-sandbox-manager",
-        "ads-sandbox-egress",
-    ]
+    assert tests["strategy"]["matrix"] == "${{ fromJSON(needs.preflight.outputs.matrix) }}"
+    assert jobs["preflight"]["outputs"]["matrix"] == "${{ steps.identity.outputs.matrix }}"
     assert tests["env"]["PYTHONPATH"] == "libraries/ads-commons/tests"
     run = next(
         step["run"] for step in tests["steps"] if step.get("name", "").startswith("Scoped lint")
@@ -62,15 +68,23 @@ def test_only_manager_and_egress_complete_service_suites_run_before_push():
     assert native["if"] == "matrix.service == 'ads-sandbox-egress'"
     for tool in ("nginx", "ADS_EGRESS_OPENSSL4_ROOT", "delv", "sha256sum --check"):
         assert tool in native["run"]
+    ipc_workflow = next(
+        step
+        for step in tests["steps"]
+        if step.get("name") == "Scoped workflow tests for IPC selection"
+    )
+    assert ipc_workflow["if"] == "matrix.service == 'ads-sandbox-ipc'"
+    assert ipc_workflow["run"] == "uv run --no-sync pytest deploy/tests/test_slice21_publish.py"
 
 
-def test_publish_has_only_two_existing_platform_sets_no_latest_or_release():
+def test_publish_uses_selected_existing_platform_sets_no_latest_or_release():
     jobs = workflow()["jobs"]
     publish = jobs["publish-image"]
-    assert publish["strategy"]["matrix"]["include"] == [
-        {"service": "ads-sandbox-manager", "platforms": "linux/amd64,linux/arm64"},
-        {"service": "ads-sandbox-egress", "platforms": "linux/amd64"},
-    ]
+    assert publish["strategy"]["matrix"] == "${{ fromJSON(needs.preflight.outputs.matrix) }}"
+    qemu = next(
+        step for step in publish["steps"] if step.get("uses") == "docker/setup-qemu-action@v4"
+    )
+    assert qemu["if"] == "contains(matrix.platforms, 'linux/arm64')"
     assert publish["permissions"] == {"contents": "read", "packages": "write"}
     build = next(
         step for step in publish["steps"] if step.get("uses") == "docker/build-push-action@v6"
@@ -91,6 +105,7 @@ def test_publish_has_only_two_existing_platform_sets_no_latest_or_release():
 def preflight(monkeypatch, tmp_path):
     values = {
         "EXPECTED_SHA": "a" * 40,
+        "SERVICE_SELECTION": "manager-egress",
         "GITHUB_SHA": "a" * 40,
         "GITHUB_REF": "refs/heads/master",
         "DEFAULT_BRANCH": "master",
@@ -124,13 +139,43 @@ def preflight(monkeypatch, tmp_path):
     return code, calls, Path(values["GITHUB_OUTPUT"])
 
 
-def test_preflight_confirms_both_absent_tags_and_emits_exact_identity(preflight):
+@pytest.mark.parametrize(
+    ("selection", "expected"),
+    [
+        (
+            "manager-egress",
+            [
+                {"service": "ads-sandbox-manager", "platforms": "linux/amd64,linux/arm64"},
+                {"service": "ads-sandbox-egress", "platforms": "linux/amd64"},
+            ],
+        ),
+        (
+            "ipc",
+            [
+                {"service": "ads-sandbox-ipc", "platforms": "linux/amd64,linux/arm64"},
+            ],
+        ),
+    ],
+)
+def test_preflight_confirms_only_selected_absent_tags_and_emits_exact_identity(
+    preflight, monkeypatch, selection, expected
+):
     code, calls, output = preflight
+    monkeypatch.setenv("SERVICE_SELECTION", selection)
     exec(code, {})
-    assert len(calls) == 4
-    assert calls[1].endswith("/ads-sandbox-manager/manifests/slice21-" + "a" * 40)
-    assert calls[3].endswith("/ads-sandbox-egress/manifests/slice21-" + "a" * 40)
-    assert output.read_text() == "image_tag=slice21-" + "a" * 40 + "\nowner=fixture\n"
+    assert len(calls) == 2 * len(expected)
+    for index, item in enumerate(expected):
+        assert calls[index * 2 + 1].endswith(
+            "/" + item["service"] + "/manifests/slice21-" + "a" * 40
+        )
+    assert output.read_text() == (
+        "image_tag=slice21-"
+        + "a" * 40
+        + "\nowner=fixture\n"
+        + "matrix="
+        + json.dumps({"include": expected})
+        + "\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -140,6 +185,8 @@ def test_preflight_confirms_both_absent_tags_and_emits_exact_identity(preflight)
         ("EXPECTED_SHA", "b" * 40),
         ("GITHUB_REF", "refs/heads/feature"),
         ("GITHUB_RUN_ATTEMPT", "2"),
+        ("SERVICE_SELECTION", "ads"),
+        ("SERVICE_SELECTION", "ipc,ads-sandbox-manager"),
     ],
 )
 def test_preflight_rejects_unbound_or_repeat_attempt_before_registry(
@@ -153,10 +200,12 @@ def test_preflight_rejects_unbound_or_repeat_attempt_before_registry(
 
 
 @pytest.mark.parametrize("status", [200, 401, 403, 500, "unproven-404"])
+@pytest.mark.parametrize("selection", ["manager-egress", "ipc"])
 def test_preflight_never_treats_existing_or_inaccessible_tag_as_absent(
-    preflight, monkeypatch, status
+    preflight, monkeypatch, status, selection
 ):
     code, _, output = preflight
+    monkeypatch.setenv("SERVICE_SELECTION", selection)
     calls = []
 
     def urlopen(request, timeout):
@@ -172,3 +221,62 @@ def test_preflight_never_treats_existing_or_inaccessible_tag_as_absent(
     with pytest.raises((SystemExit, HTTPError)):
         exec(code, {})
     assert len(calls) == 2 and not output.exists()
+
+
+@pytest.mark.parametrize("selection", ["manager-egress", "ipc"])
+@pytest.mark.parametrize("mismatch", [None, "extra", "missing", "sha", "tag", "run", "owner"])
+def test_summary_requires_exact_selected_artifacts(monkeypatch, tmp_path, selection, mismatch):
+    services = (
+        ["ads-sandbox-ipc"] if selection == "ipc" else ["ads-sandbox-manager", "ads-sandbox-egress"]
+    )
+    step = workflow()["jobs"]["summary"]["steps"][-1]
+    assert step["env"] == {
+        "IMAGE_TAG": "${{ needs.preflight.outputs.image_tag }}",
+        "SELECTED_MATRIX": "${{ needs.preflight.outputs.matrix }}",
+        "OWNER": "${{ needs.preflight.outputs.owner }}",
+    }
+    for key, value in {
+        "SELECTED_MATRIX": json.dumps({"include": [{"service": s} for s in services]}),
+        "OWNER": "fixture",
+        "IMAGE_TAG": "slice21-" + "a" * 40,
+        "GITHUB_SHA": "a" * 40,
+        "GITHUB_RUN_ID": "123",
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+    }.items():
+        monkeypatch.setenv(key, value)
+    artifacts = services.copy()
+    if mismatch == "extra":
+        artifacts.append("ads")
+    if mismatch == "missing":
+        artifacts.pop()
+    for service in artifacts:
+        evidence = {
+            "IMAGE": "ghcr.io/fixture/" + service,
+            "IMAGE_TAG": "slice21-" + "a" * 40,
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_RUN_ID": "123",
+            "DIGEST": "sha256:" + "b" * 64,
+        }
+        field = {
+            "sha": "GITHUB_SHA",
+            "tag": "IMAGE_TAG",
+            "run": "GITHUB_RUN_ID",
+            "owner": "IMAGE",
+        }.get(mismatch)
+        if field:
+            evidence[field] = "wrong"
+        directory = tmp_path / "images" / service
+        directory.mkdir(parents=True)
+        (directory / "image.json").write_text(json.dumps(evidence))
+    monkeypatch.chdir(tmp_path)
+    code = compile(step["run"].split("\n", 1)[1].rsplit("\nPY", 1)[0], str(WORKFLOW), "exec")
+    if mismatch:
+        with pytest.raises(AssertionError):
+            exec(code, {})
+        assert not (tmp_path / "summary").exists()
+    else:
+        exec(code, {})
+        summary = (tmp_path / "summary").read_text()
+        assert "not full workspace regression" in summary
+        assert "does not close slice 21" in summary
+        assert all("ghcr.io/fixture/" + service in summary for service in services)
