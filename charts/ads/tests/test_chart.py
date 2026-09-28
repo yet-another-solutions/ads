@@ -793,7 +793,7 @@ class ChartTests(unittest.TestCase):
             "--set",
             "sandbox.ca.signingSecret=dedicated-egress-signer",
             "--set-json",
-            "sandbox.manager.pairInputs=" + json.dumps({**paired_runtime_fixture(), "relay": {**paired_runtime_fixture()["relay"], "imageId": "sha256:" + "b" * 64}}),
+            "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
             "--set",
             "sandbox.manager.nodeOwner.network=private",
             "--set",
@@ -1177,7 +1177,6 @@ class ChartTests(unittest.TestCase):
 
     def test_node_owner_chart_renders_sockets_without_endpoint_map(self):
         pair = paired_runtime_fixture()
-        pair["relay"]["imageId"] = "sha256:" + "b" * 64
         with tempfile.TemporaryDirectory() as directory:
             values = Path(directory) / "node-owner-values.yaml"
             values.write_text(

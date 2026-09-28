@@ -36,7 +36,6 @@ FIELDS = {
     "kubectl",
     "crictl",
     "relay_image",
-    "relay_image_id",
     "relay_container",
     "guest_runtime",
     "egress_runtime",
@@ -83,9 +82,6 @@ def validate(config):
     require(
         type(config["transport_mtu"]) is int and 686 <= config["transport_mtu"] <= 65535,
         "invalid path MTU",
-    )
-    require(
-        re.fullmatch(r"sha256:[0-9a-f]{64}", config["relay_image_id"]), "exact image ID required"
     )
     require(
         isinstance(config["relay_image"], str)
@@ -300,7 +296,7 @@ def runtime_identity(observer, relay, container_id):
         and status["metadata"]["name"] == config["relay_container"]
         and status["labels"].get("io.kubernetes.pod.uid") == meta["uid"]
         and status["labels"].get("io.kubernetes.pod.namespace") == config["namespace"]
-        and status["imageRef"].split("@")[-1] == config["relay_image_id"]
+        and status["imageRef"] == config["relay_image"]
         and container["info"].get("sandboxID") == sandbox["id"],
         "runtime container identity mismatch",
     )
