@@ -405,7 +405,12 @@ def test_protected_capture_is_immutable_fenced_and_bound_to_original_map(
     monkeypatch.setattr(attest, "validate", lambda value: value)
     monkeypatch.setattr(attest, "Observer", lambda config: f.observer)
     monkeypatch.setattr(partial, "os", SimpleNamespace(geteuid=lambda: 0))
-    modules = {"ads-ptp": plugin, "ads-ptp-attest": attest, "ads-ptp-release": release}
+    modules = {
+        "ads-ptp": plugin,
+        "ads-ptp-attest": attest,
+        "ads-ptp-release": release,
+        "ads-cri": SimpleNamespace(RUNTIME_ID=r"(containerd|cri-o)://[0-9a-f]{64}"),
+    }
     monkeypatch.setattr(partial, "load", lambda name: modules[name])
     request = {
         **{key: f.scope[key] for key in ("generation", "sandbox_id", "pod_uids")},

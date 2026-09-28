@@ -98,7 +98,6 @@ def validate(config):
             require(not info.st_mode & 0o077, "private API credentials required")
         else:
             require(info.st_mode & 0o111, "platform executable required")
-    config["cri_endpoint"] = cri_module().detect(config["crictl"])
     return config
 
 
@@ -160,9 +159,11 @@ class Observer:
         return reply["items"]
 
     def cri(self, *args):
+        endpoint = self.config.get("cri_endpoint") or cri_module().detect(self.config["crictl"])
+        self.config["cri_endpoint"] = endpoint
         return self.command(
             self.config["crictl"],
-            "--runtime-endpoint=" + self.config["cri_endpoint"],
+            "--runtime-endpoint=" + endpoint,
             "--timeout=3s",
             *args,
         )
@@ -299,7 +300,73 @@ def processes(pids):
         check()
 
 
-def observe_binding(observer, plugin, req):
+def namespace_identity(fd):
+    info = os.fstat(fd)
+    require(fcntl.ioctl(fd, 0xB703) == 0x40000000, "network namespace required")
+    return [info.st_dev, info.st_ino]
+
+
+def host_facts(plugin, *, relay_uid, generation, sandbox_id, sandbox_pid, container_pid):
+    """Journal and namespace inodes after the host mount namespace is current.
+
+    No API call and no binding record. The caller enters that namespace.
+    """
+    private_path = f"/proc/{container_pid}/root/run/netns/private-{generation}"
+    transport_path = f"/proc/{sandbox_pid}/ns/net"
+    with processes((sandbox_pid, container_pid)):
+        with (
+            plugin.namespace(private_path) as private,
+            plugin.namespace(transport_path) as transport,
+            plugin.namespace(f"/proc/{container_pid}/ns/net") as container_net,
+        ):
+            private_id = namespace_identity(private)
+            transport_id = namespace_identity(transport)
+            require(transport_id == namespace_identity(container_net), "relay transport mismatch")
+            require(private_id != transport_id, "private aliases transport")
+            journal = plugin.read_record(
+                Path(f"/proc/{container_pid}/root/run/relay-state/state.json")
+            )
+            require(
+                journal.get("complete") is True
+                and not journal.get("stopped")
+                and journal.get("pod_uid") == relay_uid
+                and journal.get("generation") == generation
+                and journal.get("sandbox_id") == sandbox_id
+                and journal.get("private") == private_id
+                and journal.get("transport") == transport_id,
+                "relay setup journal mismatch",
+            )
+    return {
+        "journal": {
+            "pod_uid": journal["pod_uid"],
+            "generation": journal["generation"],
+            "sandbox_id": journal["sandbox_id"],
+        },
+        "private": {"path": private_path, "identity": private_id},
+        "transport": {"path": transport_path, "identity": transport_id},
+    }
+
+
+def binding_record(config, req, vm, relay, side, runtime, facts):
+    journal = facts["journal"]
+    return {
+        "pod_uid": req["pod_uid"],
+        "generation": journal["generation"],
+        "sandbox_id": journal["sandbox_id"],
+        "role": side,
+        "ifname": req["ifname"],
+        "network": config["network"],
+        "relay_pod_uid": relay["metadata"]["uid"],
+        "relay_runtime_id": runtime,
+        "private": facts["private"],
+        "transport": facts["transport"],
+        "mtu": config["transport_mtu"] - 110,
+        "address": "10.10.30.2/24" if side == "guest" else "10.10.30.1/24",
+        "gateway": "10.10.30.1" if side == "guest" else None,
+    }
+
+
+def observe_binding(observer, plugin, req, host=None):
     config = observer.config
     require(req["network"] == config["network"], "network mismatch")
     first = select_pair(observer.pods(), req["pod_uid"], config)
@@ -307,69 +374,43 @@ def observe_binding(observer, plugin, req):
     require(req["ifname"] == ("eth0" if side == "guest" else "eth1"), "private interface mismatch")
     runtime, (sandbox_pid, container_pid) = runtime_identity(observer, relay, container)
     generation = vm["metadata"]["labels"]["ads.io/attachment-generation"]
-    private_path = f"/proc/{container_pid}/root/run/netns/private-{generation}"
-    transport_path = f"/proc/{sandbox_pid}/ns/net"
-    with processes((sandbox_pid, container_pid)) as check_processes:
-        with (
-            plugin.namespace(private_path) as private,
-            plugin.namespace(transport_path) as transport,
-            plugin.namespace(f"/proc/{container_pid}/ns/net") as container_net,
-        ):
-
-            def identity(fd):
-                info = os.fstat(fd)
-                require(fcntl.ioctl(fd, 0xB703) == 0x40000000, "network namespace required")
-                return [info.st_dev, info.st_ino]
-
-            require(identity(transport) == identity(container_net), "relay transport mismatch")
-            require(identity(private) != identity(transport), "private aliases transport")
-            journal = plugin.read_record(
-                Path(f"/proc/{container_pid}/root/run/relay-state/state.json")
-            )
-            require(
-                journal.get("complete") is True
-                and not journal.get("stopped")
-                and journal.get("pod_uid") == relay["metadata"]["uid"]
-                and journal.get("generation") == generation
-                and journal.get("sandbox_id") == vm["metadata"]["labels"]["ads.io/sandbox-id"]
-                and journal.get("private") == identity(private)
-                and journal.get("transport") == identity(transport),
-                "relay setup journal mismatch",
-            )
-            record = {
-                "pod_uid": req["pod_uid"],
-                "generation": generation,
-                "sandbox_id": journal["sandbox_id"],
-                "role": side,
-                "ifname": req["ifname"],
-                "network": config["network"],
+    sandbox_id = vm["metadata"]["labels"]["ads.io/sandbox-id"]
+    if host is None:
+        facts = host_facts(
+            plugin,
+            relay_uid=relay["metadata"]["uid"],
+            generation=generation,
+            sandbox_id=sandbox_id,
+            sandbox_pid=sandbox_pid,
+            container_pid=container_pid,
+        )
+    else:
+        # One socket call. The host reader owns the mount-namespace enter.
+        facts = host(
+            {
                 "relay_pod_uid": relay["metadata"]["uid"],
-                "relay_runtime_id": runtime,
-                "private": {"path": private_path, "identity": identity(private)},
-                "transport": {"path": transport_path, "identity": identity(transport)},
-                "mtu": config["transport_mtu"] - 110,
-                "address": "10.10.30.2/24" if side == "guest" else "10.10.30.1/24",
-                "gateway": "10.10.30.1" if side == "guest" else None,
+                "generation": generation,
+                "sandbox_id": sandbox_id,
+                "sandbox_pid": sandbox_pid,
+                "container_pid": container_pid,
             }
-            plugin.binding(record, req)
-            # Repeat API and CRI after namespace observations, not from a cached watch.
-            again = select_pair(observer.pods(), req["pod_uid"], config)
-            require(
-                again[0]["metadata"]["uid"] == vm["metadata"]["uid"]
-                and again[1]["metadata"]["uid"] == relay["metadata"]["uid"]
-                and again[2:] == first[2:]
-                and all(
-                    again[0]["metadata"]["labels"][k] == vm["metadata"]["labels"][k] for k in LABELS
-                ),
-                "pair changed during observation",
-            )
-            require(
-                runtime_identity(observer, again[1], container)
-                == (runtime, (sandbox_pid, container_pid)),
-                "runtime changed during observation",
-            )
-            check_processes()
-            return record
+        )
+    record = binding_record(config, req, vm, relay, side, runtime, facts)
+    plugin.binding(record, req)
+    # Repeat API and CRI after host facts, not from a cached watch.
+    again = select_pair(observer.pods(), req["pod_uid"], config)
+    require(
+        again[0]["metadata"]["uid"] == vm["metadata"]["uid"]
+        and again[1]["metadata"]["uid"] == relay["metadata"]["uid"]
+        and again[2:] == first[2:]
+        and all(again[0]["metadata"]["labels"][k] == vm["metadata"]["labels"][k] for k in LABELS),
+        "pair changed during observation",
+    )
+    require(
+        runtime_identity(observer, again[1], container) == (runtime, (sandbox_pid, container_pid)),
+        "runtime changed during observation",
+    )
+    return record
 
 
 def refresh(config_path, req, directory, plugin=None):

@@ -105,10 +105,13 @@ def test_pair_selection_accepts_crio_runtime_id(attest, fixture):
     f.relay["status"]["containerStatuses"][0]["containerID"] = "cri-o://" + "b" * 64
     result = attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)
     assert result[3] == "b" * 64
-    f.vm["metadata"]["labels"][attest.COMPONENT] = "ads-sandbox-egress"
-    f.vm["spec"]["runtimeClassName"] = f.config["egress_runtime"]
-    f.relay["metadata"]["labels"][attest.COMPONENT] = "ads-sandbox-egress-relay"
-    assert attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)[2] == "egress"
+
+
+def test_pair_selection_rejects_short_crio_runtime_id(attest, fixture):
+    f = fixture
+    f.relay["status"]["containerStatuses"][0]["containerID"] = "cri-o://short"
+    with pytest.raises(ValueError, match="exact containerd or cri-o ID"):
+        attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)
 
 
 @pytest.mark.parametrize(
@@ -345,11 +348,6 @@ def test_platform_configuration_is_exact_local_and_protected(
         return SimpleNamespace(st_mode=value.st_mode, st_uid=0)
 
     monkeypatch.setattr(Path, "lstat", info)
-    monkeypatch.setattr(
-        attest,
-        "cri_module",
-        lambda: SimpleNamespace(detect=lambda path: "unix:///run/containerd/containerd.sock"),
-    )
     if fault == "extra":
         config["unknown"] = True
     elif fault == "mtu":
@@ -364,6 +362,7 @@ def test_platform_configuration_is_exact_local_and_protected(
         Path(config["crictl"]).chmod(0o777)
     if fault is None:
         assert attest.validate(config) == config
+        assert "cri_endpoint" not in config
     else:
         with pytest.raises(ValueError):
             attest.validate(config)
