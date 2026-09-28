@@ -1195,6 +1195,12 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/var/run/attestor-v0.0.1.sock", config)
             if name == "ads-ptp-attestor":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
+            if name == "ads-ptp-cni":
+                mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
+                self.assertIn("/etc/cni/ads-private", mounts)
+                self.assertIn("/etc/cni/net.d.crio", mounts)
+                self.assertIn("/opt/cni/bin", mounts)
+                self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-cni"])
         self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))
         policy = docs["NetworkPolicy", "ads-node-owner"]["spec"]
         self.assertEqual(policy["ingress"][0]["ports"], [{"protocol": "TCP", "port": 9443}])

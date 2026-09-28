@@ -98,6 +98,12 @@ spec:
               mountPath: /etc/cni/net.d
             - name: crio-net
               mountPath: /etc/cni/net.d.crio
+            - name: runtime-net
+              mountPath: /etc/cni/ads-private
+            - name: cni-certs
+              mountPath: /etc/cni/ads-ptp
+            - name: cni-state
+              mountPath: /var/lib/ads-ptp
             {{- end }}
             {{- if eq $role.name "ads-node-owner" }}
             - name: proc
@@ -137,6 +143,18 @@ spec:
         - name: crio-net
           hostPath:
             path: /etc/cni/net.d.crio
+            type: DirectoryOrCreate
+        - name: runtime-net
+          hostPath:
+            path: /etc/cni/ads-private
+            type: DirectoryOrCreate
+        - name: cni-certs
+          hostPath:
+            path: /etc/cni/ads-ptp
+            type: DirectoryOrCreate
+        - name: cni-state
+          hostPath:
+            path: /var/lib/ads-ptp
             type: DirectoryOrCreate
         {{- end }}
         {{- if eq $role.name "ads-node-owner" }}

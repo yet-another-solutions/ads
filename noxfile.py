@@ -41,6 +41,7 @@ _SRC = (
     "services/ads-ptp-tools/ipc-release-kernel-smoke.py",
     "services/ads-ptp-tools/ipc-storage-kernel-smoke.py",
     "services/ads-ptp-tools/ads-node-owner",
+    "services/ads-ptp-tools/ads-ptp-cni",
     "services/ads-ptp-tools/release-kernel-smoke.py",
     "services/ads-ptp-tools/relay-kernel-smoke.py",
     "services/ads-ptp-tools/attachment-kernel-smoke.py",
