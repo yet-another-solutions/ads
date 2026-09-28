@@ -121,7 +121,6 @@ def configure(monkeypatch, settings):
         "PAIR_INPUTS": json.dumps(pair_inputs()),
         "NODE_OWNER": json.dumps(
             {
-                "endpoints": {"worker.test": "https://worker.test:9443"},
                 "namespace": settings.namespace,
                 "network": "private",
                 "ca": str(settings.tls_cert_path),

@@ -1,4 +1,4 @@
-"""Authenticated, bounded delivery to explicitly configured node owners."""
+"""Authenticated, bounded delivery to the node-owner pod on the original node."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx2
@@ -34,46 +33,29 @@ SCHEMA = "ads-node-owner-v1"
 
 @dataclass(frozen=True)
 class NodeOwnerSettings:
-    endpoints: dict[str, str]
     namespace: str
     network: str
     ca: Path
     certificate: Path
     key: Path = field(repr=False)
     timeout: float = 60
+    server_cn: str = "ads-node-owner"
 
     def __post_init__(self) -> None:
         if (
-            not self.endpoints
-            or not self.namespace.strip()
+            not self.namespace.strip()
             or not self.network.strip()
+            or not self.server_cn.strip()
             or not math.isfinite(self.timeout)
             or not 0 < self.timeout <= 70
         ):
             raise ValueError("bounded explicit node-owner configuration required")
-        for node, endpoint in self.endpoints.items():
-            parsed = urlsplit(endpoint)
-            if (
-                not node.strip()
-                or parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.username is not None
-                or parsed.password is not None
-                or parsed.path not in ("", "/")
-                or parsed.query
-                or parsed.fragment
-                or parsed.port == 0
-            ):
-                raise ValueError("credential-free node HTTPS origin required")
-        if len(set(self.endpoints.values())) != len(self.endpoints):
-            raise ValueError("each node requires its own explicit endpoint")
         if not all(path.is_absolute() for path in (self.ca, self.certificate, self.key)):
             raise ValueError("absolute node TLS credential paths required")
 
     @classmethod
     def parse(cls, value: dict[str, Any]) -> NodeOwnerSettings:
         if not isinstance(value, dict) or set(value) != {
-            "endpoints",
             "namespace",
             "network",
             "ca",
@@ -82,20 +64,11 @@ class NodeOwnerSettings:
             "timeout",
         }:
             raise ValueError("exact node-owner configuration required")
-        if (
-            not isinstance(value["endpoints"], dict)
-            or not all(
-                isinstance(k, str) and isinstance(v, str) for k, v in value["endpoints"].items()
-            )
-            or not all(
-                isinstance(value[k], str)
-                for k in ("namespace", "network", "ca", "certificate", "key")
-            )
-            or type(value["timeout"]) not in (int, float)
-        ):
+        if not all(
+            isinstance(value[k], str) for k in ("namespace", "network", "ca", "certificate", "key")
+        ) or type(value["timeout"]) not in (int, float):
             raise ValueError("invalid node-owner configuration types")
         return cls(
-            endpoints=dict(value["endpoints"]),
             namespace=value["namespace"],
             network=value["network"],
             ca=Path(value["ca"]),
@@ -109,21 +82,128 @@ class NodeOwnerSettings:
         # loaded before accepting application work and never sent in JSON.
         context = ssl.create_default_context(cafile=str(self.ca))
         context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = False
         context.load_cert_chain(str(self.certificate), str(self.key))
         return context
 
 
+class NodeOwnerDirectory:
+    """Node name to the one Ready node-owner pod IP. Not a settings field."""
+
+    def __init__(self, kube: Any, namespace: str) -> None:
+        self.kube = kube
+        self.namespace = namespace
+        self.addresses: dict[str, str] = {}
+
+    async def refresh(self) -> None:
+        pods = await self.kube._list(
+            self.kube.core.list_namespaced_pod,
+            self.namespace,
+            label_selector="app.kubernetes.io/component=ads-node-owner",
+        )
+        found: dict[str, str] = {}
+        failed: set[str] = set()
+        for pod in pods:
+            spec, status = pod.get("spec", {}), pod.get("status", {})
+            node = spec.get("nodeName")
+            ready = any(
+                item.get("type") == "Ready" and item.get("status") == "True"
+                for item in status.get("conditions", [])
+            )
+            address = status.get("podIP")
+            if (
+                not isinstance(node, str)
+                or not ready
+                or not isinstance(address, str)
+                or not address
+            ):
+                if isinstance(node, str):
+                    failed.add(node)
+                continue
+            if node in found:
+                failed.add(node)
+                found.pop(node, None)
+                continue
+            found[node] = address
+        for node in failed:
+            found.pop(node, None)
+        self.addresses = found
+
+
+def peer_cn(certificate: dict[str, Any]) -> str:
+    subject = certificate.get("subject", ())
+    names = [value for item in subject for key, value in item if key == "commonName"]
+    if len(names) != 1:
+        raise ValueError("node-owner server CN required")
+    return names[0]
+
+
+def cn_transport(context: ssl.SSLContext, expected: str) -> httpx2.AsyncHTTPTransport:
+    """Reject a wrong server CN during the handshake, before the HTTP body."""
+    import httpcore2
+    from httpcore2._backends.anyio import AnyIOBackend
+
+    class Stream:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        async def start_tls(
+            self,
+            ssl_context: ssl.SSLContext,
+            server_hostname: str | None = None,
+            timeout: float | None = None,
+        ):
+            stream = await self._inner.start_tls(ssl_context, server_hostname, timeout)
+            certificate = stream.get_extra_info("ssl_object").getpeercert()
+            if peer_cn(certificate) != expected:
+                await stream.aclose()
+                raise ValueError("unexpected node-owner server")
+            return stream
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+    class Backend(AnyIOBackend):
+        async def connect_tcp(self, *args: Any, **kwargs: Any) -> Any:
+            return Stream(await super().connect_tcp(*args, **kwargs))
+
+    transport = httpx2.AsyncHTTPTransport(verify=context, retries=0, http2=False)
+    transport._pool = httpcore2.AsyncConnectionPool(
+        ssl_context=context,
+        max_connections=4,
+        max_keepalive_connections=0,
+        retries=0,
+        http2=False,
+        network_backend=Backend(),
+    )
+    return transport
+
+
 class HttpsNodeOwner:
-    def __init__(self, settings: NodeOwnerSettings, context: ssl.SSLContext) -> None:
-        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
-            raise ValueError("verified mutual TLS required")
+    def __init__(
+        self,
+        settings: NodeOwnerSettings,
+        context: ssl.SSLContext,
+        addresses: dict[str, str],
+        *,
+        port: int = 9443,
+    ) -> None:
+        # Pod IP is the dial address. The lab CA plus the server CN is the check.
+        if context.verify_mode != ssl.CERT_REQUIRED or context.check_hostname:
+            raise ValueError("lab-root TLS without hostname-as-IP check required")
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError("node-owner port required")
         self.settings = settings
+        self.addresses = addresses
+        self.port = port
         self.client = httpx2.AsyncClient(
             verify=context,
             trust_env=False,
             follow_redirects=False,
             timeout=settings.timeout,
             limits=httpx2.Limits(max_connections=4, max_keepalive_connections=0),
+            transport=cn_transport(context, settings.server_cn),
         )
 
     @property
@@ -132,6 +212,16 @@ class HttpsNodeOwner:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    def _check_server(self, response: httpx2.Response) -> None:
+        stream = response.extensions.get("network_stream")
+        if stream is None:
+            return
+        ssl_object = stream.get_extra_info("ssl_object")
+        if ssl_object is None:
+            raise ValueError("node-owner TLS peer missing")
+        if peer_cn(ssl_object.getpeercert()) != self.settings.server_cn:
+            raise ValueError("unexpected node-owner server")
 
     async def _call(
         self,
@@ -149,9 +239,10 @@ class HttpsNodeOwner:
         runtime_sha256: str | None = None,
         pv_uid: str | None = None,
     ) -> bytes:
-        endpoint = self.settings.endpoints.get(node)
-        if endpoint is None:
-            raise ValueError("original node has no configured trusted endpoint")
+        address = self.addresses.get(node)
+        if not isinstance(address, str) or not address:
+            raise ValueError("original node has no ready node-owner pod")
+        endpoint = f"https://{address}:{self.port}"
         nonce = str(uuid4())
         body = msgspec.json.encode(
             {
@@ -182,7 +273,9 @@ class HttpsNodeOwner:
                 endpoint.rstrip("/") + "/v1/observe",
                 content=body,
                 headers={"Content-Type": "application/json", "Accept-Encoding": "identity"},
+                extensions={"sni_hostname": self.settings.server_cn},
             ) as response:
+                self._check_server(response)
                 if (
                     response.status_code != 200
                     or response.headers.get("content-type") != "application/json"

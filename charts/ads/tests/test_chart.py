@@ -150,8 +150,6 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
             "--set",
             "sandbox.manager.nodeOwner.network=private",
-            "--set-json",
-            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test"}',
         )
         for (kind, name), document in docs.items():
             if kind != "Deployment":
@@ -793,8 +791,6 @@ class ChartTests(unittest.TestCase):
             "--set-json",
             "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
             "--set-json",
-            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test:9443"}',
-            "--set",
             "sandbox.manager.nodeOwner.network=private",
             "--set",
             "sandbox.manager.nodeOwner.tlsSecretName=node-owner-client",
@@ -812,7 +808,7 @@ class ChartTests(unittest.TestCase):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
         self.assertEqual(settings.pair_inputs, paired_runtime_fixture())
-        self.assertEqual(settings.node_owner["endpoints"], {"worker": "https://worker.test:9443"})
+        self.assertNotIn("endpoints", settings.node_owner)
         self.assertEqual(settings.node_owner["certificate"], "/node-owner/tls.crt")
         self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
         self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")

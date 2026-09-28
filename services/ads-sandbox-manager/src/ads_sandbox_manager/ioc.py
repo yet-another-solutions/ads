@@ -28,7 +28,11 @@ from ads_sandbox_manager.kafka import KafkaRuntime, KafkaTopics, KafkaTransport
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
 from ads_sandbox_manager.lifecycle import LifecycleService
 from ads_sandbox_manager.lifecycle_store import LifecycleRepository
-from ads_sandbox_manager.node_owner import HttpsNodeOwner, NodeOwnerSettings
+from ads_sandbox_manager.node_owner import (
+    HttpsNodeOwner,
+    NodeOwnerDirectory,
+    NodeOwnerSettings,
+)
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
@@ -123,15 +127,35 @@ class AppProvider(Provider):
         return PairResourceTeardown(pair_runtime, pair_cleanup_kube, topics)
 
     @provide(scope=Scope.APP)
-    async def node_owner(self, settings: Settings) -> AsyncIterator[PairNodeOwner | None]:
+    async def node_owner(
+        self, settings: Settings, kube: KubeClient
+    ) -> AsyncIterator[PairNodeOwner | None]:
         if settings.node_owner is None:
             yield None  # Isolated fixtures only; environment startup requires it.
             return
         config = NodeOwnerSettings.parse(settings.node_owner)
-        owner = HttpsNodeOwner(config, config.context())
+        directory = NodeOwnerDirectory(kube, config.namespace)
+        deadline = asyncio.get_running_loop().time() + config.timeout
+        while not directory.addresses:
+            await directory.refresh()
+            if directory.addresses or asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(1)
+        if not directory.addresses:
+            raise RuntimeError("node-owner pods not ready")
+        owner = HttpsNodeOwner(config, config.context(), directory.addresses)
+
+        async def refresh() -> None:
+            while True:
+                await asyncio.sleep(5)
+                await directory.refresh()
+                owner.addresses = directory.addresses
+
+        task = asyncio.create_task(refresh())
         try:
             yield owner
         finally:
+            task.cancel()
             await owner.close()
 
     @provide(scope=Scope.APP)

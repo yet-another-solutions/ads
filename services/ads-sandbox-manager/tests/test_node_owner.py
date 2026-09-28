@@ -33,7 +33,6 @@ def pair():
 @pytest.fixture
 def config():
     return NodeOwnerSettings(
-        endpoints={"worker.test": "https://worker.test:9443"},
         namespace="sandboxes",
         network="private",
         ca=Path("/ca"),
@@ -62,8 +61,10 @@ def report(request, *, leftovers=None):
 
 
 def owner(config, handler):
-    value = object.__new__(HttpsNodeOwner)
-    value.settings = config
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = False
+    value = HttpsNodeOwner(config, context, {"worker.test": "127.0.0.1"})
     value.client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler), trust_env=False)
     return value
 
@@ -194,9 +195,9 @@ async def test_interrupted_call_is_not_retried_or_reported_success(config, pair,
 @pytest.mark.parametrize(
     "change",
     [
-        {"endpoints": {}},
-        {"endpoints": {"worker": "http://worker"}},
-        {"endpoints": {"worker": "https://user:pass@worker"}},
+        {"namespace": ""},
+        {"network": ""},
+        {"server_cn": ""},
         {"timeout": float("inf")},
         {"timeout": 71},
         {"ca": Path("relative")},
@@ -211,5 +212,5 @@ def test_unverified_tls_context_cannot_construct_production_channel(config):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with pytest.raises(ValueError, match="verified mutual TLS"):
-        HttpsNodeOwner(config, context)
+    with pytest.raises(ValueError, match="lab-root TLS"):
+        HttpsNodeOwner(config, context, {"worker.test": "127.0.0.1"})

@@ -115,15 +115,16 @@ behind that restriction.
 
 ## Manager and Helm
 
-`ADS_SANDBOX_MANAGER_NODE_OWNER` is a JSON object with exactly `endpoints`,
-`namespace`, `network`, `ca`, `certificate`, `key`, and `timeout`.
+`ADS_SANDBOX_MANAGER_NODE_OWNER` is a JSON object with exactly `namespace`,
+`network`, `ca`, `certificate`, `key`, and `timeout`. The node-to-pod-IP map
+is not a settings field.
 Environment startup rejects absent/null/empty or invalid configuration, invalid
 TLS files, namespace mismatch, or a timeout not shorter than `control_seconds`.
 There is no production opt-out returning success. Direct component fixtures
 may omit the channel, in which case the existing teardown remains blocked.
 
-Helm's `sandbox.manager.nodeOwner` carries the nonsecret endpoint map, network,
-`timeoutSeconds` and `tlsSecretName`. The pre-provisioned Secret contains
+Helm's `sandbox.manager.nodeOwner` carries the network, `timeoutSeconds` and
+`tlsSecretName`. It does not carry a node endpoint map. The pre-provisioned Secret contains
 `ca.crt`, `tls.crt`, and `tls.key`, mounted read-only at `/node-owner` only in the
 manager. The default 60-second node call fits the 75-second control deadline.
 Empty chart defaults cannot start the manager; they are not guessed identities.

@@ -292,7 +292,6 @@ sandbox:
     # Dedicated mTLS node-owner trust and manager identity, installed separately
     # from service TLS and sandbox CA signer custody. Empty fails at startup.
     nodeOwner:
-      endpoints: {}
       network: ""
       tlsSecretName: ""
       timeoutSeconds: 60
