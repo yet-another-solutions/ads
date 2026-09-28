@@ -1,0 +1,244 @@
+{{- $root := . -}}
+{{- $sb := .Values.sandbox -}}
+{{- $version := $root.Chart.AppVersion -}}
+{{- $tools := include "ads.sandboxImage" (dict "root" $root "image" $sb.nodeOwner.image) -}}
+{{- $attestorSocket := printf "/var/run/attestor-v%s.sock" $version -}}
+{{- $ownerSocket := printf "/var/run/node-owner-v%s.sock" $version -}}
+{{- $issuer := $root.Values.tls.certManager.issuer -}}
+{{- $roles := list
+    (dict "name" "ads-ptp-attestor" "cn" "ads-ptp-attestor" "port" 0)
+    (dict "name" "ads-node-owner" "cn" "ads-node-owner" "port" 9443)
+    (dict "name" "ads-ptp-cni" "cn" "ads-ptp-cni" "port" 0)
+-}}
+{{- range $role := $roles }}
+{{- $secret := printf "%s-tls" $role.name }}
+{{- if not $root.Values.tls.certManager.enabled }}
+{{- $secret = required (printf "sandbox.nodeOwner.secrets.%s is required for BYO TLS" $role.name) (index $sb.nodeOwner.secrets $role.name) }}
+{{- end }}
+{{- if $root.Values.tls.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+spec:
+  secretName: {{ $secret }}
+  commonName: {{ $role.cn }}
+  issuerRef:
+    name: {{ $issuer.name }}
+    kind: {{ $issuer.kind }}
+    group: {{ $issuer.group }}
+  dnsNames:
+    - {{ $role.cn | quote }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $role.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $role.name }}
+    spec:
+      serviceAccountName: {{ $role.name }}
+      automountServiceAccountToken: false
+      hostNetwork: false
+      containers:
+        - name: {{ $role.name }}
+          image: {{ $tools | quote }}
+          imagePullPolicy: {{ $sb.nodeOwner.image.pullPolicy }}
+          command: ["/usr/local/bin/{{ $role.name }}"]
+          args: ["/etc/ads-node-owner/config.json"]
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          {{- if eq $role.name "ads-node-owner" }}
+          ports:
+            - name: https
+              containerPort: 9443
+          {{- end }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ads-node-owner
+              readOnly: true
+            - name: run
+              mountPath: /var/run
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- if eq $role.name "ads-ptp-attestor" }}
+            - name: token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            {{- end }}
+            {{- if eq $role.name "ads-ptp-cni" }}
+            - name: cni-bin
+              mountPath: /opt/cni/bin
+            - name: cni-net
+              mountPath: /etc/cni/net.d
+            - name: crio-net
+              mountPath: /etc/cni/net.d.crio
+            {{- end }}
+            {{- if eq $role.name "ads-node-owner" }}
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $role.name }}
+            defaultMode: 0600
+        - name: run
+          hostPath:
+            path: /var/run
+            type: Directory
+        - name: tls
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0600
+        {{- if eq $role.name "ads-ptp-attestor" }}
+        - name: token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+        {{- end }}
+        {{- if eq $role.name "ads-ptp-cni" }}
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+            type: Directory
+        - name: cni-net
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: crio-net
+          hostPath:
+            path: /etc/cni/net.d.crio
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if eq $role.name "ads-node-owner" }}
+        - name: proc
+          hostPath:
+            path: /proc
+            type: Directory
+        {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+data:
+  config.json: |
+    {{- if eq $role.name "ads-ptp-attestor" }}
+    {
+      "node": "",
+      "namespace": {{ $sb.namespace | quote }},
+      "network": {{ $sb.manager.nodeOwner.network | quote }},
+      "kubeconfig": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      "kubectl": "/usr/bin/kubectl",
+      "crictl": "/usr/bin/crictl",
+      "relay_image": "",
+      "relay_image_id": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "relay_container": "relay",
+      "guest_runtime": "kata-qemu-ads",
+      "egress_runtime": "kata-qemu-ads-egress",
+      "transport_mtu": {{ $sb.nodeOwner.transportMtu }},
+      "attestorSocket": {{ $attestorSocket | quote }},
+      "cniCN": "ads-ptp-cni",
+      "nodeOwnerSocket": {{ $ownerSocket | quote }},
+      "nodeOwnerCN": "ads-node-owner",
+      "ca": "/tls/ca.crt",
+      "certificate": "/tls/tls.crt",
+      "key": "/tls/tls.key"
+    }
+    {{- else if eq $role.name "ads-node-owner" }}
+    {
+      "node": "",
+      "namespace": {{ $sb.namespace | quote }},
+      "network": {{ $sb.manager.nodeOwner.network | quote }},
+      "bind": "0.0.0.0",
+      "port": 9443,
+      "ca": "/tls/ca.crt",
+      "certificate": "/tls/tls.crt",
+      "key": "/tls/tls.key",
+      "manager_cn": "ads-sandbox-manager",
+      "attestor_cn": "ads-ptp-attestor",
+      "socket": {{ $ownerSocket | quote }},
+      "pair": {"attestorConfig": "/etc/ads-node-owner/unused.json", "stateDir": "/var/lib/ads-ptp"},
+      "ipc": null
+    }
+    {{- else }}
+    {
+      "cniVersion": "1.0.0",
+      "name": {{ $sb.manager.nodeOwner.network | quote }},
+      "type": "ads-ptp",
+      "attestorSocket": {{ $attestorSocket | quote }},
+      "attestorCN": "ads-ptp-attestor",
+      "ca": "/tls/ca.crt",
+      "certificate": "/tls/tls.crt",
+      "key": "/tls/tls.key",
+      "stateDir": "/var/lib/ads-ptp",
+      "bindingDir": "/var/lib/ads-ptp/bindings"
+    }
+    {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ads-node-owner
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: ads-node-owner
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $root.Values.namespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: ads-sandbox-manager
+      ports:
+        - protocol: TCP
+          port: 9443

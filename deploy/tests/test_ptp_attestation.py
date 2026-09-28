@@ -33,7 +33,6 @@ def fixture(attest):
         "kubeconfig": "/protected/config",
         "kubectl": "/usr/bin/kubectl",
         "crictl": "/usr/bin/crictl",
-        "cri_endpoint": "unix:///run/runtime.sock",
         "relay_image": "registry.example/relay:version",
         "relay_image_id": "sha256:" + "a" * 64,
         "relay_container": "relay",
@@ -99,10 +98,20 @@ def test_pair_selection_binds_full_identity_and_both_runtime_roles(attest, fixtu
     f = fixture
     result = attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)
     assert result == (f.vm, f.relay, "guest", "b" * 64)
-    f.vm["metadata"]["labels"][attest.COMPONENT] = "ads-sandbox-egress"
-    f.vm["spec"]["runtimeClassName"] = f.config["egress_runtime"]
-    f.relay["metadata"]["labels"][attest.COMPONENT] = "ads-sandbox-egress-relay"
-    assert attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)[2] == "egress"
+
+
+def test_pair_selection_accepts_crio_runtime_id(attest, fixture):
+    f = fixture
+    f.relay["status"]["containerStatuses"][0]["containerID"] = "cri-o://" + "b" * 64
+    result = attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)
+    assert result[3] == "b" * 64
+
+
+def test_pair_selection_rejects_short_crio_runtime_id(attest, fixture):
+    f = fixture
+    f.relay["status"]["containerStatuses"][0]["containerID"] = "cri-o://short"
+    with pytest.raises(ValueError, match="exact containerd or cri-o ID"):
+        attest.select_pair([f.vm, f.relay], f.vm["metadata"]["uid"], f.config)
 
 
 @pytest.mark.parametrize(
@@ -241,9 +250,10 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(attest, fix
     assert "--field-selector=spec.nodeName=worker" in args
     assert args[args.index("-n") + 1] == "sandboxes"
     assert not any(word in args for word in ("secrets", "exec", "delete", "patch", "apply"))
+    observer.config["cri_endpoint"] = "unix:///run/containerd/containerd.sock"
     observer.cri("pods", "-o", "json")
     assert "--timeout=3s" in calls[-1]
-    assert "--runtime-endpoint=unix:///run/runtime.sock" in calls[-1]
+    assert "--runtime-endpoint=unix:///run/containerd/containerd.sock" in calls[-1]
 
 
 @pytest.mark.parametrize("fault", [None, "journal", "namespace", "replaced"])
@@ -320,7 +330,7 @@ def test_cli_cannot_adopt_a_stale_static_record_without_live_attestation(
 
 
 @pytest.mark.parametrize(
-    "fault", [None, "extra", "mtu", "remote-cri", "image-id", "name", "credentials", "executable"]
+    "fault", [None, "extra", "mtu", "image-id", "name", "credentials", "executable"]
 )
 def test_platform_configuration_is_exact_local_and_protected(
     attest, fixture, tmp_path, monkeypatch, fault
@@ -342,8 +352,6 @@ def test_platform_configuration_is_exact_local_and_protected(
         config["unknown"] = True
     elif fault == "mtu":
         config["transport_mtu"] = True
-    elif fault == "remote-cri":
-        config["cri_endpoint"] = "https://runtime.invalid"
     elif fault == "image-id":
         config["relay_image_id"] = "latest"
     elif fault == "name":
@@ -354,6 +362,7 @@ def test_platform_configuration_is_exact_local_and_protected(
         Path(config["crictl"]).chmod(0o777)
     if fault is None:
         assert attest.validate(config) == config
+        assert "cri_endpoint" not in config
     else:
         with pytest.raises(ValueError):
             attest.validate(config)

@@ -110,6 +110,13 @@ def capture(f, partial, plugin, attest, release):
     return partial.capture(plugin, attest, f.observer, release, f.root, f.scope)
 
 
+def test_partial_relay_accepts_crio_runtime_id(partial, plugin, attest, release, inventory):
+    f = inventory
+    f.relay["status"]["containerStatuses"][0]["containerID"] = "cri-o://" + "b" * 64
+    value = capture(f, partial, plugin, attest, release)
+    assert value["members"]["guest-relay"]["runtime_ids"] == ["c" * 64, "b" * 64]
+
+
 def test_one_sided_and_pre_attestation_inventory_never_needs_a_fictional_second_side(
     partial, plugin, attest, release, inventory
 ):
@@ -398,7 +405,12 @@ def test_protected_capture_is_immutable_fenced_and_bound_to_original_map(
     monkeypatch.setattr(attest, "validate", lambda value: value)
     monkeypatch.setattr(attest, "Observer", lambda config: f.observer)
     monkeypatch.setattr(partial, "os", SimpleNamespace(geteuid=lambda: 0))
-    modules = {"ads-ptp": plugin, "ads-ptp-attest": attest, "ads-ptp-release": release}
+    modules = {
+        "ads-ptp": plugin,
+        "ads-ptp-attest": attest,
+        "ads-ptp-release": release,
+        "ads-cri": SimpleNamespace(RUNTIME_ID=r"(containerd|cri-o)://[0-9a-f]{64}"),
+    }
     monkeypatch.setattr(partial, "load", lambda name: modules[name])
     request = {
         **{key: f.scope[key] for key in ("generation", "sandbox_id", "pod_uids")},

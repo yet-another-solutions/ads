@@ -98,9 +98,13 @@ def test_invalid_intermediate_and_revocation_remain_simultaneously_visible(
             .value
             for cert in chain[:2]
         ]
+        # Publication floors to the current second. A clock captured before
+        # mirror() can sit in the previous second and reject a current CRL.
+        published = datetime.now(UTC)
         crls = tuple(
             repository.get(
-                urlsplit(location).path.rsplit("/", 1)[1].removesuffix(".der"), now=now
+                urlsplit(location).path.rsplit("/", 1)[1].removesuffix(".der"),
+                now=published,
             ).crl.public_bytes(Encoding.PEM)
             for location in locations
         )

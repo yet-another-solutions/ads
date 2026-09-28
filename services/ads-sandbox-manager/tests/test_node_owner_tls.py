@@ -9,6 +9,7 @@ import ipaddress
 import socket
 import ssl
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,7 +108,9 @@ def node(certificates, monkeypatch):
         "ca": str(certificates.ca),
         "certificate": str(certificates.node[0]),
         "key": str(certificates.node[1]),
-        "manager_fingerprints": [certificates.manager_pin],
+        "manager_cn": "manager",
+        "attestor_cn": "ads-ptp-attestor",
+        "socket": "/var/run/node-owner-v0.0.1.sock",
         "pair": {"attestorConfig": "/platform/attestor", "stateDir": "/state"},
         "ipc": "/platform/ipc",
     }
@@ -181,20 +184,29 @@ def node(certificates, monkeypatch):
 
 def settings(node, certificates, *, client="manager"):
     return NodeOwnerSettings(
-        endpoints={"worker.test": node.url},
         namespace="sandboxes",
         network="private",
         ca=certificates.ca,
         certificate=getattr(certificates, client)[0],
         key=getattr(certificates, client)[1],
         timeout=5,
+        server_cn="node",
+    )
+
+
+def channel_for(node, config, context=None):
+    return HttpsNodeOwner(
+        config,
+        context or config.context(),
+        {"worker.test": "127.0.0.1"},
+        port=node.server.server_address[1],
     )
 
 
 @pytest.mark.anyio
 async def test_real_mutual_tls_pair_capture_and_observation(node, certificates):
     config = settings(node, certificates)
-    channel = HttpsNodeOwner(config, config.context())
+    channel = channel_for(node, config)
     pair = PairBinding(*(uuid4() for _ in range(4)))
     try:
         capture = decode_node_release(await channel.fence_and_capture(pair, node="worker.test"))
@@ -215,7 +227,7 @@ async def test_real_tls_ipc_role_uses_original_pod_volume_and_digest(node, certi
     from ads_commons.sandbox.ipc_release import decode_ipc_release
 
     config = settings(node, certificates)
-    channel = HttpsNodeOwner(config, config.context())
+    channel = channel_for(node, config)
     pair = PairBinding(*(uuid4() for _ in range(4)))
     pod, volume = uuid4(), uuid4()
     try:
@@ -244,12 +256,14 @@ async def test_real_tls_identity_failures_never_invoke_helpers(node, certificate
     context = config.context()
     if fault == "no-client":
         context = ssl.create_default_context(cafile=str(certificates.ca))
+        context.check_hostname = False
     elif fault == "wrong-ca":
         context = ssl.create_default_context(cafile=str(certificates.foreign[0]))
+        context.check_hostname = False
         context.load_cert_chain(*map(str, certificates.manager))
     elif fault == "wrong-server-name":
-        config.endpoints["worker.test"] = node.url.replace("127.0.0.1", "localhost")
-    channel = HttpsNodeOwner(config, context)
+        config = replace(config, server_cn="not-the-node")
+    channel = channel_for(node, config, context)
     pair = PairBinding(*(uuid4() for _ in range(4)))
     try:
         with pytest.raises((ValueError, RuntimeError, httpx2.HTTPError, ssl.SSLError)):

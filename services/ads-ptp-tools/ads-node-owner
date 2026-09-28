@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -78,6 +79,7 @@ def settings(path):
     for name in (
         "ads-ptp",
         "ads-ptp-attest",
+        "ads-cri",
         "ads-ptp-retire",
         "ads-ptp-release",
         "ads-ptp-partial",
@@ -100,7 +102,9 @@ def settings(path):
             "ca",
             "certificate",
             "key",
-            "manager_fingerprints",
+            "manager_cn",
+            "attestor_cn",
+            "socket",
             "pair",
             "ipc",
         },
@@ -118,13 +122,15 @@ def settings(path):
         and 1 <= value["port"] <= 65535,
         "explicit node listener required",
     )
-    pins = value["manager_fingerprints"]
     require(
-        isinstance(pins, list)
-        and 1 <= len(pins) <= 2
-        and all(isinstance(p, str) and re.fullmatch(r"[0-9a-f]{64}", p) for p in pins)
-        and len(set(pins)) == len(pins),
-        "one manager identity and optional rotation identity required",
+        isinstance(value["manager_cn"], str)
+        and value["manager_cn"]
+        and isinstance(value["attestor_cn"], str)
+        and value["attestor_cn"]
+        and isinstance(value["socket"], str)
+        and value["socket"].startswith("/var/run/node-owner-")
+        and value["socket"].endswith(".sock"),
+        "manager CN and versioned node-owner socket required",
     )
     for key in ("ca", "certificate", "key"):
         protected(value[key], private=key == "key")
@@ -144,6 +150,7 @@ def settings(path):
         config = attestor.validate(
             plugin.read_record(protected(pair["attestorConfig"], private=True))
         )
+        load("ads-cri").detect(config["crictl"])
         require(
             all(config[k] == value[k] for k in ("node", "namespace", "network")),
             "pair scope mismatch",
@@ -154,6 +161,7 @@ def settings(path):
     if value["ipc"] is not None:
         ipc = load("ads-ipc-release")
         config = ipc.config(load("ads-ptp").read_record(protected(value["ipc"], private=True)))
+        load("ads-cri").detect(config["crictl"])
         require(all(config[k] == value[k] for k in ("node", "namespace")), "IPC scope mismatch")
     return value
 
@@ -345,10 +353,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.close_connection = True
         try:
-            certificate = self.connection.getpeercert(binary_form=True)
             require(
-                hashlib.sha256(certificate).hexdigest()
-                in self.server.config["manager_fingerprints"],
+                load("ads-ptp").peer_cn(self.connection.getpeercert())
+                == self.server.config["manager_cn"],
                 "unexpected authenticated client",
             )
             lengths = self.headers.get_all("Content-Length", [])
@@ -440,10 +447,135 @@ def context(config):
     return result
 
 
+def host_facts_reply(request, attestor, plugin):
+    """Journal and namespace identities. Caller has already entered the host mount.
+
+    No API call and no binding record. Modules are loaded before the enter so
+    the host mount view cannot hide the projected token or the script files.
+    """
+    return attestor.host_facts(
+        plugin,
+        relay_uid=request["relay_pod_uid"],
+        generation=request["generation"],
+        sandbox_id=request["sandbox_id"],
+        sandbox_pid=request["sandbox_pid"],
+        container_pid=request["container_pid"],
+    )
+
+
+def enter_host_mount():
+    """Enter the host mount namespace. The caller must not hold the API token."""
+    fd = os.open("/proc/1/ns/mnt", os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.setns(fd, 0x00020000) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, "host mount namespace enter failed")
+    finally:
+        os.close(fd)
+
+
+def serve_host_facts(config, connection):
+    """Listener stays in the container mount namespace. Facts return on a pipe."""
+    connection.settimeout(20)
+    size = int.from_bytes(connection.recv(4), "big")
+    require(0 < size <= LIMIT, "host-fact request exceeds bound")
+    chunks = bytearray()
+    while len(chunks) < size:
+        part = connection.recv(size - len(chunks))
+        require(part, "truncated host-fact request")
+        chunks.extend(part)
+    request = json.loads(bytes(chunks))
+    require(
+        isinstance(request, dict)
+        and set(request)
+        == {
+            "relay_pod_uid",
+            "generation",
+            "sandbox_id",
+            "sandbox_pid",
+            "container_pid",
+        },
+        "exact host-fact request required",
+    )
+    # Load while the container mount, and the projected token, are still visible.
+    attestor, plugin = load("ads-ptp-attest"), load("ads-ptp")
+    read_fd, write_fd = os.pipe()
+    child = os.fork()
+    if child == 0:
+        try:
+            os.close(read_fd)
+            enter_host_mount()
+            facts = host_facts_reply(request, attestor, plugin)
+            raw = json.dumps(facts).encode()
+            require(len(raw) <= LIMIT, "host-fact reply exceeds bound")
+            os.write(write_fd, len(raw).to_bytes(4, "big") + raw)
+            os._exit(0)
+        except Exception:
+            os._exit(1)
+    os.close(write_fd)
+    try:
+        framed = os.read(read_fd, LIMIT + 4)
+        _pid, status = os.waitpid(child, 0)
+        require(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0 and framed,
+            "host reader failed",
+        )
+        connection.sendall(framed)
+    finally:
+        os.close(read_fd)
+
+
+def listen_socket(config):
+    """Bind this version's pathname. Unlink it only when connect fails."""
+    path = config["socket"]
+    try:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1)
+            probe.connect(path)
+            raise ValueError("versioned socket already bound")
+        finally:
+            probe.close()
+    except FileNotFoundError:
+        pass
+    except ConnectionRefusedError:
+        os.unlink(path)
+    except OSError as exc:
+        if getattr(exc, "errno", None) != 111:
+            raise
+        os.unlink(path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(path)
+    os.chmod(path, 0o600)
+    server.listen(4)
+    context_tls = context(config)
+    expected = config["attestor_cn"]
+    while True:
+        connection, _address = server.accept()
+        try:
+            connection.settimeout(10)
+            secured = context_tls.wrap_socket(connection, server_side=True)
+            try:
+                require(
+                    load("ads-ptp").peer_cn(secured.getpeercert()) == expected,
+                    "unexpected attestor client",
+                )
+                serve_host_facts(config, secured)
+            finally:
+                secured.close()
+        except Exception:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+
 def main():
     require(os.geteuid() == 0, "actual node-root service required")
     require(len(sys.argv) == 2, "one protected platform configuration required")
     config = settings(sys.argv[1])
+    threading.Thread(target=listen_socket, args=(config,), daemon=True).start()
     with Server(config, context(config)) as server:
         server.serve_forever(poll_interval=0.5)
 

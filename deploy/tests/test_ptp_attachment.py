@@ -351,6 +351,36 @@ def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, 
     assert not any("delete" in args for _, args in calls)
 
 
+def test_replaced_namespace_inode_fails_before_link(plugin, inputs, monkeypatch):
+    config, env, record = inputs
+    req = plugin.request(config, env)
+    record["private"]["identity"] = [9, 9]
+    state = Path(config["stateDir"]) / (req["key"] + ".json")
+
+    @contextlib.contextmanager
+    def namespace(path, expected=None, missing=False):
+        if expected == [9, 9]:
+            raise ValueError("namespace replaced")
+        yield 10
+
+    monkeypatch.setattr(plugin, "namespace", namespace)
+    monkeypatch.setattr(plugin, "execute", lambda *args, **kwargs: pytest.fail("link created"))
+    with pytest.raises(ValueError, match="namespace replaced"):
+        plugin.add(req, record, state, None, [1, 10])
+    assert not state.exists()
+
+
+def test_del_does_not_open_attestor_socket(plugin, inputs, kernel, monkeypatch):
+    config, env, record = inputs
+    plugin.perform(config, env)
+    monkeypatch.setattr(plugin, "dial_attestor", lambda *args: pytest.fail("socket opened"))
+    env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
+    record["private"]["path"] = "/some/replacement"
+    plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
+    assert plugin.perform(config, env) is None
+    assert not kernel[2].exists()
+
+
 def test_del_uses_original_binding_when_relay_record_changes(plugin, inputs, kernel):
     config, env, record = inputs
     plugin.perform(config, env)

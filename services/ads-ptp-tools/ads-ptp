@@ -12,6 +12,8 @@ import ipaddress
 import json
 import os
 import re
+import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -651,6 +653,60 @@ def delete(saved, state_path):
     sync_directory(state_path.parent)
 
 
+def peer_cn(certificate):
+    # Identity is the role CN. A pathname socket has no hostname to check.
+    subject = certificate.get("subject", ())
+    names = [value for item in subject for key, value in item if key == "commonName"]
+    if len(names) != 1:
+        raise ValueError("attestor certificate CN required")
+    return names[0]
+
+
+def dial_attestor(config, req):
+    """One TLS 1.3 round trip. The reply is the existing binding record."""
+    path = config.get("attestorSocket")
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/var/run/attestor-")
+        or not path.endswith(".sock")
+    ):
+        raise ValueError("versioned attestor socket required")
+    expected = config.get("attestorCN")
+    if not isinstance(expected, str) or not expected:
+        raise ValueError("attestor role CN required")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_verify_locations(cafile=config["ca"])
+    context.load_cert_chain(config["certificate"], config["key"])
+    raw = json.dumps(
+        {"pod_uid": req["pod_uid"], "network": req["network"], "ifname": req["ifname"]}
+    ).encode()
+    if len(raw) > LIMIT:
+        raise ValueError("attestor request exceeds bound")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(20)
+        client.connect(path)
+        with context.wrap_socket(client) as secured:
+            peer = secured.getpeercert()
+            if peer_cn(peer) != expected:
+                raise ValueError("unexpected attestor role")
+            secured.sendall(len(raw).to_bytes(4, "big") + raw)
+            size = int.from_bytes(secured.recv(4), "big")
+            if not 0 < size <= LIMIT:
+                raise ValueError("attestor reply exceeds bound")
+            chunks = bytearray()
+            while len(chunks) < size:
+                part = secured.recv(size - len(chunks))
+                if not part:
+                    raise ValueError("truncated attestor reply")
+                chunks.extend(part)
+    record = decode(bytes(chunks))
+    binding(record, req)
+    return record
+
+
 def perform(config, env):
     req = request(config, env)
     state_root = private_directory(config["stateDir"])
@@ -680,15 +736,19 @@ def perform(config, env):
             return None
         attempt = capture_attempt(state_root, req) if req["command"] == "ADD" else None
         root = private_directory(config["bindingDir"])
-        if "attestorConfig" in config:
+        if "attestorSocket" in config:
+            # One pathname-socket round trip. DEL returned above and never dials.
+            observed = dial_attestor(config, req)
+            save_record(root / (req["pod_uid"] + ".json"), observed)
+        elif "attestorConfig" in config:
             loader = importlib.machinery.SourceFileLoader(
                 "ads_ptp_node_attestor", str(Path(__file__).with_name("ads-ptp-attest"))
             )
             spec = importlib.util.spec_from_loader(loader.name, loader)
             module = importlib.util.module_from_spec(spec)
             loader.exec_module(module)
-            # Re-observe before every ADD/CHECK. Failure never falls back to an
-            # older record; DEL deliberately uses only its original journal.
+            # In-pod release helpers still call observe_binding in-process.
+            # The host plugin no longer does. This branch is not the live CNI path.
             observed = module.refresh(config["attestorConfig"], req, root)
         else:
             # In-process native kernel fixtures only. CLI requires live attestation.
@@ -724,7 +784,7 @@ def main():
             return
         if os.geteuid() != 0:
             raise PermissionError("node-root execution required")
-        if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("attestorConfig"):
+        if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("attestorSocket"):
             raise ValueError("live node attestation configuration required")
         output = perform(config, os.environ)
         if output is not None:

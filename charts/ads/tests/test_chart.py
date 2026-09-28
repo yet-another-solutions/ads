@@ -150,8 +150,6 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
             "--set",
             "sandbox.manager.nodeOwner.network=private",
-            "--set-json",
-            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test"}',
         )
         for (kind, name), document in docs.items():
             if kind != "Deployment":
@@ -499,7 +497,11 @@ class ChartTests(unittest.TestCase):
                             "BackendTLSPolicy",
                         ]:
                             sandbox_scoped = (
-                                "sandbox-ipc" in metadata or "egress-extra-trust" in metadata
+                                "sandbox-ipc" in metadata
+                                or "egress-extra-trust" in metadata
+                                or "ads-ptp-attestor" in metadata
+                                or "ads-node-owner" in metadata
+                                or "ads-ptp-cni" in metadata
                             )
                             expected = sandbox if sandbox_scoped else app
                             self.assertEqual(namespace, expected)
@@ -792,8 +794,6 @@ class ChartTests(unittest.TestCase):
             "sandbox.ca.signingSecret=dedicated-egress-signer",
             "--set-json",
             "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
-            "--set-json",
-            'sandbox.manager.nodeOwner.endpoints={"worker":"https://worker.test:9443"}',
             "--set",
             "sandbox.manager.nodeOwner.network=private",
             "--set",
@@ -812,7 +812,7 @@ class ChartTests(unittest.TestCase):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
         self.assertEqual(settings.pair_inputs, paired_runtime_fixture())
-        self.assertEqual(settings.node_owner["endpoints"], {"worker": "https://worker.test:9443"})
+        self.assertNotIn("endpoints", settings.node_owner)
         self.assertEqual(settings.node_owner["certificate"], "/node-owner/tls.crt")
         self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
         self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")
@@ -943,6 +943,14 @@ class ChartTests(unittest.TestCase):
         for component in ["mcp", "manager", "ipc"]:
             flags += ["--set", f"sandbox.{component}.tlsSecretName={component}-tls"]
             flags += ["--set", f"sandbox.{component}.existingSecret={component}-credentials"]
+        flags += [
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-ptp-attestor=attestor-tls",
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-node-owner=node-owner-tls",
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-ptp-cni=cni-tls",
+        ]
         docs = self.documents(*flags, "--set", "tls.caBundle.secretName=app-ca")
         self.assertFalse(any(kind == "Certificate" for kind, _ in docs))
         for component in ["mcp", "manager", "ipc"]:
@@ -1166,6 +1174,37 @@ class ChartTests(unittest.TestCase):
             self.assertIn('ADS_SANDBOX_MANAGER_GOLDEN_VERSION: "v0.0.123-rc.1"', result.stdout)
             self.assertNotIn(':0.0.1"', result.stdout)
             self.assertIn("ads-sandbox-golden:0.0.123-rc.1", result.stdout)
+
+    def test_node_owner_chart_renders_sockets_without_endpoint_map(self):
+        docs = self.documents()
+        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
+            self.assertIn(("DaemonSet", name), docs)
+            self.assertIn(("Certificate", name), docs)
+            self.assertEqual(docs["Certificate", name]["spec"]["commonName"], name)
+            pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
+            self.assertFalse(pod["hostNetwork"])
+            self.assertFalse(pod["automountServiceAccountToken"])
+            rendered = json.dumps(pod)
+            self.assertNotIn("hostPort", rendered)
+            self.assertNotIn("nodePort", rendered)
+            config = docs["ConfigMap", name]["data"]["config.json"]
+            if name == "ads-node-owner":
+                self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
+                self.assertNotIn("/var/run/attestor-v0.0.1.sock", config)
+            else:
+                self.assertIn("/var/run/attestor-v0.0.1.sock", config)
+            if name == "ads-ptp-attestor":
+                self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
+        self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))
+        policy = docs["NetworkPolicy", "ads-node-owner"]["spec"]
+        self.assertEqual(policy["ingress"][0]["ports"], [{"protocol": "TCP", "port": 9443}])
+        verbs = [
+            rule["verbs"]
+            for rule in docs["Role", "ads-sandbox-manager"]["rules"]
+            if rule["resources"] == ["pods"]
+        ]
+        self.assertEqual(verbs, [["create", "get", "list", "delete"]])
+        self.assertNotIn("watch", verbs[0])
 
 
 if __name__ == "__main__":

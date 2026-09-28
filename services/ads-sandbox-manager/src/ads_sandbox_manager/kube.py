@@ -175,11 +175,11 @@ class KubeClient:
             ):
                 await self._delete(self.core.delete_namespaced_pod, pod)
 
-    async def _list(self, method: Callable[..., Any], *args: Any) -> list[Object]:
+    async def _list(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> list[Object]:
         items: list[Object] = []
         continuation = ""
         while True:
-            page = await self._call(method, *args, limit=200, _continue=continuation)
+            page = await self._call(method, *args, limit=200, _continue=continuation, **kwargs)
             items.extend(page["items"])
             continuation = page.get("metadata", {}).get("continue", "")
             if not continuation:

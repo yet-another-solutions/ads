@@ -8,6 +8,7 @@ COPY services/ads-ptp-tools/ads-ptp-canary /usr/local/bin/ads-ptp-canary
 COPY services/ads-ptp-tools/ads-ptp /usr/local/bin/ads-ptp
 COPY services/ads-ptp-tools/ads-ptp-relay /usr/local/bin/ads-ptp-relay
 COPY services/ads-ptp-tools/ads-ptp-attest /usr/local/bin/ads-ptp-attest
+COPY services/ads-ptp-tools/ads-cri /usr/local/bin/ads-cri
 COPY services/ads-ptp-tools/ads-ptp-retire /usr/local/bin/ads-ptp-retire
 COPY services/ads-ptp-tools/ads-ptp-release /usr/local/bin/ads-ptp-release
 COPY services/ads-ptp-tools/ads-ptp-partial /usr/local/bin/ads-ptp-partial
@@ -15,7 +16,7 @@ COPY services/ads-ptp-tools/ads-ipc-release /usr/local/bin/ads-ipc-release
 COPY services/ads-ptp-tools/ads-ipc-storage /usr/local/bin/ads-ipc-storage
 COPY services/ads-ptp-tools/ads-block-release /usr/local/bin/ads-block-release
 COPY services/ads-ptp-tools/ads-node-owner /usr/local/bin/ads-node-owner
-RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay /usr/local/bin/ads-ptp-attest /usr/local/bin/ads-ptp-retire /usr/local/bin/ads-ptp-release /usr/local/bin/ads-ptp-partial /usr/local/bin/ads-ipc-release /usr/local/bin/ads-node-owner
+RUN chmod 755 /usr/local/bin/ads-ptp-canary /usr/local/bin/ads-ptp /usr/local/bin/ads-ptp-relay /usr/local/bin/ads-ptp-attest /usr/local/bin/ads-cri /usr/local/bin/ads-ptp-retire /usr/local/bin/ads-ptp-release /usr/local/bin/ads-ptp-partial /usr/local/bin/ads-ipc-release /usr/local/bin/ads-node-owner
 ENV PYTHONUNBUFFERED=1
 RUN chmod 755 /usr/local/bin/ads-ipc-storage /usr/local/bin/ads-block-release
 CMD ["python", "-c", "import time; time.sleep(86400)"]
