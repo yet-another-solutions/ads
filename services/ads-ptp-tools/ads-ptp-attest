@@ -32,7 +32,6 @@ FIELDS = {
     "kubeconfig",
     "kubectl",
     "crictl",
-    "cri_endpoint",
     "relay_image",
     "relay_image_id",
     "relay_container",
@@ -84,10 +83,6 @@ def validate(config):
         and not any(c.isspace() for c in config["relay_image"]),
         "invalid relay image",
     )
-    endpoint = config["cri_endpoint"]
-    require(isinstance(endpoint, str) and endpoint.startswith("unix:///"), "local CRI required")
-    socket = Path(endpoint.removeprefix("unix://"))
-    require(socket.resolve() == socket, "canonical CRI path required")
     for name in ("kubeconfig", "kubectl", "crictl"):
         path = Path(config[name])
         info = path.lstat()
@@ -103,7 +98,18 @@ def validate(config):
             require(not info.st_mode & 0o077, "private API credentials required")
         else:
             require(info.st_mode & 0o111, "platform executable required")
+    config["cri_endpoint"] = cri_module().detect(config["crictl"])
     return config
+
+
+def cri_module():
+    loader = importlib.machinery.SourceFileLoader(
+        "ads_cri", str(Path(__file__).with_name("ads-cri"))
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 class Observer:
@@ -219,9 +225,10 @@ def select_pair(pods, uid, config):
     )
     container_id = statuses[0].get("containerID", "")
     require(
-        re.fullmatch(r"containerd://[0-9a-f]{64}", container_id), "exact containerd ID required"
+        re.fullmatch(cri_module().RUNTIME_ID, container_id),
+        "exact containerd or cri-o ID required",
     )
-    return vm, relay, side, container_id.removeprefix("containerd://")
+    return vm, relay, side, container_id.split("://", 1)[1]
 
 
 def runtime_identity(observer, relay, container_id):

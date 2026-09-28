@@ -22,7 +22,6 @@ file with exactly these keys:
   "kubeconfig": "<absolute protected read-only API kubeconfig path>",
   "kubectl": "<absolute root-owned kubectl executable>",
   "crictl": "<absolute root-owned crictl executable>",
-  "cri_endpoint": "unix://<absolute local containerd socket path>",
   "relay_image": "<exact immutable published relay image reference>",
   "relay_image_id": "sha256:<observed runtime image digest>",
   "relay_container": "<manager-owned relay container name>",
@@ -34,9 +33,10 @@ file with exactly these keys:
 
 The MTU above is an example, not a platform default: supply the observed path
 MTU. The image ID must be the runtime's verified image reference digest, not an
-unverified tag or a guessed manifest type. The attestor deliberately supports
-the containerd runtime integration only; a different CRI needs an explicit
-tested adapter rather than permissive parsing.
+unverified tag or a guessed manifest type. The attestor does not take a CRI
+endpoint. It probes `unix:///run/containerd/containerd.sock` and
+`unix:///var/run/crio/crio.sock` and accepts exactly one live socket. Runtime
+IDs are `containerd://` or `cri-o://` plus 64 hex digits.
 
 The API identity requires only get/list Pods in the sandbox namespace. Do not
 reuse administrator credentials or grant Secret access, exec, writes, or

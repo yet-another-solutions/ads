@@ -30,6 +30,7 @@ _SRC = (
     "services/ads-ptp-tools/ads-ptp",
     "services/ads-ptp-tools/ads-ptp-relay",
     "services/ads-ptp-tools/ads-ptp-attest",
+    "services/ads-ptp-tools/ads-cri",
     "services/ads-ptp-tools/ads-ptp-retire",
     "services/ads-ptp-tools/ads-ptp-release",
     "services/ads-ptp-tools/ads-ptp-partial",

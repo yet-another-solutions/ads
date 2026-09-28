@@ -228,12 +228,19 @@ def startup(service, config, monkeypatch):
         return Path(path)
 
     def read(path):
-        return values if path == Path("/platform/config") else observer
+        if path == Path("/platform/config"):
+            return values
+        return {**observer, "crictl": "/usr/bin/crictl"}
 
     modules = {
         "ads-ptp": SimpleNamespace(read_record=read, private_directory=lambda path: Path(path)),
-        "ads-ptp-attest": SimpleNamespace(validate=lambda value: value),
-        "ads-ipc-release": SimpleNamespace(config=lambda value: value),
+        "ads-ptp-attest": SimpleNamespace(
+            validate=lambda value: {**value, "crictl": "/usr/bin/crictl"}
+        ),
+        "ads-cri": SimpleNamespace(detect=lambda path: "unix:///run/containerd/containerd.sock"),
+        "ads-ipc-release": SimpleNamespace(
+            config=lambda value: {**value, "crictl": "/usr/bin/crictl"}
+        ),
     }
     monkeypatch.setattr(service, "protected", protected)
     monkeypatch.setattr(service, "load", lambda name: modules[name])
@@ -246,6 +253,7 @@ def test_startup_binds_protected_helpers_and_observer_scope(service, startup):
     for name in (
         "ads-ptp",
         "ads-ptp-attest",
+        "ads-cri",
         "ads-ptp-retire",
         "ads-ptp-release",
         "ads-ptp-partial",

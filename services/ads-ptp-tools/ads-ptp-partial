@@ -175,7 +175,7 @@ def relay_inventory(plugin, attestor, observer, scope, pod):
         and statuses[0].get("name") == cfg["relay_container"]
         and "running" in statuses[0].get("state", {})
         and isinstance(statuses[0].get("containerID"), str)
-        and re.fullmatch(r"containerd://[0-9a-f]{64}", statuses[0]["containerID"]),
+        and re.fullmatch(load("ads-cri").RUNTIME_ID, statuses[0]["containerID"]),
         "original running relay required",
     )
     container_id = statuses[0]["containerID"].split("://", 1)[1]
