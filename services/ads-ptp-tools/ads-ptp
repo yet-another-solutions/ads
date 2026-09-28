@@ -665,7 +665,11 @@ def peer_cn(certificate):
 def dial_attestor(config, req):
     """One TLS 1.3 round trip. The reply is the existing binding record."""
     path = config.get("attestorSocket")
-    if not isinstance(path, str) or not path.startswith("/var/run/attestor-") or not path.endswith(".sock"):
+    if (
+        not isinstance(path, str)
+        or not path.startswith("/var/run/attestor-")
+        or not path.endswith(".sock")
+    ):
         raise ValueError("versioned attestor socket required")
     expected = config.get("attestorCN")
     if not isinstance(expected, str) or not expected:

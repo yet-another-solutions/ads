@@ -39,7 +39,14 @@ def is_socket(path):
 def answers(crictl, endpoint):
     try:
         reply = subprocess.run(
-            [str(crictl), "--runtime-endpoint=" + endpoint, "--timeout=3s", "version", "-o", "json"],
+            [
+                str(crictl),
+                "--runtime-endpoint=" + endpoint,
+                "--timeout=3s",
+                "version",
+                "-o",
+                "json",
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=4,

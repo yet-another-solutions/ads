@@ -12,6 +12,7 @@ dependencies = [
     "alembic==1.16.5",
     "cryptography==50.0.1",
     "dishka==1.10.1",
+    "httpcore2==2.12.0",
     "httpx2==2.12.0",
     "kubernetes==36.0.3",
     "litestar==2.24.0",

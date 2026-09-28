@@ -55,7 +55,8 @@ def test_one_containerd_socket_wins(cri, tmp_path, monkeypatch):
 def test_one_crio_socket_wins(cri, tmp_path, monkeypatch):
     crictl = _crictl(tmp_path)
     held = _socket(tmp_path / "crio.sock")
-    monkeypatch.setattr(cri, "PROBES", (CONTAINERD, f"unix://{tmp_path / 'crio.sock'}"))
+    missing = tmp_path / "missing" / "containerd.sock"
+    monkeypatch.setattr(cri, "PROBES", (f"unix://{missing}", f"unix://{tmp_path / 'crio.sock'}"))
     monkeypatch.setattr(cri.Path, "lstat", _root_lstat(crictl))
     assert cri.detect(crictl) == f"unix://{tmp_path / 'crio.sock'}"
     held.close()

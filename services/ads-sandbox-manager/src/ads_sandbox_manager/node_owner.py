@@ -134,7 +134,7 @@ class NodeOwnerDirectory:
 def peer_cn(certificate: dict[str, Any]) -> str:
     subject = certificate.get("subject", ())
     names = [value for item in subject for key, value in item if key == "commonName"]
-    if len(names) != 1:
+    if len(names) != 1 or not isinstance(names[0], str):
         raise ValueError("node-owner server CN required")
     return names[0]
 
@@ -153,7 +153,7 @@ def cn_transport(context: ssl.SSLContext, expected: str) -> httpx2.AsyncHTTPTran
             ssl_context: ssl.SSLContext,
             server_hostname: str | None = None,
             timeout: float | None = None,
-        ):
+        ) -> Any:
             stream = await self._inner.start_tls(ssl_context, server_hostname, timeout)
             certificate = stream.get_extra_info("ssl_object").getpeercert()
             if peer_cn(certificate) != expected:
