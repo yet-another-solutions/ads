@@ -13,7 +13,11 @@ import msgspec
 import pytest
 
 from ads_commons.sandbox.node_release import decode_node_release
-from ads_sandbox_manager.node_owner import HttpsNodeOwner, NodeOwnerSettings
+from ads_sandbox_manager.node_owner import (
+    HttpsNodeOwner,
+    NodeOwnerDirectory,
+    NodeOwnerSettings,
+)
 from ads_sandbox_manager.pair_objects import PairBinding
 
 
@@ -214,3 +218,47 @@ def test_unverified_tls_context_cannot_construct_production_channel(config):
     context.verify_mode = ssl.CERT_NONE
     with pytest.raises(ValueError, match="lab-root TLS"):
         HttpsNodeOwner(config, context, {"worker.test": "127.0.0.1"})
+
+
+def _pod(node, address, *, ready=True):
+    return {
+        "spec": {"nodeName": node},
+        "status": {
+            "podIP": address,
+            "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+        },
+    }
+
+
+class _Pods:
+    def __init__(self, pods):
+        self.pods = pods
+        self.calls = []
+        self.core = type("Core", (), {"list_namespaced_pod": object()})()
+
+    async def _list(self, method, namespace, **kwargs):
+        self.calls.append((method, namespace, kwargs))
+        return self.pods
+
+
+@pytest.mark.anyio
+async def test_directory_keeps_one_ready_pod_and_drops_zero_or_two():
+    kube = _Pods([])
+    directory = NodeOwnerDirectory(kube, "ads-sandbox")
+    await directory.refresh()
+    assert directory.addresses == {}
+    assert kube.calls[0][2]["label_selector"] == "app.kubernetes.io/component=ads-node-owner"
+
+    kube.pods = [_pod("worker", "10.0.0.8")]
+    await directory.refresh()
+    assert directory.addresses == {"worker": "10.0.0.8"}
+
+    kube.pods = [_pod("worker", "10.0.0.8"), _pod("worker", "10.0.0.9")]
+    await directory.refresh()
+    assert directory.addresses == {}
+
+    kube.pods = [_pod("worker", "10.0.0.8")]
+    await directory.refresh()
+    kube.pods = []
+    await directory.refresh()
+    assert "worker" not in directory.addresses

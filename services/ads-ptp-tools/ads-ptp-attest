@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Node-root, on-demand Kubernetes/CRI attestation. No listener or network mutation."""
+"""Node-root, on-demand Kubernetes/CRI attestation. The socket listener does not mutate links."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ import json
 import os
 import re
 import select
+import socket
+import ssl
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -159,6 +162,7 @@ class Observer:
         return reply["items"]
 
     def cri(self, *args):
+        # Detect once. This is not a configured cri_endpoint.
         endpoint = self.config.get("cri_endpoint") or cri_module().detect(self.config["crictl"])
         self.config["cri_endpoint"] = endpoint
         return self.command(
@@ -414,6 +418,7 @@ def observe_binding(observer, plugin, req, host=None):
 
 
 def refresh(config_path, req, directory, plugin=None):
+    """In-process path for release helpers. The host CNI uses the socket."""
     require(os.geteuid() == 0, "node-root attestor required")
     plugin = plugin or cni_module()
     config = validate(plugin.read_record(Path(config_path)))
@@ -421,3 +426,139 @@ def refresh(config_path, req, directory, plugin=None):
     root = plugin.private_directory(directory)
     plugin.save_record(root / (req["pod_uid"] + ".json"), record)
     return record
+
+
+def dial_node_owner(config, facts_request):
+    """One TLS 1.3 round trip. The reply is host facts, not a binding."""
+    path = config.get("nodeOwnerSocket")
+    require(
+        isinstance(path, str)
+        and path.startswith("/var/run/node-owner-")
+        and path.endswith(".sock"),
+        "versioned node-owner socket required",
+    )
+    expected = config.get("nodeOwnerCN")
+    require(isinstance(expected, str) and expected, "node-owner role CN required")
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_verify_locations(cafile=config["ca"])
+    context.load_cert_chain(config["certificate"], config["key"])
+    raw = json.dumps(facts_request).encode()
+    require(0 < len(raw) <= cni_module().LIMIT, "node-owner request exceeds bound")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(20)
+        client.connect(path)
+        with context.wrap_socket(client) as secured:
+            peer = secured.getpeercert()
+            require(cni_module().peer_cn(peer) == expected, "unexpected node-owner role")
+            secured.sendall(len(raw).to_bytes(4, "big") + raw)
+            size = int.from_bytes(secured.recv(4), "big")
+            require(0 < size <= cni_module().LIMIT, "node-owner reply exceeds bound")
+            chunks = bytearray()
+            while len(chunks) < size:
+                part = secured.recv(size - len(chunks))
+                require(part, "truncated node-owner reply")
+                chunks.extend(part)
+    facts = json.loads(bytes(chunks))
+    require(
+        isinstance(facts, dict) and set(facts) == {"journal", "private", "transport"},
+        "node-owner host facts required",
+    )
+    return facts
+
+
+def serve_binding(config, connection):
+    """API pair reads stay here. Host facts come from one node-owner call."""
+    plugin = cni_module()
+    connection.settimeout(20)
+    size = int.from_bytes(connection.recv(4), "big")
+    require(0 < size <= plugin.LIMIT, "attestor request exceeds bound")
+    chunks = bytearray()
+    while len(chunks) < size:
+        part = connection.recv(size - len(chunks))
+        require(part, "truncated attestor request")
+        chunks.extend(part)
+    req = json.loads(bytes(chunks))
+    require(
+        isinstance(req, dict) and set(req) == {"pod_uid", "network", "ifname"},
+        "exact attestor request required",
+    )
+
+    def host(facts_request):
+        return dial_node_owner(config, facts_request)
+
+    record = observe_binding(Observer(config), plugin, req, host=host)
+    payload = json.dumps(record).encode()
+    require(len(payload) <= plugin.LIMIT, "attestor reply exceeds bound")
+    connection.sendall(len(payload).to_bytes(4, "big") + payload)
+
+
+def own_socket(path):
+    """Unlink only this version's pathname, and only when connect fails."""
+    require(
+        isinstance(path, str) and path.startswith("/var/run/") and path.endswith(".sock"),
+        "versioned pathname socket required",
+    )
+    try:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1)
+            probe.connect(path)
+            raise ValueError("versioned socket already bound")
+        finally:
+            probe.close()
+    except FileNotFoundError:
+        return
+    except ConnectionRefusedError:
+        os.unlink(path)
+    except OSError as exc:
+        if getattr(exc, "errno", None) != 111:
+            raise
+        os.unlink(path)
+
+
+def listen(config):
+    """Bind the attestor pathname socket. Do not enter the host mount namespace."""
+    require(os.geteuid() == 0, "node-root attestor required")
+    path = config["attestorSocket"]
+    own_socket(path)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(path)
+    os.chmod(path, 0o600)
+    server.listen(4)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.load_verify_locations(cafile=config["ca"])
+    context.load_cert_chain(config["certificate"], config["key"])
+    expected = config["cniCN"]
+    while True:
+        connection, _address = server.accept()
+        try:
+            connection.settimeout(10)
+            secured = context.wrap_socket(connection, server_side=True)
+            try:
+                require(
+                    cni_module().peer_cn(secured.getpeercert()) == expected,
+                    "unexpected CNI client",
+                )
+                serve_binding(config, secured)
+            finally:
+                secured.close()
+        except Exception:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+
+def main():
+    require(os.geteuid() == 0, "node-root attestor required")
+    require(len(sys.argv) == 2, "one protected attestor listener configuration required")
+    listen(cni_module().read_record(Path(sys.argv[1])))
+
+
+if __name__ == "__main__":
+    main()

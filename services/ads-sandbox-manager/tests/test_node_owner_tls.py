@@ -108,7 +108,9 @@ def node(certificates, monkeypatch):
         "ca": str(certificates.ca),
         "certificate": str(certificates.node[0]),
         "key": str(certificates.node[1]),
-        "manager_fingerprints": [certificates.manager_pin],
+        "manager_cn": "manager",
+        "attestor_cn": "ads-ptp-attestor",
+        "socket": "/var/run/node-owner-v0.0.1.sock",
         "pair": {"attestorConfig": "/platform/attestor", "stateDir": "/state"},
         "ipc": "/platform/ipc",
     }

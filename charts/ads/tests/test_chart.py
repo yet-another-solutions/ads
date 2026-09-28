@@ -939,6 +939,14 @@ class ChartTests(unittest.TestCase):
         for component in ["mcp", "manager", "ipc"]:
             flags += ["--set", f"sandbox.{component}.tlsSecretName={component}-tls"]
             flags += ["--set", f"sandbox.{component}.existingSecret={component}-credentials"]
+        flags += [
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-ptp-attestor=attestor-tls",
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-node-owner=node-owner-tls",
+            "--set",
+            "sandbox.nodeOwner.secrets.ads-ptp-cni=cni-tls",
+        ]
         docs = self.documents(*flags, "--set", "tls.caBundle.secretName=app-ca")
         self.assertFalse(any(kind == "Certificate" for kind, _ in docs))
         for component in ["mcp", "manager", "ipc"]:
@@ -1162,6 +1170,31 @@ class ChartTests(unittest.TestCase):
             self.assertIn('ADS_SANDBOX_MANAGER_GOLDEN_VERSION: "v0.0.123-rc.1"', result.stdout)
             self.assertNotIn(':0.0.1"', result.stdout)
             self.assertIn("ads-sandbox-golden:0.0.123-rc.1", result.stdout)
+
+    def test_node_owner_chart_renders_sockets_without_endpoint_map(self):
+        docs = self.documents()
+        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
+            self.assertIn(("DaemonSet", name), docs)
+            self.assertIn(("Certificate", name), docs)
+            self.assertEqual(docs["Certificate", name]["spec"]["commonName"], name)
+            pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
+            self.assertFalse(pod["hostNetwork"])
+            self.assertFalse(pod["automountServiceAccountToken"])
+            rendered = json.dumps(pod)
+            self.assertIn("/var/run/attestor-v0.0.1.sock", rendered)
+            self.assertIn("/var/run/node-owner-v0.0.1.sock", rendered)
+            self.assertNotIn("hostPort", rendered)
+            self.assertNotIn("nodePort", rendered)
+        self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))
+        policy = docs["NetworkPolicy", "ads-node-owner"]["spec"]
+        self.assertEqual(policy["ingress"][0]["ports"], [{"protocol": "TCP", "port": 9443}])
+        verbs = [
+            rule["verbs"]
+            for rule in docs["Role", "ads-sandbox-manager"]["rules"]
+            if rule["resources"] == ["pods"]
+        ]
+        self.assertEqual(verbs, [["create", "get", "list", "delete"]])
+        self.assertNotIn("watch", verbs[0])
 
 
 if __name__ == "__main__":

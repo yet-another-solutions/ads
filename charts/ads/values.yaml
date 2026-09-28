@@ -291,6 +291,7 @@ sandbox:
     pairInputs: {}
     # Dedicated mTLS node-owner trust and manager identity, installed separately
     # from service TLS and sandbox CA signer custody. Empty fails at startup.
+    # The node-to-pod-IP map is not a values field.
     nodeOwner:
       network: ""
       tlsSecretName: ""
@@ -353,6 +354,13 @@ sandbox:
     stdoutBytes: 65536
     stderrBytes: 65536
     inputBytes: 262144
+  nodeOwner:
+    image:
+      repository: ghcr.io/yet-another-solutions/ads-ptp-tools
+      tag: ""
+      pullPolicy: IfNotPresent
+    transportMtu: 1450
+    secrets: {}
   admission:
     policyName: ads-sandbox-ipc-exec
     kyvernoNamespace: kyverno

@@ -218,7 +218,9 @@ def startup(service, config, monkeypatch):
         "ca": "/platform/ca",
         "certificate": "/platform/certificate",
         "key": "/platform/key",
-        "manager_fingerprints": ["a" * 64],
+        "manager_cn": "ads-sandbox-manager",
+        "attestor_cn": "ads-ptp-attestor",
+        "socket": "/var/run/node-owner-v0.0.1.sock",
     }
     observer = {key: values[key] for key in ("node", "namespace", "network")}
     checked = []
@@ -274,9 +276,9 @@ def test_startup_rejects_unsafe_configuration_before_listening(service, startup,
     elif fault == "roles":
         values["pair"] = None
     elif fault == "pin":
-        values["manager_fingerprints"] = ["not-a-fingerprint"]
+        values["manager_cn"] = ""
     elif fault == "duplicate-pin":
-        values["manager_fingerprints"] *= 2
+        values["socket"] = "/tmp/node-owner.sock"
     elif fault == "extra":
         values["arbitrary_command"] = "rejected"
     elif fault == "port":

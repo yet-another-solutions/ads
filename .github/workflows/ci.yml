@@ -372,7 +372,7 @@ jobs:
           helm template ads charts/ads >/tmp/ads-cm.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 8
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 7
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 10
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml
@@ -428,6 +428,9 @@ jobs:
             --set sandbox.mcp.tlsSecretName=byo-mcp \
             --set sandbox.manager.tlsSecretName=byo-manager \
             --set sandbox.ipc.tlsSecretName=byo-ipc \
+            --set sandbox.nodeOwner.secrets.ads-ptp-attestor=byo-attestor \
+            --set sandbox.nodeOwner.secrets.ads-node-owner=byo-node-owner \
+            --set sandbox.nodeOwner.secrets.ads-ptp-cni=byo-cni \
             >/tmp/ads-byo.yaml
           if grep -q 'kind: Certificate' /tmp/ads-byo.yaml; then
             echo 'BYO template still issues Certificates' >&2
