@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Install the host CNI plugin. This process never attaches a link."""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+
+BINARIES = ("ads-ptp", "ads-ptp-attest", "ads-cri")
+CONFIG_FIELDS = {
+    "cniVersion",
+    "name",
+    "type",
+    "attestorSocket",
+    "attestorCN",
+    "ca",
+    "certificate",
+    "key",
+    "stateDir",
+    "bindingDir",
+}
+STATE_DIRS = ("/var/lib/ads-ptp", "/var/lib/ads-ptp/bindings")
+PROBES = {
+    "unix:///run/containerd/containerd.sock": (
+        "/etc/cni/net.d",
+        "/etc/cni/ads-private/guest",
+        "/etc/cni/ads-private/egress",
+    ),
+    "unix:///var/run/crio/crio.sock": ("/etc/cni/net.d.crio",),
+}
+BRIDGE = "10-crio-bridge.conflist"
+LIMIT = 65536
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def cni_module():
+    path = Path(__file__).with_name("ads-ptp")
+    loader = importlib.machinery.SourceFileLoader("ads_ptp_cni_plugin", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def digest(path):
+    info = path.lstat()
+    require(
+        path.is_absolute()
+        and path.resolve() == path
+        and stat.S_ISREG(info.st_mode)
+        and not stat.S_ISLNK(info.st_mode),
+        "regular installer source required",
+    )
+    digest_value = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(LIMIT):
+            digest_value.update(chunk)
+    return digest_value.hexdigest()
+
+
+def replace(source, destination, mode):
+    """Copy bytes by temp and rename. Never rewrite a live destination in place."""
+    destination.parent.mkdir(mode=0o755, exist_ok=True)
+    payload = source.read_bytes()
+    fd, pending = tempfile.mkstemp(prefix=".pending-", dir=destination.parent)
+    try:
+        os.fchmod(fd, mode)
+        if os.geteuid() == 0:
+            os.fchown(fd, 0, 0)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(pending, destination)
+        os.chmod(destination, mode)
+        if os.geteuid() == 0:
+            os.chown(destination, 0, 0)
+    finally:
+        if os.path.exists(pending):
+            os.unlink(pending)
+
+
+def sockets_bound(config):
+    """Refuse the conflist until both versioned socket files exist."""
+    for name in (config["attestorSocket"], config["ownerSocket"]):
+        path = Path(name)
+        require(
+            isinstance(name, str)
+            and path.name.startswith(("attestor-v", "node-owner-v"))
+            and name.endswith(".sock")
+            and path.is_absolute()
+            and path.is_socket()
+            and not path.is_symlink(),
+            "versioned host socket required",
+        )
+
+
+def runtime_dirs(detect):
+    endpoint = detect("/usr/local/bin/crictl")
+    matches = PROBES.get(endpoint)
+    require(matches, "detected runtime has no conflist directory")
+    paths = []
+    for item in matches:
+        path = Path(item)
+        require(
+            path.is_absolute() and not path.is_symlink(),
+            "canonical conflist directory required",
+        )
+        path.mkdir(mode=0o755, exist_ok=True)
+        require(not (path / BRIDGE).exists(), "disabled CRI-O bridge must stay disabled")
+        paths.append(path)
+    return tuple(paths)
+
+
+def install(config, source_dir, bin_dir, net_dir, cert_dir=Path("/etc/cni/ads-ptp")):
+    plugin = cni_module()
+    require(
+        set(config) == CONFIG_FIELDS | {"ownerSocket"},
+        "exact installer configuration required",
+    )
+    require(
+        config["type"] == "ads-ptp" and config["cniVersion"] == plugin.VERSION,
+        "ads-ptp conflist required",
+    )
+    require(
+        isinstance(config["name"], str)
+        and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", config["name"]),
+        "invalid CNI network name",
+    )
+    sockets_bound(config)
+    for name in BINARIES:
+        source = Path(source_dir) / name
+        destination = Path(bin_dir) / name
+        replace(source, destination, 0o755)
+        require(digest(source) == digest(destination), "installer and plugin digest mismatch")
+    for directory in STATE_DIRS:
+        Path(directory).mkdir(mode=0o700, exist_ok=True)
+    for name in ("ca", "certificate", "key"):
+        source = Path(config[name])
+        destination = Path(cert_dir) / Path(name).name
+        replace(source, destination, 0o600)
+        require(digest(source) == digest(destination), "CNI client file digest mismatch")
+    conflist = {
+        "cniVersion": plugin.VERSION,
+        "name": config["name"],
+        "plugins": [
+            {
+                "type": "ads-ptp",
+                "attestorSocket": config["attestorSocket"],
+                "attestorCN": config["attestorCN"],
+                "ca": str(Path(cert_dir) / "ca"),
+                "certificate": str(Path(cert_dir) / "certificate"),
+                "key": str(Path(cert_dir) / "key"),
+                "stateDir": config["stateDir"],
+                "bindingDir": config["bindingDir"],
+            }
+        ],
+    }
+    pending = Path(net_dir) / ".pending-10-ads-ptp.conflist"
+    destination = Path(net_dir) / "10-ads-ptp.conflist"
+    pending.write_text(json.dumps(conflist, sort_keys=True))
+    os.chmod(pending, 0o644)
+    os.replace(pending, destination)
+    return destination
+
+
+def main():
+    require(os.geteuid() == 0, "node-root CNI install required")
+    require(len(sys.argv) == 2, "one protected installer configuration required")
+    plugin = cni_module()
+    config = plugin.read_record(Path(sys.argv[1]))
+    cri = importlib.machinery.SourceFileLoader("ads_cri", str(Path(__file__).with_name("ads-cri")))
+    spec = importlib.util.spec_from_loader(cri.name, cri)
+    module = importlib.util.module_from_spec(spec)
+    cri.exec_module(module)
+    for directory in runtime_dirs(module.detect):
+        install(config, Path(__file__).parent, Path("/opt/cni/bin"), directory)
+
+
+if __name__ == "__main__":
+    main()
