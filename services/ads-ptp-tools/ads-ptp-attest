@@ -41,6 +41,13 @@ FIELDS = {
     "guest_runtime",
     "egress_runtime",
     "transport_mtu",
+    "attestorSocket",
+    "cniCN",
+    "nodeOwnerSocket",
+    "nodeOwnerCN",
+    "ca",
+    "certificate",
+    "key",
 }
 
 
@@ -101,6 +108,32 @@ def validate(config):
             require(not info.st_mode & 0o077, "private API credentials required")
         else:
             require(info.st_mode & 0o111, "platform executable required")
+    for name in ("attestorSocket", "nodeOwnerSocket"):
+        require(
+            isinstance(config[name], str)
+            and config[name].startswith("/var/run/")
+            and config[name].endswith(".sock")
+            and Path(config[name]).name.startswith(
+                "attestor-v" if name == "attestorSocket" else "node-owner-v"
+            ),
+            "versioned pathname socket required",
+        )
+    for name in ("cniCN", "nodeOwnerCN"):
+        require(
+            isinstance(config[name], str) and config[name],
+            "listener role CN required",
+        )
+    for name in ("ca", "certificate", "key"):
+        path = Path(config[name])
+        info = path.lstat()
+        require(
+            path.is_absolute()
+            and path.resolve() == path
+            and stat.S_ISREG(info.st_mode)
+            and info.st_uid == 0
+            and not info.st_mode & (0o077 if name == "key" else 0o022),
+            "protected listener certificate required",
+        )
     return config
 
 

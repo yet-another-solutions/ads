@@ -39,6 +39,13 @@ def fixture(attest):
         "guest_runtime": "kata-private",
         "egress_runtime": "kata-egress",
         "transport_mtu": 1450,
+        "attestorSocket": "/var/run/attestor-v0.0.43.sock",
+        "cniCN": "ads-ptp-cni",
+        "nodeOwnerSocket": "/var/run/node-owner-v0.0.43.sock",
+        "nodeOwnerCN": "ads-node-owner",
+        "ca": "/protected/ca",
+        "certificate": "/protected/certificate",
+        "key": "/protected/key",
     }
     labels = {name: str(uuid4()) for name in attest.LABELS}
     vm = {
@@ -336,10 +343,12 @@ def test_platform_configuration_is_exact_local_and_protected(
     attest, fixture, tmp_path, monkeypatch, fault
 ):
     config = fixture.config
-    for name in ("kubeconfig", "kubectl", "crictl"):
+    for name in ("kubeconfig", "kubectl", "crictl", "ca", "certificate", "key"):
         path = tmp_path / name
         path.write_text("fixture")
-        path.chmod(0o600 if name == "kubeconfig" else 0o700)
+        path.chmod(0o600 if name in ("kubeconfig", "key") else 0o644)
+        if name in ("kubectl", "crictl"):
+            path.chmod(0o700)
         config[name] = str(path)
     original = Path.lstat
 
