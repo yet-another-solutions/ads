@@ -793,7 +793,7 @@ class ChartTests(unittest.TestCase):
             "--set",
             "sandbox.ca.signingSecret=dedicated-egress-signer",
             "--set-json",
-            "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
+            "sandbox.manager.pairInputs=" + json.dumps({**paired_runtime_fixture(), "relay": {**paired_runtime_fixture()["relay"], "imageId": "sha256:" + "b" * 64}}),
             "--set",
             "sandbox.manager.nodeOwner.network=private",
             "--set",

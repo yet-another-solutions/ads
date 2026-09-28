@@ -12,9 +12,11 @@
 -}}
 {{- range $role := $roles }}
 {{- $secret := printf "%s-tls" $role.name }}
-{{- if not $root.Values.tls.certManager.enabled }}
-{{- $secret = required (printf "sandbox.nodeOwner.secrets.%s is required for BYO TLS" $role.name) (index $sb.nodeOwner.secrets $role.name) }}
+{{- $configured := or $root.Values.tls.certManager.enabled (index $sb.nodeOwner.secrets $role.name) }}
+{{- if and (not $root.Values.tls.certManager.enabled) $configured }}
+{{- $secret = index $sb.nodeOwner.secrets $role.name }}
 {{- end }}
+{{- if $configured }}
 {{- if $root.Values.tls.certManager.enabled }}
 ---
 apiVersion: cert-manager.io/v1
@@ -275,8 +277,8 @@ data:
       "kubeconfig": "/var/run/secrets/kubernetes.io/serviceaccount/token",
       "kubectl": "/host/usr/local/bin/kubectl",
       "crictl": "/host/usr/local/bin/crictl",
-      "relay_image": {{ required "sandbox.manager.pairInputs.relay.image is required" $sb.manager.pairInputs.relay.image | quote }},
-      "relay_image_id": {{ required "sandbox.manager.pairInputs.relay.imageId is required" $sb.manager.pairInputs.relay.imageId | quote }},
+      "relay_image": {{ if $sb.manager.pairInputs }}{{ required "sandbox.manager.pairInputs.relay.image is required" (dig "relay" "image" "" $sb.manager.pairInputs) | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
+      "relay_image_id": {{ if $sb.manager.pairInputs }}{{ required "sandbox.manager.pairInputs.relay.imageId is required" (dig "relay" "imageId" "" $sb.manager.pairInputs) | quote }}{{ else }}"sha256:0000000000000000000000000000000000000000000000000000000000000000"{{ end }},
       "relay_container": "relay",
       "guest_runtime": "kata-qemu-ads",
       "egress_runtime": "kata-qemu-ads-egress",
@@ -297,8 +299,8 @@ data:
       "kubeconfig": "/var/run/secrets/kubernetes.io/serviceaccount/token",
       "kubectl": "/host/usr/local/bin/kubectl",
       "crictl": "/host/usr/local/bin/crictl",
-      "relay_image": {{ required "sandbox.manager.pairInputs.relay.image is required" $sb.manager.pairInputs.relay.image | quote }},
-      "relay_image_id": {{ required "sandbox.manager.pairInputs.relay.imageId is required" $sb.manager.pairInputs.relay.imageId | quote }},
+      "relay_image": {{ if $sb.manager.pairInputs }}{{ required "sandbox.manager.pairInputs.relay.image is required" (dig "relay" "image" "" $sb.manager.pairInputs) | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
+      "relay_image_id": {{ if $sb.manager.pairInputs }}{{ required "sandbox.manager.pairInputs.relay.imageId is required" (dig "relay" "imageId" "" $sb.manager.pairInputs) | quote }}{{ else }}"sha256:0000000000000000000000000000000000000000000000000000000000000000"{{ end }},
       "relay_container": "relay",
       "guest_runtime": "kata-qemu-ads",
       "egress_runtime": "kata-qemu-ads-egress",
@@ -351,6 +353,7 @@ metadata:
   labels:
     {{- include "ads.labels" $root | nindent 4 }}
 automountServiceAccountToken: false
+{{- end }}
 {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
