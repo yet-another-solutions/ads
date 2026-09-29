@@ -77,6 +77,9 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
         "PROBES",
         {"unix:///run/containerd/containerd.sock": (str(shared), str(guest), str(egress))},
     )
+    candidate = tmp_path / "crictl"
+    candidate.write_bytes(b"crictl")
+    monkeypatch.setattr(installer, "CRICTL_CANDIDATES", (str(candidate),))
     directories = installer.runtime_dirs(lambda _path: "unix:///run/containerd/containerd.sock")
     for directory in directories:
         installer.install(config, source, binary, directory, tmp_path / "certs")
@@ -108,10 +111,48 @@ def test_missing_socket_does_not_write_conflist(installer, tmp_path, monkeypatch
     assert not (network / "10-ads-ptp.conflist").exists()
 
 
+def _candidate(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"#!/bin/sh\nexit 0\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_discover_crictl_skips_missing_and_uses_first_protected(installer, tmp_path):
+    missing = tmp_path / "missing" / "crictl"
+    first = _candidate(tmp_path / "first" / "crictl")
+    later = tmp_path / "later" / "crictl"
+    seen = []
+
+    def detect(path):
+        seen.append(Path(path))
+        if Path(path) != first:
+            raise ValueError("protected crictl required")
+        return "unix:///run/containerd/containerd.sock"
+
+    endpoint = installer.discover_crictl(detect, (str(missing), str(first), str(later)))
+    assert endpoint == "unix:///run/containerd/containerd.sock"
+    assert seen == [first]
+
+
+def test_discover_crictl_fails_when_two_candidates_answer(installer, tmp_path):
+    first = _candidate(tmp_path / "a" / "crictl")
+    second = _candidate(tmp_path / "b" / "crictl")
+
+    def detect(path):
+        return "unix:///run/containerd/containerd.sock"
+
+    with pytest.raises(ValueError, match="exactly one answering crictl"):
+        installer.discover_crictl(detect, (str(first), str(second)))
+
+
 def test_crio_bridge_stays_disabled(installer, tmp_path, monkeypatch):
     network = tmp_path / "net.d.crio"
     network.mkdir()
     (network / "10-crio-bridge.conflist").write_text("{}\n")
+    candidate = tmp_path / "crictl"
+    candidate.write_bytes(b"crictl")
+    monkeypatch.setattr(installer, "CRICTL_CANDIDATES", (str(candidate),))
     monkeypatch.setattr(installer, "PROBES", {"unix:///var/run/crio/crio.sock": (str(network),)})
     with pytest.raises(ValueError, match="bridge"):
         installer.runtime_dirs(lambda _path: "unix:///var/run/crio/crio.sock")

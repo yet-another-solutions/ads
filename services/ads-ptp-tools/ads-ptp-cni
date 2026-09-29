@@ -38,6 +38,12 @@ PROBES = {
 }
 BRIDGE = "10-crio-bridge.conflist"
 LIMIT = 65536
+CRICTL_CANDIDATES = (
+    "/usr/local/bin/crictl",
+    "/usr/bin/crictl",
+    "/host/usr/local/bin/crictl",
+    "/host/usr/bin/crictl",
+)
 
 
 def require(value, message):
@@ -107,8 +113,32 @@ def sockets_bound(config):
         )
 
 
+def discover_crictl(detect, candidates=None):
+    """First protected candidate that answers. Missing paths are skipped.
+
+    Two answering candidates fail. No PATH search.
+    """
+    if candidates is None:
+        candidates = CRICTL_CANDIDATES
+    winners = []
+    for candidate in candidates:
+        path = Path(candidate)
+        if not path.is_absolute() or path != path.resolve():
+            raise ValueError("absolute crictl candidate required")
+        try:
+            exists = path.exists()
+        except OSError:
+            exists = False
+        if not exists:
+            continue
+        winners.append((str(path), detect(path)))
+    require(len(winners) == 1, "exactly one answering crictl required")
+    _path, endpoint = winners[0]
+    return endpoint
+
+
 def runtime_dirs(detect):
-    endpoint = detect("/usr/local/bin/crictl")
+    endpoint = discover_crictl(detect)
     matches = PROBES.get(endpoint)
     require(matches, "detected runtime has no conflist directory")
     paths = []
