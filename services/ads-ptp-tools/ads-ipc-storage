@@ -13,6 +13,7 @@ import os
 import stat
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 
@@ -126,18 +127,14 @@ def handle_exists(parent, saved, expected):
 
 def volume(observer, kind, name):
     cfg = observer.config
-    return observer.command(
-        cfg["kubectl"],
-        "--kubeconfig=" + cfg["kubeconfig"],
-        "--insecure-skip-tls-verify=false",
-        "--request-timeout=3s",
-        *(("-n", cfg["namespace"]) if kind == "pvc" else ()),
-        "get",
-        kind,
-        name,
-        "-o",
-        "json",
+    location = (
+        "/api/v1/namespaces/"
+        + urllib.parse.quote(cfg["namespace"], safe="")
+        + "/persistentvolumeclaims/"
+        if kind == "pvc"
+        else "/api/v1/persistentvolumes/"
     )
+    return observer.api_get(location + urllib.parse.quote(name, safe=""))
 
 
 def capture(observer, runtime, ipc):

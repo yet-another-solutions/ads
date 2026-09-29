@@ -70,17 +70,15 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
     guest = tmp_path / "guest"
     egress = tmp_path / "egress"
     held = (_bind(tmp_path / "attestor-v0.0.42.sock"), _bind(tmp_path / "node-owner-v0.0.42.sock"))
+    live = _bind(tmp_path / "containerd.sock")
     config = _config(tmp_path)
     monkeypatch.setattr(installer, "STATE_DIRS", (config["stateDir"], config["bindingDir"]))
     monkeypatch.setattr(
         installer,
         "PROBES",
-        {"unix:///run/containerd/containerd.sock": (str(shared), str(guest), str(egress))},
+        {f"unix://{tmp_path / 'containerd.sock'}": (str(shared), str(guest), str(egress))},
     )
-    candidate = tmp_path / "crictl"
-    candidate.write_bytes(b"crictl")
-    monkeypatch.setattr(installer, "CRICTL_CANDIDATES", (str(candidate),))
-    directories = installer.runtime_dirs(lambda _path: "unix:///run/containerd/containerd.sock")
+    directories = installer.runtime_dirs()
     for directory in directories:
         installer.install(config, source, binary, directory, tmp_path / "certs")
     for directory in (shared, guest, egress):
@@ -92,7 +90,7 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
     for name in ("ads-ptp", "ads-ptp-attest", "ads-cri"):
         assert (binary / name).read_bytes() == (source / name).read_bytes()
         assert stat.S_IMODE((binary / name).stat().st_mode) == 0o755
-    for item in held:
+    for item in (*held, live):
         item.close()
 
 
@@ -111,50 +109,52 @@ def test_missing_socket_does_not_write_conflist(installer, tmp_path, monkeypatch
     assert not (network / "10-ads-ptp.conflist").exists()
 
 
-def _candidate(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"#!/bin/sh\nexit 0\n")
-    path.chmod(0o755)
-    return path
+def test_discover_cri_socket_skips_symlinks_and_non_sockets(installer, tmp_path, monkeypatch):
+    held = _bind(tmp_path / "live.sock")
+    plain = tmp_path / "containerd.sock"
+    plain.write_text("not a socket")
+    link = tmp_path / "linked.sock"
+    if link.exists():
+        link.unlink()
+    link.symlink_to(tmp_path / "live.sock")
+    monkeypatch.setattr(
+        installer,
+        "PROBES",
+        (f"unix://{plain}", f"unix://{link}", "unix:///missing/crio.sock"),
+    )
+    with pytest.raises(ValueError, match="exactly one"):
+        installer.discover_cri_socket()
+    # A single live real socket wins.
+    monkeypatch.setattr(
+        installer,
+        "PROBES",
+        (f"unix://{tmp_path / 'live.sock'}", "unix:///missing/crio.sock"),
+    )
+    assert installer.discover_cri_socket() == f"unix://{tmp_path / 'live.sock'}"
+    held.close()
 
 
-def test_discover_crictl_skips_missing_and_uses_first_protected(installer, tmp_path):
-    missing = tmp_path / "missing" / "crictl"
-    first = _candidate(tmp_path / "first" / "crictl")
-    later = tmp_path / "later" / "crictl"
-    seen = []
-
-    def detect(path):
-        seen.append(Path(path))
-        if Path(path) != first:
-            raise ValueError("protected crictl required")
-        return "unix:///run/containerd/containerd.sock"
-
-    endpoint = installer.discover_crictl(detect, (str(missing), str(first), str(later)))
-    assert endpoint == "unix:///run/containerd/containerd.sock"
-    assert seen == [first]
-
-
-def test_discover_crictl_fails_when_two_candidates_answer(installer, tmp_path):
-    first = _candidate(tmp_path / "a" / "crictl")
-    second = _candidate(tmp_path / "b" / "crictl")
-
-    def detect(path):
-        return "unix:///run/containerd/containerd.sock"
-
-    with pytest.raises(ValueError, match="exactly one answering crictl"):
-        installer.discover_crictl(detect, (str(first), str(second)))
+def test_discover_cri_socket_fails_when_two_sockets_live(installer, tmp_path, monkeypatch):
+    first = _bind(tmp_path / "a.sock")
+    second = _bind(tmp_path / "b.sock")
+    monkeypatch.setattr(
+        installer,
+        "PROBES",
+        (f"unix://{tmp_path / 'a.sock'}", f"unix://{tmp_path / 'b.sock'}"),
+    )
+    with pytest.raises(ValueError, match="exactly one live CRI socket"):
+        installer.discover_cri_socket()
+    for item in (first, second):
+        item.close()
 
 
 def test_crio_bridge_stays_disabled(installer, tmp_path, monkeypatch):
     network = tmp_path / "net.d.crio"
     network.mkdir()
     (network / "10-crio-bridge.conflist").write_text("{}\n")
-    candidate = tmp_path / "crictl"
-    candidate.write_bytes(b"crictl")
-    monkeypatch.setattr(installer, "CRICTL_CANDIDATES", (str(candidate),))
-    monkeypatch.setattr(installer, "PROBES", {"unix:///var/run/crio/crio.sock": (str(network),)})
+    _bind(tmp_path / "crio.sock")
+    monkeypatch.setattr(installer, "PROBES", {f"unix://{tmp_path / 'crio.sock'}": (str(network),)})
     with pytest.raises(ValueError, match="bridge"):
-        installer.runtime_dirs(lambda _path: "unix:///var/run/crio/crio.sock")
+        installer.runtime_dirs()
     assert (network / "10-crio-bridge.conflist").is_file()
     assert not (network / "10-ads-ptp.conflist").exists()

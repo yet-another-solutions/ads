@@ -150,7 +150,6 @@ def settings(path):
         config = attestor.validate(
             plugin.read_record(protected(pair["attestorConfig"], private=True))
         )
-        load("ads-cri").detect(config["crictl"])
         require(
             all(config[k] == value[k] for k in ("node", "namespace", "network")),
             "pair scope mismatch",
@@ -161,7 +160,6 @@ def settings(path):
     if value["ipc"] is not None:
         ipc = load("ads-ipc-release")
         config = ipc.config(load("ads-ptp").read_record(protected(value["ipc"], private=True)))
-        load("ads-cri").detect(config["crictl"])
         require(all(config[k] == value[k] for k in ("node", "namespace")), "IPC scope mismatch")
     return value
 

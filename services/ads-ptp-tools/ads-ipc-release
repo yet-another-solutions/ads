@@ -12,6 +12,7 @@ import re
 import stat
 import sys
 import time
+import urllib.parse
 from itertools import chain
 from pathlib import Path
 from uuid import UUID
@@ -44,9 +45,9 @@ def config(value):
         == {
             "node",
             "namespace",
-            "kubeconfig",
-            "kubectl",
-            "crictl",
+            "apiServer",
+            "token",
+            "apiCa",
             "cri_endpoint",
             "container",
             "mount",
@@ -59,20 +60,15 @@ def config(value):
             isinstance(value[key], str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", value[key]),
             "invalid platform name",
         )
-    for key in ("kubeconfig", "kubectl", "crictl"):
-        path = Path(value[key])
-        info = path.lstat()
+    for name in ("token", "apiCa"):
+        path = Path(value[name])
+        info = path.stat()
         require(
             path.is_absolute()
-            and path.resolve() == path
             and stat.S_ISREG(info.st_mode)
             and info.st_uid == 0
-            and not info.st_mode & 0o022,
-            "protected platform file required",
-        )
-        require(
-            not info.st_mode & 0o077 if key == "kubeconfig" else info.st_mode & 0o111,
-            "private kubeconfig or executable required",
+            and not info.st_mode & (0o077 if name == "token" else 0o022),
+            "protected Kubernetes API credential required",
         )
     require(
         isinstance(value["cri_endpoint"], str) and value["cri_endpoint"].startswith("unix:///"),
@@ -170,18 +166,11 @@ def exact_pod(observer, wanted):
         "exact IPC state claim required",
     )
     cfg = observer.config
-    pvc = observer.command(
-        cfg["kubectl"],
-        "--kubeconfig=" + cfg["kubeconfig"],
-        "--insecure-skip-tls-verify=false",
-        "--request-timeout=3s",
-        "-n",
-        cfg["namespace"],
-        "get",
-        "pvc",
-        name,
-        "-o",
-        "json",
+    pvc = observer.api_get(
+        "/api/v1/namespaces/"
+        + urllib.parse.quote(cfg["namespace"], safe="")
+        + "/persistentvolumeclaims/"
+        + urllib.parse.quote(name, safe="")
     )
     require(
         pvc["metadata"]["uid"] == wanted["volume_uid"]

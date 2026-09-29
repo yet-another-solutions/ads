@@ -6,7 +6,6 @@ import fcntl
 import importlib.machinery
 import importlib.util
 import os
-from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -110,7 +109,7 @@ def backing(storage_module, ipc, captured, observer, tmp_path, monkeypatch):  # 
             for p in Path(parent).iterdir()
         ),
     )
-    observer.command = lambda *args: deepcopy(pvc if "pvc" in args else pv)
+    observer.kube = {"pvc": pvc, "pv": pv}
     return SimpleNamespace(
         module=module,
         ipc=ipc,
