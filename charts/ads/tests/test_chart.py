@@ -1206,9 +1206,26 @@ class ChartTests(unittest.TestCase):
             self.assertNotIn("hostPort", rendered)
             self.assertNotIn("nodePort", rendered)
             config = docs["ConfigMap", name]["data"]["config.json"]
+            self.assertNotIn("downwardAPI", rendered)
+            self.assertNotIn("podinfo", rendered)
+            init = pod["initContainers"][0]
+            self.assertEqual(
+                init["env"],
+                [{"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}],
+            )
+            self.assertIn('node="${NODE_NAME}"', init["args"][0])
+            self.assertNotIn("/podinfo/node", init["args"][0])
+            host_etc = next(item for item in pod["volumes"] if item["name"] == "host-etc")
+            self.assertEqual(host_etc["hostPath"]["path"], f"/etc/{name}")
             if name == "ads-node-owner":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
                 self.assertNotIn("/var/run/attestor-v0.0.1.sock", config)
+                self.assertIn('"attestorConfig": "/etc/ads-ptp-attestor/attestor.json"', config)
+                self.assertIn("/var/lib/ads-ptp", config)
+                owner_mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
+                self.assertIn("/etc/ads-ptp-attestor", owner_mounts)
+                init_mounts = {item["mountPath"] for item in init["volumeMounts"]}
+                self.assertNotIn("/etc/ads-ptp-attestor", init_mounts)
             else:
                 self.assertIn("/var/run/attestor-v0.0.1.sock", config)
             if name == "ads-ptp-attestor":
@@ -1220,8 +1237,33 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/etc/cni/ads-private", mounts)
                 self.assertIn("/etc/cni/net.d.crio", mounts)
                 self.assertIn("/opt/cni/bin", mounts)
+                self.assertIn("/host/usr/local/bin", mounts)
+                host_bin = next(item for item in pod["volumes"] if item["name"] == "host-bin")
+                self.assertEqual(host_bin["hostPath"]["path"], "/usr/local/bin")
                 self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-cni"])
                 self.assertIn("ownerSocket", config)
+        host_paths = set()
+        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
+            volumes = docs["DaemonSet", name]["spec"]["template"]["spec"]["volumes"]
+            host_etc = next(item for item in volumes if item["name"] == "host-etc")
+            host_paths.add(host_etc["hostPath"]["path"])
+        self.assertEqual(
+            host_paths,
+            {"/etc/ads-ptp-attestor", "/etc/ads-node-owner", "/etc/ads-ptp-cni"},
+        )
+        self.assertEqual(
+            {
+                next(
+                    item
+                    for item in docs["DaemonSet", name]["spec"]["template"]["spec"]["volumes"]
+                    if item["name"] == "cni-state"
+                )["hostPath"]["path"]
+                for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni")
+            },
+            {"/var/lib/ads-ptp"},
+        )
+        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
+            pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
             self.assertTrue(pod["hostPID"])
             self.assertIn("ads.io/sandbox", json.dumps(pod.get("tolerations", [])))
         self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))

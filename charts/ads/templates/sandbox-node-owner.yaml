@@ -68,6 +68,11 @@ spec:
         - name: materialize-config
           image: {{ $tools | quote }}
           imagePullPolicy: {{ $sb.nodeOwner.image.pullPolicy }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -77,7 +82,7 @@ spec:
               if [ -f /config/attestor.json ]; then
                 install -o root -g root -m 0600 /config/attestor.json /host-etc/attestor.json
               fi
-              node=$(cat /podinfo/node)
+              node="${NODE_NAME}"
               python3 - "$node" << 'PY'
               import json, pathlib, sys
               node = sys.argv[1]
@@ -104,9 +109,6 @@ spec:
               readOnly: true
             - name: host-etc
               mountPath: /host-etc
-            - name: podinfo
-              mountPath: /podinfo
-              readOnly: true
             {{- if ne $role.name "ads-ptp-cni" }}
             - name: cni-state
               mountPath: /host-state
@@ -146,12 +148,14 @@ spec:
             - name: host-crio
               mountPath: /var/run/crio
             {{- end }}
+            {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") }}
+            - name: host-bin
+              mountPath: /host/usr/local/bin
+              readOnly: true
+            {{- end }}
             {{- if eq $role.name "ads-ptp-attestor" }}
             - name: token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-              readOnly: true
-            - name: host-bin
-              mountPath: /host/usr/local/bin
               readOnly: true
             {{- end }}
             {{- if eq $role.name "ads-ptp-cni" }}
@@ -172,6 +176,9 @@ spec:
             - name: proc
               mountPath: /host/proc
               readOnly: true
+            - name: attestor-etc
+              mountPath: /etc/ads-ptp-attestor
+              readOnly: true
             {{- end }}
       volumes:
         - name: config
@@ -180,14 +187,8 @@ spec:
             defaultMode: 0600
         - name: host-etc
           hostPath:
-            path: /etc/ads-node-owner
+            path: /etc/{{ $role.name }}
             type: DirectoryOrCreate
-        - name: podinfo
-          downwardAPI:
-            items:
-              - path: node
-                fieldRef:
-                  fieldPath: spec.nodeName
         {{- if ne $role.name "ads-ptp-cni" }}
         - name: host-cri
           hostPath:
@@ -198,7 +199,7 @@ spec:
             path: /var/run/crio
             type: DirectoryOrCreate
         {{- end }}
-        {{- if eq $role.name "ads-ptp-attestor" }}
+        {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") }}
         - name: host-bin
           hostPath:
             path: /usr/local/bin
@@ -257,6 +258,10 @@ spec:
           hostPath:
             path: /proc
             type: Directory
+        - name: attestor-etc
+          hostPath:
+            path: /etc/ads-ptp-attestor
+            type: DirectoryOrCreate
         {{- end }}
 ---
 apiVersion: v1
@@ -324,7 +329,7 @@ data:
       "manager_cn": "ads-sandbox-manager",
       "attestor_cn": "ads-ptp-attestor",
       "socket": {{ $ownerSocket | quote }},
-      "pair": {"attestorConfig": "/host-etc/attestor.json", "stateDir": "/var/lib/ads-ptp", "kubeletRoot": "/var/lib/kubelet"},
+      "pair": {"attestorConfig": "/etc/ads-ptp-attestor/attestor.json", "stateDir": "/var/lib/ads-ptp", "kubeletRoot": "/var/lib/kubelet"},
       "ipc": null
     }
     {{- else }}
