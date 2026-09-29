@@ -87,12 +87,13 @@ def main():
             }
             observer = SimpleNamespace(
                 config={
-                    "kubectl": "/fixture/kubectl",
-                    "kubeconfig": "/fixture/config",
+                    "apiServer": "https://kubernetes.default.svc",
+                    "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+                    "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
                     "namespace": scope["namespace"],
                 },
                 pods=lambda: [pod],
-                command=lambda *args: pvc if "pvc" in args else pv,
+                api_get=lambda path: pv if "/persistentvolumes/" in path else pvc,
             )
             kubelet = root / "kubelet"
             mapping = Path(helper.paths(kubelet, pod_uid, "original-pv")["pod"])

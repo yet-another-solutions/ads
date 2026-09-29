@@ -98,11 +98,12 @@ with tempfile.TemporaryDirectory(prefix="ipc-storage-") as directory:
         }
         observer = SimpleNamespace(
             config={
-                "kubectl": "/unused",
-                "kubeconfig": "/unused",
+                "apiServer": "https://kubernetes.default.svc",
+                "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+                "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
                 "namespace": wanted["namespace"],
             },
-            command=lambda *args: deepcopy(pvc if "pvc" in args else pv),
+            api_get=lambda path: deepcopy(pv if "/persistentvolumes/" in path else pvc),
             deadline=time.monotonic() + 60,
         )
         saved = storage.unused_capture(observer, wanted, ipc, release)

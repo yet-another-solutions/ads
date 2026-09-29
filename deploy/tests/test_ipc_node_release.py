@@ -60,11 +60,16 @@ class Observer:
             "namespace": captured["namespace"],
             "container": "ipc",
             "mount": "/ipc-state",
-            "kubectl": "/platform/kubectl",
-            "kubeconfig": "/platform/config",
+            "apiServer": "https://kubernetes.default.svc",
+            "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+            "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
         }
         self.reads = 0
-        self.api, self.sandboxes, self.containers = [], [], []
+        self.api, self.kube = [], {}
+        self.sandboxes, self.containers = [], []
+
+    def api_get(self, path):
+        return deepcopy(self.kube["pv" if "/persistentvolumes/" in path else "pvc"])
 
     def pods(self):
         self.reads += 1
@@ -273,7 +278,7 @@ def live(ipc, captured, observer, tmp_path):
         "status": {"phase": "Bound"},
     }
     observer.api = [pod]
-    observer.command = lambda *args: deepcopy(pvc)
+    observer.kube = {"pvc": pvc}
     sandbox = {
         "status": {
             "id": captured["runtime_id"],

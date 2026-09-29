@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from uuid import UUID
 
@@ -32,8 +34,9 @@ FIELDS = {
     "node",
     "namespace",
     "network",
-    "kubeconfig",
-    "kubectl",
+    "apiServer",
+    "token",
+    "apiCa",
     "crictl",
     "relay_image",
     "relay_container",
@@ -89,21 +92,37 @@ def validate(config):
         and not any(c.isspace() for c in config["relay_image"]),
         "invalid relay image",
     )
-    for name in ("kubeconfig", "kubectl", "crictl"):
+    require(
+        isinstance(config["apiServer"], str)
+        and config["apiServer"].startswith("https://")
+        and len(config["apiServer"]) <= 253
+        and not config["apiServer"].endswith("/"),
+        "verified HTTPS Kubernetes API endpoint required",
+    )
+    # The projected service-account volume is the only supported credential
+    # source: kubelet-rotated token read at call time, cluster CA for verified
+    # TLS. No kubeconfig, no exec plugin, no host kube tooling.
+    for name in ("token", "apiCa"):
         path = Path(config[name])
-        info = path.lstat()
+        info = path.stat()
         require(
             path.is_absolute()
-            and path.resolve() == path
             and stat.S_ISREG(info.st_mode)
             and info.st_uid == 0
-            and not info.st_mode & 0o022,
-            "protected platform file required",
+            and not info.st_mode & (0o077 if name == "token" else 0o022),
+            "protected Kubernetes API credential required",
         )
-        if name == "kubeconfig":
-            require(not info.st_mode & 0o077, "private API credentials required")
-        else:
-            require(info.st_mode & 0o111, "platform executable required")
+    path = Path(config["crictl"])
+    info = path.lstat()
+    require(
+        path.is_absolute()
+        and path.resolve() == path
+        and stat.S_ISREG(info.st_mode)
+        and info.st_uid == 0
+        and not info.st_mode & 0o022
+        and info.st_mode & 0o111,
+        "platform executable required",
+    )
     for name in ("attestorSocket", "nodeOwnerSocket"):
         require(
             isinstance(config[name], str)
@@ -147,6 +166,38 @@ class Observer:
     def __init__(self, config):
         self.config = config
         self.deadline = time.monotonic() + 20
+        self._context = None
+
+    def tls_context(self):
+        if self._context is None:
+            # Verified TLS against the cluster CA. No kubeconfig, no kubectl,
+            # no host kube tooling: authenticated HTTPS with the
+            # service-account bearer token only.
+            context = ssl.create_default_context(cafile=str(Path(self.config["apiCa"])))
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            self._context = context
+        return self._context
+
+    def api_get(self, path):
+        remaining = min(4, self.deadline - time.monotonic())
+        require(remaining > 0, "attestation deadline exceeded")
+        request = urllib.request.Request(
+            self.config["apiServer"] + path,
+            headers={
+                "Authorization": "Bearer " + Path(self.config["token"]).read_text().strip(),
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=remaining, context=self.tls_context()
+            ) as reply:
+                payload = reply.read(1048577)
+        except OSError:
+            require(False, "observation failed")
+        require(len(payload) <= 1048576, "observation too large")
+        return json.loads(payload)
 
     def command(self, *args):
         remaining = min(4, self.deadline - time.monotonic())
@@ -171,22 +222,15 @@ class Observer:
 
     def pods(self, selector=None):
         config = self.config
-        args = [
-            config["kubectl"],
-            "--kubeconfig=" + config["kubeconfig"],
-            "--insecure-skip-tls-verify=false",
-            "--request-timeout=3s",
-            "-n",
-            config["namespace"],
-            "get",
-            "pods",
-            "--field-selector=spec.nodeName=" + config["node"],
-            "-o",
-            "json",
-        ]
+        path = (
+            "/api/v1/namespaces/"
+            + urllib.parse.quote(config["namespace"], safe="")
+            + "/pods?fieldSelector="
+            + urllib.parse.quote("spec.nodeName=" + config["node"], safe="")
+        )
         if selector:
-            args.append("--selector=" + selector)
-        reply = self.command(*args)
+            path += "&labelSelector=" + urllib.parse.quote(selector, safe="")
+        reply = self.api_get(path)
         require(not reply.get("metadata", {}).get("continue"), "incomplete Pod observation")
         return reply["items"]
 

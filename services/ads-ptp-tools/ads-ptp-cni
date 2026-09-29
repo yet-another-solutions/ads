@@ -34,7 +34,7 @@ PROBES = {
         "/etc/cni/ads-private/guest",
         "/etc/cni/ads-private/egress",
     ),
-    "unix:///var/run/crio/crio.sock": ("/etc/cni/net.d.crio",),
+    "unix:///run/crio/crio.sock": ("/etc/cni/net.d.crio",),
 }
 BRIDGE = "10-crio-bridge.conflist"
 LIMIT = 65536

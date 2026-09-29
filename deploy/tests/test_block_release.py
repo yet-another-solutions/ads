@@ -64,12 +64,13 @@ def block(tmp_path, monkeypatch):
     }
     observer = SimpleNamespace(
         config={
-            "kubectl": "/fixture/kubectl",
-            "kubeconfig": "/fixture/config",
+            "apiServer": "https://kubernetes.default.svc",
+            "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+            "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
             "namespace": scope["namespace"],
         },
         pods=lambda: deepcopy([pod]),
-        command=lambda *args: deepcopy(pvc if "pvc" in args else pv),
+        api_get=lambda path: deepcopy(pv if "/persistentvolumes/" in path else pvc),
     )
     release = module.load("ads-ptp-release")
     monkeypatch.setattr(release, "boot_id", lambda: runtime["boot_id"])

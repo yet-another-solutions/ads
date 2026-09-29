@@ -157,12 +157,12 @@ spec:
             - name: host-crio
               mountPath: /var/run/crio
             {{- end }}
-            {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") }}
+            {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") (eq $role.name "ads-node-owner") }}
             - name: host-bin
               mountPath: /host/usr/local/bin
               readOnly: true
             {{- end }}
-            {{- if eq $role.name "ads-ptp-attestor" }}
+            {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-node-owner") }}
             - name: token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
@@ -208,7 +208,7 @@ spec:
             path: /var/run/crio
             type: DirectoryOrCreate
         {{- end }}
-        {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") }}
+        {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") (eq $role.name "ads-node-owner") }}
         - name: host-bin
           hostPath:
             path: /usr/local/bin
@@ -228,13 +228,19 @@ spec:
           secret:
             secretName: {{ $secret }}
             defaultMode: 0600
-        {{- if eq $role.name "ads-ptp-attestor" }}
+        {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-node-owner") }}
         - name: token
           projected:
+            defaultMode: 0600
             sources:
               - serviceAccountToken:
                   path: token
                   expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
         {{- end }}
         {{- if eq $role.name "ads-ptp-cni" }}
         - name: cni-bin
@@ -288,8 +294,9 @@ data:
       "node": "",
       "namespace": {{ $sb.namespace | quote }},
       "network": {{ $sb.manager.nodeOwner.network | quote }},
-      "kubeconfig": "/var/run/secrets/kubernetes.io/serviceaccount/token",
-      "kubectl": "/host/usr/local/bin/kubectl",
+      "apiServer": "https://kubernetes.default.svc",
+      "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
       "crictl": "/host/usr/local/bin/crictl",
       "relay_image": {{ $pair := $sb.manager.pairInputs | default dict }}{{ if dig "relay" "image" "" $pair }}{{ dig "relay" "image" "" $pair | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
       "relay_container": "relay",
@@ -309,8 +316,9 @@ data:
       "node": "",
       "namespace": {{ $sb.namespace | quote }},
       "network": {{ $sb.manager.nodeOwner.network | quote }},
-      "kubeconfig": "/var/run/secrets/kubernetes.io/serviceaccount/token",
-      "kubectl": "/host/usr/local/bin/kubectl",
+      "apiServer": "https://kubernetes.default.svc",
+      "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
       "crictl": "/host/usr/local/bin/crictl",
       "relay_image": {{ $pair := $sb.manager.pairInputs | default dict }}{{ if dig "relay" "image" "" $pair }}{{ dig "relay" "image" "" $pair | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
       "relay_container": "relay",
@@ -365,6 +373,66 @@ metadata:
   labels:
     {{- include "ads.labels" $root | nindent 4 }}
 automountServiceAccountToken: false
+{{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-node-owner") }}
+---
+# Read-only Pod/PVC/PV observation for the in-process Kubernetes API client.
+# No exec, no secrets, no mutations. Mirrors deploy/node-owner/rbac.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $role.name }}-observer
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $role.name }}-observer
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $role.name }}-observer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $role.name }}
+    namespace: {{ $sb.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $role.name }}-storage-observer
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $sb.namespace }}-{{ $role.name }}-storage-observer
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role.name }}-storage-observer
+subjects:
+  - kind: ServiceAccount
+    name: {{ $role.name }}
+    namespace: {{ $sb.namespace }}
 {{- end }}
 {{- end }}
 ---
@@ -391,3 +459,4 @@ spec:
       ports:
         - protocol: TCP
           port: 9443
+{{- end }}
