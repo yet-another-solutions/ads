@@ -38,6 +38,14 @@ def require(value, message):
         raise ValueError(message)
 
 
+def netns_visible(path):
+    """A denied /proc netns reference is not a visible bind."""
+    try:
+        return Path(path).exists() or Path(path).is_symlink()
+    except PermissionError:
+        return False
+
+
 def uuid(value):
     require(isinstance(value, str) and str(UUID(value)) == value, "canonical identity required")
     return value
@@ -207,7 +215,7 @@ def relay_inventory(plugin, attestor, observer, scope, pod):
             if private_identity is not None:
                 namespace_identity(private_identity)
                 require(private_identity != transport_identity, "relay namespaces changed")
-                if not record.get("stopped") or Path(private_path).exists():
+                if not record.get("stopped") or netns_visible(private_path):
                     with plugin.namespace(private_path) as private:
                         require(
                             plugin.ns_identity(private) == private_identity,
@@ -219,9 +227,7 @@ def relay_inventory(plugin, attestor, observer, scope, pod):
                 # after this read. Only terminal cleanup with positive retained
                 # history and no outstanding namespace bind excludes that path.
                 require(
-                    record.get("stopped") is True
-                    and not Path(private_path).exists()
-                    and not Path(private_path).is_symlink(),
+                    record.get("stopped") is True and not netns_visible(private_path),
                     "original private namespace history unavailable",
                 )
             ns.append(transport_identity)
