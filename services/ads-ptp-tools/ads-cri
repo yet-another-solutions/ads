@@ -165,7 +165,7 @@ class Connection:
         while True:
             require(deadline_guard > time.monotonic(), "cri handshake timeout")
             length, ftype, flags, _ = self._frame_header()
-            payload = self._read_exact(length)
+            self._read_exact(length)
             if ftype == 4:  # SETTINGS
                 require(not flags & 0x01, "cri server settings expected non-ACK first")
                 # ACK it
