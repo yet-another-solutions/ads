@@ -1245,6 +1245,20 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/var/lib/ads-ptp", config)
                 owner_mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
                 self.assertIn("/etc/ads-ptp-attestor", owner_mounts)
+                self.assertIn("/var/lib/ads-ptp", owner_mounts)
+                self.assertIn("/var/lib/kubelet", owner_mounts)
+                owner_volumes = {item["name"]: item for item in pod["volumes"]}
+                self.assertEqual(
+                    owner_volumes["kubelet-root"]["hostPath"]["path"], "/var/lib/kubelet"
+                )
+                self.assertEqual(
+                    next(
+                        item
+                        for item in pod["containers"][0]["volumeMounts"]
+                        if item["mountPath"] == "/var/lib/ads-ptp"
+                    )["name"],
+                    "cni-state",
+                )
                 init_mounts = {item["mountPath"] for item in init["volumeMounts"]}
                 self.assertNotIn("/etc/ads-ptp-attestor", init_mounts)
             else:
