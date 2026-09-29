@@ -2,9 +2,9 @@
 """Minimal gRPC client for the CRI v1 API over a local unix socket.
 
 Speaks just enough HTTP/2 + gRPC to call RuntimeService methods with
-protobuf messages encoded from the vendored CRI schema. No subprocess, no
-crictl, no grpcio: the caller only needs this file and the vendored
-cri_api_pb2 module. Reads are bounded; responses fail closed on truncation.
+protobuf messages encoded by the cri_wire codec. No subprocess, no crictl,
+no grpcio: the caller only needs this file plus the cri_wire module.
+Reads are bounded; responses fail closed on truncation.
 """
 
 from __future__ import annotations

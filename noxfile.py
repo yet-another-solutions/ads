@@ -31,7 +31,7 @@ _SRC = (
     "services/ads-ptp-tools/ads-ptp-relay",
     "services/ads-ptp-tools/ads-ptp-attest",
     "services/ads-ptp-tools/ads-cri",
-    "services/ads-ptp-tools/cri_api_pb2.py",
+    "services/ads-ptp-tools/cri_wire.py",
     "services/ads-ptp-tools/ads-ptp-retire",
     "services/ads-ptp-tools/ads-ptp-release",
     "services/ads-ptp-tools/ads-ptp-partial",
