@@ -300,6 +300,20 @@ def test_incomplete_and_stopped_relay_keep_original_namespace_inventory(
     assert not partial.report(value)["observed_runtime_released"]
 
 
+def test_denied_private_netns_is_not_a_visible_bind(
+    partial, plugin, attest, release, inventory, monkeypatch
+):
+    f = inventory
+    f.relay_record.update(complete=False, private=None, stopped=True)
+
+    def denied(self, *, follow_symlinks=True):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(partial.Path, "stat", denied)
+    value = capture(f, partial, plugin, attest, release)
+    assert value["members"]["guest-relay"]["namespaces"] == [[7, 202]]
+
+
 @pytest.mark.parametrize("stopped", [False, True])
 def test_no_private_identity_requires_terminal_original_relay_history(
     partial, plugin, attest, release, inventory, stopped
