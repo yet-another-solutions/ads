@@ -1176,7 +1176,25 @@ class ChartTests(unittest.TestCase):
             self.assertIn("ads-sandbox-golden:0.0.123-rc.1", result.stdout)
 
     def test_node_owner_chart_renders_sockets_without_endpoint_map(self):
-        docs = self.documents()
+        pair = paired_runtime_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            values = Path(directory) / "node-owner-values.yaml"
+            values.write_text(
+                yaml.safe_dump(
+                    {
+                        "sandbox": {
+                            "manager": {
+                                "nodeOwner": {
+                                    "network": "ads-private",
+                                    "tlsSecretName": "node-owner-tls",
+                                },
+                                "pairInputs": pair,
+                            }
+                        }
+                    }
+                )
+            )
+            docs = self.documents("-f", str(values))
         for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
             self.assertIn(("DaemonSet", name), docs)
             self.assertIn(("Certificate", name), docs)
@@ -1195,12 +1213,17 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/var/run/attestor-v0.0.1.sock", config)
             if name == "ads-ptp-attestor":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
+                self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-attest"])
+                self.assertIn("/host/usr/local/bin/crictl", config)
             if name == "ads-ptp-cni":
                 mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
                 self.assertIn("/etc/cni/ads-private", mounts)
                 self.assertIn("/etc/cni/net.d.crio", mounts)
                 self.assertIn("/opt/cni/bin", mounts)
                 self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-cni"])
+                self.assertIn("ownerSocket", config)
+            self.assertTrue(pod["hostPID"])
+            self.assertIn("ads.io/sandbox", json.dumps(pod.get("tolerations", [])))
         self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))
         policy = docs["NetworkPolicy", "ads-node-owner"]["spec"]
         self.assertEqual(policy["ingress"][0]["ports"], [{"protocol": "TCP", "port": 9443}])

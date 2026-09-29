@@ -34,11 +34,17 @@ def fixture(attest):
         "kubectl": "/usr/bin/kubectl",
         "crictl": "/usr/bin/crictl",
         "relay_image": "registry.example/relay:version",
-        "relay_image_id": "sha256:" + "a" * 64,
         "relay_container": "relay",
         "guest_runtime": "kata-private",
         "egress_runtime": "kata-egress",
         "transport_mtu": 1450,
+        "attestorSocket": "/var/run/attestor-v0.0.43.sock",
+        "cniCN": "ads-ptp-cni",
+        "nodeOwnerSocket": "/var/run/node-owner-v0.0.43.sock",
+        "nodeOwnerCN": "ads-node-owner",
+        "ca": "/protected/ca",
+        "certificate": "/protected/certificate",
+        "key": "/protected/key",
     }
     labels = {name: str(uuid4()) for name in attest.LABELS}
     vm = {
@@ -87,7 +93,7 @@ def fixture(attest):
                 "io.kubernetes.pod.uid": relay["metadata"]["uid"],
                 "io.kubernetes.pod.namespace": config["namespace"],
             },
-            "imageRef": config["relay_image_id"],
+            "imageRef": config["relay_image"],
         },
         "info": {"pid": 202, "sandboxID": sandbox["id"]},
     }
@@ -200,7 +206,7 @@ def test_cri_requires_exact_pod_container_image_and_process(attest, fixture, fau
     if fault in ("uid", "namespace"):
         f.container["status"]["labels"]["io.kubernetes.pod." + fault] = "foreign"
     elif fault == "image":
-        f.container["status"]["imageRef"] = "sha256:" + "d" * 64
+        f.container["status"]["imageRef"] = "registry.example/relay:foreign"
     elif fault == "sandbox":
         f.container["info"]["sandboxID"] = "e" * 64
     elif fault == "state":
@@ -336,10 +342,12 @@ def test_platform_configuration_is_exact_local_and_protected(
     attest, fixture, tmp_path, monkeypatch, fault
 ):
     config = fixture.config
-    for name in ("kubeconfig", "kubectl", "crictl"):
+    for name in ("kubeconfig", "kubectl", "crictl", "ca", "certificate", "key"):
         path = tmp_path / name
         path.write_text("fixture")
-        path.chmod(0o600 if name == "kubeconfig" else 0o700)
+        path.chmod(0o600 if name in ("kubeconfig", "key") else 0o644)
+        if name in ("kubectl", "crictl"):
+            path.chmod(0o700)
         config[name] = str(path)
     original = Path.lstat
 
@@ -353,7 +361,7 @@ def test_platform_configuration_is_exact_local_and_protected(
     elif fault == "mtu":
         config["transport_mtu"] = True
     elif fault == "image-id":
-        config["relay_image_id"] = "latest"
+        config["relay_image"] = "latest tag"
     elif fault == "name":
         config["namespace"] = "../foreign"
     elif fault == "credentials":
