@@ -37,7 +37,6 @@ FIELDS = {
     "apiServer",
     "token",
     "apiCa",
-    "crictl",
     "relay_image",
     "relay_container",
     "guest_runtime",
@@ -101,7 +100,8 @@ def validate(config):
     )
     # The projected service-account volume is the only supported credential
     # source: kubelet-rotated token read at call time, cluster CA for verified
-    # TLS. No kubeconfig, no exec plugin, no host kube tooling.
+    # TLS. No kubeconfig, no exec plugin, no host kube tooling. The CRI
+    # endpoint is a detected local socket, never a configured executable.
     for name in ("token", "apiCa"):
         path = Path(config[name])
         info = path.stat()
@@ -112,17 +112,6 @@ def validate(config):
             and not info.st_mode & (0o077 if name == "token" else 0o022),
             "protected Kubernetes API credential required",
         )
-    path = Path(config["crictl"])
-    info = path.lstat()
-    require(
-        path.is_absolute()
-        and path.resolve() == path
-        and stat.S_ISREG(info.st_mode)
-        and info.st_uid == 0
-        and not info.st_mode & 0o022
-        and info.st_mode & 0o111,
-        "platform executable required",
-    )
     for name in ("attestorSocket", "nodeOwnerSocket"):
         require(
             isinstance(config[name], str)
@@ -202,8 +191,7 @@ class Observer:
     def command(self, *args):
         remaining = min(4, self.deadline - time.monotonic())
         require(remaining > 0, "attestation deadline exceeded")
-        # CRI inspect includes runtime configuration. Keep it out of logs and
-        # avoid buffering an unbounded command response in process memory.
+        # Host commands stay subprocesses. CRI responses never pass through here.
         with tempfile.TemporaryFile() as output:
             reply = subprocess.run(
                 args,
@@ -236,14 +224,19 @@ class Observer:
 
     def cri(self, *args):
         # Detect once. This is not a configured cri_endpoint.
-        endpoint = self.config.get("cri_endpoint") or cri_module().detect(self.config["crictl"])
+        command, arguments = args[0], args[1:]
+        endpoint = self.config.get("cri_endpoint") or cri_module().detect()
         self.config["cri_endpoint"] = endpoint
-        return self.command(
-            self.config["crictl"],
-            "--runtime-endpoint=" + endpoint,
-            "--timeout=3s",
-            *args,
-        )
+        cri = cri_module().Cri(endpoint, min(self.deadline, time.monotonic() + 4))
+        if command == "pods":
+            return {"items": cri.pods()}
+        if command == "ps":
+            return {"containers": cri.containers()}
+        if command == "inspectp":
+            return cri.inspectp(arguments[0])
+        if command == "inspect":
+            return cri.inspect(arguments[0])
+        require(False, "unsupported CRI command")
 
 
 def pod_identity(pod, config, component):

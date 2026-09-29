@@ -1252,15 +1252,14 @@ class ChartTests(unittest.TestCase):
             if name == "ads-ptp-attestor":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
                 self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-attest"])
-                self.assertIn("/host/usr/local/bin/crictl", config)
+                self.assertNotIn("crictl", config)
             if name == "ads-ptp-cni":
                 mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
                 self.assertIn("/etc/cni/ads-private", mounts)
                 self.assertIn("/etc/cni/net.d.crio", mounts)
                 self.assertIn("/opt/cni/bin", mounts)
-                self.assertIn("/host/usr/local/bin", mounts)
-                host_bin = next(item for item in pod["volumes"] if item["name"] == "host-bin")
-                self.assertEqual(host_bin["hostPath"]["path"], "/usr/local/bin")
+                self.assertNotIn("/host/usr/local/bin", mounts)
+                self.assertNotIn("crictl", config)
                 self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-cni"])
                 self.assertIn("ownerSocket", config)
         host_paths = set()

@@ -232,17 +232,13 @@ def startup(service, config, monkeypatch):
     def read(path):
         if path == Path("/platform/config"):
             return values
-        return {**observer, "crictl": "/usr/bin/crictl"}
+        return {**observer}
 
     modules = {
         "ads-ptp": SimpleNamespace(read_record=read, private_directory=lambda path: Path(path)),
-        "ads-ptp-attest": SimpleNamespace(
-            validate=lambda value: {**value, "crictl": "/usr/bin/crictl"}
-        ),
-        "ads-cri": SimpleNamespace(detect=lambda path: "unix:///run/containerd/containerd.sock"),
-        "ads-ipc-release": SimpleNamespace(
-            config=lambda value: {**value, "crictl": "/usr/bin/crictl"}
-        ),
+        "ads-ptp-attest": SimpleNamespace(validate=lambda value: {**value}),
+        "ads-cri": SimpleNamespace(detect=lambda: "unix:///run/containerd/containerd.sock"),
+        "ads-ipc-release": SimpleNamespace(config=lambda value: {**value}),
     }
     monkeypatch.setattr(service, "protected", protected)
     monkeypatch.setattr(service, "load", lambda name: modules[name])

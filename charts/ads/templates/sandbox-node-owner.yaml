@@ -157,11 +157,6 @@ spec:
             - name: host-crio
               mountPath: /var/run/crio
             {{- end }}
-            {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") (eq $role.name "ads-node-owner") }}
-            - name: host-bin
-              mountPath: /host/usr/local/bin
-              readOnly: true
-            {{- end }}
             {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-node-owner") }}
             - name: token
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
@@ -207,12 +202,6 @@ spec:
           hostPath:
             path: /var/run/crio
             type: DirectoryOrCreate
-        {{- end }}
-        {{- if or (eq $role.name "ads-ptp-attestor") (eq $role.name "ads-ptp-cni") (eq $role.name "ads-node-owner") }}
-        - name: host-bin
-          hostPath:
-            path: /usr/local/bin
-            type: Directory
         {{- end }}
         {{- if ne $role.name "ads-ptp-cni" }}
         - name: cni-state
@@ -297,7 +286,6 @@ data:
       "apiServer": "https://kubernetes.default.svc",
       "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
       "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-      "crictl": "/host/usr/local/bin/crictl",
       "relay_image": {{ $pair := $sb.manager.pairInputs | default dict }}{{ if dig "relay" "image" "" $pair }}{{ dig "relay" "image" "" $pair | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
       "relay_container": "relay",
       "guest_runtime": "kata-qemu-ads",
@@ -319,7 +307,6 @@ data:
       "apiServer": "https://kubernetes.default.svc",
       "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
       "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-      "crictl": "/host/usr/local/bin/crictl",
       "relay_image": {{ $pair := $sb.manager.pairInputs | default dict }}{{ if dig "relay" "image" "" $pair }}{{ dig "relay" "image" "" $pair | quote }}{{ else }}"registry.invalid/relay:unconfigured"{{ end }},
       "relay_container": "relay",
       "guest_runtime": "kata-qemu-ads",

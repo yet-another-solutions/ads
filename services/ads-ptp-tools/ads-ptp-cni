@@ -38,12 +38,6 @@ PROBES = {
 }
 BRIDGE = "10-crio-bridge.conflist"
 LIMIT = 65536
-CRICTL_CANDIDATES = (
-    "/usr/local/bin/crictl",
-    "/usr/bin/crictl",
-    "/host/usr/local/bin/crictl",
-    "/host/usr/bin/crictl",
-)
 
 
 def require(value, message):
@@ -113,32 +107,20 @@ def sockets_bound(config):
         )
 
 
-def discover_crictl(detect, candidates=None):
-    """First protected candidate that answers. Missing paths are skipped.
-
-    Two answering candidates fail. No PATH search.
-    """
-    if candidates is None:
-        candidates = CRICTL_CANDIDATES
+def discover_cri_socket():
+    """Exactly one live CRI socket decides the runtime. No executable needed."""
     winners = []
-    for candidate in candidates:
-        path = Path(candidate)
-        if not path.is_absolute() or path != path.resolve():
-            raise ValueError("absolute crictl candidate required")
-        try:
-            exists = path.exists()
-        except OSError:
-            exists = False
-        if not exists:
-            continue
-        winners.append((str(path), detect(path)))
-    require(len(winners) == 1, "exactly one answering crictl required")
-    _path, endpoint = winners[0]
-    return endpoint
+    for endpoint in PROBES:
+        path = Path(endpoint.removeprefix("unix://"))
+        require(path.is_absolute(), "absolute CRI path required")
+        if path.exists() and not path.is_symlink() and path.is_socket():
+            winners.append(endpoint)
+    require(len(winners) == 1, "exactly one live CRI socket required")
+    return winners[0]
 
 
-def runtime_dirs(detect):
-    endpoint = discover_crictl(detect)
+def runtime_dirs():
+    endpoint = discover_cri_socket()
     matches = PROBES.get(endpoint)
     require(matches, "detected runtime has no conflist directory")
     paths = []
@@ -211,11 +193,7 @@ def main():
     require(len(sys.argv) == 2, "one protected installer configuration required")
     plugin = cni_module()
     config = plugin.read_record(Path(sys.argv[1]))
-    cri = importlib.machinery.SourceFileLoader("ads_cri", str(Path(__file__).with_name("ads-cri")))
-    spec = importlib.util.spec_from_loader(cri.name, cri)
-    module = importlib.util.module_from_spec(spec)
-    cri.exec_module(module)
-    for directory in runtime_dirs(module.detect):
+    for directory in runtime_dirs():
         install(config, Path(__file__).parent, Path("/opt/cni/bin"), directory)
 
 

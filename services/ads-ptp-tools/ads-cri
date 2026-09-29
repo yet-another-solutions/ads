@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
-"""Detect the one live local CRI socket. No configured endpoint."""
+"""Minimal gRPC client for the CRI v1 API over a local unix socket.
+
+Speaks just enough HTTP/2 + gRPC to call RuntimeService methods with
+protobuf messages encoded from the vendored CRI schema. No subprocess, no
+crictl, no grpcio: the caller only needs this file and the vendored
+cri_api_pb2 module. Reads are bounded; responses fail closed on truncation.
+"""
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import os
+import socket
 import stat
-import subprocess
+import struct
 import sys
+import time
 from pathlib import Path
 
-PROBES = (
-    "unix:///run/containerd/containerd.sock",
-    "unix:///run/crio/crio.sock",
+LIMIT = 4194304
+SOCKETS = (
+    "/run/containerd/containerd.sock",
+    "/var/run/crio/crio.sock",
 )
 RUNTIME_ID = r"(containerd|cri-o)://[0-9a-f]{64}"
+SCHEME = "http"
 
 
 def require(value, message):
@@ -21,8 +33,22 @@ def require(value, message):
         raise ValueError(message)
 
 
+def load(name):
+    path = Path(__file__).with_name(name)
+    if not path.exists() and path.with_suffix(".py").exists():
+        path = path.with_suffix(".py")
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def socket_path(endpoint):
-    require(isinstance(endpoint, str) and endpoint.startswith("unix:///"), "local CRI required")
+    require(
+        isinstance(endpoint, str) and endpoint.startswith("unix://"),
+        "local CRI endpoint required",
+    )
     path = Path(endpoint.removeprefix("unix://"))
     require(path.is_absolute() and path == path.resolve(), "canonical CRI path required")
     return path
@@ -36,58 +62,258 @@ def is_socket(path):
     return stat.S_ISSOCK(info.st_mode) and not stat.S_ISLNK(info.st_mode)
 
 
-def answers(crictl, endpoint):
-    try:
-        reply = subprocess.run(
-            [
-                str(crictl),
-                "--runtime-endpoint=" + endpoint,
-                "--timeout=3s",
-                "version",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=4,
-            env={
-                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "LANG": "C",
-                "HOME": "/nonexistent",
-            },
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return reply.returncode == 0
-
-
-def detect(crictl):
-    """Exactly one probe must be a socket that answers crictl."""
-    path = Path(crictl)
-    info = path.lstat()
-    require(
-        path.is_absolute()
-        and path.resolve() == path
-        and stat.S_ISREG(info.st_mode)
-        and info.st_uid == 0
-        and not info.st_mode & 0o022
-        and info.st_mode & 0o111,
-        "protected crictl required",
-    )
+def detect():
+    """Exactly one probe must be a live CRI socket. Returns unix:// endpoint."""
     winners = []
-    for endpoint in PROBES:
-        candidate = socket_path(endpoint)
-        if not is_socket(candidate):
-            continue
-        if not answers(path, endpoint):
-            raise ValueError("CRI socket did not answer crictl")
-        winners.append(endpoint)
+    for candidate in SOCKETS:
+        path = Path(candidate)
+        require(path.is_absolute(), "absolute CRI socket path required")
+        if is_socket(path):  # lstat: symlinks are not sockets, so skipped
+            winners.append("unix://" + candidate)
     require(len(winners) == 1, "exactly one live CRI socket required")
     return winners[0]
 
 
+def varint(value):
+    out = bytearray()
+    while True:
+        byte = value & 0x7F
+        value >>= 7
+        if value:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            return bytes(out)
+
+
+def field(number, wire, payload):
+    return varint(number << 3 | wire) + payload
+
+
+def pb_string(number, value):
+    encoded = value.encode()
+    return field(number, 2, varint(len(encoded)) + encoded)
+
+
+def pb_message(number, payload):
+    return field(number, 2, varint(len(payload)) + payload)
+
+
+def hpack_int(data, index, prefix_bits):
+    """HPACK integer with prefix_bits starting at data[index]. Returns (value, next index)."""
+    mask = (1 << prefix_bits) - 1
+    value = data[index] & mask
+    if value < mask:
+        return value, index + 1
+    shift = 0
+    while True:
+        index += 1
+        byte = data[index]
+        value += (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            return value, index + 1
+
+
+def frame(ftype, flags, stream_id, payload):
+    """One HTTP/2 frame: 3-byte length, type, flags, 4-byte stream id."""
+    require(len(payload) <= 0xFFFFFF, "http2 frame payload too large")
+    return len(payload).to_bytes(3, "big") + struct.pack(">BBI", ftype, flags, stream_id) + payload
+
+
+def hpack(headers):
+    """Literal header field without indexing, no name indexing (0x00 prefix).
+
+    Values are huffman-free for determinism; CRI servers accept it.
+    """
+    out = bytearray()
+    for name, value in headers:
+        encoded_name, encoded_value = name.encode(), value.encode()
+        out.append(0x00)
+        out += varint(len(encoded_name)) + encoded_name
+        out += varint(len(encoded_value)) + encoded_value
+    return bytes(out)
+
+
+class Connection:
+    """One HTTP/2 request at a time over a unix socket, framed manually."""
+
+    def __init__(self, path, deadline):
+        require(deadline - time.monotonic() > 0, "cri deadline exceeded")
+        self.path = str(path)
+        self.deadline = deadline
+        self.stream_id = 3
+        self.buffer = b""
+        raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raw.settimeout(max(0.05, deadline - time.monotonic()))
+        try:
+            raw.connect(self.path)
+        except OSError:
+            raw.close()
+            raise
+        self.raw = raw
+        self._preface()
+
+    def _preface(self):
+        self.raw.sendall(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+        # Empty SETTINGS frame, ACK flag set.
+        self.raw.sendall(frame(4, 0x01, 0, b""))
+        self._expect_settings()
+
+    def _expect_settings(self):
+        deadline_guard = time.monotonic() + 2
+        while True:
+            require(deadline_guard > time.monotonic(), "cri handshake timeout")
+            length, ftype, flags, _ = self._frame_header()
+            payload = self._read_exact(length)
+            if ftype == 4:  # SETTINGS
+                require(not flags & 0x01, "cri server settings expected non-ACK first")
+                # ACK it
+                self.raw.sendall(frame(4, 0x01, 0, b""))
+                return
+            require(ftype in (6, 8), "unexpected pre-SETTINGS frame")  # PING/WINDOW_UPDATE
+
+    def _frame_header(self):
+        header = self._read_exact(9)
+        length = int.from_bytes(header[:3], "big")
+        ftype, flags, stream = struct.unpack(">BBI", header[3:9])
+        return length, ftype, flags, stream
+
+    def _read_exact(self, count):
+        while len(self.buffer) < count:
+            require(count <= LIMIT, "cri frame too large")
+            chunk = self.raw.recv(min(65536, count - len(self.buffer)))
+            require(chunk, "cri connection closed early")
+            self.buffer += chunk
+        result, self.buffer = self.buffer[:count], self.buffer[count:]
+        return result
+
+    def call(self, method, request_payload):
+        require(self.deadline - time.monotonic() > 0, "cri deadline exceeded")
+        self.raw.settimeout(max(0.05, self.deadline - time.monotonic()))
+        stream_id = self.stream_id
+        self.stream_id += 2
+        headers = hpack(
+            [
+                (":method", "POST"),
+                (":scheme", SCHEME),
+                (":path", "/runtime.v1.RuntimeService/" + method),
+                (":authority", "localhost"),
+                ("content-type", "application/grpc"),
+                ("te", "trailers"),
+                ("user-agent", "ads-cri/1.0"),
+            ]
+        )
+        frame_bytes = frame(1, 0x04, stream_id, headers)  # HEADERS, END_HEADERS
+        # DATA frame: gRPC framed payload (1 byte compressed flag, 4 length, body)
+        grpc = b"\x00" + struct.pack(">I", len(request_payload)) + request_payload
+        frame_bytes += frame(0, 0x01, stream_id, grpc)  # DATA, END_STREAM
+        self.raw.sendall(frame_bytes)
+        return self._response(stream_id)
+
+    def _response(self, stream_id):
+        data, grpc_message, grpc_status = b"", None, None
+        while True:
+            require(self.deadline - time.monotonic() > 0, "cri deadline exceeded")
+            length, ftype, flags, stream = self._frame_header()
+            payload = self._read_exact(length)
+            require(stream == stream_id or ftype in (4, 6, 8), "cri frame on wrong stream")
+            if ftype == 0:  # DATA
+                data += payload
+            elif ftype == 3:  # RST_STREAM
+                require(False, "cri stream reset")
+            elif ftype == 7:  # GOAWAY
+                require(False, "cri connection closed by server")
+            elif ftype == 1:  # HEADERS (trailers)
+                require(flags & 0x04, "cri trailer flags expected END_HEADERS")
+                # Parse minimal trailers: grpc-status, grpc-message (literals only)
+                text = payload
+                index = 0
+                while index < len(text):
+                    prefix = text[index]
+                    require(prefix & 0xE0 == 0x00, "cri trailer encoding unsupported")
+                    index += 1
+                    name_len, index = hpack_int(text, index, 7)
+                    name = text[index : index + name_len].decode()
+                    index += name_len
+                    require(text[index] & 0x80 == 0, "cri trailer value huffman unsupported")
+                    value_len, index = hpack_int(text, index, 7)
+                    value = text[index : index + value_len].decode()
+                    index += value_len
+                    if name == "grpc-status":
+                        grpc_status = int(value)
+                    elif name == "grpc-message":
+                        grpc_message = value
+                if flags & 0x01:  # END_STREAM
+                    break
+            elif ftype == 4:  # SETTINGS from server mid-stream: tolerate
+                continue
+            elif ftype in (6, 8):  # PING / WINDOW_UPDATE
+                continue
+            else:
+                require(False, "unexpected cri frame type")
+        require(grpc_status == 0, "cri rpc failed: " + (grpc_message or "unknown"))
+        require(len(data) >= 5, "cri rpc empty response")
+        compressed = data[0]
+        body_length = int.from_bytes(data[1:5], "big")
+        require(compressed == 0 and body_length + 5 == len(data), "cri rpc framing invalid")
+        require(body_length <= LIMIT, "cri rpc response too large")
+        return data[5:]
+
+
+class Cri:
+    """Read-only RuntimeService surface matching the crictl JSON contract."""
+
+    def __init__(self, endpoint=None, deadline=None):
+        self.endpoint = endpoint or detect()
+        self.deadline = deadline or time.monotonic() + 10
+        self.wire = load("cri_wire")
+        self.connection = None
+
+    def _connect(self):
+        if self.connection is None:
+            self.connection = Connection(socket_path(self.endpoint), self.deadline)
+        return self.connection
+
+    def call(self, method, request):
+        require(method in self.wire.RESPONSES, "unsupported CRI rpc")
+        payload = self._connect().call(method, request.serialize())
+        return self.wire.RESPONSES[method]().parse(payload)
+
+    # Read-only JSON-shaped queries matching the crictl output contract.
+    # The wire codec already emits exactly those dict shapes.
+
+    def pods(self):
+        return self.call("ListPodSandbox", self.wire.ListPodSandboxRequest()).items
+
+    def inspectp(self, sandbox_id):
+        reply = self.call(
+            "PodSandboxStatus", self.wire.PodSandboxStatusRequest(pod_sandbox_id=sandbox_id)
+        )
+        return {"status": reply.status, "info": reply.info}
+
+    def containers(self):
+        return self.call("ListContainers", self.wire.ListContainersRequest()).containers
+
+    def inspect(self, container_id):
+        reply = self.call(
+            "ContainerStatus", self.wire.ContainerStatusRequest(container_id=container_id)
+        )
+        return {"status": reply.status, "info": reply.info}
+
+
+def probe(endpoint=None, timeout=4):
+    """Answer-check: Version rpc must succeed within the timeout."""
+    client = Cri(endpoint, time.monotonic() + timeout)
+    reply = client.call("Version", client.wire.VersionRequest(version="0.1.0"))
+    require(reply.runtime_name in ("containerd", "cri-o"), "unexpected cri runtime")
+    return client.endpoint
+
+
 def main():
     require(os.geteuid() == 0, "node-root CRI detection required")
-    require(len(sys.argv) == 2, "one protected crictl path required")
-    print(detect(sys.argv[1]))
+    require(len(sys.argv) == 1, "no arguments required")
+    print(probe(timeout=4))
 
 
 if __name__ == "__main__":

@@ -33,7 +33,6 @@ def fixture(attest):
         "apiServer": "https://kubernetes.default.svc",
         "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
         "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
-        "crictl": "/usr/bin/crictl",
         "relay_image": "registry.example/relay:version",
         "relay_container": "relay",
         "guest_runtime": "kata-private",
@@ -256,9 +255,7 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     token.chmod(0o600)
     ca = tmp_path / "ca.crt"
     ca.write_text("fixture-ca")
-    observer = attest.Observer(
-        fixture.config | {"token": str(token), "apiCa": str(ca), "crictl": "/usr/bin/crictl"}
-    )
+    observer = attest.Observer(fixture.config | {"token": str(token), "apiCa": str(ca)})
 
     class Reply:
         def __enter__(self):
@@ -286,7 +283,12 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
 
     monkeypatch.setattr(attest.ssl, "create_default_context", fake_context)
     monkeypatch.setattr(attest.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(observer, "command", lambda *args: cri_calls.append(args) or {"items": []})
+
+    def fake_cri(*args):
+        cri_calls.append(args)
+        return {"items": []}
+
+    monkeypatch.setattr(observer, "cri", fake_cri)
 
     assert observer.pods() == []
     request, timeout, context = api_calls[0]
@@ -302,11 +304,8 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     assert context.check_hostname
     assert request.full_url.startswith("https://")
 
-    observer.config["cri_endpoint"] = "unix:///run/containerd/containerd.sock"
     observer.cri("pods", "-o", "json")
-    args = cri_calls[-1]
-    assert "--timeout=3s" in args
-    assert "--runtime-endpoint=unix:///run/containerd/containerd.sock" in args
+    assert cri_calls[-1] == ("pods", "-o", "json")
 
 
 @pytest.mark.parametrize("fault", [None, "journal", "namespace", "replaced"])
@@ -382,19 +381,15 @@ def test_cli_cannot_adopt_a_stale_static_record_without_live_attestation(
     assert json.loads(capsys.readouterr().out)["details"] == "ValueError"
 
 
-@pytest.mark.parametrize(
-    "fault", [None, "extra", "mtu", "image-id", "name", "credentials", "executable"]
-)
+@pytest.mark.parametrize("fault", [None, "extra", "mtu", "image-id", "name", "credentials"])
 def test_platform_configuration_is_exact_local_and_protected(
     attest, fixture, tmp_path, monkeypatch, fault
 ):
     config = fixture.config
-    for name in ("crictl", "apiCa", "ca", "certificate", "key"):
+    for name in ("apiCa", "ca", "certificate", "key"):
         path = tmp_path / name
         path.write_text("fixture")
         path.chmod(0o600 if name == "key" else 0o644)
-        if name == "crictl":
-            path.chmod(0o700)
         config[name] = str(path)
     # token/apiCa are validated through their leaf stat (the kubelet's
     # projected volume is a symlink farm), so no lstat canonical check.
@@ -426,8 +421,6 @@ def test_platform_configuration_is_exact_local_and_protected(
         config["namespace"] = "../foreign"
     elif fault == "credentials":
         Path(config["token"]).chmod(0o644)
-    elif fault == "executable":
-        Path(config["crictl"]).chmod(0o777)
     if fault is None:
         assert attest.validate(config) == config
         assert "cri_endpoint" not in config

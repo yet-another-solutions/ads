@@ -9,6 +9,7 @@ COPY services/ads-ptp-tools/ads-ptp /usr/local/bin/ads-ptp
 COPY services/ads-ptp-tools/ads-ptp-relay /usr/local/bin/ads-ptp-relay
 COPY services/ads-ptp-tools/ads-ptp-attest /usr/local/bin/ads-ptp-attest
 COPY services/ads-ptp-tools/ads-cri /usr/local/bin/ads-cri
+COPY services/ads-ptp-tools/cri_api_pb2.py /usr/local/bin/cri_api_pb2.py
 COPY services/ads-ptp-tools/ads-ptp-retire /usr/local/bin/ads-ptp-retire
 COPY services/ads-ptp-tools/ads-ptp-release /usr/local/bin/ads-ptp-release
 COPY services/ads-ptp-tools/ads-ptp-partial /usr/local/bin/ads-ptp-partial
