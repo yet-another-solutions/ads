@@ -180,6 +180,27 @@ class ChartTests(unittest.TestCase):
                 self.assertEqual(mounts, [])
         self.assertNotIn(("Secret", "dedicated-node-client"), docs)
 
+    def test_node_roles_materialize_real_tls_files_and_repoint_config(self):
+        docs = self.documents("--set", "sandbox.manager.nodeOwner.network=private")
+        for role in ["ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"]:
+            pod = docs["DaemonSet", role]["spec"]["template"]["spec"]
+            init = next(c for c in pod["initContainers"] if c["name"] == "materialize-config")
+            mounts = {m["name"]: m["mountPath"] for m in init["volumeMounts"]}
+            self.assertEqual(mounts["tls"], "/tls-src")
+            script = init["args"][-1]
+            self.assertIn("install -d -o root -g root -m 0700 /host-etc/tls", script)
+            self.assertIn(
+                "install -o root -g root -m 0600 /tls-src/tls.key /host-etc/tls/tls.key",
+                script,
+            )
+            for key in ("config.json", "attestor.json"):
+                config = json.loads(docs["ConfigMap", role]["data"].get(key, "{}"))
+                if not config:
+                    continue
+                self.assertEqual(config["ca"], "/host-etc/tls/ca.crt")
+                self.assertEqual(config["certificate"], "/host-etc/tls/tls.crt")
+                self.assertEqual(config["key"], "/host-etc/tls/tls.key")
+
     def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
         from ads_sandbox_manager.config import load_settings
 
