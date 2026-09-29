@@ -82,6 +82,12 @@ spec:
               if [ -f /config/attestor.json ]; then
                 install -o root -g root -m 0600 /config/attestor.json /host-etc/attestor.json
               fi
+              if [ -d /tls-src ]; then
+                install -d -o root -g root -m 0700 /host-etc/tls
+                install -o root -g root -m 0600 /tls-src/ca.crt /host-etc/tls/ca.crt
+                install -o root -g root -m 0600 /tls-src/tls.crt /host-etc/tls/tls.crt
+                install -o root -g root -m 0600 /tls-src/tls.key /host-etc/tls/tls.key
+              fi
               node="${NODE_NAME}"
               python3 - "$node" << 'PY'
               import json, pathlib, sys
@@ -106,6 +112,9 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+              readOnly: true
+            - name: tls
+              mountPath: /tls-src
               readOnly: true
             - name: host-etc
               mountPath: /host-etc
@@ -291,9 +300,9 @@ data:
       "cniCN": "ads-ptp-cni",
       "nodeOwnerSocket": {{ $ownerSocket | quote }},
       "nodeOwnerCN": "ads-node-owner",
-      "ca": "/tls/ca.crt",
-      "certificate": "/tls/tls.crt",
-      "key": "/tls/tls.key"
+      "ca": "/host-etc/tls/ca.crt",
+      "certificate": "/host-etc/tls/tls.crt",
+      "key": "/host-etc/tls/tls.key"
     }
   attestor.json: |
     {
@@ -312,9 +321,9 @@ data:
       "cniCN": "ads-ptp-cni",
       "nodeOwnerSocket": {{ $ownerSocket | quote }},
       "nodeOwnerCN": "ads-node-owner",
-      "ca": "/tls/ca.crt",
-      "certificate": "/tls/tls.crt",
-      "key": "/tls/tls.key"
+      "ca": "/host-etc/tls/ca.crt",
+      "certificate": "/host-etc/tls/tls.crt",
+      "key": "/host-etc/tls/tls.key"
     }
     {{- else if eq $role.name "ads-node-owner" }}
     {
@@ -323,9 +332,9 @@ data:
       "network": {{ $sb.manager.nodeOwner.network | quote }},
       "bind": "0.0.0.0",
       "port": 9443,
-      "ca": "/tls/ca.crt",
-      "certificate": "/tls/tls.crt",
-      "key": "/tls/tls.key",
+      "ca": "/host-etc/tls/ca.crt",
+      "certificate": "/host-etc/tls/tls.crt",
+      "key": "/host-etc/tls/tls.key",
       "manager_cn": "ads-sandbox-manager",
       "attestor_cn": "ads-ptp-attestor",
       "socket": {{ $ownerSocket | quote }},
@@ -339,9 +348,9 @@ data:
       "type": "ads-ptp",
       "attestorSocket": {{ $attestorSocket | quote }},
       "attestorCN": "ads-ptp-attestor",
-      "ca": "/tls/ca.crt",
-      "certificate": "/tls/tls.crt",
-      "key": "/tls/tls.key",
+      "ca": "/host-etc/tls/ca.crt",
+      "certificate": "/host-etc/tls/tls.crt",
+      "key": "/host-etc/tls/tls.key",
       "stateDir": "/var/lib/ads-ptp",
       "bindingDir": "/var/lib/ads-ptp/bindings",
       "ownerSocket": {{ $ownerSocket | quote }}
