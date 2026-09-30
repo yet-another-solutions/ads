@@ -191,13 +191,13 @@ class RuntimeObserver:
     def pods(self):
         return [self.f.vm, self.f.relay]
 
-    def cri(self, *args):
-        if args[0] == "pods":
-            return {"items": [self.f.sandbox]}
-        if args[0] == "inspectp":
-            return {"status": self.f.sandbox, "info": {"pid": 101}}
-        assert args[0] == "inspect"
-        return self.f.container
+    def cri(self):
+        f = self.f
+        return SimpleNamespace(
+            pods=lambda: [f.sandbox],
+            inspectp=lambda sandbox_id: {"status": f.sandbox, "info": {"pid": 101}},
+            inspect=lambda container_id: f.container,
+        )
 
 
 @pytest.mark.parametrize("fault", [None, "uid", "namespace", "image", "sandbox", "state", "pid"])
@@ -255,7 +255,7 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     token.chmod(0o600)
     ca = tmp_path / "ca.crt"
     ca.write_text("fixture-ca")
-    observer = attest.Observer(fixture.config | {"token": str(token), "apiCa": str(ca)})
+    observer = attest.CriObserver(fixture.config | {"token": str(token), "apiCa": str(ca)})
 
     class Reply:
         def __enter__(self):
@@ -284,9 +284,9 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     monkeypatch.setattr(attest.ssl, "create_default_context", fake_context)
     monkeypatch.setattr(attest.urllib.request, "urlopen", fake_urlopen)
 
-    def fake_cri(*args):
-        cri_calls.append(args)
-        return {"items": []}
+    def fake_cri():
+        cri_calls.append(True)
+        return SimpleNamespace(pods=lambda: [])
 
     monkeypatch.setattr(observer, "cri", fake_cri)
 
@@ -304,8 +304,8 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     assert context.check_hostname
     assert request.full_url.startswith("https://")
 
-    observer.cri("pods")
-    assert cri_calls[-1] == ("pods",)
+    observer.cri()
+    assert cri_calls == [True]
 
 
 @pytest.mark.parametrize("fault", [None, "journal", "namespace", "replaced"])

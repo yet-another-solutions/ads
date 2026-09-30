@@ -52,7 +52,7 @@ def wanted(captured):
     }
 
 
-class Observer:
+class CriObserver:
     def __init__(self, captured):
         self.deadline = time.monotonic() + 60
         self.config = {
@@ -75,17 +75,16 @@ class Observer:
         self.reads += 1
         return deepcopy(self.api)
 
-    def cri(self, command, *args):
-        return (
-            {"items": deepcopy(self.sandboxes)}
-            if command == "pods"
-            else {"containers": deepcopy(self.containers)}
+    def cri(self):
+        sandboxes, containers = self.sandboxes, self.containers
+        return SimpleNamespace(
+            pods=lambda: deepcopy(sandboxes), containers=lambda: deepcopy(containers)
         )
 
 
 @pytest.fixture
 def observer(captured):
-    return Observer(captured)
+    return CriObserver(captured)
 
 
 @pytest.mark.parametrize(
@@ -304,11 +303,11 @@ def live(ipc, captured, observer, tmp_path):
         "info": {"pid": 22, "sandboxID": captured["runtime_id"]},
     }
 
-    def cri(command, *args):
-        return deepcopy(
-            {"pods": {"items": [sandbox["status"]]}, "inspectp": sandbox, "inspect": container}[
-                command
-            ]
+    def cri():
+        return SimpleNamespace(
+            pods=lambda: [sandbox["status"]],
+            inspectp=lambda sandbox_id: sandbox,
+            inspect=lambda container_id: container,
         )
 
     observer.cri = cri
@@ -437,7 +436,7 @@ def operation(ipc, captured, observer, tmp_path, monkeypatch):
         "inventory_sha256": None,
         **{k: captured[k] for k in ("generation", "sandbox_id", "pod_uid", "volume_uid")},
     }
-    attestor = SimpleNamespace(Observer=lambda settings: observer)
+    attestor = SimpleNamespace(CriObserver=lambda settings: observer)
     modules = {"ads-ptp": plugin, "ads-ptp-attest": attestor, "ads-ptp-release": release}
     monkeypatch.setattr(ipc, "load", lambda name: modules[name])
     monkeypatch.setattr(ipc, "config", lambda value: value)

@@ -210,7 +210,7 @@ def capture(plugin, attestor, observer, root, scope, *, startup=False):
             startup_namespace(plugin, saved)
         else:
             plugin.check(req, binding, saved, saved["result"])
-        sandbox = observer.cri("inspectp", req["container_id"])["status"]
+        sandbox = observer.cri().inspectp(req["container_id"])["status"]
         require(
             sandbox["id"] == req["container_id"]
             and sandbox["state"]
@@ -245,7 +245,7 @@ def capture(plugin, attestor, observer, root, scope, *, startup=False):
                 attestor.observe_binding(observer, plugin, req) == saved["binding"],
                 "live attachment changed during startup capture",
             )
-            current = observer.cri("inspectp", req["container_id"])["status"]
+            current = observer.cri().inspectp(req["container_id"])["status"]
             require(
                 current["id"] == req["container_id"]
                 and current["state"] in ("SANDBOX_READY", "SANDBOX_NOTREADY")
@@ -345,13 +345,13 @@ def observe_counts(plugin, observer, root, snapshot):
             == snapshot["generation"]
             for pod in pods
         )
-        sandboxes = observer.cri("pods")["items"]
+        sandboxes = observer.cri().pods()
         leftovers["ready_sandboxes"] = sum(
             (item["id"] in runtimes or item["metadata"]["uid"] in uids)
             and item["state"] != "SANDBOX_NOTREADY"
             for item in sandboxes
         )
-        containers = observer.cri("ps")["containers"]
+        containers = observer.cri().containers()
         leftovers["live_containers"] = sum(
             (
                 item["podSandboxId"] in runtimes
@@ -401,7 +401,7 @@ def perform(request):
         require(str(UUID(request[key])) == request[key], "canonical pair identity required")
     plugin, attestor = load("ads-ptp"), load("ads-ptp-attest")
     config = attestor.validate(plugin.read_record(Path(request["attestorConfig"])))
-    observer = attestor.Observer(config)
+    observer = attestor.CriObserver(config)
     observer.deadline = time.monotonic() + 60
     root = plugin.private_directory(request["stateDir"])
     scope = {key: config[key] for key in ("node", "namespace", "network")}
