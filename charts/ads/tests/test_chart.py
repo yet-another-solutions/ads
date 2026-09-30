@@ -1245,13 +1245,36 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/var/lib/ads-ptp", config)
                 owner_mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
                 self.assertIn("/etc/ads-ptp-attestor", owner_mounts)
+                self.assertIn("/var/lib/ads-ptp", owner_mounts)
+                self.assertIn("/var/lib/kubelet", owner_mounts)
+                owner_volumes = {item["name"]: item for item in pod["volumes"]}
+                self.assertEqual(
+                    owner_volumes["kubelet-root"]["hostPath"]["path"], "/var/lib/kubelet"
+                )
+                self.assertEqual(
+                    next(
+                        item
+                        for item in pod["containers"][0]["volumeMounts"]
+                        if item["mountPath"] == "/var/lib/kubelet"
+                    )["mountPropagation"],
+                    "HostToContainer",
+                )
+                self.assertEqual(
+                    next(
+                        item
+                        for item in pod["containers"][0]["volumeMounts"]
+                        if item["mountPath"] == "/var/lib/ads-ptp"
+                    )["name"],
+                    "cni-state",
+                )
                 init_mounts = {item["mountPath"] for item in init["volumeMounts"]}
                 self.assertNotIn("/etc/ads-ptp-attestor", init_mounts)
             else:
                 self.assertIn("/var/run/attestor-v0.0.1.sock", config)
             if name == "ads-ptp-attestor":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
-                self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-attest"])
+                attest_args = pod["containers"][0]["args"][0]
+                self.assertIn("ads-ptp-attest /host-etc/config.json", attest_args)
                 self.assertNotIn("crictl", config)
             if name == "ads-ptp-cni":
                 mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
@@ -1260,7 +1283,9 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/opt/cni/bin", mounts)
                 self.assertNotIn("/host/usr/local/bin", mounts)
                 self.assertNotIn("crictl", config)
-                self.assertEqual(pod["containers"][0]["command"], ["/usr/local/bin/ads-ptp-cni"])
+                self.assertEqual(pod["containers"][0]["command"], ["/bin/sh", "-c"])
+                self.assertIn("ads-ptp-cni /host-etc/config.json", pod["containers"][0]["args"][0])
+                self.assertIn("exec sleep infinity", pod["containers"][0]["args"][0])
                 self.assertIn("ownerSocket", config)
         host_paths = set()
         for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):

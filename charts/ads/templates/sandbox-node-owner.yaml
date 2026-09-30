@@ -126,8 +126,13 @@ spec:
         - name: {{ $role.name }}
           image: {{ $tools | quote }}
           imagePullPolicy: {{ $sb.nodeOwner.image.pullPolicy }}
-          command: ["/usr/local/bin/{{ ternary "ads-ptp-attest" $role.name (eq $role.name "ads-ptp-attestor") }}"]
-          args: ["/host-etc/config.json"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              {{ ternary "ads-ptp-attest" $role.name (eq $role.name "ads-ptp-attestor") }} /host-etc/config.json
+              {{- if eq $role.name "ads-ptp-cni" }}
+              && exec sleep infinity
+              {{- end }}
           securityContext:
             privileged: true
             runAsUser: 0
@@ -183,6 +188,12 @@ spec:
             - name: attestor-etc
               mountPath: /etc/ads-ptp-attestor
               readOnly: true
+            - name: cni-state
+              mountPath: /var/lib/ads-ptp
+            - name: kubelet-root
+              mountPath: /var/lib/kubelet
+              readOnly: true
+              mountPropagation: HostToContainer
             {{- end }}
       volumes:
         - name: config
@@ -261,6 +272,10 @@ spec:
         - name: proc
           hostPath:
             path: /proc
+            type: Directory
+        - name: kubelet-root
+          hostPath:
+            path: /var/lib/kubelet
             type: Directory
         - name: attestor-etc
           hostPath:
