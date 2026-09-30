@@ -210,7 +210,7 @@ def capture(plugin, attestor, observer, root, scope, *, startup=False):
             startup_namespace(plugin, saved)
         else:
             plugin.check(req, binding, saved, saved["result"])
-        sandbox = observer.cri("inspectp", "-o", "json", req["container_id"])["status"]
+        sandbox = observer.cri("inspectp", req["container_id"])["status"]
         require(
             sandbox["id"] == req["container_id"]
             and sandbox["state"]
@@ -245,7 +245,7 @@ def capture(plugin, attestor, observer, root, scope, *, startup=False):
                 attestor.observe_binding(observer, plugin, req) == saved["binding"],
                 "live attachment changed during startup capture",
             )
-            current = observer.cri("inspectp", "-o", "json", req["container_id"])["status"]
+            current = observer.cri("inspectp", req["container_id"])["status"]
             require(
                 current["id"] == req["container_id"]
                 and current["state"] in ("SANDBOX_READY", "SANDBOX_NOTREADY")
@@ -345,13 +345,13 @@ def observe_counts(plugin, observer, root, snapshot):
             == snapshot["generation"]
             for pod in pods
         )
-        sandboxes = observer.cri("pods", "-o", "json")["items"]
+        sandboxes = observer.cri("pods")["items"]
         leftovers["ready_sandboxes"] = sum(
             (item["id"] in runtimes or item["metadata"]["uid"] in uids)
             and item["state"] != "SANDBOX_NOTREADY"
             for item in sandboxes
         )
-        containers = observer.cri("ps", "-a", "-o", "json")["containers"]
+        containers = observer.cri("ps")["containers"]
         leftovers["live_containers"] = sum(
             (
                 item["podSandboxId"] in runtimes

@@ -504,7 +504,8 @@ def test_capture_uses_real_adapter_boundaries_and_exact_both_journals(
     observer = Observer()
     observer.links = snapshot["links"] if fault != "host-peer" else []
 
-    def cri(command, option, fmt, runtime):
+    def cri(command, *args):
+        runtime = args[-1]
         index = snapshot["runtime_ids"].index(runtime)
         return {
             "status": {

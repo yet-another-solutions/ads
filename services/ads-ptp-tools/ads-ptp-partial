@@ -255,7 +255,7 @@ def vm_inventory(plugin, attestor, observer, scope, pod, records):
     runtimes = {r["request"]["container_id"] for r in history}
     current = [
         item
-        for item in observer.cri("pods", "-o", "json")["items"]
+        for item in observer.cri("pods")["items"]
         if item["metadata"].get("uid") == uid
     ]
     require(history or current, "original VM attempt history unavailable")
@@ -268,7 +268,7 @@ def vm_inventory(plugin, attestor, observer, scope, pod, records):
             and item["metadata"].get("namespace") == scope["namespace"],
             "VM runtime lacks original attempt history",
         )
-        inspected = observer.cri("inspectp", "-o", "json", item["id"])
+        inspected = observer.cri("inspectp", item["id"])
         detail = inspected["status"]
         require(
             detail["id"] == item["id"]
@@ -304,7 +304,7 @@ def vm_inventory(plugin, attestor, observer, scope, pod, records):
                     namespace_identity(identity)
                     require(identity != plugin.ns_identity(host), "VM shares host namespace")
                     require(
-                        observer.cri("inspectp", "-o", "json", item["id"]) == inspected,
+                        observer.cri("inspectp", item["id"]) == inspected,
                         "pre-CNI runtime changed during capture",
                     )
                     check()

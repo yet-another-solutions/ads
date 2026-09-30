@@ -82,8 +82,8 @@ def journaled(release, plugin, inputs, snapshot, monkeypatch):
     observer.links = deepcopy(snapshot["links"])
     observer.inspects = []
 
-    def cri(command, option, fmt, runtime):
-        assert (command, option, fmt) == ("inspectp", "-o", "json")
+    def cri(command, *args):
+        runtime = args[-1]
         observer.inspects.append(runtime)
         index = snapshot["runtime_ids"].index(runtime)
         return {
