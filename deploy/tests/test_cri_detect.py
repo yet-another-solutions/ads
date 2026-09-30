@@ -364,3 +364,67 @@ def test_info_map_json_passthrough(cri):
     ]
     parsed = wire._info_map([entry.body for entry in entries])
     assert parsed["pid"] == 4242 and parsed["note"] == "plain text"
+
+
+def test_repeated_label_entries_merge(cri, runtime):
+    # Protobuf maps arrive as repeated entries; every entry must survive.
+    # containerd sends pod.uid/pod.namespace/container.name as separate
+    # field-12 records, and a single-entry-overwrite decode loses the pod
+    # identity labels the attestor requires.
+    wire = runtime.wire
+    runtime.reply["Version"] = _version(wire, version="0.1.0", runtime_name="containerd", api="v1")
+
+    def label(number, key, value):
+        return wire.pb_message(number, wire.pb_string(1, key) + wire.pb_string(2, value))
+
+    body = (
+        wire.pb_string(1, "d" * 64)
+        + wire.pb_message(2, wire.pb_string(1, "relay"))
+        + wire.pb_int(3, 1)
+        + wire.pb_string(9, "ghcr.io/example/relay:v1")
+        + label(12, "io.kubernetes.container.name", "relay")
+        + label(12, "io.kubernetes.pod.namespace", "ads-sandbox")
+        + label(12, "io.kubernetes.pod.uid", "u1")
+        + label(13, "io.kubernetes.container.hash", "bf209fda")
+        + label(13, "io.kubernetes.container.ports", "[]")
+    )
+    runtime.reply["ContainerStatus"] = _Raw(wire.pb_message(1, body))
+    client = _client(cri, "unix:///tmp/ads-test-cri.sock")
+    detail = client.inspect("d" * 64)
+    assert detail["status"]["labels"]["io.kubernetes.container.name"] == "relay"
+    assert detail["status"]["labels"]["io.kubernetes.pod.namespace"] == "ads-sandbox"
+    assert detail["status"]["labels"]["io.kubernetes.pod.uid"] == "u1"
+    assert detail["status"]["annotations"]["io.kubernetes.container.hash"] == "bf209fda"
+    assert detail["status"]["annotations"]["io.kubernetes.container.ports"] == "[]"
+
+
+def test_containerd_verbose_info_nesting(cri, runtime):
+    # containerd verbose responses wrap every info field under one "info"
+    # key; the decoded shape must match the crictl contract where pid and
+    # sandboxID are top-level info entries.
+    import json as _json
+
+    wire = runtime.wire
+    runtime.reply["Version"] = _version(wire, version="0.1.0", runtime_name="containerd", api="v1")
+    nested = _json.dumps({"pid": 5151, "sandboxID": "c" * 64, "image": "x"})
+    body = (
+        wire.pb_string(1, "d" * 64)
+        + wire.pb_message(2, wire.pb_string(1, "relay"))
+        + wire.pb_int(3, 1)
+    )
+    runtime.reply["ContainerStatus"] = _Raw(
+        wire.pb_message(1, body)
+        + wire.pb_message(2, wire.pb_string(1, "info") + wire.pb_string(2, nested))
+    )
+    status_msg = _sandbox_status(wire, "c" * 64, "u1", "ipc", "sandboxes").body
+    runtime.reply["PodSandboxStatus"] = _Raw(
+        wire.pb_message(1, status_msg)
+        + wire.pb_message(2, wire.pb_string(1, "info") + wire.pb_string(2, nested))
+    )
+    client = _client(cri, "unix:///tmp/ads-test-cri.sock")
+    detail = client.inspect("d" * 64)
+    assert detail["info"]["pid"] == 5151 and type(detail["info"]["pid"]) is int
+    assert detail["info"]["sandboxID"] == "c" * 64
+    sandbox = client.inspectp("c" * 64)
+    assert sandbox["info"]["pid"] == 5151
+    assert sandbox["info"]["sandboxID"] == "c" * 64
