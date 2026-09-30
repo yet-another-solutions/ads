@@ -66,46 +66,31 @@ shutdown never erases protected evidence.
 
 ## Installation from CI-built tooling
 
-Run the service as an actual host systemd service, not in a private PID or mount
-namespace. Extract the scripts from the reviewed immutable CI-built
-`ads-ptp-tools` image. Do not build an image on a lab host. Install the
-`ads-ptp`, `ads-ptp-attest`, `ads-ptp-retire`, `ads-ptp-release`,
-`ads-ptp-partial`, `ads-ipc-release`, `ads-ipc-storage`, `ads-block-release` and
-`ads-node-owner` scripts together in `/usr/local/bin`,
-root-owned mode 0755, including protected parent directories.
+Run the privileged observer with host visibility: the chart DaemonSet runs the
+`ads-node-owner` container with host PID visibility (`hostPID: true`) and the
+node's real observer configuration, not a private PID or mount namespace.
 
-Use `deploy/node-owner/ads-node-owner.service`. The host must already have the
-supported CRI, kubectl, crictl and existing protected observer configurations.
-The sample `deploy/node-owner/rbac.yaml` grants only namespaced Pod observation
-and PVC reads plus cluster-scoped get-only PV access to a dedicated kubeconfig
-identity. Substitute the two named
-placeholders explicitly; it is not a cluster-admin bootstrap. The manager gets
-no node/PV mutation or pods/exec permission from this channel.
+Extract the scripts from the reviewed immutable CI-built `ads-ptp-tools`
+image. Do not build an image on a lab host. Install the `ads-ptp`,
+`ads-ptp-attest`, `ads-ptp-retire`, `ads-ptp-release`, `ads-ptp-partial`,
+`ads-ipc-release`, `ads-ipc-storage` and
+`ads-block-release` scripts together in `/usr/local/bin`,
+root-owned mode 0755, including protected parent directories. `ads-node-owner`
+ships in the same image but runs only as the chart-rendered `ads-node-owner`
+DaemonSet (`charts/ads/templates/sandbox-node-owner.yaml`); it is never a host
+service.
 
-Create `/etc/ads-node-owner/config.json` root-owned mode 0600 with exactly:
+The host must already have the supported CRI and existing protected observer
+definitions. The chart renders the node-owner RBAC inline (mirroring the
+sample `deploy/node-owner/rbac.yaml`): only namespaced Pod observation and PVC
+reads plus cluster-scoped get-only PV access to a dedicated service account.
+No cluster-admin bootstrap. The manager gets no node/PV mutation or pods/exec
+permission from this channel.
 
-```json
-{
-  "node": "original-node-name",
-  "namespace": "sandbox-namespace",
-  "network": "configured-cni-network",
-  "bind": "observed-private-listener-address",
-  "port": 9443,
-  "ca": "/etc/ads-node-owner/manager-ca.pem",
-  "certificate": "/etc/ads-node-owner/node.pem",
-  "key": "/etc/ads-node-owner/node.key",
-  "manager_fingerprints": ["64-lowercase-hex-characters"],
-  "pair": {
-    "attestorConfig": "/etc/ads-ptp/attestor.json",
-    "stateDir": "/var/lib/ads-ptp",
-    "kubeletRoot": "/var/lib/kubelet"
-  },
-  "ipc": null
-}
-```
-
-The displayed names/address/fingerprint are placeholders, not deployment values.
-An IPC-only node uses `pair: null` and sets `ipc` to its protected IPC observer
+The DaemonSet mounts its own node-owner configuration; do not create
+`/etc/ads-node-owner/config.json` on the host. Pair-role nodes configure the
+protected pair observer paths (attestor config, `stateDir`, `kubeletRoot`) via
+chart values, and IPC-only nodes set `ipc` to their protected IPC observer
 configuration path. A node fulfilling both roles may configure both. Node,
 namespace and network must agree with the underlying observer configuration.
 Private keys, kubeconfigs and state directories remain outside ordinary
