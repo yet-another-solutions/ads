@@ -304,7 +304,7 @@ def select_pair(pods, uid, config):
 
 def runtime_identity(observer, relay, container_id):
     config, meta = observer.config, relay["metadata"]
-    items = observer.cri("pods", "-o", "json")["items"]
+    items = observer.cri("pods")["items"]
     matches = [
         item
         for item in items
@@ -315,7 +315,7 @@ def runtime_identity(observer, relay, container_id):
     require(len(matches) == 1, "exact ready CRI sandbox required")
     sandbox = matches[0]
     require(re.fullmatch(r"[0-9a-f]{64}", sandbox["id"]), "invalid runtime sandbox ID")
-    detail = observer.cri("inspectp", "-o", "json", sandbox["id"])
+    detail = observer.cri("inspectp", sandbox["id"])
     status = detail["status"]
     require(
         status["id"] == sandbox["id"]
@@ -325,7 +325,7 @@ def runtime_identity(observer, relay, container_id):
         and status["metadata"]["name"] == meta["name"],
         "runtime sandbox replaced",
     )
-    container = observer.cri("inspect", "-o", "json", container_id)
+    container = observer.cri("inspect", container_id)
     status = container["status"]
     require(
         status["id"] == container_id

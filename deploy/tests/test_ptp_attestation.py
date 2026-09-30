@@ -304,8 +304,8 @@ def test_api_observer_forces_tls_node_namespace_and_bounded_requests(
     assert context.check_hostname
     assert request.full_url.startswith("https://")
 
-    observer.cri("pods", "-o", "json")
-    assert cri_calls[-1] == ("pods", "-o", "json")
+    observer.cri("pods")
+    assert cri_calls[-1] == ("pods",)
 
 
 @pytest.mark.parametrize("fault", [None, "journal", "namespace", "replaced"])

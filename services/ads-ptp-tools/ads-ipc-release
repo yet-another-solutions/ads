@@ -192,7 +192,7 @@ def exact_pod(observer, wanted):
 
 
 def runtime(observer, wanted, pod, container_id):
-    sandboxes = observer.cri("pods", "-o", "json")["items"]
+    sandboxes = observer.cri("pods")["items"]
     current = [
         s
         for s in sandboxes
@@ -201,8 +201,8 @@ def runtime(observer, wanted, pod, container_id):
     require(len(current) == 1, "one ready original IPC runtime required")
     sandbox_id = current[0]["id"]
     require(re.fullmatch(r"[0-9a-f]{64}", sandbox_id), "invalid runtime identity")
-    sandbox = observer.cri("inspectp", "-o", "json", sandbox_id)
-    container = observer.cri("inspect", "-o", "json", container_id)
+    sandbox = observer.cri("inspectp", sandbox_id)
+    container = observer.cri("inspect", container_id)
     status, detail = container["status"], sandbox["status"]
     require(
         detail["id"] == sandbox_id
@@ -477,8 +477,8 @@ def observe(observer, snapshot, release):
 
     def api_runtime():
         pods = observer.pods()
-        sandboxes = observer.cri("pods", "-o", "json")["items"]
-        containers = observer.cri("ps", "-a", "-o", "json")["containers"]
+        sandboxes = observer.cri("pods")["items"]
+        containers = observer.cri("ps")["containers"]
         return {
             "pods": sum(
                 p["metadata"]["uid"] == snapshot["pod_uid"]
