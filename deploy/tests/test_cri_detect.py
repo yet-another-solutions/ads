@@ -188,7 +188,7 @@ class FakeRuntime:
                 response = self.reply.get(method) or self.reply.get("Version") or _Raw(b"")
                 raw = response.serialize()
                 grpc = b"\x00" + struct.pack(">I", len(raw)) + raw
-                conn.sendall(self._frame(1, 0x04, sid, b"\x00\x0ccontent-type\x11application/grpc"))
+                conn.sendall(self._frame(1, 0x04, sid, b"\x00\x0ccontent-type\x10application/grpc"))
                 conn.sendall(self._frame(0, 0x01, sid, grpc))
                 conn.sendall(self._frame(1, 0x05, sid, b"\x00\x0bgrpc-status\x01\x30"))
 

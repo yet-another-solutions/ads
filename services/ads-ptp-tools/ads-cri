@@ -3,7 +3,10 @@
 
 Speaks just enough HTTP/2 + gRPC to call RuntimeService methods with
 protobuf messages encoded by the cri_wire codec. No subprocess, no crictl,
-no grpcio: the caller only needs this file plus the cri_wire module.
+no grpcio: the caller only needs this file plus the cri_wire module. The
+response-side HPACK decoder is the pinned pure-Python ``hpack`` library
+(vendored into the ads-ptp-tools image), because real gRPC servers use
+indexed fields and huffman-coded strings the hand-rolled parser rejected.
 Reads are bounded; responses fail closed on truncation.
 """
 
@@ -18,6 +21,8 @@ import struct
 import sys
 import time
 from pathlib import Path
+
+import hpack
 
 LIMIT = 4194304
 SOCKETS = (
@@ -99,29 +104,13 @@ def pb_message(number, payload):
     return field(number, 2, varint(len(payload)) + payload)
 
 
-def hpack_int(data, index, prefix_bits):
-    """HPACK integer with prefix_bits starting at data[index]. Returns (value, next index)."""
-    mask = (1 << prefix_bits) - 1
-    value = data[index] & mask
-    if value < mask:
-        return value, index + 1
-    shift = 0
-    while True:
-        index += 1
-        byte = data[index]
-        value += (byte & 0x7F) << shift
-        shift += 7
-        if not byte & 0x80:
-            return value, index + 1
-
-
 def frame(ftype, flags, stream_id, payload):
     """One HTTP/2 frame: 3-byte length, type, flags, 4-byte stream id."""
     require(len(payload) <= 0xFFFFFF, "http2 frame payload too large")
     return len(payload).to_bytes(3, "big") + struct.pack(">BBI", ftype, flags, stream_id) + payload
 
 
-def hpack(headers):
+def hpack_headers(headers):
     """Literal header field without indexing, no name indexing (0x00 prefix).
 
     Values are huffman-free for determinism; CRI servers accept it.
@@ -135,6 +124,17 @@ def hpack(headers):
     return bytes(out)
 
 
+def decode_headers(payload, decoder):
+    """Decode one HEADERS block with the connection-scoped hpack decoder.
+
+    gRPC servers emit indexed entries, huffman-coded strings and dynamic-table
+    references; all fail closed here if the library cannot decode them.
+    """
+    decoded = decoder.decode(bytes(payload))
+    require(decoded is not None, "cri header block truncated")
+    return decoded
+
+
 class Connection:
     """One HTTP/2 request at a time over a unix socket, framed manually."""
 
@@ -144,6 +144,7 @@ class Connection:
         self.deadline = deadline
         self.stream_id = 3
         self.buffer = b""
+        self.decoder = hpack.Decoder()
         raw = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         raw.settimeout(max(0.05, deadline - time.monotonic()))
         try:
@@ -193,7 +194,7 @@ class Connection:
         self.raw.settimeout(max(0.05, self.deadline - time.monotonic()))
         stream_id = self.stream_id
         self.stream_id += 2
-        headers = hpack(
+        headers = hpack_headers(
             [
                 (":method", "POST"),
                 (":scheme", SCHEME),
@@ -224,27 +225,22 @@ class Connection:
                 require(False, "cri stream reset")
             elif ftype == 7:  # GOAWAY
                 require(False, "cri connection closed by server")
-            elif ftype == 1:  # HEADERS (trailers)
-                require(flags & 0x04, "cri trailer flags expected END_HEADERS")
-                # Parse minimal trailers: grpc-status, grpc-message (literals only)
-                text = payload
-                index = 0
-                while index < len(text):
-                    prefix = text[index]
-                    require(prefix & 0xE0 == 0x00, "cri trailer encoding unsupported")
-                    index += 1
-                    name_len, index = hpack_int(text, index, 7)
-                    name = text[index : index + name_len].decode()
-                    index += name_len
-                    require(text[index] & 0x80 == 0, "cri trailer value huffman unsupported")
-                    value_len, index = hpack_int(text, index, 7)
-                    value = text[index : index + value_len].decode()
-                    index += value_len
+            elif ftype == 1:  # HEADERS (initial response or trailers)
+                require(flags & 0x04, "cri header flags expected END_HEADERS")
+                if not flags & 0x01 and grpc_status is not None:
+                    require(False, "cri response headers after trailers")
+                decoded = decode_headers(payload, self.decoder)
+                for name, value in decoded:
                     if name == "grpc-status":
+                        require(grpc_status is None, "duplicate cri grpc-status")
+                        require(value.isdigit(), "non-numeric cri grpc-status")
                         grpc_status = int(value)
                     elif name == "grpc-message":
+                        require(grpc_message is None, "duplicate cri grpc-message")
                         grpc_message = value
                 if flags & 0x01:  # END_STREAM
+                    if grpc_status is None:
+                        require(False, "cri trailers missing grpc-status")
                     break
             elif ftype == 4:  # SETTINGS from server mid-stream: tolerate
                 continue
