@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
@@ -39,6 +40,8 @@ from ads_sandbox_manager.relay_input_publication import RelayInputPublication
 from ads_sandbox_manager.relay_key_custody import RelayKeyCustody
 from ads_sandbox_manager.relay_key_kube import RelayKeyAdapter
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class PairTopics(Protocol):
@@ -83,7 +86,12 @@ class PairCreation:
     def _finished(self, task: asyncio.Task[None]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired topic dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def drain(self) -> None:
         for publisher in (

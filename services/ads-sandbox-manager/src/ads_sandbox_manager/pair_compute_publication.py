@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,6 +19,8 @@ from ads_sandbox_manager.pair_compute_inputs import (
 from ads_sandbox_manager.pair_compute_kube import PairComputeAdapter
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class PairComputePublication:
@@ -43,7 +46,16 @@ class PairComputePublication:
     def _finished(self, task: asyncio.Task[str]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()
+            # Retrieve without logging private API/SQL bodies; the durable
+            # inflight writer stays the only settlement authority. A silent
+            # retriever here is what made the 2026-09-30 placement drift
+            # incident invisible: the pod verification failed forever inside
+            # this detached dispatch while the caller saw only a timeout.
+            if task.exception() is not None:
+                log.error(
+                    "paired compute dispatch task failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def _dispatch(self, intent: PairIntent, role: str) -> str:
         self._configuration(intent)

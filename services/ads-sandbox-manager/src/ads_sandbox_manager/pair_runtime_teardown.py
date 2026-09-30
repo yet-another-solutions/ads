@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol
@@ -27,6 +28,8 @@ from ads_sandbox_manager.pair_storage_capture import storage_targets
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_unscheduled_proof import RUNTIME_ROLES, never_scheduled, pod_uid
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class PairRuntimeKubernetes(Protocol):
@@ -96,7 +99,13 @@ class PairRuntimeTeardown:
     def _finished(self, task: asyncio.Task[None]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()  # Retrieve without logging private API/error bodies.
+            # Retrieve without logging private API/error bodies; still fail loud.
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired teardown dispatch failed; targets retained (%s)",
+                    task.get_name(),
+                )
 
     async def drain(self) -> None:
         if self._dispatches:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -13,6 +14,8 @@ from ads_sandbox_manager.pair_ipc_kube import PairIpcAdapter
 from ads_sandbox_manager.pair_ipc_store import PairIpcRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class PairIpcPublication:
@@ -42,7 +45,12 @@ class PairIpcPublication:
     def _finished(self, task: asyncio.Task[str]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired IPC dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def drain(self) -> None:
         if self._dispatches:

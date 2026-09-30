@@ -146,6 +146,39 @@
 {{- if le (float64 $sb.manager.recoverySeconds) (float64 $sb.manager.cleanupSeconds) -}}
 {{- fail "sandbox.manager.recoverySeconds must exceed cleanupSeconds" -}}
 {{- end -}}
+{{- $ns := .Values.nodes.sandbox -}}
+{{- $extra := $ns.extraNodeSelector | default (dict) -}}
+{{- $requiredSelector := mergeOverwrite (dict $ns.labelKey (toString $ns.labelValue)) $extra -}}
+{{- $expectedTolerations := concat (list (dict "key" $ns.labelKey "operator" "Equal" "value" (toString $ns.labelValue) "effect" "NoSchedule")) (.Values.sandbox.tolerations | default (list)) -}}
+{{- $runtimeNames := list $ns.runtimeClassName $sb.guest.runtimeClassName -}}
+{{- with $sb.manager.pairInputs -}}
+{{- if and (dig "guest" "runtime_class" "" .) (dig "egress" "runtime_class" "" .) -}}
+{{- $runtimeNames = append $runtimeNames .guest.runtime_class -}}
+{{- $runtimeNames = append $runtimeNames .egress.runtime_class -}}
+{{- end -}}
+{{- end -}}
+{{- if lookup "v1" "Namespace" "" "kube-system" -}}
+{{- range $runtimeName := $runtimeNames | uniq -}}
+{{- if not $runtimeName -}}
+{{- continue -}}
+{{- end -}}
+{{- $admission := lookup "node.k8s.io/v1" "RuntimeClass" "" $runtimeName -}}
+{{- if not $admission -}}
+{{- fail (printf "missing guest RuntimeClass %s" $runtimeName) -}}
+{{- end -}}
+{{- $scheduling := $admission.scheduling | default (dict) -}}
+{{- range $key, $value := ($scheduling.nodeSelector | default (dict)) -}}
+{{- if ne (dig $key "" $requiredSelector | toString) (toString $value) -}}
+{{- fail (printf "RuntimeClass %s admits pods with nodeSelector %s=%s; add it to nodes.sandbox.extraNodeSelector or the manager cannot verify pair pods (ads.io/role placement deadlock)" $runtimeName $key (toString $value)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $toleration := ($scheduling.tolerations | default (list)) -}}
+{{- if not (has $toleration $expectedTolerations) -}}
+{{- fail (printf "RuntimeClass %s injects toleration %s; add it to sandbox.tolerations or pair pod verification fails" $runtimeName (toJson $toleration)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "ads.sandboxSessionObjects" -}}

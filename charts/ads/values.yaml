@@ -206,6 +206,12 @@ nodes:
     labelKey: ads.io/sandbox-node
     labelValue: "true"
     runtimeClassName: kata-qemu
+    # RuntimeClass admission merges each runtime's scheduling.nodeSelector into
+    # every manager-placed pod. Any key/value here is added to the manager
+    # NODE_SELECTOR so strict pod verification sees exactly what admission adds.
+    # Every RuntimeClass scheduling selector and toleration must be covered here;
+    # otherwise installs fail instead of deadlocking pair compute as inflight.
+    extraNodeSelector: {}
 
 # ADS owns its sandbox policy/RBAC, not the Kyverno installation.
 sandbox:

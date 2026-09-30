@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -31,6 +32,8 @@ from ads_sandbox_manager.session_objects import (
     session_pvc,
 )
 from ads_sandbox_manager.store import SandboxSession, SessionRepository
+
+log = logging.getLogger(__name__)
 
 
 class TopicPreparation(Protocol):
@@ -205,6 +208,12 @@ class SessionProvisioner:
             # Do not persist exception bodies: API/SQL errors may include credentials.
             async with asyncio.timeout(self.settings.control_seconds):
                 await self._record(row, owner, status="failed", status_changed_at=datetime.now(UTC))
+            log.error(
+                "provision failed; session %s sandbox %s status failed; "
+                "inflight writers keep their original obligation",
+                row.session_id,
+                row.sandbox_id,
+            )
             raise
 
     async def _current(self, row: SandboxSession, owner: UUID) -> SandboxSession:

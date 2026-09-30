@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Protocol, cast
 from uuid import UUID
 
@@ -19,6 +20,8 @@ from ads_sandbox_manager.pair_store import (
     resource_key,
 )
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class PairControlKubernetes(Protocol):
@@ -59,7 +62,12 @@ class PairControlProvisioner:
         if not task.cancelled():
             # The caller may already have timed out. Retrieve exceptions without
             # logging API/SQL bodies; durable inflight evidence remains authoritative.
-            task.exception()
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired control dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def _dispatch(self, intent: PairIntent, kind: ControlKind, role: str) -> str:
         self._configuration(intent)

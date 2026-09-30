@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import asdict
 from uuid import UUID
 
@@ -14,6 +15,8 @@ from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntent
 from ads_sandbox_manager.relay_input_kube import RelayInputAdapter
 from ads_sandbox_manager.relay_inputs import INPUT_ROLES, input_payload
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class RelayInputPublication:
@@ -39,7 +42,12 @@ class RelayInputPublication:
     def _finished(self, task: asyncio.Task[str]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired relay-input dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def _dispatch(self, intent: PairIntent, role: str) -> str:
         self._configuration(intent)
