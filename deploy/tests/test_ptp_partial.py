@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from test_ptp_attachment import plugin  # noqa: F401
 from test_ptp_attestation import RuntimeObserver, attest, fixture  # noqa: F401
-from test_ptp_release import Observer, release  # noqa: F401
+from test_ptp_release import CriObserver, release  # noqa: F401
 
 from ads_commons.sandbox.partial_release import decode_partial_release
 
@@ -94,12 +94,16 @@ def inventory(partial, release, plugin, attest, fixture, tmp_path, monkeypatch):
     f.observer = RuntimeObserver(f)
     original_cri = f.observer.cri
 
-    def cri(*args):
-        if args[0] == "pods":
-            return {"items": [f.sandbox, f.vm_sandbox]}
-        if args[0] == "inspectp" and args[-1] == f.vm_sandbox["id"]:
-            return {"status": deepcopy(f.vm_sandbox)}
-        return original_cri(*args)
+    def cri():
+        def pods():
+            return [f.sandbox, f.vm_sandbox]
+
+        def inspectp(sandbox_id):
+            if sandbox_id == f.vm_sandbox["id"]:
+                return {"status": deepcopy(f.vm_sandbox)}
+            return original_cri().inspectp(sandbox_id)
+
+        return SimpleNamespace(pods=pods, inspectp=inspectp, inspect=original_cri().inspect)
 
     f.observer.cri = cri
     f.observer.command = lambda *args: [{"ifname": "peer1", "ifindex": 20}]
@@ -158,7 +162,7 @@ def test_original_vm_attempt_history_survives_cri_collection_without_recapturing
     f = inventory
     f.scope["pod_uids"].pop("guest-relay")
     f.observer.pods = lambda: [f.vm]
-    f.observer.cri = lambda *args: {"items": []}
+    f.observer.cri = lambda: SimpleNamespace(pods=lambda: [])
     value = capture(f, partial, plugin, attest, release)
     assert value["members"]["guest"]["runtime_ids"] == ["d" * 64]
     assert value["members"]["guest"]["namespaces"] == [[7, 203]]
@@ -190,15 +194,19 @@ def test_assigned_pre_cni_vm_requires_positive_original_live_namespace(
         f.vm["status"]["containerStatuses"] = [{"name": "guest", "restartCount": 0}]
     reads = 0
 
-    def cri(*args):
-        nonlocal reads
-        if args[0] == "pods":
-            return {"items": [] if fault == "missing" else [deepcopy(f.vm_sandbox)]}
-        reads += 1
-        result = deepcopy(inspected)
-        if fault == "changed" and reads == 2:
-            result["info"]["pid"] = 404
-        return result
+    def cri():
+        def pods():
+            return [] if fault == "missing" else [deepcopy(f.vm_sandbox)]
+
+        def inspectp(sandbox_id):
+            nonlocal reads
+            reads += 1
+            result = deepcopy(inspected)
+            if fault == "changed" and reads == 2:
+                result["info"]["pid"] = 404
+            return result
+
+        return SimpleNamespace(pods=pods, inspectp=inspectp)
 
     @contextlib.contextmanager
     def processes(pids):
@@ -372,7 +380,7 @@ def test_partial_observation_requires_all_actual_runtime_references_clear(
 ):
     f = inventory
     value = capture(f, partial, plugin, attest, release)
-    observer = Observer()
+    observer = CriObserver()
     uid = f.vm["metadata"]["uid"]
     pod = {"metadata": {"uid": uid}}
     if blocker == "pod":
@@ -417,7 +425,7 @@ def test_protected_capture_is_immutable_fenced_and_bound_to_original_map(
     config_path = f.root / "config"
     plugin.save_record(config_path, f.config)
     monkeypatch.setattr(attest, "validate", lambda value: value)
-    monkeypatch.setattr(attest, "Observer", lambda config: f.observer)
+    monkeypatch.setattr(attest, "CriObserver", lambda config: f.observer)
     monkeypatch.setattr(partial, "os", SimpleNamespace(geteuid=lambda: 0))
     modules = {
         "ads-ptp": plugin,

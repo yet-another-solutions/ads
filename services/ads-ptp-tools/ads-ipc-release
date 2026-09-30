@@ -192,7 +192,7 @@ def exact_pod(observer, wanted):
 
 
 def runtime(observer, wanted, pod, container_id):
-    sandboxes = observer.cri("pods")["items"]
+    sandboxes = observer.cri().pods()
     current = [
         s
         for s in sandboxes
@@ -201,8 +201,8 @@ def runtime(observer, wanted, pod, container_id):
     require(len(current) == 1, "one ready original IPC runtime required")
     sandbox_id = current[0]["id"]
     require(re.fullmatch(r"[0-9a-f]{64}", sandbox_id), "invalid runtime identity")
-    sandbox = observer.cri("inspectp", sandbox_id)
-    container = observer.cri("inspect", container_id)
+    sandbox = observer.cri().inspectp(sandbox_id)
+    container = observer.cri().inspect(container_id)
     status, detail = container["status"], sandbox["status"]
     require(
         detail["id"] == sandbox_id
@@ -477,8 +477,8 @@ def observe(observer, snapshot, release):
 
     def api_runtime():
         pods = observer.pods()
-        sandboxes = observer.cri("pods")["items"]
-        containers = observer.cri("ps")["containers"]
+        sandboxes = observer.cri().pods()
+        containers = observer.cri().containers()
         return {
             "pods": sum(
                 p["metadata"]["uid"] == snapshot["pod_uid"]
@@ -543,7 +543,7 @@ def perform(request):
     settings = config(plugin.read_record(Path(request["config"])))
     root = plugin.private_directory(settings["stateDir"])
     wanted = scope(request, settings)
-    observer = attestor.Observer(settings)
+    observer = attestor.CriObserver(settings)
     observer.deadline = time.monotonic() + 60
     path = root / ("ipc-release-" + wanted["generation"] + ".json")
     with plugin.generation_lock(root, wanted["generation"]):

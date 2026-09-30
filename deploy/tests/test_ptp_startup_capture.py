@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 from test_ptp_attachment import inputs, plugin  # noqa: F401
-from test_ptp_release import Observer, operation, release, scope, snapshot  # noqa: F401
+from test_ptp_release import CriObserver, operation, release, scope, snapshot  # noqa: F401
 
 
 @pytest.fixture
@@ -78,12 +78,11 @@ def journaled(release, plugin, inputs, snapshot, monkeypatch):
         plugin, "links", lambda fd: {"eth0": {"link_index": 20 + int(fd.rsplit("/", 1)[1])}}
     )
     monkeypatch.setattr(plugin, "check", lambda *args: pytest.fail("not an operational CHECK"))
-    observer = Observer()
+    observer = CriObserver()
     observer.links = deepcopy(snapshot["links"])
     observer.inspects = []
 
-    def cri(command, *args):
-        runtime = args[-1]
+    def inspectp(runtime):
         observer.inspects.append(runtime)
         index = snapshot["runtime_ids"].index(runtime)
         return {
@@ -97,7 +96,7 @@ def journaled(release, plugin, inputs, snapshot, monkeypatch):
             }
         }
 
-    observer.cri = cri
+    observer.cri = lambda: SimpleNamespace(inspectp=inspectp)
     seen = []
 
     def observe(o, p, req):
@@ -197,8 +196,8 @@ def test_incomplete_or_foreign_runtime_evidence_is_not_capture(
     else:
         original = f.observer.cri
 
-        def cri(*args):
-            value = original(*args)
+        def inspectp(runtime):
+            value = original().inspectp(runtime)
             status = value["status"]
             if fault == "cri-id":
                 status["id"] = "f" * 64
@@ -208,7 +207,7 @@ def test_incomplete_or_foreign_runtime_evidence_is_not_capture(
                 status["metadata"]["uid" if fault == "cri-uid" else "namespace"] = "changed"
             return value
 
-        f.observer.cri = cri
+        f.observer.cri = lambda: SimpleNamespace(inspectp=inspectp)
     with pytest.raises((ValueError, FileNotFoundError)):
         capture(release, plugin, snapshot, f)
     assert not list(f.root.glob("release-*.json"))
@@ -224,10 +223,10 @@ def test_changed_evidence_at_final_recheck_is_not_captured(
     original = f.observer.cri
     count = 0
 
-    def cri(*args):
+    def inspectp(runtime):
         nonlocal count
         count += 1
-        value = original(*args)
+        value = original().inspectp(runtime)
         if count == 2:
             record = f.records[0]
             if fault == "journal":
@@ -260,7 +259,7 @@ def test_changed_evidence_at_final_recheck_is_not_captured(
             value["status"]["metadata"]["uid"] = str(uuid4())
         return value
 
-    f.observer.cri = cri
+    f.observer.cri = lambda: SimpleNamespace(inspectp=inspectp)
     with pytest.raises(ValueError):
         capture(release, plugin, snapshot, f)
     assert not list(f.root.glob("release-*.json"))
@@ -296,7 +295,7 @@ def test_retained_partial_journal_blocks_runtime_release(
 ):
     f = journaled
     value = capture(release, plugin, snapshot, f)
-    observer = Observer()
+    observer = CriObserver()
     monkeypatch.setattr(release, "process_references", lambda *args: 0)
     result = release.observe(plugin, observer, f.root, value)
     assert result["leftovers"]["journals"] == 2

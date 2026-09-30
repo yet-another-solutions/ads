@@ -524,7 +524,7 @@ def unused_perform(request):
     settings = ipc.config(plugin.read_record(Path(request["config"])))
     wanted = unused_scope(request, settings, ipc)
     root = plugin.private_directory(settings["stateDir"])
-    observer = attestor.Observer(settings)
+    observer = attestor.CriObserver(settings)
     observer.deadline = time.monotonic() + 60
     path = root / ("ipc-unused-storage-" + wanted["generation"] + ".json")
     with plugin.generation_lock(root, wanted["generation"]):
@@ -566,7 +566,7 @@ def perform(request):
     settings = ipc.config(plugin.read_record(Path(request["config"])))
     wanted = ipc.scope(request, settings)
     root = plugin.private_directory(settings["stateDir"])
-    observer = attestor.Observer(settings)
+    observer = attestor.CriObserver(settings)
     observer.deadline = time.monotonic() + 60
     path = root / ("ipc-storage-" + wanted["generation"] + ".json")
     with plugin.generation_lock(root, wanted["generation"]):

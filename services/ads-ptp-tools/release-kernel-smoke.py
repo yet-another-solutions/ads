@@ -10,6 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from uuid import uuid4
 
 loader = importlib.machinery.SourceFileLoader("release", "/usr/local/bin/ads-ptp-release")
@@ -72,7 +73,7 @@ try:
     )
     plugin.capture_attempt(root, request)  # Actual durable original namespace capture.
 
-    class Observer:
+    class CriObserver:
         config = {"guest_runtime": "ci-runtime"}
         live = True
         deadline = time.monotonic() + 60
@@ -98,14 +99,14 @@ try:
                 else []
             )
 
-        def cri(self, command, *args):
+        def cri(self):
             # API/CRI are explicit component-test boundaries; kernel references are real.
-            return {"items": []} if command == "pods" else {"containers": []}
+            return SimpleNamespace(pods=lambda: [], containers=lambda: [])
 
         def command(self, *args):
             return json.loads(run(*args).stdout)
 
-    observer = Observer()
+    observer = CriObserver()
     captured = partial.capture(plugin, None, observer, release, root, scope)
     observer.live = False
 

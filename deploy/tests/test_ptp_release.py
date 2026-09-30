@@ -47,7 +47,7 @@ def scope(snapshot):
     }
 
 
-class Observer:
+class CriObserver:
     def __init__(self):
         self.deadline = time.monotonic() + 60
         self.api = []
@@ -60,8 +60,9 @@ class Observer:
         self.reads += 1
         return self.api
 
-    def cri(self, command, *args):
-        return {"items": self.sandboxes} if command == "pods" else {"containers": self.containers}
+    def cri(self):
+        client = SimpleNamespace(pods=lambda: self.sandboxes, containers=lambda: self.containers)
+        return client
 
     def command(self, *args):
         assert args == ("ip", "-j", "link")
@@ -70,7 +71,7 @@ class Observer:
 
 @pytest.fixture
 def observer():
-    return Observer()
+    return CriObserver()
 
 
 @pytest.mark.parametrize(
@@ -281,8 +282,8 @@ def operation(release, plugin, inputs, snapshot, monkeypatch):
     }
     settings = {key: snapshot[key] for key in ("node", "namespace", "network")}
     plugin.save_record(Path(request["attestorConfig"]), settings)
-    observer = Observer()
-    attestor = SimpleNamespace(validate=lambda value: value, Observer=lambda config: observer)
+    observer = CriObserver()
+    attestor = SimpleNamespace(validate=lambda value: value, CriObserver=lambda config: observer)
     monkeypatch.setattr(release, "load", lambda name: plugin if name == "ads-ptp" else attestor)
     monkeypatch.setattr(release, "os", SimpleNamespace(geteuid=lambda: 0))
     monkeypatch.setattr(release, "capture", lambda *args: deepcopy(snapshot))
@@ -501,11 +502,10 @@ def test_capture_uses_real_adapter_boundaries_and_exact_both_journals(
 
     monkeypatch.setattr(plugin, "namespace", namespace)
     monkeypatch.setattr(plugin, "links", lambda fd: {"eth0": {"link_index": 20 + fd}})
-    observer = Observer()
+    observer = CriObserver()
     observer.links = snapshot["links"] if fault != "host-peer" else []
 
-    def cri(command, *args):
-        runtime = args[-1]
+    def inspectp(runtime):
         index = snapshot["runtime_ids"].index(runtime)
         return {
             "status": {
@@ -518,7 +518,7 @@ def test_capture_uses_real_adapter_boundaries_and_exact_both_journals(
             }
         }
 
-    observer.cri = cri
+    observer.cri = lambda: SimpleNamespace(inspectp=inspectp)
 
     def observed(o, p, req):
         value = next(value for value in bindings if value["pod_uid"] == req["pod_uid"])

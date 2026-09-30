@@ -151,7 +151,7 @@ def cri_module():
     return module
 
 
-class Observer:
+class CriObserver:
     def __init__(self, config):
         self.config = config
         self.deadline = time.monotonic() + 20
@@ -222,21 +222,14 @@ class Observer:
         require(not reply.get("metadata", {}).get("continue"), "incomplete Pod observation")
         return reply["items"]
 
-    def cri(self, *args):
+    def cri(self):
+        """Typed in-process CRI client: observer.cri().pods(), .inspectp(id),
+        .containers(), .inspect(id). Returns the real ads-cri client so a
+        wrong method or argument fails locally instead of at the RPC."""
         # Detect once. This is not a configured cri_endpoint.
-        command, arguments = args[0], args[1:]
         endpoint = self.config.get("cri_endpoint") or cri_module().detect()
         self.config["cri_endpoint"] = endpoint
-        cri = cri_module().Cri(endpoint, min(self.deadline, time.monotonic() + 4))
-        if command == "pods":
-            return {"items": cri.pods()}
-        if command == "ps":
-            return {"containers": cri.containers()}
-        if command == "inspectp":
-            return cri.inspectp(arguments[0])
-        if command == "inspect":
-            return cri.inspect(arguments[0])
-        require(False, "unsupported CRI command")
+        return cri_module().Cri(endpoint, min(self.deadline, time.monotonic() + 4))
 
 
 def pod_identity(pod, config, component):
@@ -304,7 +297,7 @@ def select_pair(pods, uid, config):
 
 def runtime_identity(observer, relay, container_id):
     config, meta = observer.config, relay["metadata"]
-    items = observer.cri("pods")["items"]
+    items = observer.cri().pods()
     matches = [
         item
         for item in items
@@ -315,7 +308,7 @@ def runtime_identity(observer, relay, container_id):
     require(len(matches) == 1, "exact ready CRI sandbox required")
     sandbox = matches[0]
     require(re.fullmatch(r"[0-9a-f]{64}", sandbox["id"]), "invalid runtime sandbox ID")
-    detail = observer.cri("inspectp", sandbox["id"])
+    detail = observer.cri().inspectp(sandbox["id"])
     status = detail["status"]
     require(
         status["id"] == sandbox["id"]
@@ -325,7 +318,7 @@ def runtime_identity(observer, relay, container_id):
         and status["metadata"]["name"] == meta["name"],
         "runtime sandbox replaced",
     )
-    container = observer.cri("inspect", container_id)
+    container = observer.cri().inspect(container_id)
     status = container["status"]
     require(
         status["id"] == container_id
@@ -488,7 +481,7 @@ def refresh(config_path, req, directory, plugin=None):
     require(os.geteuid() == 0, "node-root attestor required")
     plugin = plugin or cni_module()
     config = validate(plugin.read_record(Path(config_path)))
-    record = observe_binding(Observer(config), plugin, req)
+    record = observe_binding(CriObserver(config), plugin, req)
     root = plugin.private_directory(directory)
     plugin.save_record(root / (req["pod_uid"] + ".json"), record)
     return record
@@ -555,7 +548,7 @@ def serve_binding(config, connection):
     def host(facts_request):
         return dial_node_owner(config, facts_request)
 
-    record = observe_binding(Observer(config), plugin, req, host=host)
+    record = observe_binding(CriObserver(config), plugin, req, host=host)
     payload = json.dumps(record).encode()
     require(len(payload) <= plugin.LIMIT, "attestor reply exceeds bound")
     connection.sendall(len(payload).to_bytes(4, "big") + payload)
