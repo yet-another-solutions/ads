@@ -200,6 +200,9 @@ class ChartTests(unittest.TestCase):
                 self.assertEqual(config["ca"], "/host-etc/tls/ca.crt")
                 self.assertEqual(config["certificate"], "/host-etc/tls/tls.crt")
                 self.assertEqual(config["key"], "/host-etc/tls/tls.key")
+                if key == "attestor.json":
+                    self.assertEqual(config["guest_runtime"], "kata-qemu-ads")
+                    self.assertEqual(config["egress_runtime"], "kata-qemu-ads-egress")
 
     def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
         from ads_sandbox_manager.config import load_settings
@@ -1343,6 +1346,9 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/var/run/attestor-v0.0.1.sock", config)
             if name == "ads-ptp-attestor":
                 self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
+                attestor_config = json.loads(config)
+                self.assertEqual(attestor_config["guest_runtime"], "kata-private")
+                self.assertEqual(attestor_config["egress_runtime"], "kata-egress")
                 attest_args = pod["containers"][0]["args"][0]
                 self.assertIn("ads-ptp-attest /host-etc/config.json", attest_args)
                 self.assertNotIn("crictl", config)
