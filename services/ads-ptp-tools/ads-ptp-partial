@@ -253,11 +253,7 @@ def vm_inventory(plugin, attestor, observer, scope, pod, records):
     uid = pod["metadata"]["uid"]
     history = [r for r in records.values() if r["request"]["pod_uid"] == uid]
     runtimes = {r["request"]["container_id"] for r in history}
-    current = [
-        item
-        for item in observer.cri().pods()
-        if item["metadata"].get("uid") == uid
-    ]
+    current = [item for item in observer.cri().pods() if item["metadata"].get("uid") == uid]
     require(history or current, "original VM attempt history unavailable")
     ns = {tuple(namespace_identity(r["vm_identity"])) for r in history}
     for item in current:
