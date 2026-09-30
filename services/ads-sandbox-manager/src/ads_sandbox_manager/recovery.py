@@ -110,7 +110,19 @@ class RecoveryService:
             for work in works:
                 if work.pair_snapshot is not None:
                     if not await self.lifecycle.pair_capture.capture(work, recovery=row):
-                        log.warning("paired recovery writers unresolved; evidence retained")
+                        unresolved = sorted(
+                            key
+                            for family in ("control_dispatch", "compute_dispatch")
+                            for key, value in work.pair_snapshot.get(family, {}).items()
+                            if value == "inflight"
+                        )
+                        log.warning(
+                            "paired recovery writers unresolved; evidence retained "
+                            "(session %s sandbox %s inflight: %s)",
+                            row.session_id,
+                            row.sandbox_id,
+                            ", ".join(unresolved) or "none observed",
+                        )
                         return
                     runtime = self.lifecycle.pair_runtime
                     if runtime is None or not await runtime.release(work, recovery=row):

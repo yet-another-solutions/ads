@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +13,8 @@ from ads_sandbox_manager.egress_state_kube import EgressStateAdapter
 from ads_sandbox_manager.egress_state_store import EgressState, EgressStateRepository, WrappingKey
 from ads_sandbox_manager.pair_store import PairClaimLost
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class EgressStatePublication:
@@ -35,7 +38,12 @@ class EgressStatePublication:
     def _finished(self, task: asyncio.Task[str]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired egress state dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def drain(self) -> None:
         """Bounded join after stopping producers; never proof of remote release."""

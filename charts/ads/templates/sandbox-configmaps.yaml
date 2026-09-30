@@ -41,7 +41,7 @@ data:
   {{ $prefix }}GOLDEN_SLACK: {{ $sb.golden.slack | quote }}
   {{ $prefix }}CA: {{ dict "image" (include "ads.sandboxImage" (dict "root" $root "image" $sb.ca.image)) "signing_secret" $sb.ca.signingSecret "additional_configmap" (printf "%s-egress-extra-trust" (include "ads.fullname" $root)) "source_size" $sb.ca.sourceSize "deadline_seconds" $sb.ca.deadlineSeconds "resources" $sb.ca.resources | toJson | quote }}
   {{ $prefix }}NAMESPACE: {{ $sb.namespace | quote }}
-  {{ $prefix }}NODE_SELECTOR: {{ dict $root.Values.nodes.sandbox.labelKey (toString $root.Values.nodes.sandbox.labelValue) | toJson | quote }}
+  {{ $prefix }}NODE_SELECTOR: {{ mergeOverwrite (dict $root.Values.nodes.sandbox.labelKey (toString $root.Values.nodes.sandbox.labelValue)) ($root.Values.nodes.sandbox.extraNodeSelector | default (dict)) | toJson | quote }}
   {{ $prefix }}TOLERATIONS: {{ $sb.tolerations | toJson | quote }}
   {{ $prefix }}RESOURCES: {{ $sb.golden.resources | toJson | quote }}
   {{ $prefix }}IMAGE_PULL_SECRETS: {{ $sb.imagePullSecrets | join "," | quote }}

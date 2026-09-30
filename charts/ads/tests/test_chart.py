@@ -584,6 +584,76 @@ class ChartTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("guest RuntimeClass", result.stderr)
 
+    def test_runtime_class_placement_must_be_covered_by_values(self):
+        """Admission-injected placement that the manager cannot verify fails install.
+
+        2026-09-30 incident: RuntimeClass scheduling.nodeSelector ads.io/role=sandbox
+        reached admitted pair pods while manager NODE_SELECTOR lacked the key; the
+        strict pod verification failed forever and the guest writer stayed inflight.
+        """
+        scheduling = {
+            "nodeSelector": {"ads.io/role": "sandbox"},
+            "tolerations": [
+                {
+                    "effect": "NoSchedule",
+                    "key": "ads.io/sandbox",
+                    "operator": "Equal",
+                    "value": "true",
+                }
+            ],
+        }
+        covered = (
+            "--set-json",
+            'nodes.sandbox.extraNodeSelector={"ads.io/role":"sandbox"}',
+        )
+        with self.subTest(case="uncovered-selector-fails"):
+            objects = fixtures()
+            objects["/apis/node.k8s.io/v1/runtimeclasses/kata-qemu-ads"]["scheduling"] = scheduling
+            result = self.online(objects)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ads.io/role placement deadlock", result.stderr)
+        with self.subTest(case="covered-selector-renders-merged-env"):
+            result = self.online(fixtures(), *covered)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manager = next(
+                doc
+                for doc in yaml.safe_load_all(result.stdout)
+                if doc
+                and doc.get("kind") == "ConfigMap"
+                and "ADS_SANDBOX_MANAGER_NODE_SELECTOR" in doc.get("data", {})
+            )
+            self.assertEqual(
+                json.loads(manager["data"]["ADS_SANDBOX_MANAGER_NODE_SELECTOR"]),
+                {"ads.io/sandbox-node": "true", "ads.io/role": "sandbox"},
+            )
+        with self.subTest(case="uncovered-toleration-fails"):
+            objects = fixtures()
+            objects["/apis/node.k8s.io/v1/runtimeclasses/kata-qemu-ads"]["scheduling"] = {
+                "nodeSelector": {"ads.io/role": "sandbox"},
+                "tolerations": [
+                    {
+                        "effect": "NoSchedule",
+                        "key": "ads.io/other",
+                        "operator": "Equal",
+                        "value": "x",
+                    }
+                ],
+            }
+            result = self.online(objects, *covered)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("injects toleration", result.stderr)
+        with self.subTest(case="covered-toleration-passes"):
+            objects = fixtures()
+            objects["/apis/node.k8s.io/v1/runtimeclasses/kata-qemu-ads"]["scheduling"] = scheduling
+            result = self.online(
+                fixtures(),
+                *covered,
+                "--set-json",
+                'sandbox.tolerations=[{"effect":"NoSchedule","key":"ads.io/sandbox",'
+                '"operator":"Equal","value":"true"}]',
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_string_budget_is_normalized_to_integer_json(self):
         result = self.render("--set-string", "sandbox.guest.budget.CPU_MILLIS=600")
         self.assertEqual(result.returncode, 0, result.stderr)

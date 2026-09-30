@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,6 +13,8 @@ from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntent
 from ads_sandbox_manager.relay_key_kube import RelayKeyAdapter
 from ads_sandbox_manager.relay_keys import RelayKeys
 from ads_sandbox_manager.store import SandboxSession
+
+log = logging.getLogger(__name__)
 
 
 class RelayKeyCustody:
@@ -37,7 +40,14 @@ class RelayKeyCustody:
     def _finished(self, task: asyncio.Task[str]) -> None:
         self._dispatches.discard(task)
         if not task.cancelled():
-            task.exception()  # Retrieve, never log a detached failure.
+            # Retrieve, and log a detached failure without private bodies. A silent
+            # failure here previously stranded pair settlement with no evidence.
+            exc = task.exception()
+            if exc is not None:
+                log.error(
+                    "paired relay-key custody dispatch failed; writer remains inflight (%s)",
+                    task.get_name(),
+                )
 
     async def _dispatch(self, intent: PairIntent, keys: RelayKeys) -> str:
         self._configuration(intent)
