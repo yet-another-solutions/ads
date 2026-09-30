@@ -1255,6 +1255,14 @@ class ChartTests(unittest.TestCase):
                     next(
                         item
                         for item in pod["containers"][0]["volumeMounts"]
+                        if item["mountPath"] == "/var/lib/kubelet"
+                    )["mountPropagation"],
+                    "HostToContainer",
+                )
+                self.assertEqual(
+                    next(
+                        item
+                        for item in pod["containers"][0]["volumeMounts"]
                         if item["mountPath"] == "/var/lib/ads-ptp"
                     )["name"],
                     "cni-state",

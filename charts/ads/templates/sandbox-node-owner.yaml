@@ -188,6 +188,7 @@ spec:
             - name: kubelet-root
               mountPath: /var/lib/kubelet
               readOnly: true
+              mountPropagation: HostToContainer
             {{- end }}
       volumes:
         - name: config
