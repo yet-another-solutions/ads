@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-BINARIES = ("ads-ptp", "ads-ptp-attest", "ads-cri")
+BINARIES = ("ads-ptp",)
 CONFIG_FIELDS = {
     "cniVersion",
     "name",

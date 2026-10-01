@@ -6,8 +6,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib
-import importlib.machinery
-import importlib.util
 import ipaddress
 import json
 import os
@@ -802,16 +800,6 @@ def perform(config, env):
             # One pathname-socket round trip. DEL returned above and never dials.
             observed = dial_attestor(config, req)
             save_record(root / (req["pod_uid"] + ".json"), observed)
-        elif "attestorConfig" in config:
-            loader = importlib.machinery.SourceFileLoader(
-                "ads_ptp_node_attestor", str(Path(__file__).with_name("ads-ptp-attest"))
-            )
-            spec = importlib.util.spec_from_loader(loader.name, loader)
-            module = importlib.util.module_from_spec(spec)
-            loader.exec_module(module)
-            # In-pod release helpers still call observe_binding in-process.
-            # The host plugin no longer does. This branch is not the live CNI path.
-            observed = module.refresh(config["attestorConfig"], req, root)
         else:
             # In-process native kernel fixtures only. CLI requires live attestation.
             observed = read_record(root / (req["pod_uid"] + ".json"))
