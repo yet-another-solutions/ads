@@ -1491,12 +1491,8 @@ class ChartTests(unittest.TestCase):
                 )
             )
             docs = self.documents("-f", str(values))
-            ipc_config = json.loads(
-                docs["ConfigMap", "ads-node-owner"]["data"]["ipc.json"]
-            )
-            self.assertEqual(
-                ipc_config["cri_endpoint"], "unix:///var/run/crio/crio.sock"
-            )
+            ipc_config = json.loads(docs["ConfigMap", "ads-node-owner"]["data"]["ipc.json"])
+            self.assertEqual(ipc_config["cri_endpoint"], "unix:///var/run/crio/crio.sock")
 
 
 if __name__ == "__main__":

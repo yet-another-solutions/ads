@@ -75,8 +75,7 @@ def config(value):
         )
     if "cri_endpoint" in value:
         require(
-            isinstance(value["cri_endpoint"], str)
-            and value["cri_endpoint"].startswith("unix:///"),
+            isinstance(value["cri_endpoint"], str) and value["cri_endpoint"].startswith("unix:///"),
             "local CRI required",
         )
         socket = Path(value["cri_endpoint"].removeprefix("unix://"))
