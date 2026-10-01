@@ -42,8 +42,34 @@ check succeed. Cleanup must not infer it from an untrusted Pod label alone.
 The retained attempt is preparation for positive partial-runtime inventory,
 not a new manager success path or a replacement for the authenticated node
 observer. Boot changes remain blocked; this record does not claim that a
-reboot proves old storage/runtime release. No historical migration, history
-garbage collection or later transport/data-plane acceptance is added here.
+reboot proves old storage/runtime release. No historical migration or later
+transport/data-plane acceptance is added here.
+
+## Stale history collection
+
+History retention is bounded in time, not forever. Every DEL under the live
+attachment lock collects stale history from the same protected state
+directory, including on the idempotent path after the active journal is
+already gone:
+
+- An attempt record unmodified for 7 days is removed together with its
+  attachment lock, oldest first, at most 4096 keys per DEL so one call never
+  performs unbounded work; later DELs drain the rest.
+- Each candidate key's exclusive nonblocking lock must be acquired first. A
+  lock held by a live ADD, CHECK or DEL skips that key, and the DEL running
+  the collection still holds its own key's lock, so no live attachment loses
+  history. A removed attempt that loses a recreation race is recreated by the
+  winning ADD.
+- Stale `.pending-` saves from interrupted writes older than the same expiry
+  are removed without a lock.
+- Retirement fences, active journals, captures, partial pins, bindings and
+  locks without attempt records are never enumerated or removed here.
+
+Readers keep their own bounded enumeration: release journals and partial
+history are bounded per record read, not per state-directory entry, so
+retained fences, orphaned locks and pending saves cannot block release.
+Retention now grows only to the expiry window plus interrupted-operation
+residue instead of without limit on long-lived nodes.
 
 ## Tests
 

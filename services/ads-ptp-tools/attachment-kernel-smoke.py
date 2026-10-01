@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.machinery
 import importlib.util
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -221,6 +224,39 @@ try:
         attempt,
     }
     assert plugin.read_record(attempt) == admitted_attempt
+    # Later DELs collect stale history without touching fences, active
+    # journals, the retained attempt or any key whose attachment lock is held
+    # by a live operation.
+    old = time.time() - 8 * 86400
+    expired_attempt, expired_lock = (
+        root / "state" / ("attempt-" + "e" * 64 + ".json"),
+        root / "state" / ("e" * 64 + ".lock"),
+    )
+    held_attempt, held_lock = (
+        root / "state" / ("attempt-" + "f" * 64 + ".json"),
+        root / "state" / ("f" * 64 + ".lock"),
+    )
+    fresh_attempt = root / "state" / ("attempt-" + "0" * 64 + ".json")
+    for path in (expired_attempt, expired_lock, held_attempt, held_lock, fresh_attempt):
+        os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_CLOEXEC, 0o600))
+    for path in (expired_attempt, expired_lock, held_attempt, held_lock):
+        os.utime(path, (old, old))
+    held = os.open(held_lock, os.O_RDONLY | os.O_CLOEXEC)
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    env["CNI_COMMAND"] = "DEL"
+    assert plugin.perform(config, env) is None  # Idempotent DEL still collects.
+    assert not expired_attempt.exists() and not expired_lock.exists()
+    assert held_attempt.exists() and held_lock.exists()
+    assert fresh_attempt.exists()
+    fcntl.flock(held, fcntl.LOCK_UN)
+    os.close(held)
+    assert plugin.perform(config, env) is None
+    assert not held_attempt.exists() and not held_lock.exists()
+    assert set((root / "state").glob("*.json")) == {
+        root / "state" / ("retired-" + generation + ".json"),
+        attempt,
+        fresh_attempt,
+    }
 finally:
     for name in reversed(created):
         canary.run("ip", "netns", "delete", name)
@@ -235,6 +271,7 @@ print(
             "missing_namespace_del_idempotent": True,
             "persistent_generation_admission_fence": True,
             "fence_is_not_runtime_release": True,
+            "stale_history_collected_by_del": True,
             "node_attestation_and_kata_handoff_proven": False,
         }
     )

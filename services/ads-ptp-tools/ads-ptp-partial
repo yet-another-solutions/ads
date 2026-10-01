@@ -119,10 +119,12 @@ def exact_pods(observer, scope):
 def attempts(plugin, root, scope):
     """Read pre-effect history without altering or clearing any original record."""
     found = {}
-    for index, path in enumerate(root.iterdir()):
-        require(index < 16384, "attachment history exceeds bound")
+    count = 0
+    for path in root.iterdir():
         if not re.fullmatch(r"attempt-[0-9a-f]{64}\.json", path.name):
             continue
+        require(count < 16384, "attempt history bound exceeded")
+        count += 1
         saved = plugin.read_record(path)
         req = saved["request"]
         if req["pod_uid"] not in scope["pod_uids"].values():

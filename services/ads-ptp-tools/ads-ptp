@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from uuid import UUID
 
@@ -25,6 +26,8 @@ VERSION = "1.0.0"
 NS_GET_NSTYPE = 0xB703
 CLONE_NEWNET = 0x40000000
 LIMIT = 65536
+ATTEMPT_EXPIRY = 7 * 86400
+ATTEMPT_PRUNE_BOUND = 4096
 BINDING_FIELDS = {
     "pod_uid",
     "generation",
@@ -653,6 +656,63 @@ def delete(saved, state_path):
     sync_directory(state_path.parent)
 
 
+def expire_attempt_history(root):
+    """Best-effort stale history collection after DEL, under the caller's lock.
+
+    DEL removed the active journal, so surviving attempt records are history.
+    An attempt unmodified for ATTEMPT_EXPIRY seconds is removed together with
+    its attachment lock, oldest first, at most ATTEMPT_PRUNE_BOUND keys per
+    call so one DEL never performs unbounded work; later DELs drain the rest.
+    Each key's exclusive nonblocking lock is acquired before removal: a lock
+    held by a live ADD, CHECK or DEL skips that key, and the DEL running the
+    collection still holds its own key's lock, so no live attachment loses
+    history. A removed attempt that loses a recreation race is recreated by
+    the winning ADD. Stale .pending- saves from interrupted writes older than
+    the same expiry are removed without a lock. Locks without attempts,
+    retirement fences, active journals, captures, partial pins and bindings
+    are never enumerated or removed here; readers keep their own bounded
+    history and journal enumeration.
+    """
+    deadline = time.time() - ATTEMPT_EXPIRY
+    attempts, pendings = {}, []
+    for entry in root.iterdir():
+        name = entry.name
+        try:
+            mtime = entry.stat(follow_symlinks=False).st_mtime
+        except OSError:
+            continue
+        match = re.fullmatch(r"attempt-([0-9a-f]{64})\.json", name)
+        if match:
+            attempts[match[1]] = mtime
+            continue
+        if name.startswith(".pending-"):
+            pendings.append((mtime, name))
+    expired = sorted((mtime, key) for key, mtime in attempts.items() if mtime <= deadline)
+    removed = False
+    for _, key in expired[:ATTEMPT_PRUNE_BOUND]:
+        try:
+            fd = os.open(root / (key + ".lock"), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError:
+            continue
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue  # A live attachment operation owns this history.
+            (root / ("attempt-" + key + ".json")).unlink(missing_ok=True)
+            (root / (key + ".lock")).unlink(missing_ok=True)
+            removed = True
+        finally:
+            os.close(fd)
+    for mtime, name in sorted(pendings):
+        if mtime > deadline:
+            break
+        (root / name).unlink(missing_ok=True)
+        removed = True
+    if removed:
+        sync_directory(root)
+
+
 def peer_cn(certificate):
     # Identity is the role CN. A pathname socket has no hostname to check.
     subject = certificate.get("subject", ())
@@ -723,6 +783,7 @@ def perform(config, env):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if req["command"] == "DEL":
             if not state_path.exists() and not state_path.is_symlink():
+                expire_attempt_history(state_root)
                 return None
             saved = read_record(state_path)
             if any(
@@ -733,6 +794,7 @@ def perform(config, env):
             if req["pod_uid"] and req["pod_uid"] != saved["request"]["pod_uid"]:
                 raise ValueError("cleanup Pod UID changed")
             delete(saved, state_path)
+            expire_attempt_history(state_root)
             return None
         attempt = capture_attempt(state_root, req) if req["command"] == "ADD" else None
         root = private_directory(config["bindingDir"])
