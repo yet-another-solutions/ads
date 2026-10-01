@@ -222,9 +222,9 @@ def _sandbox(buf):
         elif number == 4 and wire == 0:
             item["createdAt"] = _u64(value)
         elif number == 5 and wire == 2:
-            item["labels"] = _string_map(value)
+            item["labels"].update(_string_map(value))
         elif number == 6 and wire == 2:
-            item["annotations"] = _string_map(value)
+            item["annotations"].update(_string_map(value))
         elif number == 7 and wire == 2:
             item["runtimeHandler"] = value.decode()
     return item
@@ -267,9 +267,9 @@ def _container(buf):
         elif number == 7 and wire == 0:
             item["createdAt"] = _u64(value)
         elif number == 8 and wire == 2:
-            item["labels"] = _string_map(value)
+            item["labels"].update(_string_map(value))
         elif number == 9 and wire == 2:
-            item["annotations"] = _string_map(value)
+            item["annotations"].update(_string_map(value))
     return item
 
 
@@ -295,9 +295,9 @@ def _container_status(buf):
             require(wire == 2, "invalid status imageRef wire type")
             status["imageRef"] = value.decode()
         elif number == 12 and wire == 2:
-            status["labels"] = _string_map(value)
+            status["labels"].update(_string_map(value))
         elif number == 13 and wire == 2:
-            status["annotations"] = _string_map(value)
+            status["annotations"].update(_string_map(value))
     return status
 
 
@@ -319,9 +319,9 @@ def _sandbox_status(buf):
         elif number == 3 and wire == 0:
             status["state"] = sandbox_state_name(value)
         elif number == 7 and wire == 2:
-            status["labels"] = _string_map(value)
+            status["labels"].update(_string_map(value))
         elif number == 8 and wire == 2:
-            status["annotations"] = _string_map(value)
+            status["annotations"].update(_string_map(value))
     return status
 
 
@@ -341,6 +341,13 @@ def _info_map(entries):
             out[key] = json.loads(value)
         except (json.JSONDecodeError, TypeError):
             out[key] = value
+    # containerd verbose responses nest every info entry under one "info" key
+    # (its own Info map); flatten that single-entry wrapper to the crictl shape.
+    nested = out.get("info")
+    if isinstance(nested, dict):
+        for key, value in nested.items():
+            out.setdefault(key, value)
+        del out["info"]
     return out
 
 
