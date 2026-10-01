@@ -368,10 +368,11 @@ sandbox:
       tag: ""
       pullPolicy: IfNotPresent
     transportMtu: 1450
-    # CRI endpoint for the node-owner's IPC release observer; the named host
-    # socket is mounted into the pod. Containerd by default; CRI-O labs set
-    # unix:///var/run/crio/crio.sock.
-    criEndpoint: unix:///run/containerd/containerd.sock
+    # Optional CRI endpoint for the node-owner's IPC release observer; the
+    # named host socket is mounted into the pod. Empty (default) detects the
+    # CRI socket at runtime: exactly one live socket must exist (containerd
+    # or CRI-O). Mixed-runtime clusters must keep one socket per node.
+    criEndpoint: ""
     secrets: {}
   admission:
     policyName: ads-sandbox-ipc-exec
