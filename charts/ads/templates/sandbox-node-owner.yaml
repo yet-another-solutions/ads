@@ -414,7 +414,9 @@ data:
       "apiServer": "https://kubernetes.default.svc",
       "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
       "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+      {{- if $sb.nodeOwner.criEndpoint }}
       "cri_endpoint": {{ $sb.nodeOwner.criEndpoint | quote }},
+      {{- end }}
       "container": "ipc",
       "mount": "/var/lib/ads-sandbox-ipc",
       "stateDir": "/var/lib/ads-ptp"

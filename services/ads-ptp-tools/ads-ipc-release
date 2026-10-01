@@ -39,20 +39,23 @@ def uuid(value):
 
 
 def config(value):
+    require(isinstance(value, dict), "exact IPC observer configuration required")
+    allowed = {
+        "node",
+        "namespace",
+        "apiServer",
+        "token",
+        "apiCa",
+        "cri_endpoint",
+        "container",
+        "mount",
+        "stateDir",
+    }
+    # cri_endpoint is optional; without it the CRI socket is detected at
+    # runtime (exactly one live socket must exist).
     require(
         isinstance(value, dict)
-        and set(value)
-        == {
-            "node",
-            "namespace",
-            "apiServer",
-            "token",
-            "apiCa",
-            "cri_endpoint",
-            "container",
-            "mount",
-            "stateDir",
-        },
+        and (set(value) == allowed or set(value) == allowed - {"cri_endpoint"}),
         "exact IPC observer configuration required",
     )
     for key in ("node", "namespace", "container"):
@@ -70,12 +73,13 @@ def config(value):
             and not info.st_mode & (0o077 if name == "token" else 0o022),
             "protected Kubernetes API credential required",
         )
-    require(
-        isinstance(value["cri_endpoint"], str) and value["cri_endpoint"].startswith("unix:///"),
-        "local CRI required",
-    )
-    socket = Path(value["cri_endpoint"].removeprefix("unix://"))
-    require(socket.resolve() == socket, "canonical CRI endpoint required")
+    if "cri_endpoint" in value:
+        require(
+            isinstance(value["cri_endpoint"], str) and value["cri_endpoint"].startswith("unix:///"),
+            "local CRI required",
+        )
+        socket = Path(value["cri_endpoint"].removeprefix("unix://"))
+        require(socket.resolve() == socket, "canonical CRI endpoint required")
     mount = value["mount"]
     require(
         isinstance(mount, str)

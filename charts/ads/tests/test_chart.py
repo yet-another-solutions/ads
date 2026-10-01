@@ -1390,6 +1390,8 @@ class ChartTests(unittest.TestCase):
                 )
                 self.assertEqual(cni_mount["name"], "cni-state")
                 ipc_config = json.loads(docs["ConfigMap", name]["data"]["ipc.json"])
+                # Default render: cri_endpoint omitted -> the node-owner
+                # detects the CRI socket at runtime (exactly one live socket).
                 self.assertEqual(
                     set(ipc_config),
                     {
@@ -1398,18 +1400,15 @@ class ChartTests(unittest.TestCase):
                         "apiServer",
                         "token",
                         "apiCa",
-                        "cri_endpoint",
                         "container",
                         "mount",
                         "stateDir",
                     },
                 )
+                self.assertNotIn("cri_endpoint", ipc_config)
                 self.assertEqual(ipc_config["container"], "ipc")
                 self.assertEqual(ipc_config["mount"], "/var/lib/ads-sandbox-ipc")
                 self.assertEqual(ipc_config["stateDir"], "/var/lib/ads-ptp")
-                self.assertEqual(
-                    ipc_config["cri_endpoint"], "unix:///run/containerd/containerd.sock"
-                )
                 owner_config = json.loads(config)
                 self.assertEqual(owner_config["ipc"], "/host-etc/ipc.json")
                 init_args = pod["initContainers"][0]["args"][0]
@@ -1471,6 +1470,29 @@ class ChartTests(unittest.TestCase):
         ]
         self.assertEqual(verbs, [["create", "get", "list", "delete"]])
         self.assertNotIn("watch", verbs[0])
+
+    def test_node_owner_cri_endpoint_override_renders_key(self):
+        pair = paired_runtime_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            values = Path(directory) / "node-owner-values.yaml"
+            values.write_text(
+                yaml.safe_dump(
+                    {
+                        "sandbox": {
+                            "nodeOwner": {
+                                "criEndpoint": "unix:///var/run/crio/crio.sock",
+                            },
+                            "manager": {
+                                "nodeOwner": {"network": "ads-private"},
+                                "pairInputs": pair,
+                            },
+                        }
+                    }
+                )
+            )
+            docs = self.documents("-f", str(values))
+            ipc_config = json.loads(docs["ConfigMap", "ads-node-owner"]["data"]["ipc.json"])
+            self.assertEqual(ipc_config["cri_endpoint"], "unix:///var/run/crio/crio.sock")
 
 
 if __name__ == "__main__":
