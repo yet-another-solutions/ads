@@ -1335,7 +1335,13 @@ class ChartTests(unittest.TestCase):
             self.assertIn(("Certificate", name), docs)
             self.assertEqual(docs["Certificate", name]["spec"]["commonName"], name)
             pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
-            self.assertFalse(pod["hostNetwork"])
+            if name == "ads-node-owner":
+                # Release capture inventories host links and host /proc
+                # namespaces; the observer shares the host network namespace.
+                self.assertTrue(pod["hostNetwork"])
+                self.assertEqual(pod["dnsPolicy"], "ClusterFirstWithHostNet")
+            else:
+                self.assertFalse(pod["hostNetwork"])
             self.assertFalse(pod["automountServiceAccountToken"])
             rendered = json.dumps(pod)
             self.assertNotIn("hostPort", rendered)
@@ -1361,26 +1367,53 @@ class ChartTests(unittest.TestCase):
                 self.assertIn("/etc/ads-ptp-attestor", owner_mounts)
                 self.assertIn("/var/lib/ads-ptp", owner_mounts)
                 self.assertIn("/var/lib/kubelet", owner_mounts)
+                run_mount = next(
+                    item
+                    for item in pod["containers"][0]["volumeMounts"]
+                    if item["mountPath"] == "/var/run"
+                )
+                self.assertEqual(run_mount["mountPropagation"], "HostToContainer")
+                kubelet_mount = next(
+                    item
+                    for item in pod["containers"][0]["volumeMounts"]
+                    if item["mountPath"] == "/var/lib/kubelet"
+                )
+                self.assertEqual(kubelet_mount["mountPropagation"], "HostToContainer")
                 owner_volumes = {item["name"]: item for item in pod["volumes"]}
                 self.assertEqual(
                     owner_volumes["kubelet-root"]["hostPath"]["path"], "/var/lib/kubelet"
                 )
-                self.assertEqual(
-                    next(
-                        item
-                        for item in pod["containers"][0]["volumeMounts"]
-                        if item["mountPath"] == "/var/lib/kubelet"
-                    )["mountPropagation"],
-                    "HostToContainer",
+                cni_mount = next(
+                    item
+                    for item in pod["containers"][0]["volumeMounts"]
+                    if item["mountPath"] == "/var/lib/ads-ptp"
                 )
+                self.assertEqual(cni_mount["name"], "cni-state")
+                ipc_config = json.loads(docs["ConfigMap", name]["data"]["ipc.json"])
                 self.assertEqual(
-                    next(
-                        item
-                        for item in pod["containers"][0]["volumeMounts"]
-                        if item["mountPath"] == "/var/lib/ads-ptp"
-                    )["name"],
-                    "cni-state",
+                    set(ipc_config),
+                    {
+                        "node",
+                        "namespace",
+                        "apiServer",
+                        "token",
+                        "apiCa",
+                        "cri_endpoint",
+                        "container",
+                        "mount",
+                        "stateDir",
+                    },
                 )
+                self.assertEqual(ipc_config["container"], "ipc")
+                self.assertEqual(ipc_config["mount"], "/var/lib/ads-sandbox-ipc")
+                self.assertEqual(ipc_config["stateDir"], "/var/lib/ads-ptp")
+                self.assertEqual(
+                    ipc_config["cri_endpoint"], "unix:///run/containerd/containerd.sock"
+                )
+                owner_config = json.loads(config)
+                self.assertEqual(owner_config["ipc"], "/host-etc/ipc.json")
+                init_args = pod["initContainers"][0]["args"][0]
+                self.assertIn("ipc.json", init_args)
                 init_mounts = {item["mountPath"] for item in init["volumeMounts"]}
                 self.assertNotIn("/etc/ads-ptp-attestor", init_mounts)
             else:

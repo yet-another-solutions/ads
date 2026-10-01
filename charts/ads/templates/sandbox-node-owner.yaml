@@ -82,7 +82,16 @@ spec:
     spec:
       serviceAccountName: {{ $role.name }}
       automountServiceAccountToken: false
+      {{- if eq $role.name "ads-node-owner" }}
+      # Release capture inventories host links (ip -j link) and IPC release
+      # reads host /proc namespaces, so the observer must share the host
+      # network namespace. The manager dials status.podIP, which resolves to
+      # the node IP here; TLS still verifies the server CN, not the address.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- else }}
       hostNetwork: false
+      {{- end }}
       hostPID: true
       tolerations:
         - key: ads.io/sandbox
@@ -106,6 +115,9 @@ spec:
               if [ -f /config/attestor.json ]; then
                 install -o root -g root -m 0600 /config/attestor.json /host-etc/attestor.json
               fi
+              if [ -f /config/ipc.json ]; then
+                install -o root -g root -m 0600 /config/ipc.json /host-etc/ipc.json
+              fi
               if [ -d /tls-src ]; then
                 install -d -o root -g root -m 0700 /host-etc/tls
                 install -o root -g root -m 0600 /tls-src/ca.crt /host-etc/tls/ca.crt
@@ -116,7 +128,7 @@ spec:
               python3 - "$node" << 'PY'
               import json, pathlib, sys
               node = sys.argv[1]
-              for name in ("config.json", "attestor.json"):
+              for name in ("config.json", "attestor.json", "ipc.json"):
                   path = pathlib.Path("/host-etc") / name
                   if not path.exists():
                       continue
@@ -177,6 +189,10 @@ spec:
               readOnly: true
             - name: run
               mountPath: /var/run
+              # Netns bind mounts (CNI ADD) and peer sockets appear in the
+              # host /var/run after this pod starts; HostToContainer keeps
+              # the observer's view live instead of requiring a pod restart.
+              mountPropagation: HostToContainer
             - name: tls
               mountPath: /tls
               readOnly: true
@@ -373,7 +389,7 @@ data:
       "attestor_cn": "ads-ptp-attestor",
       "socket": {{ $ownerSocket | quote }},
       "pair": {"attestorConfig": "/etc/ads-ptp-attestor/attestor.json", "stateDir": "/var/lib/ads-ptp", "kubeletRoot": "/var/lib/kubelet"},
-      "ipc": null
+      "ipc": "/host-etc/ipc.json"
     }
     {{- else }}
     {
@@ -388,6 +404,20 @@ data:
       "stateDir": "/var/lib/ads-ptp",
       "bindingDir": "/var/lib/ads-ptp/bindings",
       "ownerSocket": {{ $ownerSocket | quote }}
+    }
+    {{- end }}
+    {{- if eq $role.name "ads-node-owner" }}
+  ipc.json: |
+    {
+      "node": "",
+      "namespace": {{ $sb.namespace | quote }},
+      "apiServer": "https://kubernetes.default.svc",
+      "token": "/var/run/secrets/kubernetes.io/serviceaccount/token",
+      "apiCa": "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+      "cri_endpoint": {{ $sb.nodeOwner.criEndpoint | quote }},
+      "container": "ipc",
+      "mount": "/var/lib/ads-sandbox-ipc",
+      "stateDir": "/var/lib/ads-ptp"
     }
     {{- end }}
 ---
