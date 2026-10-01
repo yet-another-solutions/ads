@@ -27,7 +27,7 @@ import hpack
 LIMIT = 4194304
 SOCKETS = (
     "/run/containerd/containerd.sock",
-    "/var/run/crio/crio.sock",
+    "/run/crio/crio.sock",
 )
 RUNTIME_ID = r"(containerd|cri-o)://[0-9a-f]{64}"
 SCHEME = "http"
@@ -73,6 +73,7 @@ def detect():
     for candidate in SOCKETS:
         path = Path(candidate)
         require(path.is_absolute(), "absolute CRI socket path required")
+        require(path == path.resolve(), "canonical CRI socket path required")
         if is_socket(path):  # lstat: symlinks are not sockets, so skipped
             winners.append("unix://" + candidate)
     require(len(winners) == 1, "exactly one live CRI socket required")
