@@ -37,6 +37,30 @@ spec:
   dnsNames:
     - {{ $role.cn | quote }}
 {{- end }}
+{{- if and $root.Values.tls.certManager.enabled (eq $role.name "ads-node-owner") }}
+---
+# Manager's node-owner client identity. The owner server authenticates callers
+# by client certificate CN (manager_cn), so this leaf must present that exact
+# CN and a client-auth EKU. Issued by cert-manager from the same issuer as the
+# node-owner server certificates; never hand-minted.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ads-sandbox-manager-node-owner
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-manager
+spec:
+  secretName: {{ include "ads.sandboxName" (dict "root" $root "component" "manager") }}-node-owner
+  commonName: ads-sandbox-manager
+  issuerRef:
+    name: {{ $issuer.name }}
+    kind: {{ $issuer.kind }}
+    group: {{ $issuer.group }}
+  usages:
+    - client auth
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: DaemonSet

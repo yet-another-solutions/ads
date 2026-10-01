@@ -295,12 +295,14 @@ sandbox:
     # inline credentials. Exact guest/relay/egress/state_bytes shape is documented
     # in docs/egress-pair-creation.md. Empty fails closed, like the CA signer input.
     pairInputs: {}
-    # Dedicated mTLS node-owner trust and manager identity, installed separately
-    # from service TLS and sandbox CA signer custody. Empty fails at startup.
+    # Dedicated mTLS node-owner trust and manager identity. With cert-manager
+    # enabled (required when nodeOwner.network is set) the chart issues the
+    # manager's client leaf (CN ads-sandbox-manager, client auth) into secret
+    # "<sandbox-name>-node-owner" and mounts it; the certificate is never BYO
+    # or hand-minted, because the node-owner server rejects any other client CN.
     # The node-to-pod-IP map is not a values field.
     nodeOwner:
       network: ""
-      tlsSecretName: ""
       timeoutSeconds: 60
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-manager
