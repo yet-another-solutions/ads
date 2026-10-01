@@ -32,6 +32,16 @@ with `ads.io/runtime-contract: nested-v1`. Helm checks this attestation and the
 configured CPU/memory headroom; it cannot read containerd or Kata TOML through
 the Kubernetes API. No node configuration is applied by this chart.
 
+Kata VM RuntimeClasses must also declare `overhead.podFixed.memory`. The
+kubelet charges QEMU resident memory to the pod cgroup, so a pod limited at
+exactly the guest memory is OOM-killed at boot (the QEMU overhead is invisible
+to Kubernetes without it). `160Mi` overhead with `memory_mib=1024` is the
+proven combination. The sandbox manager independently validates that an
+admitted pod's `spec.overhead` matches its RuntimeClass
+(`pair_compute_kube._admitted_spec_matches`), so a mismatching or missing
+overhead fails closed there; it does not resurrect a pod the kubelet already
+OOM-killed.
+
 The guest must expose a private, writable cgroup-v2 mount with `nsdelegate`,
 CPU/memory/PID controllers, and finite enclosing CPU/memory limits. Unsupported
 layouts fail before Ready. The proc allowlist matches the tested Kata layout:

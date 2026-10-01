@@ -370,6 +370,14 @@ relay encapsulation contract. The guest DNS endpoint is the adopted pair-local
 egress address, not Kubernetes DNS. The normal image entrypoint receives
 private mode, the exact generation and the committed CA attempt.
 
+The platform RuntimeClass for any Kata VM member must declare
+`overhead.podFixed.memory`: kubelet bills QEMU resident memory to the pod
+cgroup, so a pod limited at exactly the guest memory is OOM-killed at boot.
+`160Mi` overhead over `memory_mib=1024` is the proven combination. Admission
+validation compares the pod's `spec.overhead` against the live RuntimeClass
+and fails closed on a mismatch; it cannot resurrect a pod the kubelet already
+killed.
+
 The guest retains its workspace block device and read-only public CA consumer
 only. It receives no CA private-key volume, hostPath, runtime socket, API token,
 config Secret, command override or arbitrary caller manifest. Bootstrap adds
