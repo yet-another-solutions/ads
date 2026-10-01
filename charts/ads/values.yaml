@@ -368,6 +368,10 @@ sandbox:
       tag: ""
       pullPolicy: IfNotPresent
     transportMtu: 1450
+    # CRI endpoint for the node-owner's IPC release observer; the named host
+    # socket is mounted into the pod. Containerd by default; CRI-O labs set
+    # unix:///var/run/crio/crio.sock.
+    criEndpoint: unix:///run/containerd/containerd.sock
     secrets: {}
   admission:
     policyName: ads-sandbox-ipc-exec
