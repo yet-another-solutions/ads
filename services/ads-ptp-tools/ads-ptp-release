@@ -44,14 +44,17 @@ def boot_id():
 
 
 def journals(plugin, root):
-    for index, path in enumerate(root.iterdir()):
-        require(index < 16384, "attachment inventory exceeds bound")
-        if re.fullmatch(r"[0-9a-f]{64}\.json", path.name):
-            record = plugin.read_record(path)
-            req = record["request"]
-            require(req["key"] + ".json" == path.name, "journal identity mismatch")
-            plugin.binding(record["binding"], req)
-            yield record
+    count = 0
+    for path in root.iterdir():
+        if not re.fullmatch(r"[0-9a-f]{64}\.json", path.name):
+            continue
+        require(count < 16384, "attachment journal bound exceeded")
+        count += 1
+        record = plugin.read_record(path)
+        req = record["request"]
+        require(req["key"] + ".json" == path.name, "journal identity mismatch")
+        plugin.binding(record["binding"], req)
+        yield record
 
 
 def validate_snapshot(value, scope):
