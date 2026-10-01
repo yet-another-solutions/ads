@@ -372,7 +372,7 @@ jobs:
           helm template ads charts/ads >/tmp/ads-cm.yaml
           test "$(grep -c '^kind: Deployment$' /tmp/ads-cm.yaml)" -eq 8
           test "$(grep -c '^kind: HTTPRoute$' /tmp/ads-cm.yaml)" -eq 1
-          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 10
+          test "$(grep -c '^kind: Certificate$' /tmp/ads-cm.yaml)" -eq 11
           grep -q 'kind: Certificate' /tmp/ads-cm.yaml
           grep -q 'kind: HTTPRoute' /tmp/ads-cm.yaml
           grep -q 'kind: BackendTLSPolicy' /tmp/ads-cm.yaml

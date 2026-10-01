@@ -198,7 +198,11 @@ Those Secrets use the service's environment-key names:
 `ADS_SANDBOX_<MCP|MANAGER>_DATABASE_URL`. Existing Secrets are not copied between
 namespaces. Rendered manifests and Helm release values may contain secrets.
 
-With cert-manager the chart issues three additional Certificates. A namespaced
+With cert-manager the chart issues three additional Certificates plus the
+manager's node-owner client identity (`ads-sandbox-manager-node-owner`, CN
+`ads-sandbox-manager`, client auth): the node-owner DaemonSet rejects any other
+client CN, so that certificate is chart-issued only — there is no BYO path, and
+`sandbox.manager.nodeOwner.network` requires `tls.certManager.enabled`. A namespaced
 Issuer must exist in both workload namespaces; a ClusterIssuer is usually simpler.
 With BYO TLS, set all three `sandbox.<component>.tlsSecretName` values in addition
 to the existing application/preferences TLS references. MCP and manager mount

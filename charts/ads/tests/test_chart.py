@@ -145,11 +145,22 @@ class ChartTests(unittest.TestCase):
         )
 
     def test_node_owner_client_identity_is_only_mounted_by_manager(self):
+        # cert-manager default: chart issues the manager client leaf and mounts it;
+        # no other Deployment mounts a node-owner volume.
         docs = self.documents(
             "--set",
-            "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
-            "--set",
             "sandbox.manager.nodeOwner.network=private",
+        )
+        self.assertIn(
+            ("Certificate", "ads-sandbox-manager-node-owner"),
+            docs,
+        )
+        client = docs["Certificate", "ads-sandbox-manager-node-owner"]
+        self.assertEqual(client["spec"]["commonName"], "ads-sandbox-manager")
+        self.assertEqual(client["spec"]["usages"], ["client auth"])
+        self.assertEqual(
+            client["spec"]["secretName"],
+            "ads-sandbox-manager-node-owner",
         )
         for (kind, name), document in docs.items():
             if kind != "Deployment":
@@ -163,7 +174,10 @@ class ChartTests(unittest.TestCase):
                 if v["name"] == "node-owner"
             ]
             if name == "ads-sandbox-manager":
-                self.assertEqual(volumes[0]["secret"]["secretName"], "dedicated-node-client")
+                self.assertEqual(
+                    volumes[0]["secret"]["secretName"],
+                    "ads-sandbox-manager-node-owner",
+                )
                 self.assertEqual(volumes[0]["secret"]["defaultMode"], 0o440)
                 self.assertEqual(
                     mounts,
@@ -178,7 +192,37 @@ class ChartTests(unittest.TestCase):
             else:
                 self.assertEqual(volumes, [])
                 self.assertEqual(mounts, [])
-        self.assertNotIn(("Secret", "dedicated-node-client"), docs)
+        self.assertNotIn(("Secret", "ads-sandbox-manager-node-owner"), docs)
+
+    def test_node_owner_client_identity_byo_tls_is_rejected(self):
+        # BYO client certificates are exactly how the wrong-CN identity happened:
+        # there is no BYO path for the manager's node-owner identity.
+        result = self.render(
+            "--set",
+            "tls.certManager.enabled=false",
+            "--set",
+            "tls.serviceSecretName=app-tls",
+            "--set",
+            "preferences.tls.serviceSecretName=pref-tls",
+            "--set",
+            "contextMeter.tls.serviceSecretName=meter-tls",
+            "--set",
+            "contextCompactor.tls.serviceSecretName=compactor-tls",
+            "--set",
+            "sandbox.mcp.tlsSecretName=mcp-tls",
+            "--set",
+            "sandbox.manager.tlsSecretName=manager-tls",
+            "--set",
+            "sandbox.ipc.tlsSecretName=ipc-tls",
+            "--set",
+            "sandbox.ipc.caSecretName=ipc-ca",
+            "--set",
+            "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
+            "--set",
+            "sandbox.manager.nodeOwner.network=private",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no BYO manager client certificate", result.stderr)
 
     def test_node_roles_materialize_real_tls_files_and_repoint_config(self):
         docs = self.documents("--set", "sandbox.manager.nodeOwner.network=private")
@@ -890,8 +934,6 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
             "--set",
             "sandbox.manager.nodeOwner.network=private",
-            "--set",
-            "sandbox.manager.nodeOwner.tlsSecretName=node-owner-client",
         )
 
         def environment(component):
@@ -1280,7 +1322,6 @@ class ChartTests(unittest.TestCase):
                             "manager": {
                                 "nodeOwner": {
                                     "network": "ads-private",
-                                    "tlsSecretName": "node-owner-tls",
                                 },
                                 "pairInputs": pair,
                             }
