@@ -222,7 +222,15 @@ def runtime(observer, wanted, pod, container_id):
         and container["info"].get("sandboxID") == sandbox_id,
         "IPC runtime ownership changed",
     )
-    pids = (sandbox["info"]["pid"], container["info"]["pid"])
+    # CRI-O verbose sandbox info carries only runtimeSpec; the pod network
+    # namespace is held by the container process itself (no separate sandbox
+    # process exists), so the sandbox pin degrades to the container pid there.
+    # containerd reports the real sandbox pid. Fail closed on any other shape.
+    sandbox_pid = sandbox["info"].get("pid")
+    if sandbox_pid is None:
+        require(not sandbox["info"], "unexpected sandbox info without pid")
+        sandbox_pid = container["info"]["pid"]
+    pids = (sandbox_pid, container["info"]["pid"])
     require(all(type(pid) is int and pid > 1 for pid in pids), "original native PIDs required")
     return sandbox_id, pids
 
