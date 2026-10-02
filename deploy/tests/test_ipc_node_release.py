@@ -372,11 +372,34 @@ def test_capture_accepts_crio_sandbox_without_pid(ipc, captured, live):
 
 
 def test_capture_rejects_unexpected_sandbox_info_without_pid(ipc, captured, live):
+    # No runtimeSpec marker and no pid: the runtime is neither containerd nor
+    # CRI-O; the pid fallback cannot identify the sandbox process -> fail closed.
     live.sandbox["info"] = {"image": "x"}
     with pytest.raises(ValueError, match="unexpected sandbox info without pid"):
         ipc.capture(
             live.observer, wanted(captured), live.attestor, ipc.load("ads-ptp-release"), live.proc
         )
+
+
+def test_capture_tolerates_future_crio_additive_keys(ipc, captured, live):
+    # CRI info maps are unstructured runtime extras; additive keys in future
+    # CRI-O releases are version-skew noise (cri-tools#297), not a shape break.
+    live.sandbox["info"] = {
+        "runtimeSpec": {"linux": {"namespaces": []}},
+        "pid": None,
+        "someFutureField": {"v": 1},
+    }
+
+    @contextlib.contextmanager
+    def processes(pids):
+        assert pids == (22, 22)  # no sandbox pid: pin degrades to container pid
+        yield lambda: None
+
+    live.attestor = SimpleNamespace(processes=processes)
+    result = ipc.capture(
+        live.observer, wanted(captured), live.attestor, ipc.load("ads-ptp-release"), live.proc
+    )
+    assert result["runtime_id"] == captured["runtime_id"]
 
 
 @pytest.mark.parametrize(

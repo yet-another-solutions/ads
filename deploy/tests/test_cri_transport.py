@@ -139,6 +139,7 @@ def _runtime_spec(args, hostname):
 
 
 REPLAY = {
+    "crio-future": None,  # filled below: crio + additive version-skew key
     "crio": {
         "uid": "11111111-0000-4000-8000-111111111111",
         "namespace": "ads-sandbox",
@@ -191,6 +192,24 @@ REPLAY = {
             "runtimeSpec": _runtime_spec(["relay"], "ads-egress-relay-replay"),
         },
     },
+}
+
+
+# Forward-compat scenario: the measured CRI-O shape plus additive keys a
+# future CRI-O might add to the unstructured info map (cri-tools#297).
+REPLAY["crio-future"] = {
+    **REPLAY["crio"],
+    "uid": "33333333-0000-4000-8000-333333333333",
+    "pod_name": "ads-sandbox-ipc-replay-future",
+    "sandbox_id": "9" * 64,
+    "container_id": "8" * 64,
+    "sandbox_info": {
+        "runtimeSpec": REPLAY["crio"]["sandbox_info"]["runtimeSpec"],
+        "pid": None,
+        "someFutureField": {"v": 1},
+    },
+    # Deep-copied container info re-bound to the new sandbox id.
+    "container_info": {**REPLAY["crio"]["container_info"], "sandboxID": "9" * 64},
 }
 
 
@@ -306,9 +325,9 @@ def test_replay_info_map_shapes_match_recorded_wire(cri, replay, key):
     client, _ = _replay_client(cri, replay, sc["sandbox_id"])
     detail = client.inspectp(sc["sandbox_id"])
     assert set(detail["info"]) == set(sc["sandbox_info"])
-    if key == "crio":
-        assert set(detail["info"]) == {"runtimeSpec"}
-        assert "pid" not in detail["info"]
+    if key.startswith("crio"):
+        assert "runtimeSpec" in detail["info"]
+        assert detail["info"].get("pid") is None
     else:
         assert type(detail["info"]["pid"]) is int
     container = client.inspect(sc["container_id"])
@@ -317,7 +336,12 @@ def test_replay_info_map_shapes_match_recorded_wire(cri, replay, key):
 
 
 @pytest.mark.parametrize(
-    "key,expected_pids", [("crio", (4024349, 4024349)), ("containerd", (923364, 923467))]
+    "key,expected_pids",
+    [
+        ("crio", (4024349, 4024349)),
+        ("containerd", (923364, 923467)),
+        ("crio-future", (4024349, 4024349)),
+    ],
 )
 def test_replay_runtime_pid_fallback_through_wire(ipc_release, cri, replay, key, expected_pids):
     # The exact failure PR #169 fixes, now exercised over the real wire:
@@ -362,7 +386,12 @@ def attest():
 
 
 @pytest.mark.parametrize(
-    "key,expected_pids", [("crio", (4024349, 4024349)), ("containerd", (923364, 923467))]
+    "key,expected_pids",
+    [
+        ("crio", (4024349, 4024349)),
+        ("containerd", (923364, 923467)),
+        ("crio-future", (4024349, 4024349)),
+    ],
 )
 def test_replay_runtime_identity_through_wire(attest, cri, replay, key, expected_pids):
     # Second call site (ads-ptp-attest.runtime_identity) against the same
