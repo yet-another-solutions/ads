@@ -330,7 +330,15 @@ def runtime_identity(observer, relay, container_id):
         and container["info"].get("sandboxID") == sandbox["id"],
         "runtime container identity mismatch",
     )
-    pids = (detail["info"]["pid"], container["info"]["pid"])
+    # CRI-O verbose sandbox info carries only runtimeSpec; the pod network
+    # namespace is held by the container process itself (no separate sandbox
+    # process exists), so the sandbox pin degrades to the container pid there.
+    # containerd reports the real sandbox pid. Fail closed on any other shape.
+    sandbox_pid = detail["info"].get("pid")
+    if sandbox_pid is None:
+        require(not detail["info"], "unexpected sandbox info without pid")
+        sandbox_pid = container["info"]["pid"]
+    pids = (sandbox_pid, container["info"]["pid"])
     require(all(type(pid) is int and pid > 1 for pid in pids), "invalid runtime PID")
     return sandbox["id"], pids
 

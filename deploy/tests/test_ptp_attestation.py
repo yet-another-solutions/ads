@@ -223,6 +223,32 @@ def test_cri_requires_exact_pod_container_image_and_process(attest, fixture, fau
             attest.runtime_identity(RuntimeObserver(f), f.relay, "b" * 64)
 
 
+def test_runtime_identity_accepts_crio_sandbox_without_pid(attest, fixture):
+    # CRI-O verbose sandbox info carries only runtimeSpec: no sandbox pid and
+    # no separate sandbox process. The container pid pins the pod netns.
+    f = fixture
+    f.container["status"]["containerID"] = "cri-o://" + "b" * 64
+    observer = RuntimeObserver(f)
+    observer.cri = lambda: SimpleNamespace(
+        pods=lambda: [f.sandbox],
+        inspectp=lambda sandbox_id: {"status": f.sandbox, "info": {}},
+        inspect=lambda container_id: f.container,
+    )
+    assert attest.runtime_identity(observer, f.relay, "b" * 64) == ("c" * 64, (202, 202))
+
+
+def test_runtime_identity_rejects_unexpected_sandbox_info_without_pid(attest, fixture):
+    f = fixture
+    observer = RuntimeObserver(f)
+    observer.cri = lambda: SimpleNamespace(
+        pods=lambda: [f.sandbox],
+        inspectp=lambda sandbox_id: {"status": f.sandbox, "info": {"image": "x"}},
+        inspect=lambda container_id: f.container,
+    )
+    with pytest.raises(ValueError, match="unexpected sandbox info without pid"):
+        attest.runtime_identity(observer, f.relay, "b" * 64)
+
+
 @pytest.mark.parametrize("fault", ["ticks", "exited"])
 def test_process_pin_and_replacement_detection(attest, monkeypatch, fault):
     # The sandbox Python lacks pidfd_open. Model its pollable descriptor here;

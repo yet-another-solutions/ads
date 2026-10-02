@@ -352,6 +352,32 @@ def test_capture_uses_exact_kubernetes_cri_and_filesystem_identity(ipc, captured
     assert ipc.validate_snapshot(result, wanted(captured)) == result
 
 
+def test_capture_accepts_crio_sandbox_without_pid(ipc, captured, live):
+    # CRI-O verbose sandbox info carries only runtimeSpec: no sandbox pid and
+    # no separate sandbox process. The container pid pins the pod netns.
+    live.sandbox["info"] = {}
+
+    @contextlib.contextmanager
+    def processes(pids):
+        assert pids == (22, 22)
+        yield lambda: None
+
+    live.attestor = SimpleNamespace(processes=processes)
+    result = ipc.capture(
+        live.observer, wanted(captured), live.attestor, ipc.load("ads-ptp-release"), live.proc
+    )
+    assert result["runtime_id"] == captured["runtime_id"]
+    assert ipc.validate_snapshot(result, wanted(captured)) == result
+
+
+def test_capture_rejects_unexpected_sandbox_info_without_pid(ipc, captured, live):
+    live.sandbox["info"] = {"image": "x"}
+    with pytest.raises(ValueError, match="unexpected sandbox info without pid"):
+        ipc.capture(
+            live.observer, wanted(captured), live.attestor, ipc.load("ads-ptp-release"), live.proc
+        )
+
+
 @pytest.mark.parametrize(
     "fault",
     [
