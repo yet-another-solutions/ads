@@ -26,10 +26,9 @@ def installer():
 def _source(tmp_path):
     source = tmp_path / "image"
     source.mkdir()
-    for name in ("ads-ptp", "ads-ptp-attest", "ads-cri"):
-        path = source / name
-        path.write_bytes(b"plugin-" + name.encode())
-        path.chmod(0o755)
+    path = source / "ads-ptp"
+    path.write_bytes(b"plugin-ads-ptp")
+    path.chmod(0o755)
     return source
 
 
@@ -87,9 +86,11 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
         assert written["plugins"][0]["attestorSocket"] == config["attestorSocket"]
         assert "attestorConfig" not in written["plugins"][0]
     assert not (shared / "10-crio-bridge.conflist").exists()
-    for name in ("ads-ptp", "ads-ptp-attest", "ads-cri"):
-        assert (binary / name).read_bytes() == (source / name).read_bytes()
-        assert stat.S_IMODE((binary / name).stat().st_mode) == 0o755
+    name = "ads-ptp"
+    assert (binary / name).read_bytes() == (source / name).read_bytes()
+    assert stat.S_IMODE((binary / name).stat().st_mode) == 0o755
+    assert not (binary / "ads-ptp-attest").exists()
+    assert not (binary / "ads-cri").exists()
     for item in (*held, live):
         item.close()
 

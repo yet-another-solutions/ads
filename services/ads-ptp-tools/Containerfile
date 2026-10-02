@@ -1,8 +1,7 @@
 FROM python:3.12-slim-bookworm
-# hpack is pinned pure-Python; response-side HPACK decode in ads-cri needs it
-# (real gRPC servers huffman-encode and use indexed fields). Stdlib-only
-# remains true for every host-side binary; nothing extra lands on worker hosts.
-RUN pip install --no-cache-dir hpack==4.2.0 \
+# grpcio carries the HTTP/2/gRPC transport; response parsing uses the
+# vendored cri-api 1.36 generated stubs (grpcio-tools stays out of the image).
+RUN pip install --no-cache-dir grpcio==1.84.0 protobuf==7.36.2 \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         iproute2 wireguard-tools nftables tcpdump iputils-ping iputils-arping \
@@ -13,7 +12,8 @@ COPY services/ads-ptp-tools/ads-ptp /usr/local/bin/ads-ptp
 COPY services/ads-ptp-tools/ads-ptp-relay /usr/local/bin/ads-ptp-relay
 COPY services/ads-ptp-tools/ads-ptp-attest /usr/local/bin/ads-ptp-attest
 COPY services/ads-ptp-tools/ads-cri /usr/local/bin/ads-cri
-COPY services/ads-ptp-tools/cri_wire.py /usr/local/bin/cri_wire.py
+COPY services/ads-ptp-tools/cri_api_1_36_pb2.py /usr/local/bin/cri_api_1_36_pb2.py
+COPY services/ads-ptp-tools/cri_api_1_36_pb2_grpc.py /usr/local/bin/cri_api_1_36_pb2_grpc.py
 COPY services/ads-ptp-tools/ads-ptp-retire /usr/local/bin/ads-ptp-retire
 COPY services/ads-ptp-tools/ads-ptp-release /usr/local/bin/ads-ptp-release
 COPY services/ads-ptp-tools/ads-ptp-partial /usr/local/bin/ads-ptp-partial
