@@ -330,13 +330,20 @@ def runtime_identity(observer, relay, container_id):
         and container["info"].get("sandboxID") == sandbox["id"],
         "runtime container identity mismatch",
     )
-    # CRI-O verbose sandbox info carries only runtimeSpec; the pod network
-    # namespace is held by the container process itself (no separate sandbox
-    # process exists), so the sandbox pin degrades to the container pid there.
-    # containerd reports the real sandbox pid. Fail closed on any other shape.
+    # CRI verbose info maps are unstructured runtime extras (api.proto: "key
+    # could be arbitrary string ... could include anything useful"); additive
+    # fields across runtime versions must be ignored, not fatal (version skew,
+    # cri-tools#297). So pin on the recognized marker only: pid-less info
+    # carrying runtimeSpec is the CRI-O shape -- the pod network namespace is
+    # held by the container process itself (no separate sandbox process), and
+    # the sandbox pin degrades to the container pid there. containerd reports
+    # the real sandbox pid. Unrecognized pid-less shapes still fail closed.
     sandbox_pid = detail["info"].get("pid")
     if sandbox_pid is None:
-        require(not detail["info"], "unexpected sandbox info without pid")
+        require(
+            "runtimeSpec" in detail["info"],
+            "unexpected sandbox info without pid",
+        )
         sandbox_pid = container["info"]["pid"]
     pids = (sandbox_pid, container["info"]["pid"])
     require(all(type(pid) is int and pid > 1 for pid in pids), "invalid runtime PID")

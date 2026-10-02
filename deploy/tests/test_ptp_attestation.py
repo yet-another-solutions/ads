@@ -224,20 +224,25 @@ def test_cri_requires_exact_pod_container_image_and_process(attest, fixture, fau
 
 
 def test_runtime_identity_accepts_crio_sandbox_without_pid(attest, fixture):
-    # CRI-O verbose sandbox info carries only runtimeSpec: no sandbox pid and
-    # no separate sandbox process. The container pid pins the pod netns.
+    # CRI-O verbose sandbox info carries only runtimeSpec (measured on CRI-O
+    # 1.36.4: info keys == ['runtimeSpec']): no sandbox pid and no separate
+    # sandbox process. The container pid pins the pod netns.
     f = fixture
     f.container["status"]["containerID"] = "cri-o://" + "b" * 64
     observer = RuntimeObserver(f)
     observer.cri = lambda: SimpleNamespace(
         pods=lambda: [f.sandbox],
-        inspectp=lambda sandbox_id: {"status": f.sandbox, "info": {}},
+        inspectp=lambda sandbox_id: {
+            "status": f.sandbox,
+            "info": {"runtimeSpec": {"linux": {"namespaces": []}}},
+        },
         inspect=lambda container_id: f.container,
     )
     assert attest.runtime_identity(observer, f.relay, "b" * 64) == ("c" * 64, (202, 202))
 
 
 def test_runtime_identity_rejects_unexpected_sandbox_info_without_pid(attest, fixture):
+    # No runtimeSpec marker and no pid: fail closed (unknown pid-less shape).
     f = fixture
     observer = RuntimeObserver(f)
     observer.cri = lambda: SimpleNamespace(
@@ -247,6 +252,21 @@ def test_runtime_identity_rejects_unexpected_sandbox_info_without_pid(attest, fi
     )
     with pytest.raises(ValueError, match="unexpected sandbox info without pid"):
         attest.runtime_identity(observer, f.relay, "b" * 64)
+
+
+def test_runtime_identity_tolerates_future_crio_additive_keys(attest, fixture):
+    # Additive keys beside runtimeSpec are version-skew noise (cri-tools#297).
+    f = fixture
+    observer = RuntimeObserver(f)
+    observer.cri = lambda: SimpleNamespace(
+        pods=lambda: [f.sandbox],
+        inspectp=lambda sandbox_id: {
+            "status": f.sandbox,
+            "info": {"runtimeSpec": {"linux": {"namespaces": []}}, "someFutureField": 7},
+        },
+        inspect=lambda container_id: f.container,
+    )
+    assert attest.runtime_identity(observer, f.relay, "b" * 64) == ("c" * 64, (202, 202))
 
 
 @pytest.mark.parametrize("fault", ["ticks", "exited"])
