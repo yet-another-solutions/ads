@@ -336,7 +336,10 @@ def runtime_identity(observer, relay, container_id):
     # containerd reports the real sandbox pid. Fail closed on any other shape.
     sandbox_pid = detail["info"].get("pid")
     if sandbox_pid is None:
-        require(not detail["info"], "unexpected sandbox info without pid")
+        require(
+            set(detail["info"]) == {"runtimeSpec"},
+            "unexpected sandbox info without pid",
+        )
         sandbox_pid = container["info"]["pid"]
     pids = (sandbox_pid, container["info"]["pid"])
     require(all(type(pid) is int and pid > 1 for pid in pids), "invalid runtime PID")

@@ -353,9 +353,10 @@ def test_capture_uses_exact_kubernetes_cri_and_filesystem_identity(ipc, captured
 
 
 def test_capture_accepts_crio_sandbox_without_pid(ipc, captured, live):
-    # CRI-O verbose sandbox info carries only runtimeSpec: no sandbox pid and
-    # no separate sandbox process. The container pid pins the pod netns.
-    live.sandbox["info"] = {}
+    # CRI-O verbose sandbox info carries only runtimeSpec (measured on CRI-O
+    # 1.36.4: info keys == ['runtimeSpec']): no sandbox pid and no separate
+    # sandbox process. The container pid pins the pod netns.
+    live.sandbox["info"] = {"runtimeSpec": {"linux": {"namespaces": []}}}
 
     @contextlib.contextmanager
     def processes(pids):

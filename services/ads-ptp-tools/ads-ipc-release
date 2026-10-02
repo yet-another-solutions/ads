@@ -228,7 +228,10 @@ def runtime(observer, wanted, pod, container_id):
     # containerd reports the real sandbox pid. Fail closed on any other shape.
     sandbox_pid = sandbox["info"].get("pid")
     if sandbox_pid is None:
-        require(not sandbox["info"], "unexpected sandbox info without pid")
+        require(
+            set(sandbox["info"]) == {"runtimeSpec"},
+            "unexpected sandbox info without pid",
+        )
         sandbox_pid = container["info"]["pid"]
     pids = (sandbox_pid, container["info"]["pid"])
     require(all(type(pid) is int and pid > 1 for pid in pids), "original native PIDs required")
