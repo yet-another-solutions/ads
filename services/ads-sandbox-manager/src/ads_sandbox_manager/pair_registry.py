@@ -6,12 +6,11 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select, tuple_
+from sqlalchemy import String, and_, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.pair_disposal import PairDisposal, PairDisposalRepository
-from ads_sandbox_manager.pair_retirement import PairRetirement
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_transfer import PairTransfer
 from ads_sandbox_manager.session_objects import session_name
@@ -43,6 +42,10 @@ class PairRegistry:
         recoverable = owners.where(
             SandboxSession.status.in_(("shutting_down", "recovering", "service"))
         )
+        # O2: retirement state derives from the intent's own plain columns.
+        # No PairRetirement rows are written, so retained lifetimes must be
+        # identified structurally: the retained workspace still holds its
+        # original storage, or this generation inherits one.
         query = (
             select(PairIntent.generation)
             .where(
@@ -52,12 +55,18 @@ class PairRegistry:
                 .exists(),
                 or_(
                     PairIntent.retired_at.is_(None),
-                    select(PairRetirement.generation)
-                    .where(
-                        PairRetirement.generation == PairIntent.generation,
-                        PairRetirement.kind.in_(("idle", "orphan-retained")),
-                    )
-                    .exists(),
+                    and_(
+                        PairIntent.retired_at.is_not(None),
+                        or_(
+                            and_(
+                                PairIntent.volume_resources["workspace"]["dispatch"]
+                                .cast(String)
+                                != "unissued",
+                                PairIntent.retained_from.is_(None),
+                            ),
+                            PairIntent.retained_from.is_not(None),
+                        ),
+                    ),
                 ),
                 ~select(PairTransfer.generation)
                 .where(PairTransfer.predecessor == PairIntent.generation)
