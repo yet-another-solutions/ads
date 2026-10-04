@@ -150,13 +150,23 @@ class CleanupAdapter:
     async def observe_pod(self, name: str) -> Object | None:
         return await self.kube.named_pod(name)
 
-    async def delete_pod(self, desired: Object, uid: str, *, node: str) -> bool:
-        """Fenced Pod deletion: re-observe, then UID/RV preconditions under the node."""
+    async def delete_pod(
+        self, desired: Object, uid: str, *, node: str | None
+    ) -> bool:
+        """Fenced Pod deletion: re-observe, then UID/RV preconditions.
+
+        A never-scheduled Pod has no node; the deletion stays fenced by UID
+        and resourceVersion alone, which is the same evidence the old
+        unscheduled-pod proof relied on.
+        """
         obj = await self.observe_pod(desired["metadata"]["name"])
         if obj is None or obj["metadata"]["uid"] != uid:
             raise RuntimeError("cleanup Pod was replaced")
-        if obj.get("spec", {}).get("nodeName") != node:
+        captured_node = obj.get("spec", {}).get("nodeName")
+        if node is not None and captured_node != node:
             raise RuntimeError("cleanup Pod moved away from captured node")
+        if node is None and captured_node is not None:
+            raise RuntimeError("cleanup Pod was scheduled after unscheduled capture")
         k = self.kube
         try:
             await k._call(

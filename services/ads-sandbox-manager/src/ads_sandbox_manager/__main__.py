@@ -7,7 +7,7 @@ import uvicorn
 
 from ads_commons_schema import alembic_ini_for, mapped_tables, prepare_schema
 from ads_sandbox_manager.app import create_app
-from ads_sandbox_manager.config import load_settings
+from ads_sandbox_manager.config import load_settings, load_tls_context
 from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.pair_disposal import PairDisposal
@@ -26,6 +26,9 @@ class FailFastServer(uvicorn.Server):
 
 def main() -> None:
     settings = load_settings()
+    # TLS must be proven loadable before any network or database connection;
+    # a misconfigured cert must fail the process before it reaches the store.
+    load_tls_context(settings)
     prepare_schema(
         alembic_ini=alembic_ini_for("ads-sandbox-manager"),
         database_url=settings.database_url,

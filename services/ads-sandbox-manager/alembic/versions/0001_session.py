@@ -154,7 +154,6 @@ def upgrade() -> None:
         sa.Column("project_id", sa.Uuid(), nullable=False),
         sa.Column("claim_owner", sa.Uuid(), nullable=False),
         sa.Column("claim_changed", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("retirement_sha256", sa.String(), nullable=False),
         sa.Column("state", JSONB(), nullable=False),
         sa.Column("workspace", JSONB(), nullable=False),
         sa.Column("validated_at", sa.DateTime(timezone=True), nullable=True),
@@ -171,11 +170,7 @@ def upgrade() -> None:
         sa.Column("project_id", sa.Uuid(), nullable=False),
         sa.Column("pvc_id", sa.Uuid(), nullable=False),
         sa.Column("pvc_uid", sa.String(), nullable=False),
-        sa.Column("retirement_sha256", sa.String(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("targets", JSONB(), nullable=False),
-        sa.Column("block_release", JSONB(), nullable=True),
-        sa.Column("dispositions", JSONB(), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_sandbox_pair_disposal_session_id", "sandbox_pair_disposal", ["session_id"])

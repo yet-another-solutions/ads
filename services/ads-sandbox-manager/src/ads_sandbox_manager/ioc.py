@@ -28,16 +28,10 @@ from ads_sandbox_manager.kafka import KafkaRuntime, KafkaTopics, KafkaTransport
 from ads_sandbox_manager.kube import KubeClient, Kubernetes, SessionKubernetes
 from ads_sandbox_manager.lifecycle import LifecycleService
 from ads_sandbox_manager.lifecycle_store import LifecycleRepository
-from ads_sandbox_manager.node_owner import (
-    HttpsNodeOwner,
-    NodeOwnerDirectory,
-    NodeOwnerSettings,
-)
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture, PairCleanupKubernetes
 from ads_sandbox_manager.pair_creation import PairCreation
 from ads_sandbox_manager.pair_kube import PairControlAdapter
-from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
-from ads_sandbox_manager.pair_runtime_teardown import PairNodeOwner, PairRuntimeTeardown
+from ads_sandbox_manager.pair_teardown import PairTeardown
 from ads_sandbox_manager.recovery import RecoveryService
 from ads_sandbox_manager.runtime import ManagerRuntime
 from ads_sandbox_manager.service import Maintenance, Publisher, TransitService
@@ -112,69 +106,18 @@ class AppProvider(Provider):
     lifecycle_repository = provide(LifecycleRepository, scope=Scope.APP)
     pair_cleanup_kube = provide(PairControlAdapter, scope=Scope.APP, provides=PairCleanupKubernetes)
     pair_capture = provide(PairCleanupCapture, scope=Scope.APP)
-    lifecycle = provide(LifecycleService, scope=Scope.APP)
-    recovery = provide(RecoveryService, scope=Scope.APP)
-
     @provide(scope=Scope.APP)
-    def pair_resources(
-        self,
-        pair_runtime: PairRuntimeTeardown | None,
-        pair_cleanup_kube: PairCleanupKubernetes,
-        topics: TopicPreparation,
-    ) -> PairResourceTeardown | None:
-        if pair_runtime is None:
-            return None
-        return PairResourceTeardown(pair_runtime, pair_cleanup_kube, topics)
-
-    @provide(scope=Scope.APP)
-    async def node_owner(
-        self, settings: Settings, kube: KubeClient
-    ) -> AsyncIterator[PairNodeOwner | None]:
-        if settings.node_owner is None:
-            yield None  # Isolated fixtures only; environment startup requires it.
-            return
-        config = NodeOwnerSettings.parse(settings.node_owner)
-        directory = NodeOwnerDirectory(kube, config.namespace)
-        deadline = asyncio.get_running_loop().time() + config.timeout
-        while not directory.addresses:
-            await directory.refresh()
-            if directory.addresses or asyncio.get_running_loop().time() >= deadline:
-                break
-            await asyncio.sleep(1)
-        if not directory.addresses:
-            raise RuntimeError("node-owner pods not ready")
-        owner = HttpsNodeOwner(config, config.context(), directory.addresses)
-
-        async def refresh() -> None:
-            while True:
-                await asyncio.sleep(5)
-                await directory.refresh()
-                owner.addresses = directory.addresses
-
-        task = asyncio.create_task(refresh())
-        try:
-            yield owner
-        finally:
-            task.cancel()
-            await owner.close()
-
-    @provide(scope=Scope.APP)
-    async def pair_runtime(
+    def pair_teardown(
         self,
         settings: Settings,
         sessions: async_sessionmaker[AsyncSession],
         repository: LifecycleRepository,
-        kube: KubeClient,
         storage: CleanupKubernetes,
-        node_owner: PairNodeOwner | None,
-    ) -> AsyncIterator[PairRuntimeTeardown | None]:
-        runtime = PairRuntimeTeardown(
-            settings, sessions, repository, PairControlAdapter(kube), storage, node_owner
-        )
-        try:
-            yield runtime
-        finally:
-            await runtime.drain()
+    ) -> PairTeardown | None:
+        return PairTeardown(settings, sessions, repository, storage)
+
+    lifecycle = provide(LifecycleService, scope=Scope.APP)
+    recovery = provide(RecoveryService, scope=Scope.APP)
 
     @provide(scope=Scope.APP)
     def pair_creation(

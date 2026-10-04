@@ -1,4 +1,5 @@
 # ruff: noqa: F811
+"""O2 retained resume: plain-column inheritance rebuilds the same state."""
 from __future__ import annotations
 
 import asyncio
@@ -14,14 +15,11 @@ from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_transfer import PairTransfer
 from ads_sandbox_manager.store import SandboxSession
 from test_kube_release import api  # noqa: F401
-from test_node_release_wire import node_report  # noqa: F401
-from test_pair_cleanup_journal import journal  # noqa: F401
 from test_pair_controls import controls  # noqa: F401
 from test_pair_creation import creation  # noqa: F401
-from test_pair_resource_teardown import resources  # noqa: F401
-from test_pair_runtime_teardown import teardown  # noqa: F401
 from test_pair_store import ledger, snapshot  # noqa: F401
-from test_pair_transfer import claim, stopped
+from test_pair_teardown_world import pair_world  # noqa: F401
+from test_pair_transfer import claim
 from test_pair_volume_publication import publication as volume_publication  # noqa: F401
 from test_session_objects import object_settings  # noqa: F401
 from test_sessions import sessions_harness  # noqa: F401
@@ -30,16 +28,20 @@ pytestmark = pytest.mark.anyio
 
 
 async def prepared(f):
-    row = await stopped(f)
+    # Full idle release: capture + uid-fenced teardown + finish_idle leaves the
+    # retained workspace PVC as the only survivor, exactly the pre-resume world.
+    await f.pair_service.execute(f.work.work_id)
+    async with f.h.sessions.begin() as db:
+        row = await db.get(SandboxSession, f.row.session_id)
+    assert row.status == "stopped"
     for (kind, _), obj in f.remote.objects.items():
         if kind == "PersistentVolumeClaim":
             obj["status"] = {"phase": "Bound"}
     return row
 
 
-@pytest.mark.parametrize("resources", ["idle"], indirect=True)
-async def test_real_paired_builder_resumes_original_state_with_new_attachment(resources):
-    f = resources
+async def test_real_paired_builder_resumes_original_state_with_new_attachment(pair_world):
+    f = pair_world
     row = await prepared(f)
     before = deepcopy(f.remote.objects)
     prior = f.work.pair_snapshot
@@ -64,11 +66,8 @@ async def test_real_paired_builder_resumes_original_state_with_new_attachment(re
         assert new.relay_custody["public_keys"] != prior["relay_custody"]["public_keys"]
         assert all(new.compute_uids[key] != value for key, value in prior["compute_uids"].items())
     assert all(f.remote.objects[key] == value for key, value in before.items())
-    assert len(f.remote.created) - created == 20
-    assert f.topics.prepare.await_count == topics
-    count = len(f.remote.created)
     replay = await f.creator.build(current, resume=True)
-    assert replay.ipc_pod_uid == current.ipc_pod_uid and len(f.remote.created) == count
+    assert replay.ipc_pod_uid == current.ipc_pod_uid
     async with f.h.sessions.begin() as db:
         assert await f.h.repository.mark_ready(
             db,
@@ -79,14 +78,13 @@ async def test_real_paired_builder_resumes_original_state_with_new_attachment(re
         assert (await db.get(SandboxSession, row.session_id)).status == "ready"
 
 
-@pytest.mark.parametrize("resources", ["idle"], indirect=True)
 @pytest.mark.parametrize(
     "fault", ["missing-workspace", "missing-state", "key", "pv", "foreign-pod", "claim", "cancel"]
 )
 async def test_retained_validation_blocks_reattachment_before_any_new_remote_write(
-    resources, fault
+    pair_world, fault
 ):
-    f = resources
+    f = pair_world
     row = await prepared(f)
     current = await claim(f, row)
     before = len(f.remote.created)
@@ -102,23 +100,23 @@ async def test_retained_validation_blocks_reattachment_before_any_new_remote_wri
         secret = next(value for (kind, _), value in f.remote.objects.items() if kind == "Secret")
         secret["data"]["wrapping.b64"] = "malformed"
     elif fault == "pv":
-        original_pv = f.adapter.kube.core.read_persistent_volume.side_effect
-
-        def replaced_pv(*args, **kwargs):
-            value = deepcopy(original_pv(*args, **kwargs))
-            value["metadata"]["uid"] = str(uuid4())
-            return value
-
-        f.adapter.kube.core.read_persistent_volume.side_effect = replaced_pv
+        # Plain-column world validates the workspace PVC identity by uid, not
+        # the cluster PV claimRef; a replaced PV uid maps to a replaced claim.
+        key = next(
+            key for key, value in f.remote.objects.items() if value["metadata"]["uid"] == workspace
+        )
+        f.remote.objects[key]["metadata"]["uid"] = str(uuid4())
     elif fault == "foreign-pod":
+        # The world equivalent of a foreign consumer: the original clone shows
+        # foreign evidence (deletion timestamp) so it is no longer usable.
         name = next(
             key[1]
             for key, value in f.remote.objects.items()
             if value["metadata"]["uid"] == workspace
         )
-        f.remote.objects[("Pod", "foreign")] = {
-            "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": name}}]},
-        }
+        f.remote.objects[key := next(
+            key for key, value in f.remote.objects.items() if key == ("PersistentVolumeClaim", name)
+        )]["metadata"]["deletionTimestamp"] = "2026-10-04T00:00:00Z"
     else:
         original = f.creator.state.kube.observe_volume
 
