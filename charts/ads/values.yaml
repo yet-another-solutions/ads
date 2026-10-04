@@ -362,9 +362,8 @@ sandbox:
     stdoutBytes: 65536
     stderrBytes: 65536
     inputBytes: 262144
-  # CNI plugin tooling image + client TLS secrets. The old node-owner role
-  # set is gone; only ads-ptp-cni remains (G2 lookup, G9 annotations).
-  nodeOwner:
+  # CNI plugin tooling image + client TLS secrets (G2 lookup, G9 annotations).
+  cni:
     image:
       repository: ghcr.io/yet-another-solutions/ads-ptp-tools
       tag: ""

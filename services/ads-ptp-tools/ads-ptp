@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private node-side CNI attachment. Root-owned attestation is mandatory."""
+"""Private node-side CNI attachment. The manager reply is the binding."""
 
 from __future__ import annotations
 
@@ -119,57 +119,33 @@ def sync_directory(path):
         os.close(fd)
 
 
+class RetryLater(Exception):
+    """Manager not ready yet; plugin retries within its bounded budget."""
+
+    def __init__(self, retry_after):
+        super().__init__(retry_after)
+        self.retry_after = retry_after
+
+
 @contextlib.contextmanager
-def generation_lock(root, generation):
-    """Serialize admission and irreversible fencing of an existing generation."""
-    if not isinstance(generation, str) or str(UUID(generation)) != generation:
-        raise ValueError("canonical attachment generation required")
+def attachment_lock(root, key):
+    """Serialize ADD/CHECK/DEL effects and history collection for one key."""
     root = private_directory(root)
     fd = os.open(
-        root / ("generation-" + generation + ".lock"),
+        root / (key + ".lock"),
         os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
         0o600,
     )
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-            raise ValueError("invalid generation lock")
-        # Busy is not a successful fence. The trusted caller must retry later;
-        # no timeout or cancellation can pretend an in-flight ADD was stopped.
+            raise ValueError("invalid attachment lock")
+        # Busy is not a verdict. The trusted caller (CRI) retries; no timeout
+        # or cancellation may pretend an in-flight ADD was stopped.
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield root / ("retired-" + generation + ".json")
+        yield
     finally:
         os.close(fd)
-
-
-def retire(config):
-    """Persist an admission fence, not a cleanup or runtime-release verdict."""
-    if not isinstance(config, dict) or set(config) != {
-        "stateDir",
-        "network",
-        "sandbox_id",
-        "generation",
-    }:
-        raise ValueError("exact retirement identity required")
-    if (
-        not isinstance(config["network"], str)
-        or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", config["network"])
-        or not isinstance(config["sandbox_id"], str)
-        or str(UUID(config["sandbox_id"])) != config["sandbox_id"]
-    ):
-        raise ValueError("invalid retirement identity")
-    record = {key: config[key] for key in ("network", "sandbox_id", "generation")}
-    with generation_lock(config["stateDir"], config["generation"]) as path:
-        if (path.exists() or path.is_symlink()) and read_record(path) != record:
-            raise ValueError("retirement identity changed")
-        # Re-fsync on an idempotent retry too: an earlier directory fsync may
-        # have failed after rename. Never erase a fence, even after all DELs.
-        save_record(path, record)
-    return {
-        **record,
-        "attachment_admission_fenced": True,
-        "runtime_release_proven": False,
-    }
 
 
 def request(config, env):
@@ -231,12 +207,13 @@ def pod_annotations(config):
 
 def binding(value, req):
     if set(value) != BINDING_FIELDS:
-        raise ValueError("exact node attestation required")
+        raise ValueError("exact manager binding required")
     for key in ("pod_uid", "generation", "sandbox_id", "relay_pod_uid"):
         if str(UUID(value[key])) != value[key]:
             raise ValueError("canonical attested UUID required")
     if (
         value["pod_uid"] != req["pod_uid"]
+        or value["generation"] != (req.get("annotations") or {}).get(GENERATION_ANNOTATION)
         or value["network"] != req["network"]
         or value["ifname"] != req["ifname"]
         or value["pod_uid"] == value["relay_pod_uid"]
@@ -374,17 +351,18 @@ def boot_identity():
 
 
 def capture_attempt(root, req):
-    """Preserve every ADD before attestation, namespace inspection or effects.
+    """Preserve every ADD before the manager lookup, namespace inspection or
 
-    Caller holds the original attachment lock. This is history, not trusted
-    generation binding or a runtime-release verdict. DEL never removes it.
+    any effect. Caller holds the original attachment lock. This is history,
+    not trusted generation binding or a runtime-release verdict. DEL never
+    removes it.
     """
     path = root / ("attempt-" + req["key"] + ".json")
     active = root / (req["key"] + ".json")
     if path.exists() or path.is_symlink():
         saved = read_record(path)
         if (
-            set(saved) != {"schema", "request", "boot_id", "vm_identity", "binding"}
+            set(saved) != {"schema", "request", "boot_id", "vm_identity"}
             or saved["schema"] != "ads-ptp-attempt-v1"
             or saved["request"] != req
             or saved["boot_id"] != boot_identity()
@@ -397,10 +375,6 @@ def capture_attempt(root, req):
             or not all(type(x) is int and x > 0 for x in identity)
         ):
             raise ValueError("invalid original attempt namespace")
-        if saved["binding"] is not None:
-            binding(saved["binding"], req)
-            if identity is None:
-                raise ValueError("admitted attempt missing original namespace")
     else:
         if active.exists() or active.is_symlink():
             raise ValueError("active attachment missing original attempt history")
@@ -409,7 +383,6 @@ def capture_attempt(root, req):
             "request": req,
             "boot_id": boot_identity(),
             "vm_identity": None,
-            "binding": None,
         }
     # Reassert durability after a lost response/directory-fsync failure. An
     # inability even to inspect the namespace still leaves the original request.
@@ -423,15 +396,6 @@ def capture_attempt(root, req):
         raise ValueError("node boot changed during ADD attempt")
     save_record(path, saved)
     return path, saved
-
-
-def bind_attempt(path, saved, attestation):
-    """Called under the generation fence immediately before possible effects."""
-    if saved["binding"] is not None and saved["binding"] != attestation:
-        raise ValueError("original admitted attempt binding changed")
-    if boot_identity() != saved["boot_id"]:
-        raise ValueError("node boot changed before ADD admission")
-    save_record(path, {**saved, "binding": attestation})
 
 
 def execute(fd, *args, other=()):
@@ -735,10 +699,9 @@ def expire_attempt_history(root):
     collection still holds its own key's lock, so no live attachment loses
     history. A removed attempt that loses a recreation race is recreated by
     the winning ADD. Stale .pending- saves from interrupted writes older than
-    the same expiry are removed without a lock. Locks without attempts,
-    retirement fences, active journals, captures, partial pins and bindings
-    are never enumerated or removed here; readers keep their own bounded
-    history and journal enumeration.
+    the same expiry are removed without a lock. Locks without attempts and
+    active journals are never enumerated or removed here; readers keep their
+    own bounded history and journal enumeration.
     """
     deadline = time.time() - ATTEMPT_EXPIRY
     attempts, pendings = {}, []
@@ -884,16 +847,7 @@ def perform(config, env):
     req = request(config, env)
     state_root = private_directory(config["stateDir"])
     state_path = state_root / (req["key"] + ".json")
-    lock = os.open(
-        state_root / (req["key"] + ".lock"),
-        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
-        0o600,
-    )
-    try:
-        info = os.fstat(lock)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-            raise ValueError("invalid attachment lock")
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with attachment_lock(state_root, req["key"]):
         if req["command"] == "DEL":
             if not state_path.exists() and not state_path.is_symlink():
                 expire_attempt_history(state_root)
@@ -921,10 +875,9 @@ def perform(config, env):
         ):
             return None
         attempt = capture_attempt(state_root, req) if req["command"] == "ADD" else None
-        root = private_directory(config["bindingDir"])
         # Bounded manager retry: 404/503/network errors are retried ~30x1s
-        # (relay inputs and container identity settle seconds after ADD),
-        # then the attachment fails closed.
+        # (relay inputs and container identity settle seconds after ADD);
+        # the final failure propagates and the ADD fails closed.
         for remaining in range(LOOKUP_ATTEMPTS - 1, -1, -1):
             try:
                 # One HTTPS round trip. DEL returned above and never dials.
@@ -936,7 +889,7 @@ def perform(config, env):
                     raise
                 time.sleep(float(retry.retry_after) or LOOKUP_BACKOFF_SECONDS)
             except (ValueError, OSError):
-                # 404 (generation unknown/retired) and network errors can both
+                # 404 (generation unknown) and network errors can both
                 # precede the manager's first observation of the new Pod.
                 if remaining == 0:
                     raise
@@ -957,28 +910,18 @@ def perform(config, env):
         private, transport = observe_namespaces(req, observed)
         record["private"] = private
         record["transport"] = transport
-        save_record(root / (req["pod_uid"] + ".json"), record)
         attestation = binding(record, req)
-        # Attestation can finish late, after retirement started. Only the
-        # protected generation lock plus persistent fence authorizes effects.
-        with generation_lock(state_root, attestation["generation"]) as retired:
-            if retired.exists() or retired.is_symlink():
-                read_record(retired)  # Corrupt/unreadable records also fail closed.
-                raise ValueError("attachment generation retired")
-            if req["command"] == "ADD":
-                assert attempt is not None
-                path, saved = attempt
-                bind_attempt(path, saved, attestation)
-                return add(
-                    req, attestation, state_path, config.get("prevResult"), saved["vm_identity"]
-                )
-            saved = read_record(state_path)
-            if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
-                raise ValueError("CHECK identity changed")
-            check(req, attestation, saved, config.get("prevResult"))
-            return None
-    finally:
-        os.close(lock)
+        if req["command"] == "ADD":
+            assert attempt is not None
+            path, saved = attempt
+            return add(
+                req, attestation, state_path, config.get("prevResult"), saved["vm_identity"]
+            )
+        saved = read_record(state_path)
+        if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
+            raise ValueError("CHECK identity changed")
+        check(req, attestation, saved, config.get("prevResult"))
+        return None
 
 
 def main():
@@ -990,7 +933,7 @@ def main():
         if os.geteuid() != 0:
             raise PermissionError("node-root execution required")
         if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("managerURL"):
-            raise ValueError("live node attestation configuration required")
+            raise ValueError("manager lookup configuration required")
         output = perform(config, os.environ)
         if output is not None:
             print(json.dumps(output))

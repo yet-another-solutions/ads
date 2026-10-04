@@ -487,8 +487,6 @@ class ChartTests(unittest.TestCase):
                             sandbox_scoped = (
                                 "sandbox-ipc" in metadata
                                 or "egress-extra-trust" in metadata
-                                or "ads-ptp-attestor" in metadata
-                                or "ads-node-owner" in metadata
                                 or "ads-ptp-cni" in metadata
                             )
                             expected = sandbox if sandbox_scoped else app
@@ -996,11 +994,7 @@ class ChartTests(unittest.TestCase):
             flags += ["--set", f"sandbox.{component}.existingSecret={component}-credentials"]
         flags += [
             "--set",
-            "sandbox.nodeOwner.secrets.ads-ptp-attestor=attestor-tls",
-            "--set",
-            "sandbox.nodeOwner.secrets.ads-node-owner=node-owner-tls",
-            "--set",
-            "sandbox.nodeOwner.secrets.ads-ptp-cni=cni-tls",
+            "sandbox.cni.secrets.ads-ptp-cni=cni-tls",
         ]
         docs = self.documents(*flags, "--set", "tls.caBundle.secretName=app-ca")
         self.assertFalse(any(kind == "Certificate" for kind, _ in docs))

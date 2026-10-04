@@ -30,7 +30,7 @@ rules:
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
     verbs: [create, delete, get, list, watch]
-  # get/list covers node-owner pods in this namespace. Not watch.
+  # get/list covers pair compute pods in this namespace. Not watch.
   - apiGroups: [""]
     resources: [pods]
     verbs: [create, get, list, delete]

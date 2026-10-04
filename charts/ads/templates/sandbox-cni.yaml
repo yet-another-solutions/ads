@@ -1,7 +1,7 @@
 {{- $root := . -}}
 {{- $sb := .Values.sandbox -}}
 {{- $version := $root.Chart.AppVersion -}}
-{{- $tools := include "ads.sandboxImage" (dict "root" $root "image" $sb.nodeOwner.image) -}}
+{{- $tools := include "ads.sandboxImage" (dict "root" $root "image" $sb.cni.image) -}}
 {{- $issuer := $root.Values.tls.certManager.issuer -}}
 {{- $nodeIPs := $sb.manager.nodeIPs -}}
 {{- $nodePort := $sb.manager.pairLookupNodePort -}}
@@ -11,9 +11,9 @@
 {{- $lookupPort := 8443 -}}
 {{- $role := dict "name" "ads-ptp-cni" "cn" "ads-ptp-cni" "port" 0 -}}
 {{- $secret := printf "%s-tls" $role.name -}}
-{{- $configured := or $root.Values.tls.certManager.enabled (index $sb.nodeOwner.secrets $role.name) -}}
+{{- $configured := or $root.Values.tls.certManager.enabled (index $sb.cni.secrets $role.name) -}}
 {{- if and (not $root.Values.tls.certManager.enabled) $configured -}}
-{{- $secret = index $sb.nodeOwner.secrets $role.name -}}
+{{- $secret = index $sb.cni.secrets $role.name -}}
 {{- end -}}
 {{- if $configured -}}
 {{- if $root.Values.tls.certManager.enabled }}
@@ -115,7 +115,7 @@ spec:
       initContainers:
         - name: materialize-config
           image: {{ $tools | quote }}
-          imagePullPolicy: {{ $sb.nodeOwner.image.pullPolicy }}
+          imagePullPolicy: {{ $sb.cni.image.pullPolicy }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -174,7 +174,7 @@ spec:
       containers:
         - name: {{ $role.name }}
           image: {{ $tools | quote }}
-          imagePullPolicy: {{ $sb.nodeOwner.image.pullPolicy }}
+          imagePullPolicy: {{ $sb.cni.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
           args:
             - >-
@@ -288,7 +288,6 @@ data:
       "ca": "/host-etc/tls/ca.crt",
       "certificate": "/host-etc/tls/tls.crt",
       "key": "/host-etc/tls/tls.key",
-      "stateDir": "/var/lib/ads-ptp",
-      "bindingDir": "/var/lib/ads-ptp/bindings"
+      "stateDir": "/var/lib/ads-ptp"
     }
 {{- end }}

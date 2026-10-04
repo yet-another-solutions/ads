@@ -47,7 +47,6 @@ def _config(tmp_path):
         "certificate": str(certs / "tls.crt"),
         "key": str(certs / "tls.key"),
         "stateDir": str(tmp_path / "state"),
-        "bindingDir": str(tmp_path / "bindings"),
     }
 
 
@@ -69,7 +68,7 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
     egress = tmp_path / "egress"
     live = _bind(tmp_path / "containerd.sock")
     config = _config(tmp_path)
-    monkeypatch.setattr(installer, "STATE_DIRS", (config["stateDir"], config["bindingDir"]))
+    monkeypatch.setattr(installer, "STATE_DIRS", (config["stateDir"],))
     monkeypatch.setattr(
         installer,
         "PROBES",
@@ -83,12 +82,11 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
         assert written["name"] == "ads-private"
         assert written["plugins"][0]["managerURL"] == config["managerURL"]
         assert written["plugins"][0]["capabilities"] == {"io.kubernetes.cri.pod-annotations": True}
-        assert "attestorSocket" not in written["plugins"][0]
+        assert "attestorSocket" not in written["plugins"][0]  # G1: dial config replaces the socket
     assert not (shared / "10-crio-bridge.conflist").exists()
     name = "ads-ptp"
     assert (binary / name).read_bytes() == (source / name).read_bytes()
     assert stat.S_IMODE((binary / name).stat().st_mode) == 0o755
-    assert not (binary / "ads-ptp-attest").exists()
     assert not (binary / "ads-cri").exists()
     live.close()
 

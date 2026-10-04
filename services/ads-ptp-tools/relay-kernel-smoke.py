@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
 import os
+import select
 import signal
 import ssl
 import subprocess
@@ -70,8 +72,31 @@ if len(sys.argv) > 1 and sys.argv[1] == "--child":
 
 relay = load("relay", "/usr/local/bin/ads-ptp-relay")
 plugin = load("attachment", "/usr/local/bin/ads-ptp")
-attestor = load("attestor", "/usr/local/bin/ads-ptp-attest")
 canary = load("canary", "/usr/local/bin/ads-ptp-canary")
+
+
+def _process_ticks(pid):
+    return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+
+
+@contextlib.contextmanager
+def pinned_processes(pids):
+    """Pin live relay processes (pidfd) and verify identity before yielding."""
+    originals = []
+    for pid in pids:
+        fd = os.pidfd_open(pid)
+        originals.append((pid, fd, _process_ticks(pid)))
+    try:
+        for pid, fd, start in originals:
+            replaced = select.select([fd], [], [], 0)[0] or _process_ticks(pid) != start
+            if replaced:
+                raise AssertionError(f"relay process {pid} replaced")
+        yield
+    finally:
+        for _, fd, _ in originals:
+            os.close(fd)
+
+
 generation, sandbox = str(uuid4()), str(uuid4())
 prefix = generation[:8]
 bridge = "br" + prefix
@@ -223,14 +248,10 @@ try:
             await_health(["198.18.1.1"], 503)
     await_health(["198.18.1.1", "198.18.1.2"], 200)
     # Actual pidfd_open and /proc start-time fencing against both live relays.
-    with attestor.processes(tuple(child.pid for child in children)) as check_processes:
-        check_processes()
+    with pinned_processes(tuple(child.pid for child in children)):
+        pass
     for index, side in enumerate(("guest", "egress")):
         config, child = configs[side], children[index]
-        private_path = f"/proc/{child.pid}/root/run/netns/private-{generation}"
-        private_info = os.stat(private_path)
-        transport_path = "/run/netns/" + transports[side]
-        transport_info = os.stat(transport_path)
         vm = f"vm-{side}-{generation}"
         run("ip", "netns", "add", vm)
         namespaces.append(vm)
@@ -245,36 +266,40 @@ try:
             ns(vm, "ip", "route", "add", "default", "via", "198.19.1.1", "dev", "eth0")
         directory = root / ("attach-" + side)
         directory.mkdir(mode=0o700)
-        for name in ("state", "bindings"):
-            (directory / name).mkdir(mode=0o700)
+        (directory / "state").mkdir(mode=0o700)
         uid = str(uuid4())
-        binding = {
+        # The mTLS dial contract and /proc relay scan are pinned by the
+        # pytest suite; stub both with the identities this side provides.
+        private_path = f"/proc/{child.pid}/root/run/netns/private-{generation}"
+        transport_path = "/run/netns/" + transports[side]
+        reply = {
             "pod_uid": uid,
             "generation": generation,
             "sandbox_id": sandbox,
             "role": side,
-            "ifname": interface,
-            "network": "ads-private",
             "relay_pod_uid": config["pod_uid"],
             "relay_runtime_id": hashlib.sha256(side.encode()).hexdigest(),
-            "private": {
-                "path": private_path,
-                "identity": [private_info.st_dev, private_info.st_ino],
-            },
-            "transport": {
-                "path": transport_path,
-                "identity": [transport_info.st_dev, transport_info.st_ino],
-            },
             "mtu": 1290,
             "address": config["local_private"],
             "gateway": "10.10.30.1" if side == "guest" else None,
         }
-        plugin.save_record(directory / "bindings" / (uid + ".json"), binding)
+        real_dial = plugin.dial_manager
+        real_observe = plugin.observe_namespaces
+        plugin.dial_manager = lambda *args: dict(reply)
+        plugin.observe_namespaces = lambda request, observed: (
+            {
+                "path": private_path,
+                "identity": [os.stat(private_path).st_dev, os.stat(private_path).st_ino],
+            },
+            {
+                "path": transport_path,
+                "identity": [os.stat(transport_path).st_dev, os.stat(transport_path).st_ino],
+            },
+        )
         cni = {
             "cniVersion": "1.0.0",
             "type": "ads-ptp",
             "name": "ads-private",
-            "bindingDir": str(directory / "bindings"),
             "stateDir": str(directory / "state"),
         }
         env = {
@@ -285,10 +310,14 @@ try:
             "CNI_ARGS": "K8S_POD_UID=" + uid,
         }
         attachments.append((cni, env))
-        result = plugin.perform(cni, env)
-        cni["prevResult"] = result
-        env["CNI_COMMAND"] = "CHECK"
-        plugin.perform(cni, env)
+        try:
+            result = plugin.perform(cni, env)
+            cni["prevResult"] = result
+            env["CNI_COMMAND"] = "CHECK"
+            plugin.perform(cni, env)
+        finally:
+            plugin.dial_manager = real_dial
+            plugin.observe_namespaces = real_observe
         assert ns(vm, "sysctl", "-n", "net.ipv4.ip_forward") == "0"
         if side == "egress":
             default = json.loads(ns(vm, "ip", "-j", "route", "show", "default"))
@@ -379,7 +408,7 @@ print(
             "peer_shutdown_unhealthy": True,
             "owned_namespaces_and_processes_cleaned": True,
             "real_relay_process_identity_pinning": True,
-            "kubernetes_service_node_attestation_kata_proven": False,
+            "manager_lookup_and_kata_handoff_proven": False,
         }
     )
 )

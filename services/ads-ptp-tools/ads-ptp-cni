@@ -25,9 +25,8 @@ CONFIG_FIELDS = {
     "certificate",
     "key",
     "stateDir",
-    "bindingDir",
 }
-STATE_DIRS = ("/var/lib/ads-ptp", "/var/lib/ads-ptp/bindings")
+STATE_DIRS = ("/var/lib/ads-ptp",)
 PROBES = {
     "unix:///run/containerd/containerd.sock": (
         "/etc/cni/net.d",
@@ -162,7 +161,6 @@ def install(config, source_dir, bin_dir, net_dir, cert_dir=Path("/etc/cni/ads-pt
                 "certificate": str(Path(cert_dir) / "certificate"),
                 "key": str(Path(cert_dir) / "key"),
                 "stateDir": config["stateDir"],
-                "bindingDir": config["bindingDir"],
             }
         ],
     }

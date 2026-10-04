@@ -25,7 +25,7 @@ def plugin():
 
 @pytest.fixture
 def inputs(plugin, tmp_path, monkeypatch):
-    for name in ("state", "bindings"):
+    for name in ("state",):
         (tmp_path / name).mkdir(mode=0o700)
     proc = tmp_path / "proc"
     (proc / "4242").mkdir(parents=True)
@@ -45,7 +45,6 @@ def inputs(plugin, tmp_path, monkeypatch):
         "certificate": str(tmp_path / "state" / "certificate"),
         "key": str(tmp_path / "state" / "key"),
         "stateDir": str(tmp_path / "state"),
-        "bindingDir": str(tmp_path / "bindings"),
     }
     uid = str(uuid4())
     env = {
@@ -369,7 +368,7 @@ def test_partial_add_retains_intent_for_del(plugin, inputs, kernel, monkeypatch)
     assert not state.exists()
 
 
-@pytest.mark.parametrize("change", ["alias", "index", "group", "binding", "bridge", "other-nic"])
+@pytest.mark.parametrize("change", ["alias", "index", "group", "bridge", "other-nic"])
 def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, change):
     config, env, record = inputs
     req, _, state, current, paths, calls = kernel
@@ -386,14 +385,9 @@ def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, 
         assert not state.exists()
         return
     plugin.perform(config, env)
-    if change == "binding":
-        record["generation"] = str(uuid4())
-        plugin.save_record(Path(config["bindingDir"]) / (req["pod_uid"] + ".json"), record)
-        env["CNI_COMMAND"] = "CHECK"
-    else:
-        field = {"alias": "ifalias", "index": "ifindex", "group": "group"}[change]
-        current[20]["veth-local"][field] = "replacement"
-        env["CNI_COMMAND"] = "DEL"
+    field = {"alias": "ifalias", "index": "ifindex", "group": "group"}[change]
+    current[20]["veth-local"][field] = "replacement"
+    env["CNI_COMMAND"] = "DEL"
     with pytest.raises(ValueError):
         plugin.perform(config, env)
     assert "eth0" in current[10]
@@ -419,32 +413,17 @@ def test_replaced_namespace_inode_fails_before_link(plugin, inputs, monkeypatch)
     assert not state.exists()
 
 
-def test_del_does_not_dial_manager(plugin, inputs, kernel, monkeypatch):
+def test_del_uses_original_journal_binding(plugin, inputs, kernel):
     config, env, record = inputs
     plugin.perform(config, env)
-    monkeypatch.setattr(plugin, "dial_manager", lambda *args: pytest.fail("manager dialed"))
-    env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
-    record["private"]["path"] = "/some/replacement"
-    plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
-    assert plugin.perform(config, env) is None
-    assert not kernel[2].exists()
-
-
-def test_del_uses_original_binding_when_relay_record_changes(plugin, inputs, kernel):
-    config, env, record = inputs
-    plugin.perform(config, env)
-    record["private"]["path"] = "/some/replacement"
-    plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     assert plugin.perform(config, env) is None
     assert not kernel[2].exists()
 
 
-def test_lock_and_missing_binding_fail_before_kernel(plugin, inputs, monkeypatch):
+def test_lock_and_missing_manager_fail_before_kernel(plugin, inputs, monkeypatch):
     config, env, record = inputs
-    # New world: the plugin WRITES the binding from the manager reply, so the
-    # no-binding precondition is simulated by failing the manager dial itself.
-    path = Path(config["bindingDir"]) / (record["pod_uid"] + ".json")
+    # The manager dial fails, so no binding exists and no effect may happen.
     monkeypatch.setattr(
         plugin,
         "dial_manager",
@@ -453,7 +432,6 @@ def test_lock_and_missing_binding_fail_before_kernel(plugin, inputs, monkeypatch
     monkeypatch.setattr(plugin, "add", lambda *args: pytest.fail("must not create a link"))
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)
-    assert not path.exists()
     req = plugin.request(config, env)
     lock = Path(config["stateDir"]) / (req["key"] + ".lock")
     fd = os.open(lock, os.O_RDWR)

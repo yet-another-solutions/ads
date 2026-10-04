@@ -1,4 +1,4 @@
-"""GitHub CI: real private CNI effects, not Kata or node attestation proof."""
+"""GitHub CI: real private CNI effects, not a Kata or manager-dial proof."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -28,8 +27,7 @@ names = ["attach-" + role + "-" + generation for role in ("vm", "private", "tran
 created = []
 root = Path("/run/attachment-test")
 root.mkdir(mode=0o700)
-for child in ("bindings", "state"):
-    (root / child).mkdir(mode=0o700)
+(root / "state").mkdir(mode=0o700)
 uid, relay = str(uuid4()), str(uuid4())
 env = {
     "CNI_COMMAND": "ADD",
@@ -42,7 +40,6 @@ config = {
     "cniVersion": "1.0.0",
     "type": "ads-ptp",
     "name": "ads-private",
-    "bindingDir": str(root / "bindings"),
     "stateDir": str(root / "state"),
 }
 try:
@@ -116,21 +113,56 @@ try:
     print("private bridge preflight: " + canary.ns(private, "ip", "-d", "-j", "link"), flush=True)
     req = plugin.request(config, env)
     attempt = root / "state" / ("attempt-" + req["key"] + ".json")
+    # The mTLS dial contract is pinned by the pytest suite; this real-kernel
+    # smoke stubs the manager lookup and proves every local effect. A dial
+    # failure must leave only the original attempt history and no links.
+    def dial(config, request):
+        return {
+            "pod_uid": uid,
+            "generation": generation,
+            "sandbox_id": record["sandbox_id"],
+            "role": record["role"],
+            "relay_pod_uid": relay,
+            "relay_runtime_id": record["relay_runtime_id"],
+            "mtu": record["mtu"],
+            "address": record["address"],
+            "gateway": record["gateway"],
+        }
+
+    real_dial = plugin.dial_manager
+
+    def fail_dial(*args):
+        raise FileNotFoundError("manager unavailable")
+
+    plugin.dial_manager = fail_dial
     try:
         plugin.perform(config, env)
     except FileNotFoundError:
         pass
     else:
-        raise AssertionError("missing attestation accepted")
+        raise AssertionError("manager outage accepted")
+    finally:
+        plugin.dial_manager = real_dial
     original_attempt = plugin.read_record(attempt)
     assert original_attempt["request"] == req
     assert original_attempt["vm_identity"] == canary.namespace_identity(names[0])
-    assert original_attempt["binding"] is None
     assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
-    plugin.save_record(root / "bindings" / (uid + ".json"), record)
+    # The /proc relay scan is pinned by the pytest suite; the smoke patches it
+    # to the namespaces created above.
+    real_observe = plugin.observe_namespaces
+
+    def observe(request, observed):
+        return (
+            {"path": record["private"]["path"], "identity": record["private"]["identity"]},
+            {"path": record["transport"]["path"], "identity": record["transport"]["identity"]},
+        )
+
+    plugin.observe_namespaces = observe
+    plugin.dial_manager = dial
     output = plugin.perform(config, env)
+    plugin.observe_namespaces = real_observe
     admitted_attempt = plugin.read_record(attempt)
-    assert admitted_attempt == {**original_attempt, "binding": record}
+    assert admitted_attempt == original_attempt
     assert output["ips"] == [{"interface": 0, "address": "10.10.30.2/24", "gateway": "10.10.30.1"}]
     assert output["routes"] == [{"dst": "0.0.0.0/0", "gw": "10.10.30.1"}]
     assert output["dns"] == {"nameservers": ["10.10.30.1"]}
@@ -186,43 +218,16 @@ try:
     # Missing runtime namespace after successful ADD remains an idempotent DEL.
     env["CNI_COMMAND"] = "ADD"
     output = plugin.perform(config, env)
-    # Use the packaged node-root command against the same CNI state directory.
-    # The fence deliberately does not stop or delete the existing interface.
-    request = {
-        "stateDir": config["stateDir"],
-        **{key: record[key] for key in ("network", "sandbox_id", "generation")},
-    }
-    fenced = subprocess.run(
-        ["ads-ptp-retire"],
-        input=json.dumps(request),
-        text=True,
-        capture_output=True,
-        check=True,
-        timeout=5,
-    )
-    verdict = json.loads(fenced.stdout)
-    assert verdict["attachment_admission_fenced"] and not verdict["runtime_release_proven"]
     assert json.loads(canary.ns(names[0], "ip", "-j", "link", "show", "eth0"))
     config["prevResult"] = output
-    for command in ("ADD", "CHECK"):
-        env["CNI_COMMAND"] = command
-        try:
-            plugin.perform(config, env)
-        except ValueError as error:
-            assert str(error) == "attachment generation retired"
-        else:
-            raise AssertionError("retired admission succeeded")
     canary.run("ip", "netns", "delete", names[0])
     created.remove(names[0])
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     assert plugin.perform(config, env) is None
     assert plugin.perform(config, env) is None
-    # DEL removes only the active attachment journal, not original history or
-    # the durable generation fence. Neither retained record means runtime release.
-    assert set((root / "state").glob("*.json")) == {
-        root / "state" / ("retired-" + generation + ".json"),
-        attempt,
-    }
+    # DEL removes only the active attachment journal, not original history.
+    # A retained attempt record does not mean runtime release.
+    assert set((root / "state").glob("*.json")) == {attempt}
     assert plugin.read_record(attempt) == admitted_attempt
     # Later DELs collect stale history without touching fences, active
     # journals, the retained attempt or any key whose attachment lock is held
@@ -252,12 +257,9 @@ try:
     os.close(held)
     assert plugin.perform(config, env) is None
     assert not held_attempt.exists() and not held_lock.exists()
-    assert set((root / "state").glob("*.json")) == {
-        root / "state" / ("retired-" + generation + ".json"),
-        attempt,
-        fresh_attempt,
-    }
+    assert set((root / "state").glob("*.json")) == {attempt, fresh_attempt}
 finally:
+    plugin.dial_manager = real_dial
     for name in reversed(created):
         canary.run("ip", "netns", "delete", name)
 assert not json.loads(canary.run("ip", "-j", "netns", "list"))
@@ -269,10 +271,8 @@ print(
             "replacement_cleanup_refused": True,
             "interrupted_alias_update_cleanup": True,
             "missing_namespace_del_idempotent": True,
-            "persistent_generation_admission_fence": True,
-            "fence_is_not_runtime_release": True,
             "stale_history_collected_by_del": True,
-            "node_attestation_and_kata_handoff_proven": False,
+            "manager_lookup_and_kata_handoff_proven": False,
         }
     )
 )
