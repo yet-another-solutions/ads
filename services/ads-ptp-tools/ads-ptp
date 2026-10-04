@@ -26,6 +26,11 @@ CLONE_NEWNET = 0x40000000
 LIMIT = 65536
 ATTEMPT_EXPIRY = 7 * 86400
 ATTEMPT_PRUNE_BOUND = 4096
+# G9: pod annotations ARE the join key (owner-ruled).
+GENERATION_ANNOTATION = "sandbox-ads/generation"
+ROLE_ANNOTATION = "sandbox-ads/role"
+LOOKUP_ATTEMPTS = 30
+LOOKUP_BACKOFF_SECONDS = 1
 BINDING_FIELDS = {
     "pod_uid",
     "generation",
@@ -202,6 +207,25 @@ def request(config, env):
         "pod_uid": uid,
         "netns": env.get("CNI_NETNS", ""),
         "key": key,
+        "annotations": pod_annotations(config),
+    }
+
+
+def pod_annotations(config):
+    """G9 join key: CRI-O delivers pod annotations under runtimeConfig."""
+    runtime = config.get("runtimeConfig")
+    if not isinstance(runtime, dict):
+        return {}
+    per_network = runtime.get(config.get("name", ""))
+    if not isinstance(per_network, dict):
+        return {}
+    raw = per_network.get("io.kubernetes.cri.pod-annotations")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if key in (GENERATION_ANNOTATION, ROLE_ANNOTATION)
     }
 
 
@@ -289,6 +313,51 @@ def namespace(path, expected=None, missing=False):
         yield fd
     finally:
         os.close(fd)
+
+
+PROC_ROOT = "/proc"  # Test seam: injected fake /proc root.
+
+
+def find_relay_process(relay_runtime_id):
+    """Exactly one live relay container process may carry the runtime id."""
+    if not re.fullmatch(r"[a-f0-9]{64}", relay_runtime_id or ""):
+        raise ValueError("invalid relay runtime id")
+    matches = []
+    for entry in os.listdir(PROC_ROOT):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"{PROC_ROOT}/{entry}/cgroup", "rb") as stream:
+                cgroup = stream.read(LIMIT + 1)
+        except OSError:
+            continue
+        if len(cgroup) > LIMIT:
+            continue
+        if relay_runtime_id.encode() in cgroup:
+            matches.append(entry)
+    if len(matches) != 1:
+        raise ValueError("relay runtime identity is absent or ambiguous")
+    return matches[0]
+
+
+def observe_namespaces(req, observed):
+    """Local /proc scan completing the PARTIAL manager record.
+
+    private = the relay-created netns bind path inside the relay container;
+    transport = the Pod network namespace (sandbox pid, else container pid —
+    recent CRI-O shape). Identities are [st_dev, st_ino] pairs.
+    """
+    pid = find_relay_process(observed["relay_runtime_id"])
+    private = {
+        "path": f"{PROC_ROOT}/{pid}/root/run/netns/private-{observed['generation']}",
+        "identity": None,
+    }
+    transport = {"path": f"{PROC_ROOT}/{pid}/ns/net", "identity": None}
+    with namespace(private["path"]) as fd:
+        private["identity"] = ns_identity(fd)
+    with namespace(transport["path"]) as fd:
+        transport["identity"] = ns_identity(fd)
+    return private, transport
 
 
 def ns_identity(fd):
@@ -716,53 +785,99 @@ def peer_cn(certificate):
     subject = certificate.get("subject", ())
     names = [value for item in subject for key, value in item if key == "commonName"]
     if len(names) != 1:
-        raise ValueError("attestor certificate CN required")
+        raise ValueError("manager certificate CN required")
     return names[0]
 
 
-def dial_attestor(config, req):
-    """One TLS 1.3 round trip. The reply is the existing binding record."""
-    path = config.get("attestorSocket")
+def manager_url(config):
+    url = config.get("managerURL")
     if (
-        not isinstance(path, str)
-        or not path.startswith("/var/run/attestor-")
-        or not path.endswith(".sock")
+        not isinstance(url, str)
+        or url.startswith("https://") is False
+        or not re.fullmatch(r"https://[A-Za-z0-9.\-]+:[0-9]{1,5}", url)
     ):
-        raise ValueError("versioned attestor socket required")
-    expected = config.get("attestorCN")
+        raise ValueError("manager URL host:port required")
+    expected = config.get("managerCN")
     if not isinstance(expected, str) or not expected:
-        raise ValueError("attestor role CN required")
+        raise ValueError("manager role CN required")
+    return url, expected
+
+
+def dial_manager(config, req):
+    """One mTLS HTTPS lookup. The JSON reply is the PARTIAL binding record."""
+    url, expected = manager_url(config)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
     context.check_hostname = False
     context.verify_mode = ssl.CERT_REQUIRED
     context.load_verify_locations(cafile=config["ca"])
     context.load_cert_chain(config["certificate"], config["key"])
-    raw = json.dumps(
-        {"pod_uid": req["pod_uid"], "network": req["network"], "ifname": req["ifname"]}
+    host, port = url.removeprefix("https://").rsplit(":", 1)
+    raw_path = (
+        "/v1/pair?generation=" + attestation_generation(req)
+        + "&role=" + attestation_role(req)
+        + "&pod_uid=" + req["pod_uid"]
+    )
+    request = (
+        f"GET {raw_path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+        "Connection: close\r\n\r\n"
     ).encode()
-    if len(raw) > LIMIT:
-        raise ValueError("attestor request exceeds bound")
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    with socket.create_connection((host, int(port)), timeout=20) as client:
         client.settimeout(20)
-        client.connect(path)
         with context.wrap_socket(client) as secured:
             peer = secured.getpeercert()
             if peer_cn(peer) != expected:
-                raise ValueError("unexpected attestor role")
-            secured.sendall(len(raw).to_bytes(4, "big") + raw)
-            size = int.from_bytes(secured.recv(4), "big")
-            if not 0 < size <= LIMIT:
-                raise ValueError("attestor reply exceeds bound")
-            chunks = bytearray()
-            while len(chunks) < size:
-                part = secured.recv(size - len(chunks))
+                raise ValueError("unexpected manager role")
+            secured.sendall(request)
+            response = bytearray()
+            while len(response) <= LIMIT:
+                part = secured.recv(65536)
                 if not part:
-                    raise ValueError("truncated attestor reply")
-                chunks.extend(part)
-    record = decode(bytes(chunks))
-    binding(record, req)
+                    break
+                response.extend(part)
+    if len(response) > LIMIT:
+        raise ValueError("manager reply exceeds bound")
+    text = bytes(response)
+    head, _, body = text.partition(b"\r\n\r\n")
+    lines = head.decode("latin-1").split("\r\n")
+    parts = lines[0].split(" ", 2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        raise ValueError("malformed manager response")
+    status = int(parts[1])
+    headers = {}
+    for line in lines[1:]:
+        key, _, value = line.partition(":")
+        headers[key.strip().lower()] = value.strip()
+    if status == 503:
+        raise RetryLater(headers.get("retry-after", "1"))
+    if status != 200:
+        raise ValueError("manager lookup rejected")
+    record = decode(body)
     return record
+
+
+class RetryLater(Exception):
+    """Manager not ready yet; plugin retries within its bounded budget."""
+
+    def __init__(self, retry_after):
+        super().__init__(retry_after)
+        self.retry_after = retry_after
+
+
+def attestation_generation(req):
+    annotations = req.get("annotations") or {}
+    generation = annotations.get(GENERATION_ANNOTATION)
+    if not isinstance(generation, str) or str(UUID(generation)) != generation:
+        raise ValueError("pair generation annotation required")
+    return generation
+
+
+def attestation_role(req):
+    annotations = req.get("annotations") or {}
+    role = annotations.get(ROLE_ANNOTATION)
+    if role not in ("guest", "egress", "guest-relay", "egress-relay"):
+        raise ValueError("pair role annotation required")
+    return role
 
 
 def perform(config, env):
@@ -794,16 +909,56 @@ def perform(config, env):
             delete(saved, state_path)
             expire_attempt_history(state_root)
             return None
+        # G9 skip rules: the join key lives in pod annotations. Unannotated
+        # pods and relay-role pods are not pair VMs; no dial, no attempt
+        # history, no state, no output. IPC pods never reach this plugin
+        # (different conflist dir). CHECK on an unannotated pod: no state can
+        # exist, so the skip is equally safe there.
+        role = req.get("annotations", {}).get(ROLE_ANNOTATION)
+        if GENERATION_ANNOTATION not in req.get("annotations", {}) or role in (
+            "guest-relay",
+            "egress-relay",
+        ):
+            return None
         attempt = capture_attempt(state_root, req) if req["command"] == "ADD" else None
         root = private_directory(config["bindingDir"])
-        if "attestorSocket" in config:
-            # One pathname-socket round trip. DEL returned above and never dials.
-            observed = dial_attestor(config, req)
-            save_record(root / (req["pod_uid"] + ".json"), observed)
-        else:
-            # In-process native kernel fixtures only. CLI requires live attestation.
-            observed = read_record(root / (req["pod_uid"] + ".json"))
-        attestation = binding(observed, req)
+        # Bounded manager retry: 404/503/network errors are retried ~30x1s
+        # (relay inputs and container identity settle seconds after ADD),
+        # then the attachment fails closed.
+        for remaining in range(LOOKUP_ATTEMPTS - 1, -1, -1):
+            try:
+                # One HTTPS round trip. DEL returned above and never dials.
+                observed = dial_manager(config, req)
+                break
+            except RetryLater as retry:
+                # 503: relay inputs/uid/containerID not ready yet.
+                if remaining == 0:
+                    raise
+                time.sleep(float(retry.retry_after) or LOOKUP_BACKOFF_SECONDS)
+            except (ValueError, OSError):
+                # 404 (generation unknown/retired) and network errors can both
+                # precede the manager's first observation of the new Pod.
+                if remaining == 0:
+                    raise
+                time.sleep(LOOKUP_BACKOFF_SECONDS)
+        record = {
+            "pod_uid": req["pod_uid"],
+            "generation": observed["generation"],
+            "sandbox_id": observed["sandbox_id"],
+            "role": observed["role"],
+            "ifname": req["ifname"],
+            "network": req["network"],
+            "relay_pod_uid": observed["relay_pod_uid"],
+            "relay_runtime_id": observed["relay_runtime_id"],
+            "mtu": observed["mtu"],
+            "address": observed["address"],
+            "gateway": observed["gateway"],
+        }
+        private, transport = observe_namespaces(req, observed)
+        record["private"] = private
+        record["transport"] = transport
+        save_record(root / (req["pod_uid"] + ".json"), record)
+        attestation = binding(record, req)
         # Attestation can finish late, after retirement started. Only the
         # protected generation lock plus persistent fence authorizes effects.
         with generation_lock(state_root, attestation["generation"]) as retired:
@@ -834,7 +989,7 @@ def main():
             return
         if os.geteuid() != 0:
             raise PermissionError("node-root execution required")
-        if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("attestorSocket"):
+        if os.environ.get("CNI_COMMAND") in ("ADD", "CHECK") and not config.get("managerURL"):
             raise ValueError("live node attestation configuration required")
         output = perform(config, os.environ)
         if output is not None:

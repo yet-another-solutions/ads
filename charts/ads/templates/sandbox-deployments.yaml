@@ -44,17 +44,16 @@ spec:
           ports:
             - name: https
               containerPort: {{ $settings.port }}
+            {{- if eq $component "manager" }}
+            - name: pair-lookup
+              containerPort: 8443
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ $name }}
             - secretRef:
                 name: {{ include "ads.sandboxSecret" $ctx }}
           volumeMounts:
-            {{- if and (eq $component "manager") $sb.manager.nodeOwner.network }}
-            - name: node-owner
-              mountPath: /node-owner
-              readOnly: true
-            {{- end }}
             - name: tls
               mountPath: /tls
               readOnly: true
@@ -82,24 +81,6 @@ spec:
           resources:
             {{- toYaml $settings.resources | nindent 12 }}
       volumes:
-        {{- if and (eq $component "manager") $sb.manager.nodeOwner.network }}
-        {{- /* Chart-issued manager client identity for the node-owner channel (CN ads-sandbox-manager).
-             The node-owner server rejects any other client CN, so this is never BYO. */}}
-        {{- if not $root.Values.tls.certManager.enabled }}
-        {{- fail "tls.certManager.enabled is required for the node-owner channel; there is no BYO manager client certificate" }}
-        {{- end }}
-        - name: node-owner
-          secret:
-            secretName: {{ include "ads.sandboxName" (dict "root" $root "component" "manager") }}-node-owner
-            defaultMode: 0440
-            items:
-              - key: ca.crt
-                path: ca.crt
-              - key: tls.crt
-                path: tls.crt
-              - key: tls.key
-                path: tls.key
-        {{- end }}
         - name: tls
           secret:
             secretName: {{ include "ads.sandboxTLS" $ctx }}

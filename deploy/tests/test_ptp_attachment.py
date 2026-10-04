@@ -24,13 +24,26 @@ def plugin():
 
 
 @pytest.fixture
-def inputs(plugin, tmp_path):
+def inputs(plugin, tmp_path, monkeypatch):
     for name in ("state", "bindings"):
         (tmp_path / name).mkdir(mode=0o700)
+    proc = tmp_path / "proc"
+    (proc / "4242").mkdir(parents=True)
+    (proc / "4242" / "cgroup").write_text(
+        "0::/kubepods/burstable/pod" + "b" * 64 + "/" + "b" * 64 + "\n"
+    )
+    for rel in ("root/run/netns", "ns"):
+        (proc / "4242" / rel).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(plugin, "PROC_ROOT", str(proc))
     config = {
         "cniVersion": "1.0.0",
         "type": "ads-ptp",
         "name": "ads-private",
+        "managerURL": "https://127.0.0.1:8443",
+        "managerCN": "ads-sandbox-manager",
+        "ca": str(tmp_path / "state" / "ca"),
+        "certificate": str(tmp_path / "state" / "certificate"),
+        "key": str(tmp_path / "state" / "key"),
         "stateDir": str(tmp_path / "state"),
         "bindingDir": str(tmp_path / "bindings"),
     }
@@ -57,7 +70,43 @@ def inputs(plugin, tmp_path):
         "address": "10.10.30.2/24",
         "gateway": "10.10.30.1",
     }
-    plugin.save_record(tmp_path / "bindings" / (uid + ".json"), attestation)
+    config["runtimeConfig"] = {
+        config["name"]: {
+            "io.kubernetes.cri.pod-annotations": {
+                "sandbox-ads/generation": attestation["generation"],
+                "sandbox-ads/role": attestation["role"],
+            }
+        }
+    }
+    observed = {
+        "pod_uid": uid,
+        "generation": attestation["generation"],
+        "sandbox_id": attestation["sandbox_id"],
+        "role": attestation["role"],
+        "network": attestation["network"],
+        "relay_pod_uid": attestation["relay_pod_uid"],
+        "relay_runtime_id": "b" * 64,
+        "mtu": attestation["mtu"],
+        "address": attestation["address"],
+        "gateway": attestation["gateway"],
+    }
+
+    def fake_dial(config, req):
+        return deepcopy(observed)
+
+    # Relay private netns bind file + netns identities the /proc scan reads.
+    (proc / "4242" / "root" / "run" / "netns").mkdir(parents=True, exist_ok=True)
+    private_ns = proc / "4242" / "root" / "run" / "netns" / ("private-" + attestation["generation"])
+    private_ns.touch()
+    monkeypatch.setattr(plugin, "dial_manager", fake_dial)
+
+    def fake_observe(req, observed):
+        # The plugin recomputes namespace paths from the manager reply and the
+        # fake /proc; flow tests re-patch namespace()/ns_identity around the
+        # record's paths, so emit exactly the record's own paths here.
+        return deepcopy(attestation["private"]), deepcopy(attestation["transport"])
+
+    monkeypatch.setattr(plugin, "observe_namespaces", fake_observe)
     return config, env, attestation
 
 
@@ -370,10 +419,10 @@ def test_replaced_namespace_inode_fails_before_link(plugin, inputs, monkeypatch)
     assert not state.exists()
 
 
-def test_del_does_not_open_attestor_socket(plugin, inputs, kernel, monkeypatch):
+def test_del_does_not_dial_manager(plugin, inputs, kernel, monkeypatch):
     config, env, record = inputs
     plugin.perform(config, env)
-    monkeypatch.setattr(plugin, "dial_attestor", lambda *args: pytest.fail("socket opened"))
+    monkeypatch.setattr(plugin, "dial_manager", lambda *args: pytest.fail("manager dialed"))
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     record["private"]["path"] = "/some/replacement"
     plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
@@ -391,13 +440,20 @@ def test_del_uses_original_binding_when_relay_record_changes(plugin, inputs, ker
     assert not kernel[2].exists()
 
 
-def test_lock_and_missing_attestation_fail_before_kernel(plugin, inputs, monkeypatch):
+def test_lock_and_missing_binding_fail_before_kernel(plugin, inputs, monkeypatch):
     config, env, record = inputs
+    # New world: the plugin WRITES the binding from the manager reply, so the
+    # no-binding precondition is simulated by failing the manager dial itself.
     path = Path(config["bindingDir"]) / (record["pod_uid"] + ".json")
-    path.unlink()
+    monkeypatch.setattr(
+        plugin,
+        "dial_manager",
+        lambda *args: (_ for _ in ()).throw(FileNotFoundError("manager unavailable")),
+    )
     monkeypatch.setattr(plugin, "add", lambda *args: pytest.fail("must not create a link"))
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)
+    assert not path.exists()
     req = plugin.request(config, env)
     lock = Path(config["stateDir"]) / (req["key"] + ".lock")
     fd = os.open(lock, os.O_RDWR)

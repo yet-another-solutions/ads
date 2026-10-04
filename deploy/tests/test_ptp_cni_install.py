@@ -41,9 +41,8 @@ def _config(tmp_path):
         "cniVersion": "1.0.0",
         "name": "ads-private",
         "type": "ads-ptp",
-        "attestorSocket": str(tmp_path / "attestor-v0.0.42.sock"),
-        "ownerSocket": str(tmp_path / "node-owner-v0.0.42.sock"),
-        "attestorCN": "ads-ptp-attestor",
+        "managerURL": "https://10.0.0.5:30944",
+        "managerCN": "ads-sandbox-manager",
         "ca": str(certs / "ca.crt"),
         "certificate": str(certs / "tls.crt"),
         "key": str(certs / "tls.key"),
@@ -68,7 +67,6 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
     shared = tmp_path / "net.d"
     guest = tmp_path / "guest"
     egress = tmp_path / "egress"
-    held = (_bind(tmp_path / "attestor-v0.0.42.sock"), _bind(tmp_path / "node-owner-v0.0.42.sock"))
     live = _bind(tmp_path / "containerd.sock")
     config = _config(tmp_path)
     monkeypatch.setattr(installer, "STATE_DIRS", (config["stateDir"], config["bindingDir"]))
@@ -83,29 +81,25 @@ def test_containerd_install_writes_each_runtime_directory(installer, tmp_path, m
     for directory in (shared, guest, egress):
         written = json.loads((directory / "10-ads-ptp.conflist").read_text())
         assert written["name"] == "ads-private"
-        assert written["plugins"][0]["attestorSocket"] == config["attestorSocket"]
-        assert "attestorConfig" not in written["plugins"][0]
+        assert written["plugins"][0]["managerURL"] == config["managerURL"]
+        assert written["plugins"][0]["capabilities"] == {"io.kubernetes.cri.pod-annotations": True}
+        assert "attestorSocket" not in written["plugins"][0]
     assert not (shared / "10-crio-bridge.conflist").exists()
     name = "ads-ptp"
     assert (binary / name).read_bytes() == (source / name).read_bytes()
     assert stat.S_IMODE((binary / name).stat().st_mode) == 0o755
     assert not (binary / "ads-ptp-attest").exists()
     assert not (binary / "ads-cri").exists()
-    for item in (*held, live):
-        item.close()
+    live.close()
 
 
-def test_missing_socket_does_not_write_conflist(installer, tmp_path, monkeypatch):
+def test_bad_manager_url_does_not_write_conflist(installer, tmp_path, monkeypatch):
     source = _source(tmp_path)
     network = tmp_path / "net.d"
     network.mkdir()
     config = _config(tmp_path)
-    monkeypatch.setattr(
-        installer,
-        "sockets_bound",
-        lambda _config: (_ for _ in ()).throw(ValueError("unbound")),
-    )
-    with pytest.raises(ValueError, match="unbound"):
+    config["managerURL"] = "not-a-url"
+    with pytest.raises(ValueError, match="manager URL"):
         installer.install(config, source, tmp_path / "bin", network)
     assert not (network / "10-ads-ptp.conflist").exists()
 

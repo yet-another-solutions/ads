@@ -15,10 +15,16 @@ def attempt_path(config, req):
     return Path(config["stateDir"]) / ("attempt-" + req["key"] + ".json")
 
 
-def test_missing_attestation_preserves_original_namespace_before_any_effect(plugin, inputs, kernel):
+def test_missing_attestation_preserves_original_namespace_before_any_effect(plugin, inputs, kernel, monkeypatch):
     config, env, attestation = inputs
     req, _, active, _, _, calls = kernel
-    Path(config["bindingDir"], attestation["pod_uid"] + ".json").unlink()
+    # New world: bindings are written from the manager reply. Simulate the
+    # missing-binding precondition by failing the dial before any record.
+    monkeypatch.setattr(
+        plugin,
+        "dial_manager",
+        lambda *args: (_ for _ in ()).throw(FileNotFoundError("manager unavailable")),
+    )
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)
     saved = plugin.read_record(attempt_path(config, req))
@@ -110,8 +116,20 @@ def test_retry_cannot_replace_original_attempt(plugin, inputs, kernel, monkeypat
     elif changed == "namespace":
         kernel[4][env["CNI_NETNS"]] = 11
     else:
-        binding["generation"] = str(uuid4())
-        plugin.save_record(Path(config["bindingDir"], binding["pod_uid"] + ".json"), binding)
+        # Binding drift is now manager-side: the fake reply returns a
+        # different generation on the retry ADD.
+        import test_ptp_attachment
+
+        # inputs monkeypatched dial_manager in a closure; patch the module
+        # attribute used at perform time.
+        original_dial = plugin.dial_manager
+
+        def drifting(config, req):
+            reply = dict(original_dial(config, req))
+            reply["generation"] = str(uuid4())
+            return reply
+
+        monkeypatch.setattr(plugin, "dial_manager", drifting)
     with pytest.raises(ValueError, match="original"):
         plugin.perform(config, env)
     assert path.read_bytes() == original

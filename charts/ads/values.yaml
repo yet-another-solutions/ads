@@ -295,15 +295,15 @@ sandbox:
     # inline credentials. Exact guest/relay/egress/state_bytes shape is documented
     # in docs/egress-pair-creation.md. Empty fails closed, like the CA signer input.
     pairInputs: {}
-    # Dedicated mTLS node-owner trust and manager identity. With cert-manager
-    # enabled (required when nodeOwner.network is set) the chart issues the
-    # manager's client leaf (CN ads-sandbox-manager, client auth) into secret
-    # "<sandbox-name>-node-owner" and mounts it; the certificate is never BYO
-    # or hand-minted, because the node-owner server rejects any other client CN.
-    # The node-to-pod-IP map is not a values field.
-    nodeOwner:
-      network: ""
-      timeoutSeconds: 60
+    # Dedicated mTLS CNI lookup trust. With cert-manager enabled the CNI
+    # client leaf (CN ads-ptp-cni) is chart-issued; the manager's /v1/pair
+    # listener rejects any other client CN. The node-to-nodeIP map IS values
+    # (nodeIPs): the manager Certificate gains those SANs and the conflist
+    # derives managerURL from the first entry (G2, static per node).
+    nodeIPs: []
+    pairLookupNodePort: 0
+    # CNI network name shared by the conflist and the manager's binding check.
+    cniNetwork: "ads-private"
     image:
       repository: ghcr.io/yet-another-solutions/ads-sandbox-manager
       tag: ""
@@ -362,17 +362,13 @@ sandbox:
     stdoutBytes: 65536
     stderrBytes: 65536
     inputBytes: 262144
+  # CNI plugin tooling image + client TLS secrets. The old node-owner role
+  # set is gone; only ads-ptp-cni remains (G2 lookup, G9 annotations).
   nodeOwner:
     image:
       repository: ghcr.io/yet-another-solutions/ads-ptp-tools
       tag: ""
       pullPolicy: IfNotPresent
-    transportMtu: 1450
-    # Optional CRI endpoint for the node-owner's IPC release observer; the
-    # named host socket is mounted into the pod. Empty (default) detects the
-    # CRI socket at runtime: exactly one live socket must exist (containerd
-    # or CRI-O). Mixed-runtime clusters must keep one socket per node.
-    criEndpoint: ""
     secrets: {}
   admission:
     policyName: ads-sandbox-ipc-exec
