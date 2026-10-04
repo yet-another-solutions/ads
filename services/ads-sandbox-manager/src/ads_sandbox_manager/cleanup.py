@@ -16,6 +16,8 @@ class CleanupKubernetes(Protocol):
     async def observe(self, target: Object) -> Object | None: ...
     async def capture(self, target: Object) -> Object: ...
     async def delete(self, target: Object) -> None: ...
+    async def observe_pod(self, name: str) -> Object | None: ...
+    async def delete_pod(self, desired: Object, uid: str, *, node: str) -> bool: ...
     async def released(self, target: Object) -> bool: ...
     async def reclaimed(self, target: Object) -> bool: ...
     async def unreferenced(self, target: Object) -> bool: ...
@@ -144,6 +146,40 @@ class CleanupAdapter:
         except ApiException as exc:
             if exc.status not in (404, 409):
                 raise
+
+    async def observe_pod(self, name: str) -> Object | None:
+        return await self.kube.named_pod(name)
+
+    async def delete_pod(self, desired: Object, uid: str, *, node: str) -> bool:
+        """Fenced Pod deletion: re-observe, then UID/RV preconditions under the node."""
+        obj = await self.observe_pod(desired["metadata"]["name"])
+        if obj is None or obj["metadata"]["uid"] != uid:
+            raise RuntimeError("cleanup Pod was replaced")
+        if obj.get("spec", {}).get("nodeName") != node:
+            raise RuntimeError("cleanup Pod moved away from captured node")
+        k = self.kube
+        try:
+            await k._call(
+                k.core.delete_namespaced_pod,
+                obj["metadata"]["name"],
+                k.settings.namespace,
+                body={
+                    "apiVersion": "v1",
+                    "kind": "DeleteOptions",
+                    "propagationPolicy": "Foreground",
+                    "preconditions": {
+                        "uid": obj["metadata"]["uid"],
+                        "resourceVersion": obj["metadata"]["resourceVersion"],
+                    },
+                },
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return True
+            if exc.status == 409:
+                return False
+            raise
+        return await self.observe_pod(obj["metadata"]["name"]) is None
 
     async def released(self, target: Object) -> bool:
         if not target.get("never_bound") and not (target.get("pv_name") and target.get("nodes")):

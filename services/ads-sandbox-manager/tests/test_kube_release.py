@@ -49,6 +49,7 @@ def api(manager_settings, monkeypatch):
     k.core.create_namespaced_persistent_volume_claim.return_value = {}
     k.core.delete_namespaced_persistent_volume_claim.return_value = {}
     k.core.delete_namespaced_pod.return_value = {}
+    k.core.read_namespaced_pod.return_value = pod
     k.core.list_namespaced_pod.return_value = {"items": [pod], "metadata": {}}
     k.core.read_persistent_volume.return_value = {
         "spec": {

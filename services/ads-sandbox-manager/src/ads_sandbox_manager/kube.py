@@ -94,6 +94,9 @@ class KubeClient:
     async def named_pvc(self, name: str) -> Object | None:
         return await self._get(self.core.read_namespaced_persistent_volume_claim, name)
 
+    async def named_pod(self, name: str) -> Object | None:
+        return await self._get(self.core.read_namespaced_pod, name)
+
     async def runtime_class(self, name: str) -> Object | None:
         try:
             return cast(Object, await self._call(self.node.read_runtime_class, name))
