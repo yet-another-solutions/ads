@@ -387,6 +387,10 @@ class LifecycleRepository:
             saved, _, _ = await PairTransferRepository(self).available(db, row)
         pvc.state = "destroying"
         pvc.last_state_change = advance(pvc.last_state_change, now)
+        # The retained workspace keep target carries its original retain=True
+        # evidence forward; a reap of a retained lifetime must not widen into
+        # deleting the workspace claim itself.
+        workspace_evidence = pvc.release_evidence or {}
         work = await self.work(
             db,
             row,
@@ -396,8 +400,9 @@ class LifecycleRepository:
             timeout,
             [
                 {
-                    **(pvc.release_evidence or {}),
+                    **workspace_evidence,
                     **target("PersistentVolumeClaim", session_name(pvc_id), pvc.uid),
+                    "retain": bool(workspace_evidence.get("retain")),
                 }
             ],
         )

@@ -66,7 +66,10 @@ async def test_reap_opens_exclusive_disposal_and_finish_ends_whole_lifetime(pair
         assert current.status == "stopped" and current.pvc_id is None
         assert current.sandbox_id != row.sandbox_id
         await f.retirements.verify(db, f.intent.generation)
-    assert not f.remote.objects
+    # The retired lifetime's whole captured inventory is gone; the retained
+    # workspace claim survives until the PVC record is deleted with the
+    # one-way receipt (finish() above removed SessionPVC).
+    assert [kind for kind, _ in f.remote.objects] == ["PersistentVolumeClaim"]
     # A fresh paired admission starts a new sandbox lifetime on the same session.
     resumed = await claim(f, await row_for(f.h, row.session_id))
     assert resumed is not None
