@@ -14,11 +14,8 @@ from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle import RECOVER, LifecycleService, Signal
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import Object
-from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
-from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
 from ads_sandbox_manager.pair_retirement import PairRetirementRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
-from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
 from ads_sandbox_manager.session_objects import session_name
 from ads_sandbox_manager.sessions import SessionProvisioner, TopicPreparation
 from ads_sandbox_manager.store import SandboxSession, SessionPVC, SessionRepository, advance
@@ -124,15 +121,10 @@ class RecoveryService:
                             ", ".join(unresolved) or "none observed",
                         )
                         return
-                    runtime = self.lifecycle.pair_runtime
-                    if runtime is None or not await runtime.release(work, recovery=row):
-                        log.warning("paired recovery requires runtime-release proof")
+                    teardown = self.lifecycle.pair_teardown
+                    if teardown is None or not await teardown.release(work, recovery=row):
+                        log.warning("paired recovery requires complete kube teardown")
                         return
-                    await PairUnusedStorageTeardown(runtime).dispose(work, recovery=row)
-                    if await PairIpcStorageTeardown(runtime).dispose(work, recovery=row):
-                        await PairBlockStorageTeardown(runtime).dispose(work, recovery=row)
-                    if self.lifecycle.pair_resources is not None:
-                        await self.lifecycle.pair_resources.dispose(work, recovery=row)
             await self._finish_paired(row, works)
             return
         if any(obj.get("retain") for work in works for obj in work.targets):
@@ -300,16 +292,24 @@ class RecoveryService:
                         recovery=row,
                         recovery_seconds=self.settings.recovery_seconds,
                     )
-                    if saved is None:
+                    if not saved:
                         # Roll back earlier tentative retirements too.
                         raise PairClaimLost("paired recovery terminal proof incomplete")
-                    retired[pair.generation] = saved
+                    retired[pair.generation] = work
             for pvc in await db.scalars(
                 select(SessionPVC).where(SessionPVC.session_id == row.session_id).with_for_update()
             ):
-                if not any(
-                    retirements.owns_destroyed_pvc(saved, pvc) for saved in retired.values()
-                ):
+                # Plain-column ownership: a retirement work owns the PVC when its
+                # exact-name target carried the workspace uid; unissued work owns
+                # only never-bound claims.
+                owned = any(
+                    obj["kind"] == "PersistentVolumeClaim"
+                    and obj["name"] == session_name(pvc.pvc_id)
+                    and (pvc.uid is None or obj["uid"] == pvc.uid)
+                    for work in retired.values()
+                    for obj in work.targets
+                )
+                if not owned:
                     if pvc.sandbox_id not in unissued or pvc.uid is not None:
                         raise PairClaimLost("paired recovery workspace not proven destroyed")
                 await db.delete(pvc)

@@ -212,10 +212,10 @@ class PairIntentRepository:
             or intent.egress_state_id is None
         ):
             raise RuntimeError("invalid retained generation provenance")
-        if intent.retired_at is not None and (
-            not intent.creation_fenced or intent.cleanup_journal is None
-        ):
-            raise RuntimeError("retired pair lacks permanent fence and journal")
+        if intent.retired_at is not None and not intent.creation_fenced:
+            raise RuntimeError("retired pair lacks permanent creator fence")
+        if intent.cleanup_journal is not None:
+            raise RuntimeError("pair cleanup journal must stay unset")
         if intent.topics_dispatch not in ("unissued", "inflight", "settled"):
             raise RuntimeError("corrupt paired topic dispatch")
         if intent.egress_state_id is not None and not isinstance(intent.egress_state_id, UUID):

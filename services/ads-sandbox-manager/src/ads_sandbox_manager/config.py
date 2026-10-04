@@ -176,7 +176,6 @@ class Settings:
     ads_service_subject: UUID | None = None
     ca: CaSettings | None = None
     pair_inputs: dict[str, Any] | None = field(default=None, repr=False)
-    node_owner: dict[str, Any] | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if (
@@ -245,13 +244,6 @@ class Settings:
             from ads_sandbox_manager.pair_runtime import pair_runtime
 
             pair_runtime(self)
-        if self.node_owner is not None:
-            from ads_sandbox_manager.node_owner import NodeOwnerSettings
-
-            owner = NodeOwnerSettings.parse(self.node_owner)
-            if owner.namespace != self.namespace or owner.timeout >= self.control_seconds:
-                raise ValueError("node-owner scope or control deadline mismatch")
-
     @property
     def golden_name(self) -> str:
         return "ads-sandbox-golden-" + self.golden_version.replace(".", "-")
@@ -346,22 +338,7 @@ def load_settings() -> Settings:
         ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
         ca=CaSettings(**json.loads(required("CA"))),
         pair_inputs=json.loads(required("PAIR_INPUTS")),
-        node_owner=json.loads(required("NODE_OWNER")),
     )
     from ads_sandbox_manager.pair_runtime import pair_runtime
 
     pair_runtime(settings)  # JSON null is not permission to select the unpaired fixture path.
-    from ads_sandbox_manager.node_owner import NodeOwnerSettings
-
-    if settings.node_owner is None:
-        raise ValueError("production node-owner configuration required")
-    NodeOwnerSettings.parse(settings.node_owner).context()
-    load_tls_context(settings)
-    if settings.session_objects is None:
-        raise RuntimeError("ADS_SANDBOX_MANAGER_SESSION_OBJECTS is required")
-    if not settings.keycloak_client_secret or not all(
-        value.startswith("https://")
-        for value in (settings.keycloak_issuer, settings.keycloak_well_known_url)
-    ):
-        raise RuntimeError("manager Keycloak HTTPS issuer, discovery and client secret required")
-    return settings
