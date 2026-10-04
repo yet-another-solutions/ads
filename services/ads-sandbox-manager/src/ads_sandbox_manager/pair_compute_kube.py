@@ -281,7 +281,9 @@ class PairComputeAdapter:
         result = PairControlAdapter._identity(observed, desired, uid)
         if (
             observed["metadata"].get("deletionTimestamp")
-            or observed["metadata"].get("annotations")
+            # G10: annotations are NOT validated post-push. The manager stamps
+            # sandbox-ads/* itself at compose time; after push the manager never
+            # re-validates pod structure (no whitelist, no rejection).
             or not await self._admitted_spec_matches(observed, desired)
         ):
             raise RuntimeError("deleting or incompatible pair Pod")

@@ -167,7 +167,7 @@ async def test_exact_dependencies_required_without_recreation(publication, targe
 
 
 @pytest.mark.parametrize("role", PUBLISHED_COMPUTE_ROLES)
-@pytest.mark.parametrize("change", ["absent", "uid", "spec", "annotations", "owner"])
+@pytest.mark.parametrize("change", ["absent", "uid", "spec", "owner"])
 async def test_bound_pod_loss_replacement_or_extra_authority_is_not_repaired(
     publication, role, change
 ):
@@ -180,8 +180,6 @@ async def test_bound_pod_loss_replacement_or_extra_authority_is_not_repaired(
         body["metadata"]["uid"] = str(uuid4())
     elif change == "spec":
         body["spec"]["hostNetwork"] = True
-    elif change == "annotations":
-        body["metadata"]["annotations"] = {"untrusted-hook": "enabled"}
     else:
         body["metadata"]["ownerReferences"] = [{"uid": "replacement-controller"}]
     with pytest.raises(RuntimeError):

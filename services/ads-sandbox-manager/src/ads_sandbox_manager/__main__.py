@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import ssl
 import sys
 
 import uvicorn
@@ -29,30 +30,44 @@ def main() -> None:
     # TLS must be proven loadable before any network or database connection;
     # a misconfigured cert must fail the process before it reaches the store.
     load_tls_context(settings)
-    prepare_schema(
-        alembic_ini=alembic_ini_for("ads-sandbox-manager"),
-        database_url=settings.database_url,
-        tables=mapped_tables(
-            SandboxSession,
-            SessionPVC,
-            CleanupWork,
-            PingProbe,
-            PairIntent,
-            EgressState,
-            PairRetirement,
-            PairTransfer,
-            PairDisposal,
-        ),
-    )
-    FailFastServer(
-        uvicorn.Config(
-            create_app(settings),
-            host=settings.bind_host,
-            port=settings.port,
-            ssl_certfile=str(settings.tls_cert_path),
-            ssl_keyfile=str(settings.tls_key_path),
+    listener = None
+    if settings.pair_lookup is not None:
+        from ads_sandbox_manager.pair_lookup import PairLookupListener
+
+        # Same server cert as the main API; the CNI client pins the cluster CA
+        # and presents its own cert (CN ads-ptp-cni), enforced per request.
+        context = load_tls_context(settings)
+        context.verify_mode = ssl.CERT_REQUIRED
+        listener = PairLookupListener(settings, context)
+        listener.start()
+    try:
+        prepare_schema(
+            alembic_ini=alembic_ini_for("ads-sandbox-manager"),
+            database_url=settings.database_url,
+            tables=mapped_tables(
+                SandboxSession,
+                SessionPVC,
+                CleanupWork,
+                PingProbe,
+                PairIntent,
+                EgressState,
+                PairRetirement,
+                PairTransfer,
+                PairDisposal,
+            ),
         )
-    ).run()
+        FailFastServer(
+            uvicorn.Config(
+                create_app(settings),
+                host=settings.bind_host,
+                port=settings.port,
+                ssl_certfile=str(settings.tls_cert_path),
+                ssl_keyfile=str(settings.tls_key_path),
+            )
+        ).run()
+    finally:
+        if listener is not None:
+            listener.stop()
 
 
 if __name__ == "__main__":

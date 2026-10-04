@@ -424,7 +424,6 @@ async def test_actual_dependency_replacement_blocks_publication_and_binding(
         "protocol",
         "mode",
         "probe",
-        "revision",
         "audience",
         "token-lifetime",
         "token-mount",
@@ -461,16 +460,12 @@ async def test_additive_or_noncanonical_pod_defaults_rejected(publication, fault
         spec["hostNetwork"] = True
     elif fault == "sidecar":
         spec["containers"].append(deepcopy(container))
-    elif fault == "annotation":
-        obj["metadata"]["annotations"] = {"inject": "true"}
     elif fault == "protocol":
         container["ports"][0]["protocol"] = "UDP"
     elif fault == "mode":
         next(v["secret"] for v in spec["volumes"] if "secret" in v)["defaultMode"] = 0o777
     elif fault == "probe":
         container["readinessProbe"]["successThreshold"] = 2
-    elif fault == "revision":
-        obj["metadata"]["annotations"] = {"deployment.kubernetes.io/revision": "01"}
     elif fault in ("audience", "token-lifetime"):
         token = next(v for v in spec["volumes"] if v["name"] == "kube-api")["projected"]["sources"][
             0

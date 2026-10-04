@@ -11,6 +11,12 @@ from ads_sandbox_manager.session_objects import SANDBOX, labels
 
 GENERATION = "ads.io/attachment-generation"
 PROJECT = "ads.io/project-id"
+# G9 join key: the CNI plugin reads these pod annotations (declared via the
+# io.kubernetes.cri.pod-annotations capability) and dials the manager's
+# /v1/pair lookup with (generation, role). Stamped at compose time, before
+# the Pod exists — nothing depends on kube-assigned identity or uid capture.
+PAIR_GENERATION = "sandbox-ads/generation"
+PAIR_ROLE = "sandbox-ads/role"
 COMPUTE_ROLES = ("guest", "egress", "guest-relay", "egress-relay")
 ROLES = (*COMPUTE_ROLES, "ipc")
 COMPONENTS = {
@@ -69,6 +75,13 @@ def pair_labels(settings: Settings, pair: PairBinding, role: str) -> Object:
     }
 
 
+def pair_annotations(pair: PairBinding, role: str) -> Object:
+    """G9 stamps for pair compute Pod manifests; IPC pods stay stamp-free."""
+    if role not in COMPUTE_ROLES:
+        raise ValueError("invalid pair compute role")
+    return {PAIR_GENERATION: str(pair.generation), PAIR_ROLE: role}
+
+
 def metadata(settings: Settings, pair: PairBinding, role: str) -> Object:
     return {
         "name": pair_name(pair, role),
@@ -84,7 +97,15 @@ def compute_identity(settings: Settings, pair: PairBinding, role: str) -> Object
     return {
         "apiVersion": "v1",
         "kind": "Pod",
-        "metadata": metadata(settings, pair, role),
+        "metadata": {
+            "name": pair_name(pair, role),
+            "namespace": settings.namespace,
+            "labels": pair_labels(settings, pair, role),
+            # Stamp every compute Pod manifest at one choke point; relay
+            # roles carry the stamps too so the plugin can skip them by
+            # role without dialing the manager.
+            "annotations": pair_annotations(pair, role),
+        },
     }
 
 

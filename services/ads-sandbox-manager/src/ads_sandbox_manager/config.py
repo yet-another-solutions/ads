@@ -132,6 +132,29 @@ class CaSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PairLookupSettings:
+    """mTLS CNI lookup listener (G9): /v1/pair served next to the main API."""
+
+    host: str = "0.0.0.0"
+    port: int = 8443
+    client_cn: str = "ads-ptp-cni"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.host, str) or not self.host.strip():
+            raise ValueError("pair lookup host is required")
+        if type(self.port) is not int or not 1 <= self.port <= 65535:
+            raise ValueError("pair lookup port must be a valid TCP port")
+        if not isinstance(self.client_cn, str) or not self.client_cn.strip():
+            raise ValueError("pair lookup client CN is required")
+
+    @classmethod
+    def parse(cls, value: dict[str, Any]) -> PairLookupSettings:
+        if not isinstance(value, dict) or not set(value) <= {"host", "port", "client_cn"}:
+            raise ValueError("exact pair lookup configuration required")
+        return cls(**value)
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     golden_version: str
     golden_image: str
@@ -176,6 +199,7 @@ class Settings:
     ads_service_subject: UUID | None = None
     ca: CaSettings | None = None
     pair_inputs: dict[str, Any] | None = field(default=None, repr=False)
+    pair_lookup: PairLookupSettings | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -338,6 +362,11 @@ def load_settings() -> Settings:
         ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
         ca=CaSettings(**json.loads(required("CA"))),
         pair_inputs=json.loads(required("PAIR_INPUTS")),
+        pair_lookup=(
+            PairLookupSettings.parse(json.loads(os.environ[prefix + "PAIR_LOOKUP"]))
+            if os.environ.get(prefix + "PAIR_LOOKUP", "").strip()
+            else None
+        ),
     )
     from ads_sandbox_manager.pair_runtime import pair_runtime
 
