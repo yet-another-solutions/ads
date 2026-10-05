@@ -70,11 +70,9 @@ def inputs(plugin, tmp_path, monkeypatch):
         "gateway": "10.10.30.1",
     }
     config["runtimeConfig"] = {
-        config["name"]: {
-            "io.kubernetes.cri.pod-annotations": {
-                "sandbox-ads/generation": attestation["generation"],
-                "sandbox-ads/role": attestation["role"],
-            }
+        "io.kubernetes.cri.pod-annotations": {
+            "sandbox-ads/generation": attestation["generation"],
+            "sandbox-ads/role": attestation["role"],
         }
     }
     observed = {
