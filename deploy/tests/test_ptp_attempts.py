@@ -14,7 +14,9 @@ def attempt_path(config, req):
     return Path(config["stateDir"]) / ("attempt-" + req["key"] + ".json")
 
 
-def test_missing_attestation_preserves_original_namespace_before_any_effect(plugin, inputs, kernel, monkeypatch):
+def test_missing_attestation_preserves_original_namespace_before_any_effect(
+    plugin, inputs, kernel, monkeypatch
+):
     config, env, attestation = inputs
     req, _, active, _, _, calls = kernel
     # Simulate a manager outage: the dial fails before any record or effect.

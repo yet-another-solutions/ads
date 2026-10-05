@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import http.client
-import contextlib
 import importlib.machinery
 import importlib.util
 import json
@@ -285,17 +285,26 @@ try:
         }
         real_dial = plugin.dial_manager
         real_observe = plugin.observe_namespaces
-        plugin.dial_manager = lambda *args: dict(reply)
-        plugin.observe_namespaces = lambda request, observed: (
-            {
-                "path": private_path,
-                "identity": [os.stat(private_path).st_dev, os.stat(private_path).st_ino],
-            },
-            {
-                "path": transport_path,
-                "identity": [os.stat(transport_path).st_dev, os.stat(transport_path).st_ino],
-            },
-        )
+
+        reply_copy = dict(reply)
+
+        def stub_dial(*args, _reply=reply_copy):
+            return dict(_reply)
+
+        def stub_observe(request, observed, _private=private_path, _transport=transport_path):
+            return (
+                {
+                    "path": _private,
+                    "identity": [os.stat(_private).st_dev, os.stat(_private).st_ino],
+                },
+                {
+                    "path": _transport,
+                    "identity": [os.stat(_transport).st_dev, os.stat(_transport).st_ino],
+                },
+            )
+
+        plugin.dial_manager = stub_dial
+        plugin.observe_namespaces = stub_observe
         cni = {
             "cniVersion": "1.0.0",
             "type": "ads-ptp",

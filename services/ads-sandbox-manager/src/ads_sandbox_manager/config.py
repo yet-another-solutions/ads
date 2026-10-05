@@ -268,6 +268,7 @@ class Settings:
             from ads_sandbox_manager.pair_runtime import pair_runtime
 
             pair_runtime(self)
+
     @property
     def golden_name(self) -> str:
         return "ads-sandbox-golden-" + self.golden_version.replace(".", "-")

@@ -19,7 +19,7 @@ from ads_sandbox_manager.egress_state_store import (
 from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
-from ads_sandbox_manager.pair_objects import pair_name, PairBinding
+from ads_sandbox_manager.pair_objects import PairBinding, pair_name
 from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
     PairClaimLost,
@@ -218,15 +218,12 @@ class LifecycleRepository:
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
         expected_snapshot = expected.pair_snapshot
         assert expected_snapshot is not None
+        assert retained is not None
         # A late original writer settling between capture and seal is the same
         # positive evidence pair_writers_settled accepts (inflight -> settled
         # with its captured UID intact); nothing else may differ.
-        settled_keys = ["topics_dispatch", "relay_custody.dispatch", "relay_inputs", "volume_resources", "ipc_resources"]
         for key in ("topics_dispatch",):
-            if (
-                expected_snapshot.get(key) == "inflight"
-                and retained.get(key) == "settled"
-            ):
+            if expected_snapshot.get(key) == "inflight" and retained.get(key) == "settled":
                 expected_snapshot = {**expected_snapshot, key: "settled"}
         for field in ("relay_inputs", "volume_resources", "ipc_resources"):
             cap, ret = expected_snapshot.get(field), retained.get(field)
@@ -235,12 +232,25 @@ class LifecycleRepository:
             merged = dict(cap)
             for role, entry in cap.items():
                 r = ret.get(role)
-                if isinstance(r, dict) and isinstance(entry, dict) and entry.get("dispatch") == "inflight" and r.get("dispatch") == "settled":
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(r, dict)
+                    and entry.get("dispatch") == "inflight"
+                    and r.get("dispatch") == "settled"
+                ):
                     merged[role] = {**entry, "dispatch": "settled", "uid": r.get("uid")}
             expected_snapshot = {**expected_snapshot, field: merged}
         cap, ret = expected_snapshot.get("relay_custody"), retained.get("relay_custody")
-        if isinstance(cap, dict) and isinstance(ret, dict) and cap.get("dispatch") == "inflight" and ret.get("dispatch") == "settled":
-            expected_snapshot = {**expected_snapshot, "relay_custody": {**cap, "dispatch": "settled", "uid": ret.get("uid")}}
+        if (
+            isinstance(cap, dict)
+            and isinstance(ret, dict)
+            and cap.get("dispatch") == "inflight"
+            and ret.get("dispatch") == "settled"
+        ):
+            expected_snapshot = {
+                **expected_snapshot,
+                "relay_custody": {**cap, "dispatch": "settled", "uid": ret.get("uid")},
+            }
         # Persistent egress state follows require_cleanup_state's tolerance:
         # inflight -> settled is the same positive writers-settled evidence;
         # retained uid may be None or equal, never drifted.
@@ -249,7 +259,8 @@ class LifecycleRepository:
             merged_e = dict(cape)
             changed_e = False
             for role in ("key", "volume"):
-                if cape.get(f"{role}_dispatch") == "inflight" and rete.get(f"{role}_dispatch") == "settled":
+                inflight = cape.get(f"{role}_dispatch") == "inflight"
+                if inflight and rete.get(f"{role}_dispatch") == "settled":
                     cap_uid, ret_uid = cape.get(f"{role}_uid"), rete.get(f"{role}_uid")
                     if cap_uid is not None and ret_uid is not None and cap_uid != ret_uid:
                         continue
@@ -422,9 +433,7 @@ class LifecycleRepository:
     ) -> list[dict[str, Any]]:
         """Exact non-retained objects of a retired generation plus the claim."""
         binding = intent.binding()
-        targets = [
-            target("Pod", ipc_name(intent.sandbox_id), intent.ipc_resources["pod"]["uid"])
-        ]
+        targets = [target("Pod", ipc_name(intent.sandbox_id), intent.ipc_resources["pod"]["uid"])]
         for key, uid in intent.compute_uids.items():
             if uid is not None:
                 targets.append(target("Pod", pair_name(binding, key.removeprefix("Pod/")), uid))
@@ -458,9 +467,7 @@ class LifecycleRepository:
                 )
         for role, entry in intent.relay_inputs.items():
             if entry["uid"] is not None:
-                targets.append(
-                    target("Secret", relay_input_name(binding, role), entry["uid"])
-                )
+                targets.append(target("Secret", relay_input_name(binding, role), entry["uid"]))
         if intent.egress_state_id is not None:
             state = await db.get(EgressState, intent.egress_state_id)
             if state is not None:

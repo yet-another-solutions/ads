@@ -12,16 +12,15 @@ from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.pair_disposal import PairDisposal
 from ads_sandbox_manager.pair_registry import PairRegistry
 from ads_sandbox_manager.pair_retirement import (
-    PairRetirementRepository,
     retirement_kind,
 )
 from ads_sandbox_manager.pair_store import PairIntent
 from ads_sandbox_manager.store import SandboxSession
 from test_kube_release import api  # noqa: F401
-from test_pair_store import ledger, snapshot  # noqa: F401
 from test_pair_controls import controls  # noqa: F401
 from test_pair_creation import creation  # noqa: F401
 from test_pair_disposal import reap, stopped
+from test_pair_store import ledger, snapshot  # noqa: F401
 from test_pair_teardown_world import pair_world, reconcile  # noqa: F401
 from test_pair_volume_publication import publication as volume_publication  # noqa: F401
 from test_session_objects import object_settings  # noqa: F401
@@ -30,7 +29,10 @@ from test_sessions import sessions_harness  # noqa: F401
 pytestmark = pytest.mark.anyio
 
 
-@pytest.mark.parametrize("marker", ["ads.io/project-id", "ads.io/attachment-generation", "ads.io/egress-state-id"])
+@pytest.mark.parametrize(
+    "marker",
+    ["ads.io/project-id", "ads.io/attachment-generation", "ads.io/egress-state-id"],
+)
 def test_paired_markers_are_never_legacy_orphan_authority(marker):
     sid, sandbox, pvc = uuid4(), uuid4(), uuid4()
     obj = {

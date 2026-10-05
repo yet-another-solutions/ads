@@ -13,7 +13,6 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -22,7 +21,6 @@ from ads_sandbox_manager.lifecycle import IDLE, LifecycleService, Signal
 from ads_sandbox_manager.lifecycle_store import (
     CleanupWork,
     LifecycleRepository,
-    sandbox_targets,
 )
 from ads_sandbox_manager.pair_disposal import PairDisposalRepository
 from ads_sandbox_manager.pair_registry import PairRegistry

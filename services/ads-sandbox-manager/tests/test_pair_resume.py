@@ -1,5 +1,6 @@
 # ruff: noqa: F811
 """O2 retained resume: plain-column inheritance rebuilds the same state."""
+
 from __future__ import annotations
 
 import asyncio
@@ -45,8 +46,6 @@ async def test_real_paired_builder_resumes_original_state_with_new_attachment(pa
     row = await prepared(f)
     before = deepcopy(f.remote.objects)
     prior = f.work.pair_snapshot
-    created = len(f.remote.created)
-    topics = f.topics.prepare.await_count
     # A retained clone does not require its historical shared source to survive.
     f.golden.clone_source.side_effect = RuntimeError("retired golden source unavailable")
     current = await f.h.service.provision(row.session_id)
@@ -114,9 +113,13 @@ async def test_retained_validation_blocks_reattachment_before_any_new_remote_wri
             for key, value in f.remote.objects.items()
             if value["metadata"]["uid"] == workspace
         )
-        f.remote.objects[key := next(
-            key for key, value in f.remote.objects.items() if key == ("PersistentVolumeClaim", name)
-        )]["metadata"]["deletionTimestamp"] = "2026-10-04T00:00:00Z"
+        f.remote.objects[
+            key := next(
+                key
+                for key, value in f.remote.objects.items()
+                if key == ("PersistentVolumeClaim", name)
+            )
+        ]["metadata"]["deletionTimestamp"] = "2026-10-04T00:00:00Z"
     else:
         original = f.creator.state.kube.observe_volume
 

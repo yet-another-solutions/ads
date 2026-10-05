@@ -121,7 +121,7 @@ class PairTransferRepository:
             != (row.session_id, row.sandbox_id, row.project_id, row.status_changed_at)
             or pair.namespace != saved.namespace
             or pair.golden_version != saved.golden_version
-            or pair.claim_changed <= saved.retired_at
+            or pair.claim_changed <= (saved.retired_at or pair.claim_changed)
             or pair.egress_state_id is not None
             or pair.retained_from is not None
             or pair.volume_resources["workspace"]["dispatch"] != "unissued"
@@ -131,8 +131,7 @@ class PairTransferRepository:
             or pvc.uid != row.pvc_uid
             or (saved.session_id, saved.sandbox_id, saved.project_id)
             != (pair.session_id, pair.sandbox_id, pair.project_id)
-            or str(pvc.pvc_id)
-            != saved.volume_resources["workspace"]["payload"]["pvc_id"]
+            or str(pvc.pvc_id) != saved.volume_resources["workspace"]["payload"]["pvc_id"]
             or pvc.uid != saved.volume_resources["workspace"]["uid"]
         ):
             raise PairClaimLost("new retained ownership scope changed")

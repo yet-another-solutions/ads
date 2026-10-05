@@ -70,11 +70,13 @@ jobs:
             libfstrm0 libprotobuf-c1 liburcu8t64 libjemalloc2 liblmdb0
           root="$RUNNER_TEMP/ads-openssl4"
           mkdir -p "$root"
+          # OpenSSL 4.0.2 is pinned by ads_sandbox_egress.tls; the live pool
+          # drops superseded versions, so fetch the exact debs from snapshot.
           curl --fail --show-error --location \
-            https://deb.debian.org/debian/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
+            https://snapshot.debian.org/archive/debian/20260826T022714Z/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
             --output "$root/libssl.deb"
           curl --fail --show-error --location \
-            https://deb.debian.org/debian/pool/main/o/openssl/openssl_4.0.2-1_amd64.deb \
+            https://snapshot.debian.org/archive/debian/20260826T022714Z/pool/main/o/openssl/openssl_4.0.2-1_amd64.deb \
             --output "$root/openssl.deb"
           echo "1e265574c02f4918092d2f09e63cf368b21f15108b667790633f038717ded260  $root/libssl.deb" | sha256sum --check
           echo "657b368d7ae7c57cb85e24766a6e4f756b45e4f275dc991b2697b8cc648d7f6b  $root/openssl.deb" | sha256sum --check

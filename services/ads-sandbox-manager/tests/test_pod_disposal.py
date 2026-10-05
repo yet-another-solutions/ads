@@ -13,7 +13,7 @@ pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
-def pod_adapter(api):
+def pod_adapter(api):  # noqa: F811 -- pytest fixture injection, not shadowing
     pod = {
         "metadata": {"name": "ads-sandbox-ipc-x", "uid": "ipc-uid", "resourceVersion": "11"},
         "spec": {"nodeName": "sandbox-node"},
@@ -23,7 +23,7 @@ def pod_adapter(api):
     return CleanupAdapter(api), deepcopy(pod)
 
 
-async def test_pod_delete_fenced_observation_and_preconditions(api, pod_adapter):
+async def test_pod_delete_fenced_observation_and_preconditions(api, pod_adapter):  # noqa: F811
     adapter, pod = pod_adapter
     reads = iter([deepcopy(pod), None])
 
@@ -41,7 +41,7 @@ async def test_pod_delete_fenced_observation_and_preconditions(api, pod_adapter)
     assert call.kwargs["body"]["propagationPolicy"] == "Foreground"
 
 
-async def test_pod_delete_404_is_released_and_409_is_retry(api, pod_adapter):
+async def test_pod_delete_404_is_released_and_409_is_retry(api, pod_adapter):  # noqa: F811
     adapter, pod = pod_adapter
 
     def conflict(*args, **kwargs):
@@ -59,7 +59,7 @@ async def test_pod_delete_404_is_released_and_409_is_retry(api, pod_adapter):
     assert await adapter.delete_pod(pod, "ipc-uid", node="sandbox-node")
 
 
-async def test_pod_delete_replacement_or_node_move_refuses(api, pod_adapter):
+async def test_pod_delete_replacement_or_node_move_refuses(api, pod_adapter):  # noqa: F811
     adapter, pod = pod_adapter
     replaced = deepcopy(pod)
     replaced["metadata"]["uid"] = "other-uid"

@@ -1,5 +1,6 @@
 # ruff: noqa: F811
 """O2 retained expiry: exclusive whole-lifetime disposal of retired storage."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,6 @@ from sqlalchemy import delete, select
 
 from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.pair_disposal import PairDisposal
-from ads_sandbox_manager.pair_registry import PairRegistry
 from ads_sandbox_manager.pair_store import PairClaimLost
 from ads_sandbox_manager.store import SandboxSession, SessionPVC
 from test_kube_release import api  # noqa: F401
@@ -19,8 +19,7 @@ from test_pair_controls import controls  # noqa: F401
 from test_pair_creation import build, creation  # noqa: F401
 from test_pair_store import ledger, snapshot  # noqa: F401
 from test_pair_teardown_world import (
-    FakeTeardownKube,
-    pair_world,
+    pair_world,  # noqa: F401  (pytest fixture injection, mirrors HEAD imports)
     reconcile,
     retire,
 )
@@ -75,9 +74,7 @@ async def test_reap_opens_exclusive_disposal_and_finish_ends_whole_lifetime(pair
 async def test_expiry_and_resume_serialize_on_original_session_and_workspace(pair_world):
     f = pair_world
     row = await stopped(f)
-    results = await asyncio.gather(
-        claim(f, row), reap(f, row), return_exceptions=True
-    )
+    results = await asyncio.gather(claim(f, row), reap(f, row), return_exceptions=True)
     claim_result, reap_result = results
     if not isinstance(claim_result, BaseException) and claim_result is not None:
         # The claim won; the reap must have found the PVC attaching (not detached).
@@ -124,9 +121,7 @@ async def test_retired_orphan_without_session_reconciles_and_disposes(pair_world
     f = pair_world
     row = await stopped(f)
     async with f.h.sessions.begin() as db:
-        await db.execute(
-            delete(SandboxSession).where(SandboxSession.session_id == row.session_id)
-        )
+        await db.execute(delete(SandboxSession).where(SandboxSession.session_id == row.session_id))
     work = await reconcile(f)
     assert work is not None and work.kind == "orphan" and work.session_id is None
     assert work.pair_snapshot is None
@@ -136,9 +131,7 @@ async def test_retired_orphan_without_session_reconciles_and_disposes(pair_world
         assert receipt.completed_at is not None
         assert (
             await db.scalar(
-                select(CleanupWork.work_id).where(
-                    CleanupWork.sandbox_id == f.intent.sandbox_id
-                )
+                select(CleanupWork.work_id).where(CleanupWork.sandbox_id == f.intent.sandbox_id)
             )
             is None
         )

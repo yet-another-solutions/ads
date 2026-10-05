@@ -11,19 +11,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Any, Protocol
 from uuid import UUID
-from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_objects import PairBinding
-from ads_sandbox_manager.session_objects import ca_consumer_name
 from ads_sandbox_manager.pair_store import PairClaimLost
+from ads_sandbox_manager.session_objects import ca_consumer_name
 from ads_sandbox_manager.store import SandboxSession
 
 log = logging.getLogger(__name__)
@@ -35,7 +34,7 @@ class PairTeardownKubernetes(Protocol):
     async def observe(self, target: Object) -> Object | None: ...
     async def delete(self, target: Object) -> None: ...
     async def observe_pod(self, name: str) -> Object | None: ...
-    async def delete_pod(self, desired: Object, uid: str, *, node: str) -> bool: ...
+    async def delete_pod(self, desired: Object, uid: str, *, node: str | None) -> bool: ...
     async def released(self, target: Object) -> bool: ...
     async def reclaimed(self, target: Object) -> bool: ...
 
@@ -68,16 +67,8 @@ class PairTeardown:
         async with asyncio.timeout(self.settings.control_seconds):
             async with self.sessions.begin() as db:
                 current = await db.get(CleanupWork, expected.work_id)
-                fields = (
-                    "work_id",
-                    "session_id",
-                    "sandbox_id",
-                    "pvc_id",
-                    "kind",
-                    "state_changed",
-                    "pvc_changed",
-                    "targets",
-                )
+                if current is None:
+                    raise PairClaimLost("paired teardown claim vanished")
                 snapshotless = current.pair_snapshot is None
                 if snapshotless != (expected.pair_snapshot is None) or (
                     not snapshotless
@@ -109,9 +100,7 @@ class PairTeardown:
             log.warning("paired teardown unavailable; exact targets retained")
             return False
 
-    async def _release(
-        self, expected: CleanupWork, recovery: SandboxSession | None
-    ) -> bool:
+    async def _release(self, expected: CleanupWork, recovery: SandboxSession | None) -> bool:
         work = await self._owned(expected, recovery)
         snapshot = work.pair_snapshot
         if snapshot is None:
@@ -120,20 +109,21 @@ class PairTeardown:
             return await self._release_targets(work, None)
         return await self._release_targets(work, snapshot)
 
-    async def _release_targets(
-        self, work: CleanupWork, snapshot: dict[str, Any] | None
-    ) -> bool:
+    async def _release_targets(self, work: CleanupWork, snapshot: dict[str, Any] | None) -> bool:
         # Pods first: ipc Pod (uid backfilled from the captured ownership),
         # then compute pods in fixed role order, each fenced by its exact UID.
         pod_uid = snapshot["ipc_resources"]["pod"]["uid"] if snapshot else None
         targets: list[tuple[Object, str | None]] = [
-            ({"kind": "Pod", "name": obj["name"], "uid": obj["uid"] or pod_uid}, obj["uid"] or pod_uid)
+            (
+                {"kind": "Pod", "name": obj["name"], "uid": obj["uid"] or pod_uid},
+                obj["uid"] or pod_uid,
+            )
             for obj in work.targets
             if obj["kind"] == "Pod" and (obj.get("uid") or pod_uid)
         ]
         if snapshot is not None:
             from ads_sandbox_manager.pair_objects import pair_name
-            from ads_sandbox_manager.pair_store import PairIntent
+
             # Compute Pods are named pair_name(binding, role): ads-{role}-{sandbox}.
             binding = PairBinding(
                 session_id=UUID(snapshot["session_id"]),
@@ -147,6 +137,7 @@ class PairTeardown:
                     continue
                 targets.append(({"kind": "Pod", "name": pair_name(binding, role), "uid": uid}, uid))
         for desired, uid in targets:
+            assert uid is not None  # targets only exist with a UID
             observed = await self.kube.observe_pod(desired["name"])
             if observed is None:
                 log.warning("cleanup exact target missing: %s uid=%s", desired["name"], uid)

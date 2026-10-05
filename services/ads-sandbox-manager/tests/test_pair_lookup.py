@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import ssl
-from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -82,8 +80,16 @@ def intent_row(**over):
         compute_uids={"Pod/guest": POD_UID, "Pod/guest-relay": RELAY_UID},
         compute_payloads={},
         relay_inputs={
-            "guest-relay": {"payload": relay_payload("guest-relay"), "uid": str(uuid4()), "dispatch": "issued"},
-            "egress-relay": {"payload": relay_payload("egress-relay"), "uid": str(uuid4()), "dispatch": "issued"},
+            "guest-relay": {
+                "payload": relay_payload("guest-relay"),
+                "uid": str(uuid4()),
+                "dispatch": "issued",
+            },
+            "egress-relay": {
+                "payload": relay_payload("egress-relay"),
+                "uid": str(uuid4()),
+                "dispatch": "issued",
+            },
         },
         relay_custody={},
         control_uids={},
@@ -223,7 +229,8 @@ def test_settings_parse_accepts_subset():
 
 
 def test_settings_defaults():
-    assert PairLookupSettings() == PairLookupSettings(host="0.0.0.0", port=8443, client_cn="ads-ptp-cni")
+    defaults = PairLookupSettings()
+    assert defaults == PairLookupSettings(host="0.0.0.0", port=8443, client_cn="ads-ptp-cni")
 
 
 @pytest.mark.anyio
@@ -260,7 +267,8 @@ async def test_lookup_uid_mismatch_404():
 async def test_lookup_ready_before_uid_capture():
     # G9: join works without capture; pod_uid query param stands in.
     intent = intent_row(compute_uids={"Pod/guest-relay": RELAY_UID})
-    status, body = await lookup_with(intent, {"ads-guest-relay-" + str(SANDBOX): relay_pod()}, pod_uid=POD_UID)
+    pods = {"ads-guest-relay-" + str(SANDBOX): relay_pod()}
+    status, body = await lookup_with(intent, pods, pod_uid=POD_UID)
     assert status == 200
     assert body["pod_uid"] == POD_UID and body["relay_pod_uid"] == RELAY_UID
 
@@ -285,7 +293,8 @@ async def test_lookup_no_relay_uid_503():
 
 @pytest.mark.anyio
 async def test_lookup_no_container_id_503():
-    status, _ = await lookup_with(intent_row(), {"ads-guest-relay-" + str(SANDBOX): relay_pod(None)})
+    pods = {"ads-guest-relay-" + str(SANDBOX): relay_pod(None)}
+    status, _ = await lookup_with(intent_row(), pods)
     assert status == 503
 
 

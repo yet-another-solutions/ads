@@ -123,6 +123,7 @@ try:
     print("private bridge preflight: " + canary.ns(private, "ip", "-d", "-j", "link"), flush=True)
     req = plugin.request(config, env)
     attempt = root / "state" / ("attempt-" + req["key"] + ".json")
+
     # The mTLS dial contract is pinned by the pytest suite; this real-kernel
     # smoke stubs the manager lookup and proves every local effect. A dial
     # failure must leave only the original attempt history and no links.
@@ -158,7 +159,9 @@ try:
     assert original_attempt["vm_identity"] == canary.namespace_identity(names[0])
     assert len(json.loads(canary.ns(names[0], "ip", "-j", "link"))) == 1
     # The /proc relay scan is pinned by the pytest suite; the smoke patches it
-    # to the namespaces created above.
+    # for the whole run to the namespaces created above. The fake relay
+    # runtime id matches no /proc cgroup, so the unpatched scan can never
+    # succeed here.
     real_observe = plugin.observe_namespaces
 
     def observe(request, observed):
@@ -170,7 +173,6 @@ try:
     plugin.observe_namespaces = observe
     plugin.dial_manager = dial
     output = plugin.perform(config, env)
-    plugin.observe_namespaces = real_observe
     admitted_attempt = plugin.read_record(attempt)
     assert admitted_attempt == original_attempt
     assert output["ips"] == [{"interface": 0, "address": "10.10.30.2/24", "gateway": "10.10.30.1"}]
@@ -269,6 +271,7 @@ try:
     assert not held_attempt.exists() and not held_lock.exists()
     assert set((root / "state").glob("*.json")) == {attempt, fresh_attempt}
 finally:
+    plugin.observe_namespaces = real_observe
     plugin.dial_manager = real_dial
     for name in reversed(created):
         canary.run("ip", "netns", "delete", name)

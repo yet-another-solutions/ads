@@ -79,9 +79,7 @@ async def condemn(f):
     now = datetime.now(UTC)
     async with f.h.sessions.begin() as db:
         row = await db.get(SandboxSession, f.row.session_id)
-        assert await f.pair_service.repository.recover(
-            db, row.session_id, row.sandbox_id, now, 120
-        )
+        assert await f.pair_service.repository.recover(db, row.session_id, row.sandbox_id, now, 120)
     async with f.h.sessions.begin() as db:
         f.claim = await db.get(SandboxSession, f.row.session_id)
         f.work = await db.scalar(
@@ -94,9 +92,7 @@ async def condemn(f):
 async def stored_works(f):
     async with f.h.sessions.begin() as db:
         return list(
-            await db.scalars(
-                select(CleanupWork).where(CleanupWork.session_id == f.row.session_id)
-            )
+            await db.scalars(select(CleanupWork).where(CleanupWork.session_id == f.row.session_id))
         )
 
 
@@ -157,6 +153,7 @@ async def test_recovery_never_builds_fresh_before_all_terminal_proof_commits(
         with pytest.raises(RuntimeError):
             await recovery(f)._execute(stale, [f.work])
     else:
+
         async def refused(self, db, expected, now, **kwargs):
             return False
 
@@ -205,17 +202,16 @@ async def test_recovery_retry_carries_unissued_interim_identity_without_legacy_d
                 select(PairIntent.generation).where(PairIntent.session_id == row.session_id)
             )
         )
-        assert set(generations) == {old_generation,
+        assert set(generations) == {
+            old_generation,
             await db.scalar(
                 select(PairIntent.generation).where(
                     PairIntent.session_id == row.session_id,
                     PairIntent.retired_at.is_(None),
                 )
-            )
+            ),
         }
-        assert await PairRetirementRepository(f.pair_service.repository).verify(
-            db, old_generation
-        )
+        assert await PairRetirementRepository(f.pair_service.repository).verify(db, old_generation)
 
 
 async def test_fresh_admission_refuses_surviving_original_pvc_without_retirement(

@@ -1,5 +1,6 @@
 # ruff: noqa: F811
 """O2 retained transfer: plain-column retirement feeds exclusive inheritance."""
+
 from __future__ import annotations
 
 import asyncio
@@ -101,7 +102,9 @@ async def test_competing_resumes_share_one_claim_and_one_transfer(pair_world):
     assert left.generation == right.generation
     async with f.h.sessions.begin() as db:
         receipts = list(
-            await db.scalars(select(PairTransfer).where(PairTransfer.sandbox_id == f.row.sandbox_id))
+            await db.scalars(
+                select(PairTransfer).where(PairTransfer.sandbox_id == f.row.sandbox_id)
+            )
         )
         assert len(receipts) == 1
 

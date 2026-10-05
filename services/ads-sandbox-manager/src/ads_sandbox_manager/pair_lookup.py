@@ -23,17 +23,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.kube import KubeClient
-from ads_sandbox_manager.pair_objects import COMPUTE_ROLES
 from ads_sandbox_manager.pair_store import PairIntent
 
 LIMIT = 8192
 CLIENT_CN = "ads-ptp-cni"
 GATEWAY = "10.10.30.1"
-UUID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 VM_ROLES = ("guest", "egress")
-RELAY_ROLES = {"guest": "guest-relay", "egress": "egress-relay"}
 
 
 def container_identity(pod: dict[str, Any], name: str) -> str | None:
@@ -56,7 +52,6 @@ def binding_record(
 ) -> dict[str, Any]:
     """The PARTIAL record: plugin adds ifname + private/transport identities."""
     guest = role == "guest"
-    relay_role = RELAY_ROLES[role]
     config = payload["configuration"]
     # The plugin needs the bare IP; the configuration carries a /24.
     address = config["local_private"].split("/", 1)[0]
@@ -77,7 +72,9 @@ def binding_record(
 class PairLookup:
     """Pure lookup logic over (generation, role); DB + kube injected per request."""
 
-    def __init__(self, settings: Settings, sessions_factory: Any = None, kube_factory: Any = None) -> None:
+    def __init__(
+        self, settings: Settings, sessions_factory: Any = None, kube_factory: Any = None
+    ) -> None:
         self.settings = settings
         self.sessions_factory = sessions_factory
         self.kube_factory = kube_factory
@@ -98,7 +95,7 @@ class PairLookup:
         # G9: the join works before uid capture; a captured mismatch is fatal.
         if captured is not None and pod_uid is not None and captured != pod_uid:
             return 404, {}
-        relay_role = RELAY_ROLES[role]
+        relay_role = {"guest": "guest-relay", "egress": "egress-relay"}[role]
         inputs = intent.relay_inputs.get(relay_role)
         payload = (inputs or {}).get("payload")
         if payload is None:
@@ -134,8 +131,10 @@ class PairLookup:
         self, generation: str, role: str, pod_uid: str | None
     ) -> tuple[int, dict[str, Any], dict[str, str]]:
         """Canonical parse + one request-scoped engine/kube pair."""
-        if not UUID_RE.fullmatch(generation or "") or role not in VM_ROLES or (
-            pod_uid is not None and not UUID_RE.fullmatch(pod_uid)
+        if (
+            not UUID_RE.fullmatch(generation or "")
+            or role not in VM_ROLES
+            or (pod_uid is not None and not UUID_RE.fullmatch(pod_uid))
         ):
             return 400, {"error": "invalid query"}, {}
         engine = create_async_engine(self.settings.database_url, pool_pre_ping=True, echo=False)
@@ -154,7 +153,7 @@ class PairLookup:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server: "PairLookupServer"
+    server: PairLookupServer
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         parts = urlsplit(self.path)
@@ -164,8 +163,8 @@ class _Handler(BaseHTTPRequestHandler):
         query = parse_qs(parts.query, keep_blank_values=True)
         generation = (query.get("generation") or [""])[0].strip()
         role = (query.get("role") or [""])[0].strip()
-        pod_uid = (query.get("pod_uid") or [None])[0]
-        pod_uid = pod_uid.strip() if isinstance(pod_uid, str) else None
+        raw_uid = (query.get("pod_uid") or [""])[0]
+        pod_uid = raw_uid.strip() if raw_uid.strip() else None
         peer = self.connection.getpeercert() or {}
         cn = ""
         for rdn in peer.get("subject", ()):
@@ -183,7 +182,9 @@ class _Handler(BaseHTTPRequestHandler):
             status, body, headers = 500, {"error": "lookup failed"}, {}
         self._respond(status, body, headers)
 
-    def _respond(self, status: int, body: dict[str, Any], headers: dict[str, str] | None = None) -> None:
+    def _respond(
+        self, status: int, body: dict[str, Any], headers: dict[str, str] | None = None
+    ) -> None:
         data = json.dumps(body, separators=(",", ":")).encode()
         if len(data) > LIMIT:
             self.send_response(500)
@@ -219,17 +220,22 @@ class PairLookupListener:
         self._serve_thread: threading.Thread | None = None
 
     def start(self) -> None:
+        pair_lookup = self.settings.pair_lookup
+        assert pair_lookup is not None  # __main__ constructs only when configured
         lookup = PairLookup(self.settings)
-        httpd = PairLookupServer(
-            (self.settings.pair_lookup.host, self.settings.pair_lookup.port), _Handler
-        )
+        httpd = PairLookupServer((pair_lookup.host, pair_lookup.port), _Handler)
         httpd.lookup = lookup
         httpd.socket = self.context.wrap_socket(httpd.socket, server_side=True)
         self.httpd = httpd
         self.loop = asyncio.new_event_loop()
-        self._loop_thread = threading.Thread(target=self.loop.run_forever, name="pair-lookup-loop", daemon=True)
+        self._loop_thread = threading.Thread(
+            target=self.loop.run_forever, name="pair-lookup-loop", daemon=True
+        )
         self._serve_thread = threading.Thread(
-            target=httpd.serve_forever, kwargs={"poll_interval": 0.5}, name="pair-lookup-serve", daemon=True
+            target=httpd.serve_forever,
+            kwargs={"poll_interval": 0.5},
+            name="pair-lookup-serve",
+            daemon=True,
         )
         self._loop_thread.start()
         self._serve_thread.start()

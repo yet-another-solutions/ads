@@ -6,12 +6,11 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, or_, select
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
-from ads_sandbox_manager.pair_retirement import PairRetirementRepository, retention
+from ads_sandbox_manager.pair_retirement import PairRetirementRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.store import Base, SandboxSession, SessionPVC, advance
 
@@ -39,18 +38,14 @@ class PairDisposalRepository:
 
     async def _retained_workspace(self, db: AsyncSession, generation: UUID) -> PairIntent:
         """Retained disposal applies only to idle-retained, untransferred lifetimes."""
-        intent = await db.get(
-            PairIntent, generation, with_for_update=True, populate_existing=True
-        )
+        intent = await db.get(PairIntent, generation, with_for_update=True, populate_existing=True)
         if (
             intent is None
             or intent.retired_at is None
             or not intent.creation_fenced
             or intent.cleanup_journal is not None
             or await db.scalar(
-                select(PairIntent.generation).where(
-                    PairIntent.retained_from == generation
-                )
+                select(PairIntent.generation).where(PairIntent.retained_from == generation)
             )
             is not None
         ):
@@ -87,7 +82,9 @@ class PairDisposalRepository:
         if owner is not None or pvc is not None or recovery is not None:
             raise PairClaimLost("retained orphan has a live ownership claim")
 
-    async def begin(self, db: AsyncSession, work: CleanupWork, generation: UUID, now: datetime) -> PairDisposal:
+    async def begin(
+        self, db: AsyncSession, work: CleanupWork, generation: UUID, now: datetime
+    ) -> PairDisposal:
         """Open the exclusive whole-lifetime destruction claim."""
         intent = await self._retained_workspace(db, generation)
         if (
@@ -136,10 +133,10 @@ class PairDisposalRepository:
             or (receipt.session_id, receipt.sandbox_id, receipt.project_id)
             != (intent.session_id, intent.sandbox_id, intent.project_id)
             or receipt.pvc_uid != intent.volume_resources["workspace"]["uid"]
-            or str(receipt.pvc_id)
-            != intent.volume_resources["workspace"]["payload"]["pvc_id"]
-            or receipt.created_at < intent.retired_at
-            or receipt.completed_at is not None and receipt.completed_at < receipt.created_at
+            or str(receipt.pvc_id) != intent.volume_resources["workspace"]["payload"]["pvc_id"]
+            or receipt.created_at < (intent.retired_at or intent.claim_changed)
+            or receipt.completed_at is not None
+            and receipt.completed_at < receipt.created_at
         ):
             raise PairClaimLost("retained disposal ownership or proof changed")
         return receipt
@@ -157,7 +154,10 @@ class PairDisposalRepository:
         receipt = await self.verify(db, receipt.generation)
         if expected.kind == "orphan":
             await self._retained_workspace(db, receipt.generation)
-            await self.orphan_scope(db, await db.get(PairIntent, receipt.generation))
+            intent = await db.get(PairIntent, receipt.generation)
+            if intent is None:
+                raise PairClaimLost("orphan scope lacks its retained intent")
+            await self.orphan_scope(db, intent)
         work = await db.get(CleanupWork, expected.work_id, populate_existing=True)
         if (
             work is None

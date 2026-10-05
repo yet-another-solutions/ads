@@ -11,11 +11,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ads_sandbox_manager.store import Base
-
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
-from ads_sandbox_manager.store import SandboxSession, SessionPVC, advance
+from ads_sandbox_manager.session_objects import session_name
+from ads_sandbox_manager.store import Base, SandboxSession, SessionPVC, advance
 
 RETIREMENT_KINDS = ("idle", "service", "reap", "orphan", "orphan-retained", "recovery")
 
@@ -121,7 +120,11 @@ class PairRetirementRepository:
                 raise PairClaimLost("destructive completion lacks original lifetime")
             if pvc is not None:
                 retained = next(
-                    (obj for obj in work.targets if obj.get("retain") and obj["name"] == pvc.name),
+                    (
+                        obj
+                        for obj in work.targets
+                        if obj.get("retain") and obj["name"] == session_name(pvc.pvc_id)
+                    ),
                     None,
                 )
                 if retained is not None:

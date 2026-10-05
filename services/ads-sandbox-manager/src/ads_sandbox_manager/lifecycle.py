@@ -583,7 +583,7 @@ class LifecycleService:
                     return
                 async with self.sessions.begin() as db:
                     disposal = PairDisposalRepository(self.repository)
-                    receipt = await disposal.owned(db, work)
+                    await disposal.owned(db, work)
                     await disposal.finish(db, work, datetime.now(UTC))
                 return
             if work.kind == "idle" and not work.acknowledged:

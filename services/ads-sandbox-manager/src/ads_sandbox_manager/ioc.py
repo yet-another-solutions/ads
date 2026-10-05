@@ -106,6 +106,7 @@ class AppProvider(Provider):
     lifecycle_repository = provide(LifecycleRepository, scope=Scope.APP)
     pair_cleanup_kube = provide(PairControlAdapter, scope=Scope.APP, provides=PairCleanupKubernetes)
     pair_capture = provide(PairCleanupCapture, scope=Scope.APP)
+
     @provide(scope=Scope.APP)
     def pair_teardown(
         self,

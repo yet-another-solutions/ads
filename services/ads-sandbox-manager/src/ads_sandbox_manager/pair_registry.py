@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import String, and_, or_, select, tuple_
@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ads_sandbox_manager.egress_state_store import EgressState
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
-from ads_sandbox_manager.pair_disposal import PairDisposal, PairDisposalRepository
 from ads_sandbox_manager.pair_compute import relay_input_name
+from ads_sandbox_manager.pair_disposal import PairDisposal, PairDisposalRepository
 from ads_sandbox_manager.pair_objects import pair_name
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_transfer import PairTransfer
@@ -62,8 +62,7 @@ class PairRegistry:
                         PairIntent.retired_at.is_not(None),
                         or_(
                             and_(
-                                PairIntent.volume_resources["workspace"]["dispatch"]
-                                .cast(String)
+                                PairIntent.volume_resources["workspace"]["dispatch"].cast(String)
                                 != "unissued",
                                 PairIntent.retained_from.is_(None),
                             ),
@@ -198,9 +197,7 @@ class PairRegistry:
                     )
             for role, entry in intent.relay_inputs.items():
                 if entry["uid"] is not None:
-                    targets.append(
-                        target("Secret", relay_input_name(binding, role), entry["uid"])
-                    )
+                    targets.append(target("Secret", relay_input_name(binding, role), entry["uid"]))
             if intent.egress_state_id is not None:
                 state = await db.get(EgressState, intent.egress_state_id)
                 if state is not None:
@@ -215,7 +212,9 @@ class PairRegistry:
             targets.append(
                 target(
                     "PersistentVolumeClaim",
-                    session_name(pvc.pvc_id) if pvc else session_name(UUID(workspace["payload"]["pvc_id"])),
+                    session_name(pvc.pvc_id)
+                    if pvc
+                    else session_name(UUID(workspace["payload"]["pvc_id"])),
                     workspace["uid"],
                 )
             )
@@ -358,7 +357,9 @@ class PairRegistry:
                                 )
                             )
             targets.append(
-                target("Pod", ipc_name(intent.sandbox_id), intent_full["ipc_resources"]["pod"]["uid"])
+                target(
+                    "Pod", ipc_name(intent.sandbox_id), intent_full["ipc_resources"]["pod"]["uid"]
+                )
             )
         work = CleanupWork(
             work_id=uuid4(),
