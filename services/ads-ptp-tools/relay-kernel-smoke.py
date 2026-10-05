@@ -310,13 +310,12 @@ try:
             "type": "ads-ptp",
             "name": "ads-private",
             "stateDir": str(directory / "state"),
-            # G9 join key: only annotated pods dial the manager.
+            # G9 join key: only annotated pods dial the manager (libcni
+            # delivers capability args keyed by capability name).
             "runtimeConfig": {
-                "ads-private": {
-                    "io.kubernetes.cri.pod-annotations": {
-                        "sandbox-ads/generation": generation,
-                        "sandbox-ads/role": side,
-                    },
+                "io.kubernetes.cri.pod-annotations": {
+                    "sandbox-ads/generation": generation,
+                    "sandbox-ads/role": side,
                 },
             },
         }

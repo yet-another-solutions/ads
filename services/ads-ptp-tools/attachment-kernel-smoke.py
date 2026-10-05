@@ -42,13 +42,12 @@ config = {
     "name": "ads-private",
     "stateDir": str(root / "state"),
     # G9 join key: the plugin only dials the manager for pods carrying the
-    # generation/role annotations (CRI-O delivers them via runtimeConfig).
+    # generation/role annotations (libcni delivers capability args keyed by
+    # capability name: runtimeConfig["io.kubernetes.cri.pod-annotations"]).
     "runtimeConfig": {
-        "ads-private": {
-            "io.kubernetes.cri.pod-annotations": {
-                "sandbox-ads/generation": generation,
-                "sandbox-ads/role": "guest",
-            },
+        "io.kubernetes.cri.pod-annotations": {
+            "sandbox-ads/generation": generation,
+            "sandbox-ads/role": "guest",
         },
     },
 }

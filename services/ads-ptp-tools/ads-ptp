@@ -188,14 +188,13 @@ def request(config, env):
 
 
 def pod_annotations(config):
-    """G9 join key: CRI-O delivers pod annotations under runtimeConfig."""
+    """G9 join key: libcni delivers capability args keyed by capability name
+    (BuildRuntimeConfig), so pod annotations ride
+    runtimeConfig["io.kubernetes.cri.pod-annotations"] directly."""
     runtime = config.get("runtimeConfig")
     if not isinstance(runtime, dict):
         return {}
-    per_network = runtime.get(config.get("name", ""))
-    if not isinstance(per_network, dict):
-        return {}
-    raw = per_network.get("io.kubernetes.cri.pod-annotations")
+    raw = runtime.get("io.kubernetes.cri.pod-annotations")
     if not isinstance(raw, dict):
         return {}
     return {
