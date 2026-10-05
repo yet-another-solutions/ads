@@ -16,9 +16,11 @@ RUN apt-get update \
 WORKDIR /native
 # Native ABI and package digest are verified pins from the genuine ECH proof.
 # This v1 artifact is amd64 only; other architectures require their own proof.
+# Fetched from snapshot.debian.org: the live pool drops superseded OpenSSL
+# versions, which 404s builds after upstream moves on (hit at v0.0.61).
 RUN test "$(dpkg --print-architecture)" = amd64 \
     && curl --fail --show-error --location \
-       --output libssl.deb https://deb.debian.org/debian/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
+       --output libssl.deb https://snapshot.debian.org/archive/debian/20260826T022714Z/pool/main/o/openssl/libssl4_4.0.2-1_amd64.deb \
     && echo "1e265574c02f4918092d2f09e63cf368b21f15108b667790633f038717ded260  libssl.deb" | sha256sum --check \
     && dpkg-deb --extract libssl.deb extracted \
     && mkdir -p /opt/ads-openssl/lib \
