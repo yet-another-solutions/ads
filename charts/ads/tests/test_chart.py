@@ -173,15 +173,11 @@ class ChartTests(unittest.TestCase):
         # ads-sandbox-manager), not the CN-less main API certificate.
         manager = docs["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
         mounts = {
-            m["name"]: m["mountPath"]
-            for c in manager["containers"]
-            for m in c["volumeMounts"]
+            m["name"]: m["mountPath"] for c in manager["containers"] for m in c["volumeMounts"]
         }
         self.assertEqual(mounts["pair-lookup-tls"], "/pair-lookup-tls")
         secrets = {
-            v["name"]: v["secret"]["secretName"]
-            for v in manager["volumes"]
-            if "secret" in v
+            v["name"]: v["secret"]["secretName"] for v in manager["volumes"] if "secret" in v
         }
         self.assertEqual(secrets["pair-lookup-tls"], "ads-sandbox-manager-pair-lookup")
         configmap = docs["ConfigMap", "ads-sandbox-manager"]["data"]
@@ -200,9 +196,7 @@ class ChartTests(unittest.TestCase):
             bare["ConfigMap", "ads-sandbox-manager"]["data"],
         )
         bare_manager = bare["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
-        self.assertNotIn(
-            "pair-lookup-tls", {v["name"] for v in bare_manager["volumes"]}
-        )
+        self.assertNotIn("pair-lookup-tls", {v["name"] for v in bare_manager["volumes"]})
         # materialize-config strips any extra key (e.g. legacy "node") so the
         # installer sees exactly CONFIG_FIELDS.
         self.assertIn('record.pop("node", None)', script)
