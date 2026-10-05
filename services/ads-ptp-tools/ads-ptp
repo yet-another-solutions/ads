@@ -199,9 +199,7 @@ def pod_annotations(config):
     if not isinstance(raw, dict):
         return {}
     return {
-        key: value
-        for key, value in raw.items()
-        if key in (GENERATION_ANNOTATION, ROLE_ANNOTATION)
+        key: value for key, value in raw.items() if key in (GENERATION_ANNOTATION, ROLE_ANNOTATION)
     }
 
 
@@ -777,13 +775,15 @@ def dial_manager(config, req):
     context.load_cert_chain(config["certificate"], config["key"])
     host, port = url.removeprefix("https://").rsplit(":", 1)
     raw_path = (
-        "/v1/pair?generation=" + attestation_generation(req)
-        + "&role=" + attestation_role(req)
-        + "&pod_uid=" + req["pod_uid"]
+        "/v1/pair?generation="
+        + attestation_generation(req)
+        + "&role="
+        + attestation_role(req)
+        + "&pod_uid="
+        + req["pod_uid"]
     )
     request = (
-        f"GET {raw_path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
-        "Connection: close\r\n\r\n"
+        f"GET {raw_path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
     ).encode()
     with socket.create_connection((host, int(port)), timeout=20) as client:
         client.settimeout(20)
@@ -817,14 +817,6 @@ def dial_manager(config, req):
         raise ValueError("manager lookup rejected")
     record = decode(body)
     return record
-
-
-class RetryLater(Exception):
-    """Manager not ready yet; plugin retries within its bounded budget."""
-
-    def __init__(self, retry_after):
-        super().__init__(retry_after)
-        self.retry_after = retry_after
 
 
 def attestation_generation(req):
@@ -914,9 +906,7 @@ def perform(config, env):
         if req["command"] == "ADD":
             assert attempt is not None
             path, saved = attempt
-            return add(
-                req, attestation, state_path, config.get("prevResult"), saved["vm_identity"]
-            )
+            return add(req, attestation, state_path, config.get("prevResult"), saved["vm_identity"])
         saved = read_record(state_path)
         if any(saved["request"][key] != req[key] for key in ("key", "pod_uid", "netns")):
             raise ValueError("CHECK identity changed")
