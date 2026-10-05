@@ -198,8 +198,9 @@ def test_binding_record_guest():
         "relay_pod_uid": RELAY_UID,
         "relay_runtime_id": RUNTIME_ID,
         "mtu": MTU,
-        # Bare IP, not the /24 from the configuration.
-        "address": "10.10.30.2",
+        # Canonical /24 interface string, exactly what the plugin's
+        # endpoint() validates (prefixlen == 24, host address).
+        "address": "10.10.30.2/24",
         "gateway": GATEWAY,
     }
 
@@ -217,7 +218,7 @@ def test_binding_record_egress_gateway_none():
         RELAY_UID,
         RUNTIME_ID,
     )
-    assert record["address"] == "10.10.30.1"
+    assert record["address"] == "10.10.30.1/24"
     assert record["gateway"] is None
 
 
@@ -305,7 +306,7 @@ async def test_lookup_no_container_id_503():
 async def test_lookup_ready_200():
     status, body = await lookup_with(intent_row(), {"ads-guest-relay-" + str(SANDBOX): relay_pod()})
     assert status == 200
-    assert body["mtu"] == MTU and body["address"] == "10.10.30.2" and body["gateway"] == GATEWAY
+    assert body["mtu"] == MTU and body["address"] == "10.10.30.2/24" and body["gateway"] == GATEWAY
     assert body["relay_runtime_id"] == RUNTIME_ID
     # The served network must be the conflist name, not the k8s namespace.
     assert body["network"] == "ads-private"
