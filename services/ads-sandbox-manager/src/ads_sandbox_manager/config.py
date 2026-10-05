@@ -282,7 +282,10 @@ def load_tls_context(settings: Settings) -> ssl.SSLContext:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(settings.tls_cert_path), str(settings.tls_key_path))
     if settings.tls_ca_bundle:
-        ssl.create_default_context(cafile=str(settings.tls_ca_bundle))
+        # Load the trust anchors so client-certificate verification
+        # (CERT_REQUIRED listeners) can validate chains. The bundle lists
+        # every CA the cluster issues from (leaf + intermediate when chained).
+        context.load_verify_locations(cafile=str(settings.tls_ca_bundle))
     return context
 
 

@@ -36,8 +36,11 @@ def main() -> None:
 
         # Same server cert as the main API; the CNI client pins the cluster CA
         # and presents its own cert (CN ads-ptp-cni), enforced per request.
+        # CERT_REQUIRED without loaded CA certs rejects every client with
+        # "unknown CA" — the trust anchor must be the configured bundle.
         context = load_tls_context(settings)
         context.verify_mode = ssl.CERT_REQUIRED
+        context.load_verify_locations(cafile=str(settings.tls_ca_bundle))
         listener = PairLookupListener(settings, context)
         listener.start()
     try:
