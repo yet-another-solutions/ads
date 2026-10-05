@@ -139,7 +139,9 @@ spec:
               node = sys.argv[1]
               path = pathlib.Path("/host-etc/config.json")
               record = json.loads(path.read_text())
-              record["node"] = node
+              # The ads-ptp-cni installer requires EXACTLY CONFIG_FIELDS; the
+              # node name is carried on the pod annotation path instead.
+              record.pop("node", None)
               path.write_text(json.dumps(record))
               PY
               chown root:root /host-etc/config.json

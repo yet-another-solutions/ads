@@ -167,6 +167,10 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(config["key"], "/host-etc/tls/tls.key")
         self.assertEqual(config["managerURL"], "https://10.0.0.5:30944")
         self.assertEqual(config["managerCN"], "ads-sandbox-manager")
+        # materialize-config strips any extra key (e.g. legacy "node") so the
+        # installer sees exactly CONFIG_FIELDS.
+        self.assertIn('record.pop("node", None)', script)
+        self.assertNotIn('record["node"] = node', script)
         # The installer binary takes exactly one argument (the protected
         # config path); no subcommand word — argv0 already selects the tool.
         container = next(c for c in pod["containers"] if c["name"] == "ads-ptp-cni")
