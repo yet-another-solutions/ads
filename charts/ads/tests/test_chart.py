@@ -150,6 +150,8 @@ class ChartTests(unittest.TestCase):
             "sandbox.manager.nodeIPs={10.0.0.5}",
             "--set",
             "sandbox.manager.pairLookupNodePort=30944",
+            "--set",
+            "sandbox.manager.pairLookup=true",
         )
         pod = docs["DaemonSet", "ads-ptp-cni"]["spec"]["template"]["spec"]
         init = next(c for c in pod["initContainers"] if c["name"] == "materialize-config")
@@ -167,6 +169,40 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(config["key"], "/host-etc/tls/tls.key")
         self.assertEqual(config["managerURL"], "https://10.0.0.5:30944")
         self.assertEqual(config["managerCN"], "ads-sandbox-manager")
+        # G2: the pair-lookup listener serves the dedicated leaf (CN
+        # ads-sandbox-manager), not the CN-less main API certificate.
+        manager = docs["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
+        mounts = {
+            m["name"]: m["mountPath"]
+            for c in manager["containers"]
+            for m in c["volumeMounts"]
+        }
+        self.assertEqual(mounts["pair-lookup-tls"], "/pair-lookup-tls")
+        secrets = {
+            v["name"]: v["secret"]["secretName"]
+            for v in manager["volumes"]
+            if "secret" in v
+        }
+        self.assertEqual(secrets["pair-lookup-tls"], "ads-sandbox-manager-pair-lookup")
+        configmap = docs["ConfigMap", "ads-sandbox-manager"]["data"]
+        self.assertEqual(
+            configmap["ADS_SANDBOX_MANAGER_PAIR_LOOKUP_CERT_PATH"],
+            "/pair-lookup-tls/tls.crt",
+        )
+        self.assertEqual(
+            configmap["ADS_SANDBOX_MANAGER_PAIR_LOOKUP_KEY_PATH"],
+            "/pair-lookup-tls/tls.key",
+        )
+        # Without nodeIPs there is no pair-lookup wiring at all.
+        bare = self.documents("--set", "sandbox.manager.pairLookup=true")
+        self.assertNotIn(
+            "ADS_SANDBOX_MANAGER_PAIR_LOOKUP_CERT_PATH",
+            bare["ConfigMap", "ads-sandbox-manager"]["data"],
+        )
+        bare_manager = bare["Deployment", "ads-sandbox-manager"]["spec"]["template"]["spec"]
+        self.assertNotIn(
+            "pair-lookup-tls", {v["name"] for v in bare_manager["volumes"]}
+        )
         # materialize-config strips any extra key (e.g. legacy "node") so the
         # installer sees exactly CONFIG_FIELDS.
         self.assertIn('record.pop("node", None)', script)

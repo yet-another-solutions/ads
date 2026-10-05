@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -144,6 +145,8 @@ def fixture():
         tls_cert_path="/tls/tls.crt",
         tls_key_path="/tls/tls.key",
         pair_lookup=PairLookupSettings(),
+        pair_lookup_cert_path=Path("/pair-lookup-tls/tls.crt"),
+        pair_lookup_key_path=Path("/pair-lookup-tls/tls.key"),
     )
     return settings
 

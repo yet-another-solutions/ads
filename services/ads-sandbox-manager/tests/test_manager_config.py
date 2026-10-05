@@ -5,12 +5,13 @@ import os
 import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from ads_sandbox_manager import __main__ as entrypoint
-from ads_sandbox_manager.config import CaSettings, load_settings, size_bytes
+from ads_sandbox_manager.config import CaSettings, PairLookupSettings, load_settings, size_bytes
 
 
 @pytest.mark.parametrize(
@@ -186,6 +187,34 @@ def test_load_settings_and_tls_before_clients(monkeypatch, manager_tls):
     assert settings.lifecycle_batch == 50
 
 
+def test_pair_lookup_requires_dedicated_leaf(manager_settings):
+    # Fail closed: without dedicated leaf paths the listener would fall back
+    # to the main API certificate, which carries no CN and is always rejected
+    # by the CNI plugin ("manager certificate CN required").
+    with pytest.raises(ValueError, match="dedicated leaf"):
+        replace(manager_settings, pair_lookup=PairLookupSettings())
+    cert, key = Path("/pair-lookup-tls/tls.crt"), Path("/pair-lookup-tls/tls.key")
+    complete = replace(
+        manager_settings,
+        pair_lookup=PairLookupSettings(),
+        pair_lookup_cert_path=cert,
+        pair_lookup_key_path=key,
+    )
+    assert complete.pair_lookup_cert_path == cert
+    assert complete.pair_lookup_key_path == key
+
+
+def test_pair_lookup_paths_are_environment_overridable(monkeypatch, manager_tls):
+    configure(monkeypatch, manager_tls)
+    monkeypatch.setenv("ADS_SANDBOX_MANAGER_PAIR_LOOKUP", '{"port": 9443}')
+    monkeypatch.setenv("ADS_SANDBOX_MANAGER_PAIR_LOOKUP_CERT_PATH", "/pair-lookup-tls/tls.crt")
+    monkeypatch.setenv("ADS_SANDBOX_MANAGER_PAIR_LOOKUP_KEY_PATH", "/pair-lookup-tls/tls.key")
+    settings = load_settings()
+    assert settings.pair_lookup == PairLookupSettings(port=9443)
+    assert settings.pair_lookup_cert_path == Path("/pair-lookup-tls/tls.crt")
+    assert settings.pair_lookup_key_path == Path("/pair-lookup-tls/tls.key")
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
@@ -281,6 +310,13 @@ def test_tls_failure_exits_before_any_network(monkeypatch, manager_tls, tmp_path
 
 
 def test_entrypoint_always_uses_tls(monkeypatch, manager_tls):
+    manager_tls = replace(
+        manager_tls,
+        pair_lookup=PairLookupSettings(),
+        pair_lookup_cert_path=manager_tls.tls_cert_path,
+        pair_lookup_key_path=manager_tls.tls_key_path,
+        tls_ca_bundle=manager_tls.tls_cert_path,
+    )
     monkeypatch.setattr(entrypoint, "load_settings", Mock(return_value=manager_tls))
     schema = Mock()
     monkeypatch.setattr(entrypoint, "prepare_schema", schema)

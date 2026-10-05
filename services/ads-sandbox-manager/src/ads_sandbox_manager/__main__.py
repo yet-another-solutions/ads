@@ -34,11 +34,17 @@ def main() -> None:
     if settings.pair_lookup is not None:
         from ads_sandbox_manager.pair_lookup import PairLookupListener
 
-        # Same server cert as the main API; the CNI client pins the cluster CA
-        # and presents its own cert (CN ads-ptp-cni), enforced per request.
+        # The CNI client pins the cluster CA and presents its own cert
+        # (CN ads-ptp-cni), enforced per request. The listener serves the
+        # DEDICATED pair-lookup leaf (CN ads-sandbox-manager + node IP SANs,
+        # mounted from the manager-pair-lookup secret) — the main API leaf
+        # carries no CN, and the plugin rejects any manager without one.
         # CERT_REQUIRED without loaded CA certs rejects every client with
         # "unknown CA" — the trust anchor must be the configured bundle.
-        context = load_tls_context(settings)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(
+            str(settings.pair_lookup_cert_path), str(settings.pair_lookup_key_path)
+        )
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_verify_locations(cafile=str(settings.tls_ca_bundle))
         listener = PairLookupListener(settings, context)

@@ -36,6 +36,10 @@ data:
   {{ $prefix }}PAIR_INPUTS: {{ $settings.pairInputs | toJson | quote }}
   {{- if $settings.pairLookup }}
   {{ $prefix }}PAIR_LOOKUP: {{ dict "host" "0.0.0.0" "port" 8443 "client_cn" "ads-ptp-cni" | toJson | quote }}
+  {{- if $sb.manager.nodeIPs }}
+  {{ $prefix }}PAIR_LOOKUP_CERT_PATH: "/pair-lookup-tls/tls.crt"
+  {{ $prefix }}PAIR_LOOKUP_KEY_PATH: "/pair-lookup-tls/tls.key"
+  {{- end }}
   {{- end }}
   ADS_SESSION_SIZE: {{ ($root.Files.Get "files/sandbox-release.yaml" | fromYaml).sessionSize | quote }}
   {{ $prefix }}GOLDEN_VERSION: {{ printf "v%s" $root.Chart.AppVersion | quote }}

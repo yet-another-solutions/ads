@@ -299,7 +299,10 @@ sandbox:
     # client leaf (CN ads-ptp-cni) is chart-issued; the manager's /v1/pair
     # listener rejects any other client CN. The node-to-nodeIP map IS values
     # (nodeIPs): the manager Certificate gains those SANs and the conflist
-    # derives managerURL from the first entry (G2, static per node).
+    # derives managerURL from the first entry (G2, static per node). The
+    # dedicated pair-lookup leaf (CN ads-sandbox-manager; the main API leaf
+    # carries no CN and the CNI plugin rejects any manager without one) is
+    # mounted from the <manager>-pair-lookup secret and served on :8443.
     nodeIPs: []
     pairLookupNodePort: 0
     # CNI network name shared by the conflist and the manager's binding check.

@@ -200,8 +200,16 @@ class Settings:
     ca: CaSettings | None = None
     pair_inputs: dict[str, Any] | None = field(default=None, repr=False)
     pair_lookup: PairLookupSettings | None = None
+    pair_lookup_cert_path: Path | None = None
+    pair_lookup_key_path: Path | None = None
 
     def __post_init__(self) -> None:
+        if self.pair_lookup is not None and (
+            self.pair_lookup_cert_path is None or self.pair_lookup_key_path is None
+        ):
+            # Fail closed: falling back to the main API leaf would serve a
+            # certificate without a CN, which the CNI plugin always rejects.
+            raise ValueError("pair lookup requires a dedicated leaf certificate and key")
         if (
             not re.fullmatch(
                 r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?", self.golden_version
@@ -371,6 +379,8 @@ def load_settings() -> Settings:
             if os.environ.get(prefix + "PAIR_LOOKUP", "").strip()
             else None
         ),
+        pair_lookup_cert_path=optional_path("PAIR_LOOKUP_CERT_PATH"),
+        pair_lookup_key_path=optional_path("PAIR_LOOKUP_KEY_PATH"),
     )
     from ads_sandbox_manager.pair_runtime import pair_runtime
 

@@ -57,6 +57,11 @@ spec:
             - name: tls
               mountPath: /tls
               readOnly: true
+            {{- if and (eq $component "manager") $sb.manager.nodeIPs }}
+            - name: pair-lookup-tls
+              mountPath: /pair-lookup-tls
+              readOnly: true
+            {{- end }}
             {{- if $root.Values.tls.caBundle.secretName }}
             - name: ca
               mountPath: /ca
@@ -84,6 +89,11 @@ spec:
         - name: tls
           secret:
             secretName: {{ include "ads.sandboxTLS" $ctx }}
+        {{- if and (eq $component "manager") $sb.manager.nodeIPs }}
+        - name: pair-lookup-tls
+          secret:
+            secretName: {{ include "ads.sandboxName" (dict "root" $root "component" "manager") }}-pair-lookup
+        {{- end }}
         {{- if $root.Values.tls.caBundle.secretName }}
         - name: ca
           secret:
