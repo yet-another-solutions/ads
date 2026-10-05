@@ -178,7 +178,7 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - >-
-              {{ $role.name }} install /host-etc/config.json
+              {{ $role.name }} /host-etc/config.json
               && exec sleep infinity
           securityContext:
             privileged: true

@@ -167,6 +167,13 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(config["key"], "/host-etc/tls/tls.key")
         self.assertEqual(config["managerURL"], "https://10.0.0.5:30944")
         self.assertEqual(config["managerCN"], "ads-sandbox-manager")
+        # The installer binary takes exactly one argument (the protected
+        # config path); no subcommand word — argv0 already selects the tool.
+        container = next(c for c in pod["containers"] if c["name"] == "ads-ptp-cni")
+        self.assertEqual(
+            container["args"][0].split(),
+            ["ads-ptp-cni", "/host-etc/config.json", "&&", "exec", "sleep", "infinity"],
+        )
 
     def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
         from ads_sandbox_manager.config import load_settings
