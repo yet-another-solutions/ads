@@ -78,7 +78,9 @@ class PairLookup:
         self.settings = settings
         self.sessions_factory = sessions_factory
         self.kube_factory = kube_factory
-        self.network = "ads-sandbox"
+        # The CNI network name must equal the conflist "name" the plugin was
+        # invoked with; binding() rejects any mismatch (attachment identity).
+        self.network = settings.cni_network
 
     async def lookup(
         self, db: AsyncSession, kube: Any, generation: UUID, role: str, pod_uid: str | None

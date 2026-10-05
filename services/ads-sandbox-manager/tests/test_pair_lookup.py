@@ -182,7 +182,7 @@ def test_binding_record_guest():
             "pod_uid": POD_UID,
             "generation": str(GEN),
             "sandbox_id": str(SANDBOX),
-            "network": "ads-sandbox",
+            "network": "ads-private",
         },
         "guest",
         payload,
@@ -194,7 +194,7 @@ def test_binding_record_guest():
         "generation": str(GEN),
         "sandbox_id": str(SANDBOX),
         "role": "guest",
-        "network": "ads-sandbox",
+        "network": "ads-private",
         "relay_pod_uid": RELAY_UID,
         "relay_runtime_id": RUNTIME_ID,
         "mtu": MTU,
@@ -210,7 +210,7 @@ def test_binding_record_egress_gateway_none():
             "pod_uid": POD_UID,
             "generation": str(GEN),
             "sandbox_id": str(SANDBOX),
-            "network": "ads-sandbox",
+            "network": "ads-private",
         },
         "egress",
         relay_payload("egress-relay"),
@@ -307,3 +307,12 @@ async def test_lookup_ready_200():
     assert status == 200
     assert body["mtu"] == MTU and body["address"] == "10.10.30.2" and body["gateway"] == GATEWAY
     assert body["relay_runtime_id"] == RUNTIME_ID
+    # The served network must be the conflist name, not the k8s namespace.
+    assert body["network"] == "ads-private"
+
+
+def test_lookup_network_follows_settings():
+    from ads_sandbox_manager.pair_lookup import PairLookup
+
+    lookup = PairLookup(fixture())
+    assert lookup.network == "ads-private"
