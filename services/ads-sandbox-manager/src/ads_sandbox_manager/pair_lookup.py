@@ -53,8 +53,10 @@ def binding_record(
     """The PARTIAL record: plugin adds ifname + private/transport identities."""
     guest = role == "guest"
     config = payload["configuration"]
-    # The plugin needs the bare IP; the configuration carries a /24.
-    address = config["local_private"].split("/", 1)[0]
+    # The plugin validates an exact IPv4Interface string with prefixlen == 24
+    # (RFC1918 host address, not network/broadcast), so the /24 from the
+    # configuration is passed through untouched.
+    address = config["local_private"]
     return {
         "pod_uid": str(pair["pod_uid"]),
         "generation": str(pair["generation"]),
