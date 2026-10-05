@@ -5,41 +5,21 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-import msgspec
 from sqlalchemy import DateTime, ForeignKey, delete, or_, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ads_commons.sandbox.block_release import decode_block_release
-from ads_commons.sandbox.ipc_release import decode_ipc_release
-from ads_commons.sandbox.ipc_storage import decode_ipc_storage, decode_unused_ipc_storage
-from ads_commons.sandbox.node_release import decode_node_release
-from ads_commons.sandbox.partial_release import decode_partial_release
 from ads_sandbox_manager.egress_state_store import (
     EgressState,
     require_cleanup_state,
     state_from_snapshot,
     state_snapshot,
 )
-from ads_sandbox_manager.pair_block_proof import validate_block_journal
+from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_compute_inputs import validate_compute_payloads
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_resources
-from ads_sandbox_manager.pair_ipc_proof import ipc_capture_report, ipc_release_report
-from ads_sandbox_manager.pair_node_proof import capture_report, release_report
-from ads_sandbox_manager.pair_objects import PairBinding
-from ads_sandbox_manager.pair_partial_proof import (
-    partial_capture_report,
-    partial_release_report,
-    remaining_private,
-    validate_partial_journal,
-)
-from ads_sandbox_manager.pair_resource_proof import resource_targets, validate_resource_journal
-from ads_sandbox_manager.pair_storage_capture import (
-    storage_targets,
-    validate_storage_capture,
-    validate_storage_observation,
-)
+from ads_sandbox_manager.pair_objects import PairBinding, pair_name
 from ads_sandbox_manager.pair_store import (
     CONTROL_RESOURCES,
     PairClaimLost,
@@ -51,12 +31,6 @@ from ads_sandbox_manager.pair_store import (
     validate_control_dispatch,
     validate_relay_custody,
 )
-from ads_sandbox_manager.pair_unscheduled_proof import (
-    pod_uid,
-    validate_observation,
-    validate_unscheduled,
-)
-from ads_sandbox_manager.pair_unused_proof import validate_unused_journal
 from ads_sandbox_manager.pair_volume_inputs import validate_volume_resources, volume_role
 from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
 from ads_sandbox_manager.session_objects import (
@@ -211,237 +185,10 @@ class LifecycleRepository:
         return self.retained_pair_snapshot(intent, current)
 
     def retained_pair_snapshot(self, intent: PairIntent, current: dict[str, Any]) -> dict[str, Any]:
-        """Recover original ownership, including UIDs captured after the creator lost its claim."""
-        journal = intent.cleanup_journal
-        if journal is None:
-            return current
-        if (
-            not intent.creation_fenced
-            or not isinstance(journal, dict)
-            or set(journal)
-            != {
-                "snapshot",
-                "creator_snapshot",
-                "targets",
-                "retain_workspace",
-                "node_capture",
-                "storage_capture",
-                "runtime_release",
-                "runtime_unissued",
-                "ipc_placement",
-                "ipc_capture",
-                "ipc_release",
-                "ipc_storage_capture",
-                "ipc_storage_release",
-                "ipc_storage_reclaimed",
-                "unscheduled",
-                "partial_storage",
-                "partial_capture",
-                "partial_release",
-                "block_capture",
-                "block_release",
-                "block_disposition",
-                "resource_disposition",
-                "topic_disposition",
-                "unused_storage",
-            }
-            or type(journal["retain_workspace"]) is not bool
-            or not isinstance(journal["targets"], list)
-            or any(not isinstance(item, dict) for item in journal["targets"])
-        ):
-            raise RuntimeError("invalid retained pair cleanup journal")
-        saved = journal["snapshot"]
-        work = CleanupWork(
-            sandbox_id=intent.sandbox_id, session_id=None, kind="orphan", pair_snapshot=saved
-        )
-        pair = self.cleanup_pair(work)
-        if pair != intent.binding():
-            raise PairClaimLost("retained cleanup pair identity changed")
-        if current != journal["creator_snapshot"]:
-            raise PairClaimLost("settled creator ledger changed after cleanup seal")
-        if (
-            any(item.get("retain") for item in journal["targets"])
-            and not journal["retain_workspace"]
-        ):
-            raise RuntimeError("retained workspace disposition changed")
-        # Original normal completion can settle a previously captured inflight
-        # marker. A separately captured UID can fill a creator's unbound slot.
-        # Neither exception permits replacing a known identity or erasing a write.
-        comparable = deepcopy(current)
-
-        def normalize(live: dict[str, Any], old: dict[str, Any], uid: str, dispatch: str) -> None:
-            if live[uid] is None:
-                live[uid] = old[uid]
-            if (old[dispatch], live[dispatch]) == ("inflight", "settled"):
-                live[dispatch] = old[dispatch]
-
-        for family in ("control", "compute"):
-            for key in comparable[f"{family}_uids"]:
-                if comparable[f"{family}_uids"][key] is None:
-                    comparable[f"{family}_uids"][key] = saved[f"{family}_uids"][key]
-                if (
-                    saved[f"{family}_dispatch"][key],
-                    comparable[f"{family}_dispatch"][key],
-                ) == ("inflight", "settled"):
-                    comparable[f"{family}_dispatch"][key] = "inflight"
-        for field in ("relay_inputs", "volume_resources", "ipc_resources"):
-            for role, entry in comparable[field].items():
-                normalize(entry, saved[field][role], "uid", "dispatch")
-        normalize(comparable["relay_custody"], saved["relay_custody"], "uid", "dispatch")
-        if comparable["egress_state"] is not None and saved["egress_state"] is not None:
-            for role in ("key", "volume"):
-                normalize(
-                    comparable["egress_state"],
-                    saved["egress_state"],
-                    f"{role}_uid",
-                    f"{role}_dispatch",
-                )
-        if (saved["topics_dispatch"], comparable["topics_dispatch"]) == ("inflight", "settled"):
-            comparable["topics_dispatch"] = "inflight"
-        if comparable != saved:
-            raise PairClaimLost("retained cleanup ownership changed")
-        if journal["runtime_unissued"] != self.unissued_runtime(saved):
-            raise RuntimeError("retained never-dispatched runtime proof changed")
-        if journal["runtime_unissued"] != self.unissued_runtime(current):
-            raise PairClaimLost("creator never-dispatched runtime proof changed")
-        validate_unscheduled(saved, journal["unscheduled"])
-        validate_partial_journal(journal, pair)
-        if not isinstance(journal["storage_capture"], dict):
-            raise RuntimeError("invalid retained storage capture")
-        if journal["storage_capture"]:
-            targets = storage_targets(saved, journal["retain_workspace"])
-            for role, evidence in journal["storage_capture"].items():
-                if role not in targets:
-                    raise RuntimeError("foreign retained storage capture")
-                validate_storage_capture(targets[role], evidence, filesystem=role == "ipc")
-        self.validate_ipc_journal(journal, pair)
-        if journal["node_capture"] is not None:
-            raw = msgspec.json.encode(journal["node_capture"])
-            report = decode_node_release(raw)
-            capture_report(
-                raw,
-                pair,
-                node=report.node,
-                namespace=saved["namespace"],
-                network=report.network,
-                pod_uids=saved["compute_uids"],
-            )
-        if journal["runtime_release"] is not None:
-            if journal["node_capture"] is None or set(journal["storage_capture"]) != set(
-                storage_targets(saved, journal["retain_workspace"])
-            ):
-                raise RuntimeError("runtime release missing original capture")
-            if not release_report(
-                msgspec.json.encode(journal["runtime_release"]),
-                decode_node_release(msgspec.json.encode(journal["node_capture"])),
-            ):
-                raise RuntimeError("retained runtime report does not prove release")
-        validate_block_journal(journal)
-        validate_unused_journal(journal)
-        validate_resource_journal(journal)
-        return deepcopy(saved)
-
-    @staticmethod
-    def unissued_runtime(snapshot: dict[str, Any]) -> list[str]:
-        """Classify a sealed creator ledger, not an API or kernel inventory.
-
-        This becomes proof only inside a validated retained journal, after the
-        permanent creator fence and settlement of every original writer. A null
-        UID alone says nothing about whether a Pod could have started.
-        """
-        result = [
-            key
-            for key, dispatch in sorted(snapshot["compute_dispatch"].items())
-            if dispatch == "unissued" and snapshot["compute_uids"][key] is None
-        ]
-        ipc = snapshot["ipc_resources"]["pod"]
-        if ipc["dispatch"] == "unissued" and ipc["uid"] is None and ipc["payload"] is None:
-            result.append("Pod/ipc")
-        return result
-
-    @staticmethod
-    def validate_ipc_journal(journal: dict[str, Any], pair: PairBinding) -> None:
-        placement, captured = journal["ipc_placement"], journal["ipc_capture"]
-        saved = journal["snapshot"]
-        if placement is not None:
-            if (
-                not isinstance(placement, dict)
-                or set(placement) != {"uid", "node", "resource_version"}
-                or any(not isinstance(v, str) or not v.strip() for v in placement.values())
-                or placement["uid"] != saved["ipc_resources"]["pod"]["uid"]
-            ):
-                raise RuntimeError("invalid original IPC placement")
-        if captured is not None:
-            storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
-            if placement is None or storage is None:
-                raise RuntimeError("IPC capture missing original placement or storage")
-            if placement["node"] not in storage["nodes"]:
-                raise RuntimeError("IPC node differs from captured volume use")
-            ipc_capture_report(
-                msgspec.json.encode(captured),
-                pair,
-                node=placement["node"],
-                namespace=saved["namespace"],
-                pod_uid=placement["uid"],
-                volume_uid=saved["ipc_resources"]["volume"]["uid"],
-            )
-        if journal["ipc_release"] is not None:
-            if captured is None or not ipc_release_report(
-                msgspec.json.encode(journal["ipc_release"]),
-                decode_ipc_release(msgspec.json.encode(captured)),
-            ):
-                raise RuntimeError("retained IPC report does not prove release")
-        backing = journal["ipc_storage_capture"]
-        storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
-        if (
-            storage is not None
-            and "filesystem_backing" in storage
-            and journal["ipc_release"] is not None
-            and backing is None
-        ):
-            raise RuntimeError("IPC release lacks original backing capture")
-        if backing is not None:
-            report = decode_ipc_storage(msgspec.json.encode(backing))
-            storage = journal["storage_capture"].get("ipc") or journal["partial_storage"].get("ipc")
-            if captured is None or storage is None or "filesystem_backing" not in storage:
-                raise RuntimeError("IPC backing capture lacks original runtime/storage")
-            if (
-                report.observed
-                or str(report.pv_uid) != storage["pv_uid"]
-                or report.runtime_sha256 != captured["inventory_sha256"]
-                or any(
-                    backing[key] != captured[key]
-                    for key in (
-                        "node",
-                        "namespace",
-                        "generation",
-                        "sandbox_id",
-                        "boot_id",
-                        "pod_uid",
-                        "volume_uid",
-                    )
-                )
-            ):
-                raise RuntimeError("IPC backing capture identity changed")
-        for phase in ("release", "reclaimed"):
-            proof = journal[f"ipc_storage_{phase}"]
-            if proof is None:
-                continue
-            report = decode_ipc_storage(msgspec.json.encode(proof))
-            if (
-                backing is None
-                or journal["ipc_release"] is None
-                or not report.observed
-                or not report.released
-                or (phase == "reclaimed" and not report.reclaimed)
-                or any(
-                    proof[key] != backing[key]
-                    for key in backing
-                    if key not in ("observed", "released", "reclaimed")
-                )
-                or (phase == "reclaimed" and journal["ipc_storage_release"] is None)
-            ):
-                raise RuntimeError("IPC storage observation lacks original positive proof")
+        """Retained ownership is the live creator intent; no sealed journal exists."""
+        if intent.cleanup_journal is not None:
+            raise RuntimeError("retained pair cleanup journal must stay unset")
+        return current
 
     async def seal_pair_cleanup(
         self,
@@ -452,10 +199,11 @@ class LifecycleRepository:
         recovery: SandboxSession | None = None,
         recovery_seconds: float = 0,
     ) -> bool:
-        """Persist complete captured ownership outside the cascading work row.
+        """Fence creators and confirm retained ownership matches the claim.
 
-        The caller commits before any node call or deletion. This is not a
-        runtime-release verdict, deletion permit, or generation retirement.
+        The caller commits before any deletion. This is not a runtime-release
+        verdict, deletion permit, or generation retirement. No journal is
+        written: the live PairIntent columns are the retained state of record.
         """
         if not await self.pair_writers_settled(
             db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
@@ -465,588 +213,87 @@ class LifecycleRepository:
         assert expected.pair_snapshot is not None
         intent = await db.get(PairIntent, pair.generation, with_for_update=True)
         assert intent is not None
-        if intent.cleanup_journal is None:
-            creator_snapshot = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
-            intent.cleanup_journal = {
-                "snapshot": deepcopy(expected.pair_snapshot),
-                "creator_snapshot": creator_snapshot,
-                "targets": deepcopy(expected.targets),
-                "retain_workspace": expected.kind == "idle"
-                or any(item.get("retain") for item in expected.targets),
-                "node_capture": None,
-                "storage_capture": {},
-                "runtime_release": None,
-                "runtime_unissued": self.unissued_runtime(expected.pair_snapshot),
-                "ipc_placement": None,
-                "ipc_capture": None,
-                "ipc_release": None,
-                "ipc_storage_capture": None,
-                "ipc_storage_release": None,
-                "ipc_storage_reclaimed": None,
-                "unscheduled": {},
-                "partial_storage": {},
-                "partial_capture": None,
-                "partial_release": None,
-                "block_capture": None,
-                "block_release": None,
-                "block_disposition": {},
-                "resource_disposition": {},
-                "topic_disposition": None,
-                "unused_storage": {},
-            }
-            await db.flush()
+        if intent.cleanup_journal is not None:
+            raise RuntimeError("pair cleanup journal must stay unset")
         retained = await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
-        if retained != expected.pair_snapshot:
-            raise PairClaimLost("cleanup claim differs from retained ownership")
-        return True
-
-    async def reserve_pair_unscheduled(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        role: str,
-        captured: dict[str, Any],
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> int | None:
-        """Commit original conditional deletion before its only invocation.
-
-        A direct deleting/unscheduled observation excludes future admission.
-        Otherwise only the original DELETE response can settle this operation.
-        Neither a 404 nor expiry is permission to replay an inflight DELETE.
-        """
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            raise PairClaimLost("pair writers have not settled")
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        validate_observation(captured, pod_uid(journal["snapshot"], role))
-        attempts = journal["unscheduled"].setdefault(role, [])
-        if attempts and attempts[-1]["dispatch"] != "conflict":
-            return None  # Existing original invocation or positive terminal proof.
-        if len(attempts) >= 128:
-            raise PairClaimLost("unscheduled conflict history exhausted; intent retained")
-        observed = captured["deletion_timestamp"] is not None
-        attempts.append(
-            {
-                "capture": deepcopy(captured),
-                "dispatch": "observed" if observed else "inflight",
-                "response": None,
-            }
-        )
-        validate_unscheduled(journal["snapshot"], journal["unscheduled"])
-        intent.cleanup_journal = journal
-        await db.flush()
-        return None if observed else len(attempts) - 1
-
-    async def settle_pair_unscheduled(
-        self,
-        db: AsyncSession,
-        pair: PairBinding,
-        role: str,
-        index: int,
-        captured: dict[str, Any],
-        response: dict[str, Any] | None,
-        *,
-        conflict: bool = False,
-    ) -> None:
-        """Save the original call's outcome even after caller/claim loss.
-
-        No new deletion is authorized here. The retained exact reservation is
-        required and cannot be recreated, replaced or reassigned to a new pair.
-        A normal HTTP 409 is a rejected operation; other failures stay inflight.
-        """
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        if intent is None or intent.binding() != pair or intent.cleanup_journal is None:
-            raise PairClaimLost("original unscheduled cleanup intent missing")
-        # Validate the permanent fence, creator seal and entire prior proof.
-        await self.pair_snapshot(db, pair.session_id, pair.sandbox_id)
-        journal = deepcopy(intent.cleanup_journal)
-        attempts = journal["unscheduled"].get(role, [])
-        if type(index) is not int or index != len(attempts) - 1 or index < 0:
-            raise PairClaimLost("original unscheduled dispatch missing")
-        original = attempts[index]
-        outcome = {
-            "capture": deepcopy(captured),
-            "dispatch": "conflict" if conflict else "settled",
-            "response": deepcopy(response),
-        }
-        if original["capture"] != captured or original["dispatch"] not in (
-            "inflight",
-            outcome["dispatch"],
-        ):
-            raise PairClaimLost("original unscheduled dispatch changed")
-        if original["dispatch"] != "inflight" and original != outcome:
-            raise PairClaimLost("original unscheduled outcome cannot be replaced")
-        attempts[index] = outcome
-        validate_unscheduled(journal["snapshot"], journal["unscheduled"])
-        intent.cleanup_journal = journal
-        await db.flush()
-
-    async def record_pair_partial_storage(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        role: str,
-        evidence: dict[str, Any],
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> None:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            raise PairClaimLost("pair writers have not settled")
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        targets = storage_targets(
-            journal["snapshot"], journal["retain_workspace"], issued_only=True
-        )
-        if role not in targets:
-            raise ValueError("unsupported original partial storage role")
-        validate_storage_observation(targets[role], evidence)
-        old = journal["partial_storage"].get(role)
-        if old is not None and old != evidence:
-            raise PairClaimLost("original partial storage observation cannot be replaced")
-        journal["partial_storage"][role] = deepcopy(evidence)
-        validate_partial_journal(journal, pair)
-        intent.cleanup_journal = journal
-        await db.flush()
-
-    async def record_pair_partial_proof(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        node: str | None = None,
-        network: str | None = None,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        if journal["node_capture"] is not None:
-            raise PairClaimLost("full node capture cannot be replaced by partial proof")
-        report = decode_partial_release(raw)
-        value = msgspec.to_builtins(report)
-        if node is not None:
-            if network is None:
-                raise ValueError("trusted partial network required")
-            partial_capture_report(
-                raw,
-                pair,
-                node=node,
-                network=network,
-                namespace=journal["snapshot"]["namespace"],
-                pod_uids=remaining_private(journal),
-            )
-            field = "partial_capture"
-        else:
-            if journal["partial_capture"] is None:
-                raise PairClaimLost("original partial capture required")
-            if not partial_release_report(
-                raw, decode_partial_release(msgspec.json.encode(journal["partial_capture"]))
-            ):
-                return False
-            field = "partial_release"
-        if journal[field] is not None and journal[field] != value:
-            raise PairClaimLost("original partial proof cannot be replaced")
-        journal[field] = value
-        validate_partial_journal(journal, pair)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_node_capture(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        node: str,
-        network: str,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> None:
-        """Bind a trusted node response after rechecking the original cleanup claim.
-
-        The caller supplies fresh trusted placement and node-owner transport.
-        No transport, freshness, or deletion authority is manufactured here.
-        """
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            raise PairClaimLost("pair writers have not settled")
-        pair = self.cleanup_pair(expected)
-        snapshot = expected.pair_snapshot
-        assert snapshot is not None
-        report = capture_report(
-            raw,
-            pair,
-            node=node,
-            namespace=snapshot["namespace"],
-            network=network,
-            pod_uids=snapshot["compute_uids"],
-        )
-        value = msgspec.to_builtins(report)
-        value["pod_uids"] = sorted(value["pod_uids"])
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = intent.cleanup_journal
-        if journal["node_capture"] is not None and journal["node_capture"] != value:
-            raise PairClaimLost("original node capture cannot be replaced")
-        intent.cleanup_journal = {**journal, "node_capture": value}
-        await db.flush()
-
-    async def record_pair_storage_capture(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        role: str,
-        evidence: dict[str, Any],
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> None:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            raise PairClaimLost("pair writers have not settled")
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = intent.cleanup_journal
-        targets = storage_targets(journal["snapshot"], journal["retain_workspace"])
-        if role not in targets:
-            raise ValueError("unsupported paired storage role")
-        validate_storage_capture(targets[role], evidence, filesystem=role == "ipc")
-        saved = journal["storage_capture"]
-        if role in saved and saved[role] != evidence:
-            raise PairClaimLost("original storage capture cannot be replaced")
-        intent.cleanup_journal = {**journal, "storage_capture": {**saved, role: deepcopy(evidence)}}
-        await db.flush()
-
-    async def record_pair_runtime_release(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        """Persist positive original-inventory proof, never API-absence inference."""
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = intent.cleanup_journal
-        if journal["node_capture"] is None or set(journal["storage_capture"]) != set(
-            storage_targets(journal["snapshot"], journal["retain_workspace"])
-        ):
-            raise PairClaimLost("original node and storage captures required")
-        captured = decode_node_release(msgspec.json.encode(journal["node_capture"]))
-        if not release_report(raw, captured):
-            return False
-        value = msgspec.to_builtins(decode_node_release(raw))
-        value["pod_uids"] = sorted(value["pod_uids"])
-        if journal["runtime_release"] is not None and journal["runtime_release"] != value:
-            raise PairClaimLost("original runtime-release report cannot be replaced")
-        intent.cleanup_journal = {**journal, "runtime_release": value}
-        await db.flush()
-        return True
-
-    async def record_pair_ipc_proof(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        placement: dict[str, Any] | None = None,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        """Commit original capture or positive observation under the same cleanup claim."""
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        value = msgspec.to_builtins(decode_ipc_release(raw))
-        if placement is not None:
-            if journal["ipc_placement"] is not None and journal["ipc_placement"] != placement:
-                raise PairClaimLost("original IPC placement cannot be replaced")
-            if journal["ipc_capture"] is not None and journal["ipc_capture"] != value:
-                raise PairClaimLost("original IPC capture cannot be replaced")
-            journal.update(ipc_placement=deepcopy(placement), ipc_capture=value)
-        else:
-            if journal["ipc_capture"] is None:
-                raise PairClaimLost("original IPC capture required")
-            if not ipc_release_report(
-                raw, decode_ipc_release(msgspec.json.encode(journal["ipc_capture"]))
-            ):
-                return False
-            if journal["ipc_release"] is not None and journal["ipc_release"] != value:
-                raise PairClaimLost("original IPC release cannot be replaced")
-            journal["ipc_release"] = value
-        self.validate_ipc_journal(journal, pair)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_ipc_storage_capture(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        value = msgspec.to_builtins(decode_ipc_storage(raw))
-        if journal["ipc_storage_capture"] is not None and journal["ipc_storage_capture"] != value:
-            raise PairClaimLost("original IPC backing capture cannot be replaced")
-        journal["ipc_storage_capture"] = value
-        self.validate_ipc_journal(journal, pair)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_ipc_storage_observation(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        reclaimed: bool = False,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        report = decode_ipc_storage(raw)
-        # Validate scope before accepting even a blocked observer response.
-        value = msgspec.to_builtins(report)
-        captured = journal["ipc_storage_capture"]
+        expected_snapshot = expected.pair_snapshot
+        assert expected_snapshot is not None
+        assert retained is not None
+        # A late original writer settling between capture and seal is the same
+        # positive evidence pair_writers_settled accepts (inflight -> settled
+        # with its captured UID intact); nothing else may differ.
+        for key in ("topics_dispatch",):
+            if expected_snapshot.get(key) == "inflight" and retained.get(key) == "settled":
+                expected_snapshot = {**expected_snapshot, key: "settled"}
+        for field in ("relay_inputs", "volume_resources", "ipc_resources"):
+            cap, ret = expected_snapshot.get(field), retained.get(field)
+            if not isinstance(cap, dict) or not isinstance(ret, dict):
+                continue
+            merged = dict(cap)
+            for role, entry in cap.items():
+                r = ret.get(role)
+                if (
+                    isinstance(entry, dict)
+                    and isinstance(r, dict)
+                    and entry.get("dispatch") == "inflight"
+                    and r.get("dispatch") == "settled"
+                ):
+                    merged[role] = {**entry, "dispatch": "settled", "uid": r.get("uid")}
+            expected_snapshot = {**expected_snapshot, field: merged}
+        cap, ret = expected_snapshot.get("relay_custody"), retained.get("relay_custody")
         if (
-            captured is None
-            or any(
-                value[key] != captured[key]
-                for key in captured
-                if key not in ("observed", "released", "reclaimed")
-            )
-            or not report.observed
+            isinstance(cap, dict)
+            and isinstance(ret, dict)
+            and cap.get("dispatch") == "inflight"
+            and ret.get("dispatch") == "settled"
         ):
-            raise PairClaimLost("original IPC backing observation required")
-        if not report.released or (reclaimed and not report.reclaimed):
-            return False
-        key = "ipc_storage_reclaimed" if reclaimed else "ipc_storage_release"
-        if journal[key] is not None:
-            # A later observation may progress from released to reclaimed.
-            # Keep the original positive receipt; never rewrite its identity.
-            self.validate_ipc_journal(journal, pair)
-            return True
-        journal[key] = value
-        self.validate_ipc_journal(journal, pair)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_block_proof(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        raw: bytes,
-        now: datetime,
-        *,
-        capture: bool = False,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        report = decode_block_release(raw)
-        value = msgspec.to_builtins(report)
-        key = "block_capture" if capture else "block_release"
-        if not capture:
-            original = journal["block_capture"]
-            if original is None or any(
-                value[k] != original[k] for k in original if k not in ("leftovers", "released")
-            ):
-                raise PairClaimLost("original Block observation binding changed")
-            if not report.released:
-                return False
-        if journal[key] is not None and journal[key] != value:
-            raise PairClaimLost("original Block receipt cannot be replaced")
-        journal[key] = value
-        validate_block_journal(journal)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_block_disposition(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        role: str,
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        target = {**journal["storage_capture"], **journal["partial_storage"]}[role]
-        journal["block_disposition"][role] = "retained" if target["retain"] else "reclaimed"
-        validate_block_journal(journal)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_resource_disposition(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        key: str,
-        now: datetime,
-        *,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        if key == "topics":
-            journal["topic_disposition"] = (
-                "unissued"
-                if journal["snapshot"]["topics_dispatch"] == "unissued"
-                else "retained"
-                if journal["retain_workspace"]
-                else "deleted"
-            )
-        else:
-            journal["resource_disposition"][key] = resource_targets(journal)[key]
-        validate_resource_journal(journal)
-        intent.cleanup_journal = journal
-        await db.flush()
-        return True
-
-    async def record_pair_unused_storage(
-        self,
-        db: AsyncSession,
-        expected: CleanupWork,
-        role: str,
-        now: datetime,
-        *,
-        captured: dict[str, Any] | None = None,
-        proof: bytes | None = None,
-        recovery: SandboxSession | None = None,
-        recovery_seconds: float = 0,
-    ) -> bool:
-        if not await self.seal_pair_cleanup(
-            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
-        ):
-            return False
-        pair = self.cleanup_pair(expected)
-        intent = await db.get(PairIntent, pair.generation, with_for_update=True)
-        assert intent is not None and intent.cleanup_journal is not None
-        journal = deepcopy(intent.cleanup_journal)
-        entries = journal["unused_storage"]
-        if captured is not None:
-            if role in entries and entries[role]["capture"] != captured:
-                raise PairClaimLost("original unused storage capture cannot be replaced")
-            entries.setdefault(
-                role,
-                {
-                    "capture": deepcopy(captured),
-                    "disposition": None,
-                    **(
-                        {"release": None, "reclaimed": None}
-                        if captured["mode"] == "never-mounted-filesystem"
-                        else {"release": None}
-                        if captured["mode"] == "retired-inherited-csi"
-                        else {}
-                    ),
-                },
-            )
-        elif proof is not None:
-            if entries[role]["capture"]["mode"] == "retired-inherited-csi":
-                block = decode_block_release(proof)
-                if not block.released:
-                    return False
-                entries[role]["release"] = msgspec.to_builtins(block)
-            else:
-                report = decode_unused_ipc_storage(proof)
-                if not report.observed or not report.released:
-                    return False
-                entries[role]["release"] = msgspec.to_builtins(report)
-                if report.reclaimed:
-                    entries[role]["reclaimed"] = msgspec.to_builtins(report)
-        else:
-            target = entries[role]["capture"]["target"]
-            entries[role]["disposition"] = "retained" if target["retain"] else "reclaimed"
-        validate_unused_journal(journal)
-        intent.cleanup_journal = journal
-        await db.flush()
+            expected_snapshot = {
+                **expected_snapshot,
+                "relay_custody": {**cap, "dispatch": "settled", "uid": ret.get("uid")},
+            }
+        # Persistent egress state follows require_cleanup_state's tolerance:
+        # inflight -> settled is the same positive writers-settled evidence;
+        # retained uid may be None or equal, never drifted.
+        cape, rete = expected_snapshot.get("egress_state"), retained.get("egress_state")
+        if isinstance(cape, dict) and isinstance(rete, dict):
+            merged_e = dict(cape)
+            changed_e = False
+            for role in ("key", "volume"):
+                inflight = cape.get(f"{role}_dispatch") == "inflight"
+                if inflight and rete.get(f"{role}_dispatch") == "settled":
+                    cap_uid, ret_uid = cape.get(f"{role}_uid"), rete.get(f"{role}_uid")
+                    if cap_uid is not None and ret_uid is not None and cap_uid != ret_uid:
+                        continue
+                    merged_e[f"{role}_dispatch"], merged_e[f"{role}_uid"] = "settled", ret_uid
+                    changed_e = True
+            if changed_e:
+                expected_snapshot = {**expected_snapshot, "egress_state": merged_e}
+        # control/compute dispatch families follow the same rule; UID drift
+        # stays refused (identity change is never positive evidence).
+        for family in ("control", "compute"):
+            cap = expected_snapshot.get(f"{family}_dispatch")
+            ret = retained.get(f"{family}_dispatch")
+            capu = expected_snapshot.get(f"{family}_uids")
+            retu = retained.get(f"{family}_uids")
+            if not isinstance(cap, dict) or not isinstance(ret, dict):
+                continue
+            merged, mergedu = dict(cap), dict(capu or {})
+            changed = False
+            for key, dispatch in cap.items():
+                if dispatch == "inflight" and ret.get(key) == "settled":
+                    uid = retu.get(key) if isinstance(retu, dict) else None
+                    if capu and capu.get(key) is not None and uid is not None and capu[key] != uid:
+                        continue
+                    merged[key], mergedu[key] = "settled", uid
+                    changed = True
+            if changed:
+                expected_snapshot = {
+                    **expected_snapshot,
+                    f"{family}_dispatch": merged,
+                    f"{family}_uids": mergedu,
+                }
+        if retained != expected_snapshot:
+            raise PairClaimLost("cleanup claim differs from retained ownership")
         return True
 
     async def work(
@@ -1165,10 +412,86 @@ class LifecycleRepository:
                 }
             ],
         )
+        # A retired generation's captured inventory is exact teardown scope:
+        # reap deletes the whole retired pair, not just the workspace claim.
+        # Reconstruct the retired generation's creator snapshot so the release
+        # path runs with the same uid-fenced evidence the idle capture had.
+        if work.pair_snapshot is None and history is not None:
+            intent = await db.get(PairIntent, history)
+            if intent is not None and intent.retired_at is not None:
+                work.pair_snapshot = await self.pair_snapshot(
+                    db, intent.session_id, intent.sandbox_id, generation=intent.generation
+                )
+                work.targets = await self.retired_targets(db, intent, work.targets)
         if saved is not None:
             await db.flush()
-            await PairDisposalRepository(self).begin(db, work, saved, now)
+            await PairDisposalRepository(self).begin(db, work, saved.generation, now)
         return work
+
+    async def retired_targets(
+        self, db: AsyncSession, intent: PairIntent, keep: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Exact non-retained objects of a retired generation plus the claim."""
+        binding = intent.binding()
+        targets = [target("Pod", ipc_name(intent.sandbox_id), intent.ipc_resources["pod"]["uid"])]
+        for key, uid in intent.compute_uids.items():
+            if uid is not None:
+                targets.append(target("Pod", pair_name(binding, key.removeprefix("Pod/")), uid))
+        # Control-plane objects (PodGroups, Services, NetworkPolicies) carry
+        # exact captured uids in the intent; the retired generation owns them
+        # until observed absence proves the whole lifetime is gone.
+        for key, uid in intent.control_uids.items():
+            if uid is None:
+                continue
+            kind, role = key.split("/", 1)
+            # Every control builder names its object pair_name(binding, role).
+            targets.append(target(kind, pair_name(binding, role), uid))
+        targets.append(
+            target(
+                "PersistentVolumeClaim",
+                ipc_name(intent.sandbox_id),
+                intent.ipc_resources["volume"]["uid"],
+            )
+        )
+        # CA clone PVC uids are retired-generation intent state; the session
+        # row's ca_clones is cleared by retirement and cannot be used here.
+        for role in ("guest", "egress", "key"):
+            entry = intent.volume_resources.get(role)
+            if entry and entry.get("uid"):
+                targets.append(
+                    target(
+                        "PersistentVolumeClaim",
+                        ca_consumer_name(intent.sandbox_id, role),
+                        entry["uid"],
+                    )
+                )
+        for role, entry in intent.relay_inputs.items():
+            if entry["uid"] is not None:
+                targets.append(target("Secret", relay_input_name(binding, role), entry["uid"]))
+        if intent.egress_state_id is not None:
+            state = await db.get(EgressState, intent.egress_state_id)
+            if state is not None:
+                for role, uid in (("key", state.key_uid), ("volume", state.volume_uid)):
+                    targets.append(
+                        target(
+                            "Secret" if role == "key" else "PersistentVolumeClaim",
+                            f"ads-egress-{role}-{state.state_id}",
+                            uid,
+                        )
+                    )
+            # Relay custody Secret: retired-generation ownership is part of the
+            # whole-lifetime teardown scope.
+            custody = intent.relay_custody
+            if custody.get("uid"):
+                targets.append(
+                    target(
+                        "Secret",
+                        f"ads-relay-keys-{intent.sandbox_id}.{intent.generation}",
+                        custody["uid"],
+                    )
+                )
+        targets.extend(keep)
+        return targets
 
     async def service(
         self,
@@ -1369,6 +692,11 @@ class LifecycleRepository:
             raise PairClaimLost("invalid pair orphan claim")
         if expected.kind == "recovery" and recovery is None:
             raise PairClaimLost("pair recovery claim required")
+        if expected.kind == "orphan" and snapshot is None:
+            # Snapshotless orphan: exact targets are the scope; each object is
+            # independently revalidated before deletion. Never capture here —
+            # an orphan cannot adopt new evidence.
+            return expected
         pair = self.cleanup_pair(expected)
         assert snapshot is not None
         if expected.kind == "recovery":

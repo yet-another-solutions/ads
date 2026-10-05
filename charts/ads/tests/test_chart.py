@@ -144,109 +144,29 @@ class ChartTests(unittest.TestCase):
             ],
         )
 
-    def test_node_owner_client_identity_is_only_mounted_by_manager(self):
-        # cert-manager default: chart issues the manager client leaf and mounts it;
-        # no other Deployment mounts a node-owner volume.
+    def test_node_roles_materialize_real_tls_files_and_repoint_config(self):
         docs = self.documents(
             "--set",
-            "sandbox.manager.nodeOwner.network=private",
+            "sandbox.manager.nodeIPs={10.0.0.5}",
+            "--set",
+            "sandbox.manager.pairLookupNodePort=30944",
         )
+        pod = docs["DaemonSet", "ads-ptp-cni"]["spec"]["template"]["spec"]
+        init = next(c for c in pod["initContainers"] if c["name"] == "materialize-config")
+        mounts = {m["name"]: m["mountPath"] for m in init["volumeMounts"]}
+        self.assertEqual(mounts["tls"], "/tls-src")
+        script = init["args"][-1]
+        self.assertIn("install -d -o root -g root -m 0700 /host-etc/tls", script)
         self.assertIn(
-            ("Certificate", "ads-sandbox-manager-node-owner"),
-            docs,
+            "install -o root -g root -m 0600 /tls-src/tls.key /host-etc/tls/tls.key",
+            script,
         )
-        client = docs["Certificate", "ads-sandbox-manager-node-owner"]
-        self.assertEqual(client["spec"]["commonName"], "ads-sandbox-manager")
-        self.assertEqual(client["spec"]["usages"], ["client auth"])
-        self.assertEqual(
-            client["spec"]["secretName"],
-            "ads-sandbox-manager-node-owner",
-        )
-        for (kind, name), document in docs.items():
-            if kind != "Deployment":
-                continue
-            spec = document["spec"]["template"]["spec"]
-            volumes = [v for v in spec.get("volumes", []) if v["name"] == "node-owner"]
-            mounts = [
-                v
-                for c in spec["containers"]
-                for v in c.get("volumeMounts", [])
-                if v["name"] == "node-owner"
-            ]
-            if name == "ads-sandbox-manager":
-                self.assertEqual(
-                    volumes[0]["secret"]["secretName"],
-                    "ads-sandbox-manager-node-owner",
-                )
-                self.assertEqual(volumes[0]["secret"]["defaultMode"], 0o440)
-                self.assertEqual(
-                    mounts,
-                    [
-                        {
-                            "name": "node-owner",
-                            "mountPath": "/node-owner",
-                            "readOnly": True,
-                        }
-                    ],
-                )
-            else:
-                self.assertEqual(volumes, [])
-                self.assertEqual(mounts, [])
-        self.assertNotIn(("Secret", "ads-sandbox-manager-node-owner"), docs)
-
-    def test_node_owner_client_identity_byo_tls_is_rejected(self):
-        # BYO client certificates are exactly how the wrong-CN identity happened:
-        # there is no BYO path for the manager's node-owner identity.
-        result = self.render(
-            "--set",
-            "tls.certManager.enabled=false",
-            "--set",
-            "tls.serviceSecretName=app-tls",
-            "--set",
-            "preferences.tls.serviceSecretName=pref-tls",
-            "--set",
-            "contextMeter.tls.serviceSecretName=meter-tls",
-            "--set",
-            "contextCompactor.tls.serviceSecretName=compactor-tls",
-            "--set",
-            "sandbox.mcp.tlsSecretName=mcp-tls",
-            "--set",
-            "sandbox.manager.tlsSecretName=manager-tls",
-            "--set",
-            "sandbox.ipc.tlsSecretName=ipc-tls",
-            "--set",
-            "sandbox.ipc.caSecretName=ipc-ca",
-            "--set",
-            "sandbox.manager.nodeOwner.tlsSecretName=dedicated-node-client",
-            "--set",
-            "sandbox.manager.nodeOwner.network=private",
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no BYO manager client certificate", result.stderr)
-
-    def test_node_roles_materialize_real_tls_files_and_repoint_config(self):
-        docs = self.documents("--set", "sandbox.manager.nodeOwner.network=private")
-        for role in ["ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"]:
-            pod = docs["DaemonSet", role]["spec"]["template"]["spec"]
-            init = next(c for c in pod["initContainers"] if c["name"] == "materialize-config")
-            mounts = {m["name"]: m["mountPath"] for m in init["volumeMounts"]}
-            self.assertEqual(mounts["tls"], "/tls-src")
-            script = init["args"][-1]
-            self.assertIn("install -d -o root -g root -m 0700 /host-etc/tls", script)
-            self.assertIn(
-                "install -o root -g root -m 0600 /tls-src/tls.key /host-etc/tls/tls.key",
-                script,
-            )
-            for key in ("config.json", "attestor.json"):
-                config = json.loads(docs["ConfigMap", role]["data"].get(key, "{}"))
-                if not config:
-                    continue
-                self.assertEqual(config["ca"], "/host-etc/tls/ca.crt")
-                self.assertEqual(config["certificate"], "/host-etc/tls/tls.crt")
-                self.assertEqual(config["key"], "/host-etc/tls/tls.key")
-                if key == "attestor.json":
-                    self.assertEqual(config["guest_runtime"], "kata-qemu-ads")
-                    self.assertEqual(config["egress_runtime"], "kata-qemu-ads-egress")
+        config = json.loads(docs["ConfigMap", "ads-ptp-cni"]["data"]["config.json"])
+        self.assertEqual(config["ca"], "/host-etc/tls/ca.crt")
+        self.assertEqual(config["certificate"], "/host-etc/tls/tls.crt")
+        self.assertEqual(config["key"], "/host-etc/tls/tls.key")
+        self.assertEqual(config["managerURL"], "https://10.0.0.5:30944")
+        self.assertEqual(config["managerCN"], "ads-sandbox-manager")
 
     def test_paired_inputs_are_manager_only_and_empty_defaults_cannot_start(self):
         from ads_sandbox_manager.config import load_settings
@@ -567,8 +487,6 @@ class ChartTests(unittest.TestCase):
                             sandbox_scoped = (
                                 "sandbox-ipc" in metadata
                                 or "egress-extra-trust" in metadata
-                                or "ads-ptp-attestor" in metadata
-                                or "ads-node-owner" in metadata
                                 or "ads-ptp-cni" in metadata
                             )
                             expected = sandbox if sandbox_scoped else app
@@ -932,8 +850,6 @@ class ChartTests(unittest.TestCase):
             "sandbox.ca.signingSecret=dedicated-egress-signer",
             "--set-json",
             "sandbox.manager.pairInputs=" + json.dumps(paired_runtime_fixture()),
-            "--set",
-            "sandbox.manager.nodeOwner.network=private",
         )
 
         def environment(component):
@@ -943,13 +859,10 @@ class ChartTests(unittest.TestCase):
         with (
             patch.dict(os.environ, environment("manager"), clear=True),
             patch("ads_sandbox_manager.config.load_tls_context"),
-            patch("ads_sandbox_manager.node_owner.NodeOwnerSettings.context"),
         ):
             settings = manager_settings()
         self.assertEqual(settings.idle_seconds, 99)
         self.assertEqual(settings.pair_inputs, paired_runtime_fixture())
-        self.assertNotIn("endpoints", settings.node_owner)
-        self.assertEqual(settings.node_owner["certificate"], "/node-owner/tls.crt")
         self.assertEqual(settings.ca.signing_secret, "dedicated-egress-signer")
         self.assertEqual(settings.ca.additional_configmap, "custom-egress-extra-trust")
         self.assertEqual(settings.ca.source_size, "256Mi")
@@ -1081,11 +994,7 @@ class ChartTests(unittest.TestCase):
             flags += ["--set", f"sandbox.{component}.existingSecret={component}-credentials"]
         flags += [
             "--set",
-            "sandbox.nodeOwner.secrets.ads-ptp-attestor=attestor-tls",
-            "--set",
-            "sandbox.nodeOwner.secrets.ads-node-owner=node-owner-tls",
-            "--set",
-            "sandbox.nodeOwner.secrets.ads-ptp-cni=cni-tls",
+            "sandbox.cni.secrets.ads-ptp-cni=cni-tls",
         ]
         docs = self.documents(*flags, "--set", "tls.caBundle.secretName=app-ca")
         self.assertFalse(any(kind == "Certificate" for kind, _ in docs))
@@ -1310,189 +1219,6 @@ class ChartTests(unittest.TestCase):
             self.assertIn('ADS_SANDBOX_MANAGER_GOLDEN_VERSION: "v0.0.123-rc.1"', result.stdout)
             self.assertNotIn(':0.0.1"', result.stdout)
             self.assertIn("ads-sandbox-golden:0.0.123-rc.1", result.stdout)
-
-    def test_node_owner_chart_renders_sockets_without_endpoint_map(self):
-        pair = paired_runtime_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            values = Path(directory) / "node-owner-values.yaml"
-            values.write_text(
-                yaml.safe_dump(
-                    {
-                        "sandbox": {
-                            "manager": {
-                                "nodeOwner": {
-                                    "network": "ads-private",
-                                },
-                                "pairInputs": pair,
-                            }
-                        }
-                    }
-                )
-            )
-            docs = self.documents("-f", str(values))
-        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
-            self.assertIn(("DaemonSet", name), docs)
-            self.assertIn(("Certificate", name), docs)
-            self.assertEqual(docs["Certificate", name]["spec"]["commonName"], name)
-            pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
-            if name == "ads-node-owner":
-                # Release capture inventories host links and host /proc
-                # namespaces; the observer shares the host network namespace.
-                self.assertTrue(pod["hostNetwork"])
-                self.assertEqual(pod["dnsPolicy"], "ClusterFirstWithHostNet")
-            else:
-                self.assertFalse(pod["hostNetwork"])
-            self.assertFalse(pod["automountServiceAccountToken"])
-            rendered = json.dumps(pod)
-            self.assertNotIn("hostPort", rendered)
-            self.assertNotIn("nodePort", rendered)
-            config = docs["ConfigMap", name]["data"]["config.json"]
-            self.assertNotIn("downwardAPI", rendered)
-            self.assertNotIn("podinfo", rendered)
-            init = pod["initContainers"][0]
-            self.assertEqual(
-                init["env"],
-                [{"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}],
-            )
-            self.assertIn('node="${NODE_NAME}"', init["args"][0])
-            self.assertNotIn("/podinfo/node", init["args"][0])
-            host_etc = next(item for item in pod["volumes"] if item["name"] == "host-etc")
-            self.assertEqual(host_etc["hostPath"]["path"], f"/etc/{name}")
-            if name == "ads-node-owner":
-                self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
-                self.assertNotIn("/var/run/attestor-v0.0.1.sock", config)
-                self.assertIn('"attestorConfig": "/etc/ads-ptp-attestor/attestor.json"', config)
-                self.assertIn("/var/lib/ads-ptp", config)
-                owner_mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
-                self.assertIn("/etc/ads-ptp-attestor", owner_mounts)
-                self.assertIn("/var/lib/ads-ptp", owner_mounts)
-                self.assertIn("/var/lib/kubelet", owner_mounts)
-                run_mount = next(
-                    item
-                    for item in pod["containers"][0]["volumeMounts"]
-                    if item["mountPath"] == "/var/run"
-                )
-                self.assertEqual(run_mount["mountPropagation"], "HostToContainer")
-                kubelet_mount = next(
-                    item
-                    for item in pod["containers"][0]["volumeMounts"]
-                    if item["mountPath"] == "/var/lib/kubelet"
-                )
-                self.assertEqual(kubelet_mount["mountPropagation"], "HostToContainer")
-                owner_volumes = {item["name"]: item for item in pod["volumes"]}
-                self.assertEqual(
-                    owner_volumes["kubelet-root"]["hostPath"]["path"], "/var/lib/kubelet"
-                )
-                cni_mount = next(
-                    item
-                    for item in pod["containers"][0]["volumeMounts"]
-                    if item["mountPath"] == "/var/lib/ads-ptp"
-                )
-                self.assertEqual(cni_mount["name"], "cni-state")
-                ipc_config = json.loads(docs["ConfigMap", name]["data"]["ipc.json"])
-                # Default render: cri_endpoint omitted -> the node-owner
-                # detects the CRI socket at runtime (exactly one live socket).
-                self.assertEqual(
-                    set(ipc_config),
-                    {
-                        "node",
-                        "namespace",
-                        "apiServer",
-                        "token",
-                        "apiCa",
-                        "container",
-                        "mount",
-                        "stateDir",
-                    },
-                )
-                self.assertNotIn("cri_endpoint", ipc_config)
-                self.assertEqual(ipc_config["container"], "ipc")
-                self.assertEqual(ipc_config["mount"], "/var/lib/ads-sandbox-ipc")
-                self.assertEqual(ipc_config["stateDir"], "/var/lib/ads-ptp")
-                owner_config = json.loads(config)
-                self.assertEqual(owner_config["ipc"], "/host-etc/ipc.json")
-                init_args = pod["initContainers"][0]["args"][0]
-                self.assertIn("ipc.json", init_args)
-                init_mounts = {item["mountPath"] for item in init["volumeMounts"]}
-                self.assertNotIn("/etc/ads-ptp-attestor", init_mounts)
-            else:
-                self.assertIn("/var/run/attestor-v0.0.1.sock", config)
-            if name == "ads-ptp-attestor":
-                self.assertIn("/var/run/node-owner-v0.0.1.sock", config)
-                attestor_config = json.loads(config)
-                self.assertEqual(attestor_config["guest_runtime"], "kata-private")
-                self.assertEqual(attestor_config["egress_runtime"], "kata-egress")
-                attest_args = pod["containers"][0]["args"][0]
-                self.assertIn("ads-ptp-attest /host-etc/config.json", attest_args)
-                self.assertNotIn("crictl", config)
-            if name == "ads-ptp-cni":
-                mounts = {item["mountPath"] for item in pod["containers"][0]["volumeMounts"]}
-                self.assertIn("/etc/cni/ads-private", mounts)
-                self.assertIn("/etc/cni/net.d.crio", mounts)
-                self.assertIn("/opt/cni/bin", mounts)
-                self.assertNotIn("/host/usr/local/bin", mounts)
-                self.assertNotIn("crictl", config)
-                self.assertEqual(pod["containers"][0]["command"], ["/bin/sh", "-c"])
-                self.assertIn("ads-ptp-cni /host-etc/config.json", pod["containers"][0]["args"][0])
-                self.assertIn("exec sleep infinity", pod["containers"][0]["args"][0])
-                self.assertIn("ownerSocket", config)
-        host_paths = set()
-        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
-            volumes = docs["DaemonSet", name]["spec"]["template"]["spec"]["volumes"]
-            host_etc = next(item for item in volumes if item["name"] == "host-etc")
-            host_paths.add(host_etc["hostPath"]["path"])
-        self.assertEqual(
-            host_paths,
-            {"/etc/ads-ptp-attestor", "/etc/ads-node-owner", "/etc/ads-ptp-cni"},
-        )
-        self.assertEqual(
-            {
-                next(
-                    item
-                    for item in docs["DaemonSet", name]["spec"]["template"]["spec"]["volumes"]
-                    if item["name"] == "cni-state"
-                )["hostPath"]["path"]
-                for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni")
-            },
-            {"/var/lib/ads-ptp"},
-        )
-        for name in ("ads-ptp-attestor", "ads-node-owner", "ads-ptp-cni"):
-            pod = docs["DaemonSet", name]["spec"]["template"]["spec"]
-            self.assertTrue(pod["hostPID"])
-            self.assertIn("ads.io/sandbox", json.dumps(pod.get("tolerations", [])))
-        self.assertNotIn("endpoints", json.dumps(docs["ConfigMap", "ads-sandbox-manager"]))
-        policy = docs["NetworkPolicy", "ads-node-owner"]["spec"]
-        self.assertEqual(policy["ingress"][0]["ports"], [{"protocol": "TCP", "port": 9443}])
-        verbs = [
-            rule["verbs"]
-            for rule in docs["Role", "ads-sandbox-manager"]["rules"]
-            if rule["resources"] == ["pods"]
-        ]
-        self.assertEqual(verbs, [["create", "get", "list", "delete"]])
-        self.assertNotIn("watch", verbs[0])
-
-    def test_node_owner_cri_endpoint_override_renders_key(self):
-        pair = paired_runtime_fixture()
-        with tempfile.TemporaryDirectory() as directory:
-            values = Path(directory) / "node-owner-values.yaml"
-            values.write_text(
-                yaml.safe_dump(
-                    {
-                        "sandbox": {
-                            "nodeOwner": {
-                                "criEndpoint": "unix:///var/run/crio/crio.sock",
-                            },
-                            "manager": {
-                                "nodeOwner": {"network": "ads-private"},
-                                "pairInputs": pair,
-                            },
-                        }
-                    }
-                )
-            )
-            docs = self.documents("-f", str(values))
-            ipc_config = json.loads(docs["ConfigMap", "ads-node-owner"]["data"]["ipc.json"])
-            self.assertEqual(ipc_config["cri_endpoint"], "unix:///var/run/crio/crio.sock")
 
 
 if __name__ == "__main__":

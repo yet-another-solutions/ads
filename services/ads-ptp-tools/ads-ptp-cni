@@ -19,15 +19,14 @@ CONFIG_FIELDS = {
     "cniVersion",
     "name",
     "type",
-    "attestorSocket",
-    "attestorCN",
+    "managerURL",
+    "managerCN",
     "ca",
     "certificate",
     "key",
     "stateDir",
-    "bindingDir",
 }
-STATE_DIRS = ("/var/lib/ads-ptp", "/var/lib/ads-ptp/bindings")
+STATE_DIRS = ("/var/lib/ads-ptp",)
 PROBES = {
     "unix:///run/containerd/containerd.sock": (
         "/etc/cni/net.d",
@@ -92,21 +91,6 @@ def replace(source, destination, mode):
             os.unlink(pending)
 
 
-def sockets_bound(config):
-    """Refuse the conflist until both versioned socket files exist."""
-    for name in (config["attestorSocket"], config["ownerSocket"]):
-        path = Path(name)
-        require(
-            isinstance(name, str)
-            and path.name.startswith(("attestor-v", "node-owner-v"))
-            and name.endswith(".sock")
-            and path.is_absolute()
-            and path.is_socket()
-            and not path.is_symlink(),
-            "versioned host socket required",
-        )
-
-
 def discover_cri_socket():
     """Exactly one live CRI socket decides the runtime. No executable needed."""
     winners = []
@@ -139,7 +123,7 @@ def runtime_dirs():
 def install(config, source_dir, bin_dir, net_dir, cert_dir=Path("/etc/cni/ads-ptp")):
     plugin = cni_module()
     require(
-        set(config) == CONFIG_FIELDS | {"ownerSocket"},
+        set(config) == CONFIG_FIELDS,
         "exact installer configuration required",
     )
     require(
@@ -151,7 +135,7 @@ def install(config, source_dir, bin_dir, net_dir, cert_dir=Path("/etc/cni/ads-pt
         and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,252}", config["name"]),
         "invalid CNI network name",
     )
-    sockets_bound(config)
+    plugin.manager_url(config)
     for name in BINARIES:
         source = Path(source_dir) / name
         destination = Path(bin_dir) / name
@@ -170,13 +154,13 @@ def install(config, source_dir, bin_dir, net_dir, cert_dir=Path("/etc/cni/ads-pt
         "plugins": [
             {
                 "type": "ads-ptp",
-                "attestorSocket": config["attestorSocket"],
-                "attestorCN": config["attestorCN"],
+                "capabilities": {"io.kubernetes.cri.pod-annotations": True},
+                "managerURL": config["managerURL"],
+                "managerCN": config["managerCN"],
                 "ca": str(Path(cert_dir) / "ca"),
                 "certificate": str(Path(cert_dir) / "certificate"),
                 "key": str(Path(cert_dir) / "key"),
                 "stateDir": config["stateDir"],
-                "bindingDir": config["bindingDir"],
             }
         ],
     }

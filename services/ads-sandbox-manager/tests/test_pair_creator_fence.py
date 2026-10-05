@@ -31,7 +31,12 @@ async def cleanup_claim(f):
         )
         claim = await db.get(SandboxSession, f.row.session_id)
         work = await db.scalar(
-            select(CleanupWork).where(CleanupWork.session_id == f.row.session_id)
+            select(CleanupWork)
+            .where(
+                CleanupWork.session_id == f.row.session_id,
+                CleanupWork.pair_snapshot.isnot(None),
+            )
+            .order_by(CleanupWork.state_changed.desc())
         )
     capture = PairCleanupCapture(
         replace(f.service.settings, cleanup_seconds=60, recovery_seconds=120),

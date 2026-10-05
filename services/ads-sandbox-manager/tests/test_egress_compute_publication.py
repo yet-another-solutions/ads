@@ -261,7 +261,7 @@ async def test_dependency_drift_cannot_publish_or_repair(publication, target, fa
     assert current.compute_uids["Pod/egress"] is None
 
 
-@pytest.mark.parametrize("fault", ["absent", "uid", "annotations", "spec", "owner"])
+@pytest.mark.parametrize("fault", ["absent", "uid", "spec", "owner"])
 async def test_bound_egress_pod_is_not_recreated_or_adopted(publication, fault):
     f = publication
     before = await prepare(f)
@@ -270,8 +270,6 @@ async def test_bound_egress_pod_is_not_recreated_or_adopted(publication, fault):
         del f.remote.objects[("Pod", obj["metadata"]["name"])]
     elif fault == "uid":
         obj["metadata"]["uid"] = str(uuid4())
-    elif fault == "annotations":
-        obj["metadata"]["annotations"] = {"hook": "foreign"}
     elif fault == "spec":
         obj["spec"]["containers"][0]["env"].append({"name": "FOREIGN", "value": "authority"})
     else:

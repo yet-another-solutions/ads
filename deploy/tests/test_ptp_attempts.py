@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,10 +14,17 @@ def attempt_path(config, req):
     return Path(config["stateDir"]) / ("attempt-" + req["key"] + ".json")
 
 
-def test_missing_attestation_preserves_original_namespace_before_any_effect(plugin, inputs, kernel):
+def test_missing_attestation_preserves_original_namespace_before_any_effect(
+    plugin, inputs, kernel, monkeypatch
+):
     config, env, attestation = inputs
     req, _, active, _, _, calls = kernel
-    Path(config["bindingDir"], attestation["pod_uid"] + ".json").unlink()
+    # Simulate a manager outage: the dial fails before any record or effect.
+    monkeypatch.setattr(
+        plugin,
+        "dial_manager",
+        lambda *args: (_ for _ in ()).throw(FileNotFoundError("manager unavailable")),
+    )
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)
     saved = plugin.read_record(attempt_path(config, req))
@@ -27,7 +33,6 @@ def test_missing_attestation_preserves_original_namespace_before_any_effect(plug
         "request": req,
         "boot_id": plugin.boot_identity(),
         "vm_identity": [1, 10],
-        "binding": None,
     }
     assert not active.exists() and not calls
     env["CNI_COMMAND"] = "DEL"
@@ -44,7 +49,7 @@ def test_namespace_lookup_failure_keeps_attempt_without_fabricating_identity(
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)
     saved = plugin.read_record(attempt_path(config, req))
-    assert saved["vm_identity"] is None and saved["binding"] is None
+    assert saved["vm_identity"] is None
     assert saved["request"] == req and not active.exists() and not calls
     # A retry before any namespace was observed may fill that single null slot.
     paths[env["CNI_NETNS"]] = 10
@@ -53,13 +58,11 @@ def test_namespace_lookup_failure_keeps_attempt_without_fabricating_identity(
 
 
 def test_del_keeps_immutable_history_and_check_does_not_rewrite_it(plugin, inputs, kernel):
-    config, env, binding = inputs
+    config, env, _ = inputs
     req = kernel[0]
     config["prevResult"] = plugin.perform(config, env)
     path = attempt_path(config, req)
     original = path.read_bytes()
-    saved = plugin.read_record(path)
-    assert saved["binding"] == binding
     assert path.stat().st_mode & 0o777 == 0o600
     env["CNI_COMMAND"] = "CHECK"
     plugin.perform(config, env)
@@ -71,7 +74,7 @@ def test_del_keeps_immutable_history_and_check_does_not_rewrite_it(plugin, input
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("stage", ["request", "namespace", "binding"])
+@pytest.mark.parametrize("stage", ["request", "namespace"])
 def test_attempt_durability_failure_prevents_network_effects(
     plugin, inputs, kernel, monkeypatch, stage
 ):
@@ -83,7 +86,7 @@ def test_attempt_durability_failure_prevents_network_effects(
         nonlocal count
         if path.name.startswith("attempt-"):
             count += 1
-            if count == {"request": 1, "namespace": 2, "binding": 3}[stage]:
+            if count == {"request": 1, "namespace": 2}[stage]:
                 raise OSError("fsync unavailable")
         return original(path, value)
 
@@ -93,9 +96,9 @@ def test_attempt_durability_failure_prevents_network_effects(
     assert not kernel[2].exists() and not kernel[-1]
 
 
-@pytest.mark.parametrize("changed", ["request", "boot", "namespace", "binding"])
+@pytest.mark.parametrize("changed", ["request", "boot", "namespace"])
 def test_retry_cannot_replace_original_attempt(plugin, inputs, kernel, monkeypatch, changed):
-    config, env, binding = inputs
+    config, env, _ = inputs
     plugin.perform(config, env)
     path = attempt_path(config, kernel[0])
     original = path.read_bytes()
@@ -107,18 +110,32 @@ def test_retry_cannot_replace_original_attempt(plugin, inputs, kernel, monkeypat
         env["CNI_ARGS"] = "K8S_POD_UID=" + str(uuid4())
     elif changed == "boot":
         monkeypatch.setattr(plugin, "boot_identity", lambda: str(uuid4()))
-    elif changed == "namespace":
-        kernel[4][env["CNI_NETNS"]] = 11
     else:
-        binding["generation"] = str(uuid4())
-        plugin.save_record(Path(config["bindingDir"], binding["pod_uid"] + ".json"), binding)
+        kernel[4][env["CNI_NETNS"]] = 11
     with pytest.raises(ValueError, match="original"):
         plugin.perform(config, env)
     assert path.read_bytes() == original
     assert not kernel[2].exists() and not kernel[-1]
 
 
-def test_attestation_race_cannot_retarget_original_namespace(plugin, inputs, kernel, monkeypatch):
+def test_manager_reply_generation_must_match_annotation(plugin, inputs, kernel, monkeypatch):
+    config, env, _ = inputs
+    # Generation drift is manager-side: a reply naming another generation
+    # than the pod-annotation join key is refused before any effect.
+    original_dial = plugin.dial_manager
+
+    def drifting(config, req):
+        reply = dict(original_dial(config, req))
+        reply["generation"] = str(uuid4())
+        return reply
+
+    monkeypatch.setattr(plugin, "dial_manager", drifting)
+    with pytest.raises(ValueError, match="attachment identity mismatch"):
+        plugin.perform(config, env)
+    assert not kernel[2].exists() and not kernel[-1]
+
+
+def test_binding_race_cannot_retarget_original_namespace(plugin, inputs, kernel, monkeypatch):
     config, env, _ = inputs
     original = plugin.binding
 
@@ -133,7 +150,7 @@ def test_attestation_race_cannot_retarget_original_namespace(plugin, inputs, ker
     assert not kernel[2].exists() and not kernel[-1]
 
 
-@pytest.mark.parametrize("fault", ["shape", "identity", "admitted", "mode", "symlink"])
+@pytest.mark.parametrize("fault", ["shape", "identity", "boot", "mode", "symlink"])
 def test_corrupt_or_unprotected_attempt_is_never_overwritten(
     plugin, inputs, kernel, fault, tmp_path
 ):
@@ -143,8 +160,8 @@ def test_corrupt_or_unprotected_attempt_is_never_overwritten(
         saved["extra"] = True
     elif fault == "identity":
         saved["vm_identity"] = [True, 1]
-    elif fault == "admitted":
-        saved.update(vm_identity=None, binding=deepcopy(inputs[2]))
+    elif fault == "boot":
+        saved["boot_id"] = str(uuid4())
     plugin.save_record(path, saved)
     if fault == "mode":
         path.chmod(0o644)

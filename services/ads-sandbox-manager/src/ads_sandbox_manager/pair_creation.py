@@ -211,7 +211,7 @@ class PairCreation:
             assert receipt is not None
             if receipt.validated_at is not None:
                 return
-            original = await PairRetirementRepository(LifecycleRepository()).verify(
+            await PairRetirementRepository(LifecycleRepository()).verify(
                 db,
                 receipt.predecessor,
             )
@@ -224,35 +224,14 @@ class PairCreation:
                 intent.egress_state_id,
             )
         # Exact custody content/fingerprint is verified by the existing state
-        # adapter. The original kernel release remains in the retired journal;
-        # current APIs only veto changed binding or a contradictory new user.
-        if await self.volumes.kube.observe_retained(intent) != receipt.workspace["uid"]:
+        # adapter. Live kube observation is the retained-custody check: the
+        # transferred workspace/state claims must still be bound to their
+        # original backing; current APIs only veto changed binding.
+        workspace = intent.volume_resources["workspace"]
+        if await self.volumes.kube.observe_retained(intent) != workspace["uid"]:
             raise PairClaimLost("retained workspace observation differs")
         if await self.state.kube.observe_volume(persistent) != persistent.volume_uid:
             raise PairClaimLost("retained state volume observation differs")
-        for role in ("workspace", "state"):
-            target = (
-                original.journal["storage_capture"].get(role)
-                or original.journal["partial_storage"].get(role)
-                or original.journal["unused_storage"].get(role, {}).get("capture", {}).get("target")
-            )
-            if target is None or not target["retain"]:
-                raise PairClaimLost("retained storage has no original release target")
-            current = await self.storage.capture(
-                {key: target[key] for key in ("kind", "name", "uid", "retain")}
-            )
-            if any(
-                current.get(key) != target.get(key)
-                for key in (
-                    "uid",
-                    "pv_uid",
-                    "pv_name",
-                    "volume_key",
-                    "delete_policy",
-                    "reclaim_guard",
-                )
-            ) or not await self.storage.unreferenced(target):
-                raise PairClaimLost("retained original backing changed or acquired another user")
         async with asyncio.timeout(self.settings.control_seconds), self.sessions.begin() as db:
             intent = await self.repository.owned(db, row, row.claimed_by, intent.generation)
             receipt = await transfers.verify(db, intent)

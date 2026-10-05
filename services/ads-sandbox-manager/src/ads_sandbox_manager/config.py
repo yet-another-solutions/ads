@@ -132,6 +132,29 @@ class CaSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PairLookupSettings:
+    """mTLS CNI lookup listener (G9): /v1/pair served next to the main API."""
+
+    host: str = "0.0.0.0"
+    port: int = 8443
+    client_cn: str = "ads-ptp-cni"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.host, str) or not self.host.strip():
+            raise ValueError("pair lookup host is required")
+        if type(self.port) is not int or not 1 <= self.port <= 65535:
+            raise ValueError("pair lookup port must be a valid TCP port")
+        if not isinstance(self.client_cn, str) or not self.client_cn.strip():
+            raise ValueError("pair lookup client CN is required")
+
+    @classmethod
+    def parse(cls, value: dict[str, Any]) -> PairLookupSettings:
+        if not isinstance(value, dict) or not set(value) <= {"host", "port", "client_cn"}:
+            raise ValueError("exact pair lookup configuration required")
+        return cls(**value)
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     golden_version: str
     golden_image: str
@@ -176,7 +199,7 @@ class Settings:
     ads_service_subject: UUID | None = None
     ca: CaSettings | None = None
     pair_inputs: dict[str, Any] | None = field(default=None, repr=False)
-    node_owner: dict[str, Any] | None = field(default=None, repr=False)
+    pair_lookup: PairLookupSettings | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -245,12 +268,6 @@ class Settings:
             from ads_sandbox_manager.pair_runtime import pair_runtime
 
             pair_runtime(self)
-        if self.node_owner is not None:
-            from ads_sandbox_manager.node_owner import NodeOwnerSettings
-
-            owner = NodeOwnerSettings.parse(self.node_owner)
-            if owner.namespace != self.namespace or owner.timeout >= self.control_seconds:
-                raise ValueError("node-owner scope or control deadline mismatch")
 
     @property
     def golden_name(self) -> str:
@@ -346,22 +363,13 @@ def load_settings() -> Settings:
         ads_service_subject=UUID(required("ADS_SERVICE_SUBJECT")),
         ca=CaSettings(**json.loads(required("CA"))),
         pair_inputs=json.loads(required("PAIR_INPUTS")),
-        node_owner=json.loads(required("NODE_OWNER")),
+        pair_lookup=(
+            PairLookupSettings.parse(json.loads(os.environ[prefix + "PAIR_LOOKUP"]))
+            if os.environ.get(prefix + "PAIR_LOOKUP", "").strip()
+            else None
+        ),
     )
     from ads_sandbox_manager.pair_runtime import pair_runtime
 
     pair_runtime(settings)  # JSON null is not permission to select the unpaired fixture path.
-    from ads_sandbox_manager.node_owner import NodeOwnerSettings
-
-    if settings.node_owner is None:
-        raise ValueError("production node-owner configuration required")
-    NodeOwnerSettings.parse(settings.node_owner).context()
-    load_tls_context(settings)
-    if settings.session_objects is None:
-        raise RuntimeError("ADS_SANDBOX_MANAGER_SESSION_OBJECTS is required")
-    if not settings.keycloak_client_secret or not all(
-        value.startswith("https://")
-        for value in (settings.keycloak_issuer, settings.keycloak_well_known_url)
-    ):
-        raise RuntimeError("manager Keycloak HTTPS issuer, discovery and client secret required")
     return settings

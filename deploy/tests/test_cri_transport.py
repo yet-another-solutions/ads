@@ -12,13 +12,10 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
-import re
 import sys
 import time
 from concurrent import futures
 from pathlib import Path
-from types import SimpleNamespace
-from uuid import uuid4
 
 import grpc
 import pytest
@@ -333,100 +330,3 @@ def test_replay_info_map_shapes_match_recorded_wire(cri, replay, key):
     container = client.inspect(sc["container_id"])
     assert type(container["info"]["pid"]) is int
     assert container["info"]["sandboxID"] == sc["sandbox_id"]
-
-
-@pytest.mark.parametrize(
-    "key,expected_pids",
-    [
-        ("crio", (4024349, 4024349)),
-        ("containerd", (923364, 923467)),
-        ("crio-future", (4024349, 4024349)),
-    ],
-)
-def test_replay_runtime_pid_fallback_through_wire(ipc_release, cri, replay, key, expected_pids):
-    # The exact failure PR #169 fixes, now exercised over the real wire:
-    # CRI-O degrades the sandbox pin to the container pid (no sandbox
-    # process exists), containerd pins the true sandbox pid. Both must
-    # return the recorded pid pairs without an ownership fault.
-    sc = REPLAY[key]
-    client, sc_full = _replay_client(cri, replay, sc["sandbox_id"])
-    observer = SimpleNamespace(config={"container": sc_full["container_name"]}, cri=lambda: client)
-    wanted = {
-        "node": "application",
-        "namespace": sc_full["namespace"],
-        "generation": str(uuid4()),
-        "sandbox_id": str(uuid4()),
-        "pod_uid": sc_full["uid"],
-        "volume_uid": str(uuid4()),
-    }
-    pod = {
-        "metadata": {
-            "name": sc_full["pod_name"],
-            "uid": sc_full["uid"],
-            "namespace": sc_full["namespace"],
-        },
-        "spec": {"nodeName": "application"},
-    }
-    sandbox_id, pids = ipc_release.runtime(observer, wanted, pod, sc_full["container_id"])
-    assert re.fullmatch(r"[0-9a-f]{64}", sandbox_id)
-    assert pids == expected_pids
-    assert all(type(pid) is int and pid > 1 for pid in pids)
-
-
-@pytest.fixture
-def ipc_release():
-    # ads-ipc-release loads its sibling helpers (ads-ptp, ads-ptp-release,
-    # ads-cri) through the same with-name loader used in the image.
-    return _load("ipc_node_release", TOOLS / "ads-ipc-release")
-
-
-@pytest.fixture
-def attest():
-    return _load("ads_ptp_attest", TOOLS / "ads-ptp-attest")
-
-
-@pytest.mark.parametrize(
-    "key,expected_pids",
-    [
-        ("crio", (4024349, 4024349)),
-        ("containerd", (923364, 923467)),
-        ("crio-future", (4024349, 4024349)),
-    ],
-)
-def test_replay_runtime_identity_through_wire(attest, cri, replay, key, expected_pids):
-    # Second call site (ads-ptp-attest.runtime_identity) against the same
-    # recorded wire shapes: CRI-O degrades to the container pid, containerd
-    # keeps the real sandbox pid, both without an identity fault.
-    sc = REPLAY[key]
-    client, _ = _replay_client(cri, replay, sc["sandbox_id"])
-    observer = SimpleNamespace(
-        config={
-            "namespace": sc["namespace"],
-            "relay_container": sc["container_name"],
-            "relay_image": sc["image_ref"],
-        },
-        cri=lambda: client,
-    )
-    relay = {"metadata": {"uid": sc["uid"], "name": sc["pod_name"]}}
-    sandbox_id, pids = attest.runtime_identity(observer, relay, sc["container_id"])
-    assert sandbox_id == sc["sandbox_id"]
-    assert pids == expected_pids
-
-
-@pytest.mark.parametrize("key", ["crio", "containerd"])
-def test_replay_rejects_foreign_sandbox_status_over_wire(attest, cri, replay, key):
-    # Tampered verbose status (wrong pod uid in the status message) must
-    # still fail closed through the full wire path.
-    sc = REPLAY[key]
-    client, _ = _replay_client(cri, replay, sc["sandbox_id"])
-    observer = SimpleNamespace(
-        config={
-            "namespace": sc["namespace"],
-            "relay_container": sc["container_name"],
-            "relay_image": sc["image_ref"],
-        },
-        cri=lambda: client,
-    )
-    relay = {"metadata": {"uid": str(uuid4()), "name": sc["pod_name"]}}
-    with pytest.raises(ValueError):
-        attest.runtime_identity(observer, relay, sc["container_id"])

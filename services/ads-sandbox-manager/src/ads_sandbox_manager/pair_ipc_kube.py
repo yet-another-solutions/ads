@@ -30,8 +30,10 @@ class PairIpcAdapter:
 
     @staticmethod
     def _pod_matches(observed: Object, desired: Object) -> bool:
-        if observed.get("metadata", {}).get("annotations"):
-            return False
+        # G10: no post-push annotation validation — the manager never
+        # re-validates pod structure after creation (drop-validation, no
+        # whitelist). IPC pods carry no stamps, but any annotations present
+        # are simply not our concern here.
         pod = deepcopy(observed.get("spec", {}))
         wanted = desired["spec"]
         if pod.pop("serviceAccount", wanted["serviceAccountName"]) != wanted["serviceAccountName"]:

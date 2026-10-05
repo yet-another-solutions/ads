@@ -18,17 +18,13 @@ from ads_sandbox_manager.cleanup import CleanupKubernetes
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository, target
 from ads_sandbox_manager.objects import COMPONENT, Object
-from ads_sandbox_manager.pair_block_storage import PairBlockStorageTeardown
 from ads_sandbox_manager.pair_cleanup import PairCleanupCapture
-from ads_sandbox_manager.pair_disposal import PairDisposal, PairRetainedDisposal
-from ads_sandbox_manager.pair_ipc_storage import PairIpcStorageTeardown
+from ads_sandbox_manager.pair_disposal import PairDisposal, PairDisposalRepository
 from ads_sandbox_manager.pair_objects import GENERATION, PROJECT
 from ads_sandbox_manager.pair_registry import PairRegistry
-from ads_sandbox_manager.pair_resource_teardown import PairResourceTeardown
 from ads_sandbox_manager.pair_retirement import PairRetirementRepository
-from ads_sandbox_manager.pair_runtime_teardown import PairRuntimeTeardown
 from ads_sandbox_manager.pair_store import PairIntent
-from ads_sandbox_manager.pair_unused_storage import PairUnusedStorageTeardown
+from ads_sandbox_manager.pair_teardown import PairTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMER,
@@ -77,8 +73,7 @@ class LifecycleService:
         credentials: ClientCredentials,
         tokens: TokenMinter,
         pair_capture: PairCleanupCapture,
-        pair_runtime: PairRuntimeTeardown | None = None,
-        pair_resources: PairResourceTeardown | None = None,
+        pair_teardown: PairTeardown | None = None,
     ) -> None:
         self.settings, self.sessions, self.repository = settings, sessions, repository
         self.kube, self.publisher, self.credentials, self.tokens = (
@@ -89,8 +84,7 @@ class LifecycleService:
         )
         self._task: asyncio.Task[None] | None = None
         self.pair_capture = pair_capture
-        self.pair_runtime = pair_runtime
-        self.pair_resources = pair_resources
+        self.pair_teardown = pair_teardown
         self._ping_task: asyncio.Task[None] | None = None
         self._pair_scan_after: UUID | None = None
 
@@ -578,8 +572,19 @@ class LifecycleService:
             # True orphans never recreate anything. Keep exact targets/evidence and retry.
         try:
             if retained is not None:
-                if self.pair_resources is not None:
-                    await PairRetainedDisposal(self.pair_resources).dispose(work)
+                # Retained expiry is destructive: release the exact targets
+                # (reaped/orphan work carries the retired generation's captured
+                # inventory) through the same teardown path before the one-way
+                # DB receipt. finish() performs no external I/O.
+                if work.targets and (
+                    self.pair_teardown is None or not await self.pair_teardown.release(work)
+                ):
+                    log.warning("pair teardown incomplete; targets retained: %s", work_id)
+                    return
+                async with self.sessions.begin() as db:
+                    disposal = PairDisposalRepository(self.repository)
+                    await disposal.owned(db, work)
+                    await disposal.finish(db, work, datetime.now(UTC))
                 return
             if work.kind == "idle" and not work.acknowledged:
                 async with asyncio.timeout(self.settings.control_seconds):
@@ -599,14 +604,9 @@ class LifecycleService:
                     if not await self.pair_capture.capture(work):
                         log.warning("paired writers unresolved; cleanup retained: %s", work_id)
                         return
-                if self.pair_runtime is None or not await self.pair_runtime.release(work):
-                    log.warning("pair retirement requires runtime-release proof: %s", work_id)
+                if self.pair_teardown is None or not await self.pair_teardown.release(work):
+                    log.warning("pair teardown incomplete; targets retained: %s", work_id)
                     return
-                await PairUnusedStorageTeardown(self.pair_runtime).dispose(work)
-                if await PairIpcStorageTeardown(self.pair_runtime).dispose(work):
-                    await PairBlockStorageTeardown(self.pair_runtime).dispose(work)
-                if self.pair_resources is not None:
-                    await self.pair_resources.dispose(work)
                 async with self.sessions.begin() as db:
                     if work.kind == "idle":
                         await PairRetirementRepository(self.repository).finish_idle(

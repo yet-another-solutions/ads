@@ -144,9 +144,7 @@ async def test_runtime_class_only_404_is_absent(session_api, status):
     session_api.node.read_runtime_class.assert_called_once()
 
 
-@pytest.mark.parametrize(
-    "change", [None, "uid", "generation", "annotations", "deleting", "budget", "overhead"]
-)
+@pytest.mark.parametrize("change", [None, "uid", "generation", "deleting", "budget", "overhead"])
 async def test_observe_keeps_identity_and_custody_checks_with_overhead(
     object_settings, pair, state, runtime, change
 ):
@@ -177,8 +175,6 @@ async def test_observe_keeps_identity_and_custody_checks_with_overhead(
         observed["metadata"]["uid"] = "replacement"
     elif change == "generation":
         observed["metadata"]["labels"][GENERATION] = str(uuid4())
-    elif change == "annotations":
-        observed["metadata"]["annotations"] = {"unexpected": "true"}
     elif change == "deleting":
         observed["metadata"]["deletionTimestamp"] = "now"
     elif change == "budget":

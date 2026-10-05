@@ -1,0 +1,293 @@
+{{- $root := . -}}
+{{- $sb := .Values.sandbox -}}
+{{- $version := $root.Chart.AppVersion -}}
+{{- $tools := include "ads.sandboxImage" (dict "root" $root "image" $sb.cni.image) -}}
+{{- $issuer := $root.Values.tls.certManager.issuer -}}
+{{- $nodeIPs := $sb.manager.nodeIPs -}}
+{{- $nodePort := $sb.manager.pairLookupNodePort -}}
+{{- if and (or $nodeIPs $nodePort) (not (and $nodeIPs $nodePort)) -}}
+{{- fail "sandbox.manager.nodeIPs and sandbox.manager.pairLookupNodePort must be set together" -}}
+{{- end -}}
+{{- $lookupPort := 8443 -}}
+{{- $role := dict "name" "ads-ptp-cni" "cn" "ads-ptp-cni" "port" 0 -}}
+{{- $secret := printf "%s-tls" $role.name -}}
+{{- $configured := or $root.Values.tls.certManager.enabled (index $sb.cni.secrets $role.name) -}}
+{{- if and (not $root.Values.tls.certManager.enabled) $configured -}}
+{{- $secret = index $sb.cni.secrets $role.name -}}
+{{- end -}}
+{{- if $configured -}}
+{{- if $root.Values.tls.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+spec:
+  secretName: {{ $secret }}
+  commonName: {{ $role.cn }}
+  issuerRef:
+    name: {{ $issuer.name }}
+    kind: {{ $issuer.kind }}
+    group: {{ $issuer.group }}
+  dnsNames:
+    - {{ $role.cn | quote }}
+{{- if $nodeIPs }}
+---
+# G2: node -> manager lookup dials https://<node-ip>:<nodePort>. The manager
+# server certificate must carry every configured node IP as a SAN; cert-manager
+# issues them natively, nothing handcrafted.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: manager-pair-lookup
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-manager
+spec:
+  secretName: {{ include "ads.sandboxName" (dict "root" $root "component" "manager") }}-pair-lookup
+  commonName: ads-sandbox-manager
+  issuerRef:
+    name: {{ $issuer.name }}
+    kind: {{ $issuer.kind }}
+    group: {{ $issuer.group }}
+  dnsNames:
+    - ads-sandbox-manager
+  ipAddresses:
+    {{- toYaml $nodeIPs | nindent 4 }}
+{{- end }}
+{{- if $nodeIPs }}
+---
+# G2: dedicated NodePort Service for the CNI pair lookup. The existing
+# ClusterIP Service stays for in-cluster clients; this one is additive and
+# static per node via managerURL in the conflist.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ads.sandboxName" (dict "root" $root "component" "manager") }}-pair-lookup
+  namespace: {{ $root.Values.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-manager
+spec:
+  type: NodePort
+  ports:
+    - name: pair-lookup
+      port: {{ $lookupPort }}
+      targetPort: pair-lookup
+      nodePort: {{ $nodePort }}
+  selector:
+    {{- include "ads.selectorLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: ads-sandbox-manager
+{{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: {{ $role.name }}
+  template:
+    metadata:
+      labels:
+        {{- include "ads.selectorLabels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $role.name }}
+    spec:
+      serviceAccountName: {{ $role.name }}
+      automountServiceAccountToken: false
+      hostNetwork: false
+      hostPID: true
+      tolerations:
+        - key: ads.io/sandbox
+          operator: Exists
+          effect: NoSchedule
+      initContainers:
+        - name: materialize-config
+          image: {{ $tools | quote }}
+          imagePullPolicy: {{ $sb.cni.image.pullPolicy }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              install -d -o root -g root -m 0700 /host-etc
+              install -o root -g root -m 0600 /config/config.json /host-etc/config.json
+              if [ -d /tls-src ]; then
+                install -d -o root -g root -m 0700 /host-etc/tls
+                install -o root -g root -m 0600 /tls-src/ca.crt /host-etc/tls/ca.crt
+                install -o root -g root -m 0600 /tls-src/tls.crt /host-etc/tls/tls.crt
+                install -o root -g root -m 0600 /tls-src/tls.key /host-etc/tls/tls.key
+              fi
+              node="${NODE_NAME}"
+              python3 - "$node" << 'PY'
+              import json, pathlib, sys
+              node = sys.argv[1]
+              path = pathlib.Path("/host-etc/config.json")
+              record = json.loads(path.read_text())
+              record["node"] = node
+              path.write_text(json.dumps(record))
+              PY
+              chown root:root /host-etc/config.json
+              {{- if and $nodeIPs $nodePort }}
+              install -d -o root -g root -m 0755 /host-cni-net-d
+              {{- end }}
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: tls
+              mountPath: /tls-src
+              readOnly: true
+            - name: host-etc
+              mountPath: /host-etc
+            - name: cni-bin
+              mountPath: /opt/cni/bin
+            - name: cni-net
+              mountPath: /etc/cni/net.d
+            - name: crio-net
+              mountPath: /etc/cni/net.d.crio
+            - name: runtime-net
+              mountPath: /etc/cni/ads-private
+            - name: cni-certs
+              mountPath: /etc/cni/ads-ptp
+            - name: cni-state
+              mountPath: /var/lib/ads-ptp
+      containers:
+        - name: {{ $role.name }}
+          image: {{ $tools | quote }}
+          imagePullPolicy: {{ $sb.cni.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              {{ $role.name }} install /host-etc/config.json
+              && exec sleep infinity
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: host-etc
+              mountPath: /host-etc
+              readOnly: true
+            - name: run
+              mountPath: /var/run
+              # Netns bind mounts (CNI ADD) and peer sockets appear in the
+              # host /var/run after this pod starts; HostToContainer keeps
+              # the installer's view live instead of requiring a pod restart.
+              mountPropagation: HostToContainer
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            - name: cni-bin
+              mountPath: /opt/cni/bin
+            - name: cni-net
+              mountPath: /etc/cni/net.d
+            - name: crio-net
+              mountPath: /etc/cni/net.d.crio
+            - name: runtime-net
+              mountPath: /etc/cni/ads-private
+            - name: cni-certs
+              mountPath: /etc/cni/ads-ptp
+            - name: cni-state
+              mountPath: /var/lib/ads-ptp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $role.name }}
+            defaultMode: 0600
+        - name: host-etc
+          hostPath:
+            path: /etc/{{ $role.name }}
+            type: DirectoryOrCreate
+        - name: run
+          hostPath:
+            path: /var/run
+            type: Directory
+        - name: tls
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0600
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+            type: Directory
+        - name: cni-net
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: crio-net
+          hostPath:
+            path: /etc/cni/net.d.crio
+            type: DirectoryOrCreate
+        - name: runtime-net
+          hostPath:
+            path: /etc/cni/ads-private
+            type: DirectoryOrCreate
+        - name: cni-certs
+          hostPath:
+            path: /etc/cni/ads-ptp
+            type: DirectoryOrCreate
+        - name: cni-state
+          hostPath:
+            path: /var/lib/ads-ptp
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $role.name }}
+  namespace: {{ $sb.namespace }}
+  labels:
+    {{- include "ads.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $role.name }}
+data:
+  config.json: |
+    {
+      "cniVersion": "1.0.0",
+      "name": {{ $sb.manager.cniNetwork | default "ads-private" | quote }},
+      "type": "ads-ptp",
+      {{- if and $nodeIPs $nodePort }}
+      "managerURL": "https://{{ index $nodeIPs 0 }}:{{ $nodePort }}",
+      {{- else }}
+      "managerURL": "",
+      {{- end }}
+      "managerCN": "ads-sandbox-manager",
+      "ca": "/host-etc/tls/ca.crt",
+      "certificate": "/host-etc/tls/tls.crt",
+      "key": "/host-etc/tls/tls.key",
+      "stateDir": "/var/lib/ads-ptp"
+    }
+{{- end }}

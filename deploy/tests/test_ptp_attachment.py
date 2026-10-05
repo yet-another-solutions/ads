@@ -24,15 +24,27 @@ def plugin():
 
 
 @pytest.fixture
-def inputs(plugin, tmp_path):
-    for name in ("state", "bindings"):
+def inputs(plugin, tmp_path, monkeypatch):
+    for name in ("state",):
         (tmp_path / name).mkdir(mode=0o700)
+    proc = tmp_path / "proc"
+    (proc / "4242").mkdir(parents=True)
+    (proc / "4242" / "cgroup").write_text(
+        "0::/kubepods/burstable/pod" + "b" * 64 + "/" + "b" * 64 + "\n"
+    )
+    for rel in ("root/run/netns", "ns"):
+        (proc / "4242" / rel).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(plugin, "PROC_ROOT", str(proc))
     config = {
         "cniVersion": "1.0.0",
         "type": "ads-ptp",
         "name": "ads-private",
+        "managerURL": "https://127.0.0.1:8443",
+        "managerCN": "ads-sandbox-manager",
+        "ca": str(tmp_path / "state" / "ca"),
+        "certificate": str(tmp_path / "state" / "certificate"),
+        "key": str(tmp_path / "state" / "key"),
         "stateDir": str(tmp_path / "state"),
-        "bindingDir": str(tmp_path / "bindings"),
     }
     uid = str(uuid4())
     env = {
@@ -57,7 +69,43 @@ def inputs(plugin, tmp_path):
         "address": "10.10.30.2/24",
         "gateway": "10.10.30.1",
     }
-    plugin.save_record(tmp_path / "bindings" / (uid + ".json"), attestation)
+    config["runtimeConfig"] = {
+        config["name"]: {
+            "io.kubernetes.cri.pod-annotations": {
+                "sandbox-ads/generation": attestation["generation"],
+                "sandbox-ads/role": attestation["role"],
+            }
+        }
+    }
+    observed = {
+        "pod_uid": uid,
+        "generation": attestation["generation"],
+        "sandbox_id": attestation["sandbox_id"],
+        "role": attestation["role"],
+        "network": attestation["network"],
+        "relay_pod_uid": attestation["relay_pod_uid"],
+        "relay_runtime_id": "b" * 64,
+        "mtu": attestation["mtu"],
+        "address": attestation["address"],
+        "gateway": attestation["gateway"],
+    }
+
+    def fake_dial(config, req):
+        return deepcopy(observed)
+
+    # Relay private netns bind file + netns identities the /proc scan reads.
+    (proc / "4242" / "root" / "run" / "netns").mkdir(parents=True, exist_ok=True)
+    private_ns = proc / "4242" / "root" / "run" / "netns" / ("private-" + attestation["generation"])
+    private_ns.touch()
+    monkeypatch.setattr(plugin, "dial_manager", fake_dial)
+
+    def fake_observe(req, observed):
+        # The plugin recomputes namespace paths from the manager reply and the
+        # fake /proc; flow tests re-patch namespace()/ns_identity around the
+        # record's paths, so emit exactly the record's own paths here.
+        return deepcopy(attestation["private"]), deepcopy(attestation["transport"])
+
+    monkeypatch.setattr(plugin, "observe_namespaces", fake_observe)
     return config, env, attestation
 
 
@@ -320,7 +368,7 @@ def test_partial_add_retains_intent_for_del(plugin, inputs, kernel, monkeypatch)
     assert not state.exists()
 
 
-@pytest.mark.parametrize("change", ["alias", "index", "group", "binding", "bridge", "other-nic"])
+@pytest.mark.parametrize("change", ["alias", "index", "group", "bridge", "other-nic"])
 def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, change):
     config, env, record = inputs
     req, _, state, current, paths, calls = kernel
@@ -337,14 +385,9 @@ def test_replacement_or_foreign_resources_never_deleted(plugin, inputs, kernel, 
         assert not state.exists()
         return
     plugin.perform(config, env)
-    if change == "binding":
-        record["generation"] = str(uuid4())
-        plugin.save_record(Path(config["bindingDir"]) / (req["pod_uid"] + ".json"), record)
-        env["CNI_COMMAND"] = "CHECK"
-    else:
-        field = {"alias": "ifalias", "index": "ifindex", "group": "group"}[change]
-        current[20]["veth-local"][field] = "replacement"
-        env["CNI_COMMAND"] = "DEL"
+    field = {"alias": "ifalias", "index": "ifindex", "group": "group"}[change]
+    current[20]["veth-local"][field] = "replacement"
+    env["CNI_COMMAND"] = "DEL"
     with pytest.raises(ValueError):
         plugin.perform(config, env)
     assert "eth0" in current[10]
@@ -370,31 +413,22 @@ def test_replaced_namespace_inode_fails_before_link(plugin, inputs, monkeypatch)
     assert not state.exists()
 
 
-def test_del_does_not_open_attestor_socket(plugin, inputs, kernel, monkeypatch):
+def test_del_uses_original_journal_binding(plugin, inputs, kernel):
     config, env, record = inputs
     plugin.perform(config, env)
-    monkeypatch.setattr(plugin, "dial_attestor", lambda *args: pytest.fail("socket opened"))
-    env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
-    record["private"]["path"] = "/some/replacement"
-    plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
-    assert plugin.perform(config, env) is None
-    assert not kernel[2].exists()
-
-
-def test_del_uses_original_binding_when_relay_record_changes(plugin, inputs, kernel):
-    config, env, record = inputs
-    plugin.perform(config, env)
-    record["private"]["path"] = "/some/replacement"
-    plugin.save_record(Path(config["bindingDir"]) / (record["pod_uid"] + ".json"), record)
     env.update(CNI_COMMAND="DEL", CNI_NETNS="", CNI_ARGS="")
     assert plugin.perform(config, env) is None
     assert not kernel[2].exists()
 
 
-def test_lock_and_missing_attestation_fail_before_kernel(plugin, inputs, monkeypatch):
+def test_lock_and_missing_manager_fail_before_kernel(plugin, inputs, monkeypatch):
     config, env, record = inputs
-    path = Path(config["bindingDir"]) / (record["pod_uid"] + ".json")
-    path.unlink()
+    # The manager dial fails, so no binding exists and no effect may happen.
+    monkeypatch.setattr(
+        plugin,
+        "dial_manager",
+        lambda *args: (_ for _ in ()).throw(FileNotFoundError("manager unavailable")),
+    )
     monkeypatch.setattr(plugin, "add", lambda *args: pytest.fail("must not create a link"))
     with pytest.raises(FileNotFoundError):
         plugin.perform(config, env)

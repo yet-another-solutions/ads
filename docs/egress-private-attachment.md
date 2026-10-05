@@ -19,27 +19,25 @@ remains a separate integration gate.
 
 ## Trust and prerequisites
 
-A trusted node attestor must publish a root-owned mode-0600 binding under a
-root-owned mode-0700 binding directory. This publisher is a subsequent
-integration component described in `egress-node-attestation.md`, not a
-success-returning fallback. Production ADD/CHECK invoke it on demand and
-require `attestorConfig`; static records alone are accepted only by in-process
-kernel fixtures. Missing attestation
-fails ADD. Relays and guests must never write the binding/state directories.
-Neither receives a host runtime socket, general host filesystem, Kubernetes
-credential or node CNI authority from this component.
+ADD/CHECK obtain the binding from the manager: the plugin dials the mTLS
+`/v1/pair` lookup (G1/G2) using the `sandbox-ads/generation` and
+`sandbox-ads/role` pod annotations as the join key (G9), then completes the
+partial reply with local `/proc` observation of the relay's private and
+transport namespaces. A missing manager reply fails ADD. Relays and guests
+must never write the state directories. Neither receives a host runtime
+socket, general host filesystem, Kubernetes credential or node CNI authority
+from this component.
 
-The exact record fields are checked by `binding()`: VM Pod UID, sandbox UUID,
-attachment generation, role, interface/network names, current local relay Pod
-UID and runtime sandbox ID, private and transport namespace paths plus nsfs
-device/inode identities, effective private MTU, pair-local address and gateway.
-Addresses must be canonical RFC1918 IPv4 host addresses on a /24; guest gateway
-must be another host in that same subnet, while egress gateway must be null.
-These inputs are platform-owned, never project policy. The attestor must establish
-these from current Kubernetes/CRI observations, reject terminating/replaced or
-foreign-node objects, and verify the private namespace belongs to that exact
-relay runtime. A root-authored record is authorization, not proof of those
-facts by itself. Live node integration remains a separate proof.
+The exact reply fields are checked by `binding()`: VM Pod UID, sandbox UUID,
+attachment generation (it must equal the pod-annotation generation), role,
+interface/network names, current local relay Pod UID and runtime sandbox ID,
+private and transport namespace paths plus nsfs device/inode identities,
+effective private MTU, pair-local address and gateway. Addresses must be
+canonical RFC1918 IPv4 host addresses on a /24; guest gateway must be another
+host in that same subnet, while egress gateway must be null. These inputs are
+platform-owned, never project policy; the manager establishes them from its
+own pair registry, and the plugin verifies the namespaces belong to that exact
+relay runtime before any effect.
 
 Both namespace references are opened and verified using nsfs type and
 device/inode. Held descriptors, not a later PID lookup, address kernel
@@ -89,44 +87,6 @@ Kernel peer removal after namespace destruction can race an explicit delete;
 an operation error is accepted only after positive interface-absence rechecks.
 A surviving original or replacement link retains the failure and journal.
 
-## Generation retirement fence
-
-The packaged `ads-ptp-retire` command is a trusted node-root operation, not a
-relay/guest API. It reads one bounded JSON object from stdin with exactly
-`stateDir`, `network`, `sandbox_id` and `generation`. The IDs are canonical UUIDs
-from the existing manager-owned pair, not a new claim epoch. `stateDir` must be
-the exact persistent, protected directory used by every CNI invocation for that
-pair on the node. A separate/ephemeral directory does not fence those calls.
-Do not mount this directory, executable authority or host runtime sockets into
-untrusted workloads.
-
-The command takes a nonblocking generation lock shared with ADD/CHECK and
-atomically fsyncs a mode-0600 `retired-<generation>.json` record. Contention or
-any write/sync failure is an error, never a completed fence. An in-flight ADD
-holds that lock across its kernel effects and journal commit. An attestation
-that finishes after fencing must still acquire the lock and check the record;
-it cannot authorize a late ADD. Changed runtime/Pod IDs for that generation do
-not bypass the fence. No new ADD/CHECK succeeds after acknowledged fencing,
-including after CNI process restart. Busy callers must retry through their
-existing bounded lifecycle, not treat contention as absence.
-
-Fencing does not remove existing links, halt traffic, stop relay/VM processes,
-reclaim storage or authorize control-policy deletion. The response explicitly
-reports `attachment_admission_fenced: true` and `runtime_release_proven: false`.
-DEL remains available using the original per-attachment journal and does not
-need the generation lock, Kubernetes API or current attestation. It never
-removes the retirement record. Idempotent retirement reasserts fsync durability;
-a conflicting, corrupt, symlinked or unprotected record fails closed. There is
-no automatic unretire/expiry or generation reuse.
-
-The node-root command is implemented and kernel-CI tested, but manager-to-node
-delivery, persistent installation on the worker, positive runtime release
-observation and complete paired retirement are subsequent integration gates.
-All creators must first lose their existing manager claim. Keep ingress
-policies and ownership records until compute/controller cleanup, node fencing
-and positive attachment/runtime release are established; this command alone
-does not close that boundary or prevent late Kubernetes control-object writes.
-
 ## Proof boundary
 
 Unit tests use a fake kernel to cover input rejection, protected records,
@@ -135,7 +95,7 @@ tooling-image CI job additionally runs real ADD/CHECK/DEL, actual pair-local
 address/default-route inspection, replacement denial and missing-namespace cleanup. No lab build is
 authorized or required.
 
-Remaining gates: trusted node attestor, relay runtime integration, scoped
-runtime/CNI installation, actual Kata TAP/TC handoff, inner Podman NIC transfer,
-concurrent pair isolation, ingress/broadcast limits, manager ownership and
-fault recovery. No production attachment or full egress acceptance is claimed.
+Remaining gates: relay runtime integration, scoped runtime/CNI installation,
+actual Kata TAP/TC handoff, inner Podman NIC transfer, concurrent pair
+isolation, ingress/broadcast limits and fault recovery. No production
+attachment or full egress acceptance is claimed.

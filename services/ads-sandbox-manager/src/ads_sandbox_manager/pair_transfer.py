@@ -14,7 +14,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.egress_state_store import EgressState, state_snapshot
 from ads_sandbox_manager.lifecycle_store import LifecycleRepository
-from ads_sandbox_manager.pair_retirement import PairRetirement, PairRetirementRepository
+from ads_sandbox_manager.pair_disposal import PairDisposal
+from ads_sandbox_manager.pair_retirement import PairRetirementRepository
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
 from ads_sandbox_manager.store import Base, SandboxSession, SessionPVC
 
@@ -28,11 +29,10 @@ class PairTransfer(Base):
     generation: Mapped[UUID] = mapped_column(primary_key=True)
     predecessor: Mapped[UUID]
     session_id: Mapped[UUID] = mapped_column(index=True)
-    sandbox_id: Mapped[UUID] = mapped_column(index=True)
+    sandbox_id: Mapped[UUID]
     project_id: Mapped[UUID]
     claim_owner: Mapped[UUID]
     claim_changed: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    retirement_sha256: Mapped[str]
     state: Mapped[dict[str, Any]] = mapped_column(JSONB)
     workspace: Mapped[dict[str, Any]] = mapped_column(JSONB)
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -45,10 +45,8 @@ class PairTransferRepository:
 
     async def available(
         self, db: AsyncSession, row: SandboxSession
-    ) -> tuple[PairRetirement, EgressState, SessionPVC]:
+    ) -> tuple[PairIntent, EgressState, SessionPVC]:
         """Called under the session lock before claim or generation allocation."""
-        from ads_sandbox_manager.pair_disposal import PairDisposal
-
         prior = await db.scalar(
             select(PairIntent)
             .where(PairIntent.sandbox_id == row.sandbox_id)
@@ -59,19 +57,18 @@ class PairTransferRepository:
         )
         if prior is None or prior.retired_at is None:
             raise PairClaimLost("retained sandbox has no retired original generation")
-        saved = await self.retirements.verify(db, prior.generation)
+        await self.retirements.verify(db, prior.generation)
+        if prior.project_id != row.project_id:
+            raise PairClaimLost("retained generation acquired a foreign project")
         if (
-            saved.kind != "idle"
-            or (saved.session_id, saved.sandbox_id, saved.project_id)
-            != (row.session_id, row.sandbox_id, row.project_id)
-            or await db.scalar(
+            await db.scalar(
                 select(PairTransfer.generation).where(PairTransfer.predecessor == prior.generation)
             )
             is not None
             or await db.get(PairDisposal, prior.generation) is not None
         ):
             raise PairClaimLost("retained generation is not available for exclusive transfer")
-        old = saved.journal["snapshot"]["volume_resources"]["workspace"]
+        old = prior.volume_resources["workspace"]
         pvc = (
             await db.get(SessionPVC, row.pvc_id, with_for_update=True, populate_existing=True)
             if row.pvc_id is not None
@@ -87,25 +84,25 @@ class PairTransferRepository:
             or (row.status == "stopped" and pvc.state != "detached")
             or (row.status == "creating" and pvc.state != "attaching")
             or row.status not in ("stopped", "creating")
-            or row.golden_version != saved.journal["snapshot"]["golden_version"]
+            or row.golden_version != prior.golden_version
         ):
             raise PairClaimLost("retained workspace lifetime or claim changed")
         state = await db.get(
             EgressState,
-            UUID(saved.journal["snapshot"]["egress_state_id"]),
+            UUID(str(prior.egress_state_id)),
             with_for_update=True,
             populate_existing=True,
         )
-        if state is None or state_snapshot(state) != saved.journal["snapshot"]["egress_state"]:
+        if state is None:
             raise PairClaimLost("retained persistent state or wrapping identity changed")
-        return saved, state, pvc
+        return prior, state, pvc
 
     async def inherit(
         self,
         db: AsyncSession,
         row: SandboxSession,
         pair: PairIntent,
-        saved: PairRetirement,
+        saved: PairIntent,
         state: EgressState,
         pvc: SessionPVC,
     ) -> PairTransfer:
@@ -122,30 +119,28 @@ class PairTransferRepository:
             or pair.creation_fenced
             or (pair.session_id, pair.sandbox_id, pair.project_id, pair.claim_changed)
             != (row.session_id, row.sandbox_id, row.project_id, row.status_changed_at)
-            or pair.namespace != saved.journal["snapshot"]["namespace"]
-            or pair.golden_version != saved.journal["snapshot"]["golden_version"]
-            or pair.claim_changed <= saved.retired_at
+            or pair.namespace != saved.namespace
+            or pair.golden_version != saved.golden_version
+            or pair.claim_changed <= (saved.retired_at or pair.claim_changed)
             or pair.egress_state_id is not None
             or pair.retained_from is not None
             or pair.volume_resources["workspace"]["dispatch"] != "unissued"
             or pair.topics_dispatch != "unissued"
-            or state_snapshot(state) != saved.journal["snapshot"]["egress_state"]
             or pvc.state != "attaching"
             or pvc.pvc_id != row.pvc_id
             or pvc.uid != row.pvc_uid
             or (saved.session_id, saved.sandbox_id, saved.project_id)
             != (pair.session_id, pair.sandbox_id, pair.project_id)
-            or str(pvc.pvc_id)
-            != saved.journal["snapshot"]["volume_resources"]["workspace"]["payload"]["pvc_id"]
-            or pvc.uid != saved.journal["snapshot"]["volume_resources"]["workspace"]["uid"]
+            or str(pvc.pvc_id) != saved.volume_resources["workspace"]["payload"]["pvc_id"]
+            or pvc.uid != saved.volume_resources["workspace"]["uid"]
         ):
             raise PairClaimLost("new retained ownership scope changed")
         # The caller may not inject an available-looking receipt: validate it
         # again from the immutable original row while the locks remain held.
         original = await self.retirements.verify(db, saved.generation)
-        if original.journal_sha256 != saved.journal_sha256 or original.kind != "idle":
+        if original["retired_at"] != saved.retired_at:
             raise PairClaimLost("retained predecessor proof changed")
-        workspace = deepcopy(saved.journal["snapshot"]["volume_resources"]["workspace"])
+        workspace = deepcopy(saved.volume_resources["workspace"])
         workspace["payload"]["pvc_changed"] = pvc.last_state_change.isoformat()
         transfer = PairTransfer(
             generation=pair.generation,
@@ -155,7 +150,6 @@ class PairTransferRepository:
             project_id=pair.project_id,
             claim_owner=pair.claim_owner,
             claim_changed=pair.claim_changed,
-            retirement_sha256=saved.journal_sha256,
             state=state_snapshot(state),
             workspace=workspace,
         )
@@ -175,11 +169,14 @@ class PairTransferRepository:
             if pair.retained_from is not None:
                 raise PairClaimLost("retained generation transfer receipt missing")
             return None
-        previous = await self.retirements.verify(db, receipt.predecessor)
+        previous = await db.get(
+            PairIntent, receipt.predecessor, with_for_update=True, populate_existing=True
+        )
         if (
-            pair.retained_from != receipt.predecessor
-            or previous.kind != "idle"
-            or previous.journal_sha256 != receipt.retirement_sha256
+            previous is None
+            or previous.retired_at is None
+            or previous.cleanup_journal is not None
+            or pair.retained_from != receipt.predecessor
             or previous.retired_at >= pair.claim_changed
             or (
                 receipt.session_id,
@@ -199,12 +196,11 @@ class PairTransferRepository:
             != (pair.session_id, pair.sandbox_id, pair.project_id)
             or pair.egress_state_id is None
             or str(pair.egress_state_id) != receipt.state["state_id"]
-            or receipt.state != previous.journal["snapshot"]["egress_state"]
             or pair.volume_resources["workspace"] != receipt.workspace
             or pair.topics_dispatch != "settled"
         ):
             raise PairClaimLost("retained ownership receipt changed")
-        original = deepcopy(previous.journal["snapshot"]["volume_resources"]["workspace"])
+        original = deepcopy(previous.volume_resources["workspace"])
         original["payload"]["pvc_changed"] = receipt.workspace["payload"]["pvc_changed"]
         if original != receipt.workspace:
             raise PairClaimLost("retained workspace provenance changed")
@@ -218,14 +214,4 @@ class PairTransferRepository:
         )
         if state is None or state_snapshot(state) != receipt.state:
             raise PairClaimLost("retained state provenance changed")
-        if pair.cleanup_journal is not None:
-            from ads_sandbox_manager.pair_inherited_storage import inherited_capture
-
-            for role, entry in pair.cleanup_journal["unused_storage"].items():
-                if entry["capture"]["mode"] == "retired-inherited-csi" and entry["capture"] != (
-                    inherited_capture(
-                        previous, role, retain=pair.cleanup_journal["retain_workspace"]
-                    )
-                ):
-                    raise PairClaimLost("inherited storage differs from its retired predecessor")
         return receipt
