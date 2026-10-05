@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import ssl
 import threading
@@ -30,6 +31,8 @@ CLIENT_CN = "ads-ptp-cni"
 GATEWAY = "10.10.30.1"
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 VM_ROLES = ("guest", "egress")
+
+log = logging.getLogger(__name__)
 
 
 def container_identity(pod: dict[str, Any], name: str) -> str | None:
@@ -87,49 +90,72 @@ class PairLookup:
     async def lookup(
         self, db: AsyncSession, kube: Any, generation: UUID, role: str, pod_uid: str | None
     ) -> tuple[int, dict[str, Any]]:
+        def reject(status: int, reason: str) -> tuple[int, dict[str, Any]]:
+            log.info(
+                "pair-lookup %s gen=%s pod_uid=%s -> %d (%s)",
+                role,
+                generation,
+                pod_uid or "-",
+                status,
+                reason,
+            )
+            # 503 keeps the Retry-After contract the plugin backs off on.
+            return status, {"Retry-After": "1"} if status == 503 else {}
+
         if role not in VM_ROLES:
-            return 404, {}
+            return reject(404, "role not a VM role")
         intent = await db.get(PairIntent, generation)
         if intent is None or intent.retired_at is not None:
             # Unknown AND retired generations are indistinguishable: 404.
-            return 404, {}
+            return reject(404, "generation unknown or retired")
         if intent.namespace != self.settings.namespace:
-            return 404, {}
+            return reject(404, f"namespace mismatch: {intent.namespace!r}")
         captured = intent.compute_uids.get(f"Pod/{role}")
         # G9: the join works before uid capture; a captured mismatch is fatal.
         if captured is not None and pod_uid is not None and captured != pod_uid:
-            return 404, {}
+            return reject(404, f"pod_uid mismatch: captured {captured}")
         relay_role = {"guest": "guest-relay", "egress": "egress-relay"}[role]
         inputs = intent.relay_inputs.get(relay_role)
         payload = (inputs or {}).get("payload")
         if payload is None:
-            return 503, {"Retry-After": "1"}
+            return reject(503, f"{relay_role} inputs not published yet")
         relay_uid = intent.compute_uids.get(f"Pod/{relay_role}")
         if relay_uid is None:
-            return 503, {"Retry-After": "1"}
+            return reject(503, f"{relay_role} pod uid not captured yet")
         relay_pod = await kube._get(
             kube.core.read_namespaced_pod, f"ads-{relay_role}-{intent.sandbox_id}"
         )
         if relay_pod is None:
-            return 503, {"Retry-After": "1"}
+            return reject(503, f"relay pod ads-{relay_role}-{intent.sandbox_id} absent")
         relay_runtime_id = container_identity(relay_pod, "relay")
         if relay_runtime_id is None:
-            return 503, {"Retry-After": "1"}
-        return (
-            200,
-            binding_record(
-                {
-                    "pod_uid": captured or pod_uid,
-                    "generation": str(generation),
-                    "sandbox_id": str(intent.sandbox_id),
-                    "network": self.network,
-                },
-                role,
-                payload,
-                relay_uid,
-                relay_runtime_id,
-            ),
+            return reject(503, f"relay container id absent in pod {relay_uid}")
+        record = binding_record(
+            {
+                "pod_uid": captured or pod_uid,
+                "generation": str(generation),
+                "sandbox_id": str(intent.sandbox_id),
+                "network": self.network,
+            },
+            role,
+            payload,
+            relay_uid,
+            relay_runtime_id,
         )
+        log.info(
+            "pair-lookup %s gen=%s pod_uid=%s -> 200 sandbox=%s relay=%s address=%s "
+            "gateway=%s mtu=%s network=%s",
+            role,
+            generation,
+            pod_uid or "-",
+            record["sandbox_id"],
+            relay_uid,
+            record["address"],
+            record["gateway"],
+            record["mtu"],
+            record["network"],
+        )
+        return 200, record
 
     async def handle(
         self, generation: str, role: str, pod_uid: str | None
@@ -140,6 +166,12 @@ class PairLookup:
             or role not in VM_ROLES
             or (pod_uid is not None and not UUID_RE.fullmatch(pod_uid))
         ):
+            log.warning(
+                "pair-lookup invalid query gen=%r role=%r pod_uid=%r -> 400",
+                generation,
+                role,
+                pod_uid,
+            )
             return 400, {"error": "invalid query"}, {}
         engine = create_async_engine(self.settings.database_url, pool_pre_ping=True, echo=False)
         try:
@@ -162,6 +194,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib naming
         parts = urlsplit(self.path)
         if parts.path != "/v1/pair":
+            log.warning("pair-lookup unknown route %r from %s", self.path, self.client_cn())
             self._respond(404, {"error": "unknown route"})
             return
         query = parse_qs(parts.query, keep_blank_values=True)
@@ -176,21 +209,53 @@ class _Handler(BaseHTTPRequestHandler):
                 if key == "commonName":
                     cn = value
         if cn != CLIENT_CN:
+            log.warning(
+                "pair-lookup unauthorized client cn=%r from %s -> 403",
+                cn,
+                self.client_address[0],
+            )
             self._respond(403, {"error": "unauthorized client"})
             return
+        log.info(
+            "pair-lookup request gen=%s role=%s pod_uid=%s from %s cn=%s",
+            generation,
+            role,
+            pod_uid or "-",
+            self.client_address[0],
+            cn,
+        )
         try:
             status, body, headers = asyncio.run(
                 self.server.lookup.handle(generation, role, pod_uid)
             )
         except Exception:  # noqa: BLE001 - handler must never crash the thread
+            log.exception(
+                "pair-lookup handler crashed gen=%s role=%s pod_uid=%s -> 500",
+                generation,
+                role,
+                pod_uid,
+            )
             status, body, headers = 500, {"error": "lookup failed"}, {}
         self._respond(status, body, headers)
+
+    def client_cn(self) -> str:
+        peer = self.connection.getpeercert() or {}
+        for rdn in peer.get("subject", ()):
+            for key, value in rdn:
+                if key == "commonName":
+                    return str(value)
+        return ""
 
     def _respond(
         self, status: int, body: dict[str, Any], headers: dict[str, str] | None = None
     ) -> None:
         data = json.dumps(body, separators=(",", ":")).encode()
         if len(data) > LIMIT:
+            log.error(
+                "pair-lookup reply exceeds bound (%d bytes) for %s -> 500",
+                len(data),
+                self.client_cn(),
+            )
             self.send_response(500)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -203,13 +268,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def log_message(self, *args: Any) -> None:  # silence per-request stderr
-        return
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib signature
+        """Route stdlib request logging into the manager logger (INFO)."""
+        log.info("pair-lookup http %s %s", self.address_string(), format % args)
 
 
 class PairLookupServer(ThreadingHTTPServer):
     daemon_threads = True
     lookup: PairLookup
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """TLS handshake failures and dropped connections land here; log them."""
+        log.exception("pair-lookup connection error from %s", client_address)
 
 
 class PairLookupListener:
@@ -243,11 +313,18 @@ class PairLookupListener:
         )
         self._loop_thread.start()
         self._serve_thread.start()
+        log.info(
+            "pair-lookup listener serving on %s:%d (client CN %s)",
+            pair_lookup.host,
+            pair_lookup.port,
+            pair_lookup.client_cn,
+        )
 
     def stop(self) -> None:
         if self.httpd is not None:
             self.httpd.shutdown()
             self.httpd.server_close()
+            log.info("pair-lookup listener stopped")
             self.httpd = None
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self.loop.stop)
