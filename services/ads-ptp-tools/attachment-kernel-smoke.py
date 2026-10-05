@@ -41,6 +41,16 @@ config = {
     "type": "ads-ptp",
     "name": "ads-private",
     "stateDir": str(root / "state"),
+    # G9 join key: the plugin only dials the manager for pods carrying the
+    # generation/role annotations (CRI-O delivers them via runtimeConfig).
+    "runtimeConfig": {
+        "ads-private": {
+            "io.kubernetes.cri.pod-annotations": {
+                "sandbox-ads/generation": generation,
+                "sandbox-ads/role": "guest",
+            },
+        },
+    },
 }
 try:
     for name in names:
