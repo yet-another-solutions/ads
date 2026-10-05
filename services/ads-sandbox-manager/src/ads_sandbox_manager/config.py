@@ -164,6 +164,10 @@ class Settings:
     tls_cert_path: Path
     tls_key_path: Path
     namespace: str = "ads-sandbox"
+    # CNI network name shared with the conflist served to ads-ptp-cni; the
+    # pair-lookup binding record must carry the same name or the plugin's
+    # binding() rejects the attachment (G9 identity mismatch).
+    cni_network: str = "ads-private"
     golden_slack: str = "2Gi"
     node_selector: dict[str, str] = field(default_factory=lambda: {"ads.io/sandbox-node": "true"})
     tolerations: list[dict[str, Any]] = field(default_factory=list)
@@ -219,6 +223,8 @@ class Settings:
             raise ValueError("golden version must be a DNS-safe ADS release version")
         if not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?", self.namespace):
             raise ValueError("namespace must be a Kubernetes DNS label")
+        if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", self.cni_network):
+            raise ValueError("CNI network must be a valid network name")
         if not self.golden_image.strip():
             raise ValueError("golden image is required")
         if not self.database_url.startswith("postgresql+psycopg://"):
@@ -329,6 +335,7 @@ def load_settings() -> Settings:
         tls_cert_path=Path(required("TLS_CERT_PATH")),
         tls_key_path=Path(required("TLS_KEY_PATH")),
         namespace=os.environ.get(prefix + "NAMESPACE", "ads-sandbox"),
+        cni_network=os.environ.get(prefix + "CNI_NETWORK", "ads-private"),
         golden_slack=os.environ.get(prefix + "GOLDEN_SLACK", "2Gi"),
         node_selector=json.loads(
             os.environ.get(prefix + "NODE_SELECTOR", '{"ads.io/sandbox-node":"true"}')

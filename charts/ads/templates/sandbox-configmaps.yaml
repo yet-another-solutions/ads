@@ -34,6 +34,7 @@ data:
   {{ $prefix }}ADS_BASE_URL: {{ printf "https://%s:%v" (include "ads.fullname" $root) $root.Values.service.port | quote }}
   {{ $prefix }}ADS_SERVICE_SUBJECT: {{ $root.Values.keycloak.serviceSubjects.ads | quote }}
   {{ $prefix }}PAIR_INPUTS: {{ $settings.pairInputs | toJson | quote }}
+  {{ $prefix }}CNI_NETWORK: {{ $sb.manager.cniNetwork | default "ads-private" | quote }}
   {{- if $settings.pairLookup }}
   {{ $prefix }}PAIR_LOOKUP: {{ dict "host" "0.0.0.0" "port" 8443 "client_cn" "ads-ptp-cni" | toJson | quote }}
   {{- if $sb.manager.nodeIPs }}
