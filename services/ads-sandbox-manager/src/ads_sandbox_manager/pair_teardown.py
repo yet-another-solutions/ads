@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,6 +21,7 @@ from ads_sandbox_manager.egress_state_objects import identity as egress_state_id
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_compute import relay_input_name
+from ads_sandbox_manager.pair_kube import ControlKind
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import PairClaimLost
 from ads_sandbox_manager.session_objects import ca_consumer_name
@@ -38,12 +39,13 @@ class PairTeardownKubernetes(Protocol):
     async def delete_pod(self, desired: Object, uid: str, *, node: str | None) -> bool: ...
     async def released(self, target: Object) -> bool: ...
     async def reclaimed(self, target: Object) -> bool: ...
+    async def capture(self, target: Object) -> Object: ...
 
 
 class PairTeardownControls(Protocol):
     """Control-plane deleter surface (PairControlAdapter); absence-verified."""
 
-    async def delete(self, pair: PairBinding, kind: str, role: str, uid: str) -> bool: ...
+    async def delete(self, pair: PairBinding, kind: ControlKind, role: str, uid: str) -> bool: ...
     async def dispose_secret(
         self,
         pair: PairBinding,
@@ -285,7 +287,9 @@ class PairTeardown:
                     log.warning("pair controls unavailable; target retained: %s", obj["name"])
                     return False
                 ckind, crole = key.split("/", 1)
-                if not await self.controls.delete(binding, ckind, crole, uid):
+                # kind membership was checked above; snapshot keys are
+                # ControlKind/role pairs, so ckind is always a ControlKind.
+                if not await self.controls.delete(binding, cast(ControlKind, ckind), crole, uid):
                     return False
                 continue
             if snapshot is not None and kind == "Secret":
