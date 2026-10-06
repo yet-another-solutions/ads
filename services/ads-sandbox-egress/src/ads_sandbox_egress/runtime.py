@@ -8,6 +8,7 @@ import socket
 import ssl
 import sys
 import tempfile
+import traceback
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
 from typing import Any
@@ -283,6 +284,7 @@ def main() -> None:
             stage = "serve"
             asyncio.run(serve(settings, custody, directory, library, boundary, cert, key, context))
     except Exception:
-        # Only a code-owned constant: never exception text, inputs or tracebacks.
+        # No swallowing: full traceback to stderr for diagnosis.
         print(f"egress runtime stage failed: {stage}", file=sys.stderr)
+        traceback.print_exc()
         raise

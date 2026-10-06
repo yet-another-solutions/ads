@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import ipaddress
+import logging
 import math
 import threading
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from ads_sandbox_egress.tls import (
     UnmappableTLS,
 )
 from ads_sandbox_egress.tls_transport import TLSStream
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +185,7 @@ class OriginContext:
             session.verification_seen = True
             return 1  # Observe, not authorize or relabel as trusted.
         except Exception:
+            _LOG.exception("origin TLS observe failed")
             return 0
 
     def session(self, name: str, protocols: tuple[bytes, ...]) -> OriginSession:

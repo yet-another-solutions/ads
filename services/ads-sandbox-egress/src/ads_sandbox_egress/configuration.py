@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from dataclasses import dataclass
 from typing import Protocol
@@ -16,6 +17,8 @@ from ads_commons.egress import (
     canonical_settings,
 )
 from ads_commons.security import AccessDenied, SecurityContextHolder, ensure_caller
+
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,5 +123,6 @@ class ConfigurationService:
             except asyncio.CancelledError:
                 raise
             except Exception:
+                _LOG.exception("configuration ping failed")
                 healthy = False
         return EgressPing(self.store.instance_id, healthy and self.store.accepting)

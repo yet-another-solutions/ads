@@ -128,7 +128,7 @@ class DNSTransport:
         try:
             _LOG.warning(json.dumps(fields, ensure_ascii=True, separators=(",", ":")))
         except Exception:
-            pass
+            _LOG.exception("DNS warning emission failed")
 
     def _query(self, wire: bytes, *, udp: bool) -> dns.message.Message:
         if not wire or len(wire) > (1232 if udp else 65535):

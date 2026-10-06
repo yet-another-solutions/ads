@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 from typing import Any
 
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -17,6 +18,8 @@ from ads_commons.egress_trust import public_certificates
 from ads_sandbox_egress.origin_tls import VerificationIssue, _certificate_der, compatibility_issues
 from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.tls import TLSFailure, TLSLibrary
+
+_LOG = logging.getLogger(__name__)
 
 
 class CertificateValidator:
@@ -83,6 +86,7 @@ class CertificateValidator:
                         issues.append(issue)
                 return 1
             except Exception:
+                _LOG.exception("certificate_validation stapling failed")
                 failed = True
                 return 0
 

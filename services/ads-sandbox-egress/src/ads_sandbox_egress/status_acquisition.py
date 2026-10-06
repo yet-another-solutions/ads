@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
@@ -33,6 +34,8 @@ from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.resolution import ResolutionJob, UpstreamResolver
 from ads_sandbox_egress.streams import OwnedStream
 from ads_sandbox_egress.tls import UnmappableReason, UnmappableTLS
+
+_LOG = logging.getLogger(__name__)
 
 Connect = Callable[[Address, int], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]]
 
@@ -228,4 +231,5 @@ class StatusAcquisition:
         except CertificateDefectRequiresMirror:
             raise
         except Exception:
+            _LOG.exception("status acquisition rejected")
             raise UnmappableTLS(UnmappableReason.UNAVAILABLE_STATUS) from None

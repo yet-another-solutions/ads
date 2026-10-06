@@ -96,7 +96,7 @@ class LocalCRLService:
         try:
             _LOG.warning("local_crl_denied reason=%s", reason)
         except Exception:
-            pass
+            _LOG.exception("local CRL request failed")
         finally:
             reset(writer)
 
@@ -187,6 +187,7 @@ class LocalCRLService:
         except (RequestDenied, CRLUnavailable, OSError, TimeoutError):
             self._deny(writer, "request_or_publication")
         except Exception:
+            _LOG.exception("CRL service internal failure")
             self._failed = True
             self._deny(writer, "internal_failure")
         finally:

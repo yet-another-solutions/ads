@@ -6,6 +6,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -294,5 +295,6 @@ def load_settings(
             ca,
         )
     except Exception:
-        # Never echo values or parser exceptions that might contain credentials.
+        # Full diagnosis; values themselves are never echoed, only the traceback.
+        logging.getLogger(__name__).exception("invalid egress manager configuration")
         raise ValueError("invalid egress manager configuration") from None

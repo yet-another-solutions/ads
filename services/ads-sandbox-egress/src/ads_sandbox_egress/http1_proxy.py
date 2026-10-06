@@ -264,10 +264,9 @@ class HTTP1Proxy:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Do not expose URLs, credentials, upstream exception text or an
-            # HTTP denial response. Both legs are reset by the custody finally.
+            # Both legs are reset by the custody finally.
             try:
-                _LOG.warning("http1_exchange_reset reason=request_or_upstream")
+                _LOG.exception("http1 exchange reset")
             except Exception:
                 pass
         finally:

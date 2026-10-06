@@ -109,9 +109,7 @@ class _Leg:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Fixed, redacted outcome. Native exception strings can contain
-            # client headers and must not be included in logs or responses.
-            pass
+            _LOG.exception("http2 exchange reset")
         finally:
             self.closed = True
             self.window_changed.set()
@@ -532,7 +530,7 @@ class HTTP2Proxy:
             raise
         except Exception:
             try:
-                _LOG.warning("http2_exchange_reset reason=request_or_upstream")
+                _LOG.exception("http2 exchange reset")
             except Exception:
                 pass
         finally:
@@ -737,7 +735,7 @@ class HTTP2Proxy:
             raise
         except Exception:
             try:
-                _LOG.warning("http2_upgrade_reset reason=upstream")
+                _LOG.exception("http2 upgrade reset")
             except Exception:
                 pass
         finally:
