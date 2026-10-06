@@ -115,13 +115,22 @@ class UpstreamResolver:
         self.boundary.check_name(value)
 
     async def exchange(
-        self, name: dns.name.Name, rdtype: dns.rdatatype.RdataType, job: ResolutionJob
+        self,
+        name: dns.name.Name,
+        rdtype: dns.rdatatype.RdataType,
+        job: ResolutionJob,
+        *,
+        want_dnssec: bool = True,
     ) -> dns.message.Message:
         self._name(name)
-        query = dns.message.make_query(name, rdtype, want_dnssec=True)
-        # Obtain original defective data rather than asking upstream to conceal
-        # it behind validation SERVFAIL. Local classification is still required.
-        query.flags |= dns.flags.CD
+        # DNSSEC acquisition obtains original defective data rather than
+        # asking upstream to conceal it behind validation SERVFAIL; local
+        # classification is still required. Plain-DNS acquisition mirrors a
+        # Linux stub resolver for guests that never requested DNSSEC. The
+        # security inspection below is flavor independent and still runs.
+        query = dns.message.make_query(name, rdtype, want_dnssec=want_dnssec)
+        if want_dnssec:
+            query.flags |= dns.flags.CD
         for upstream in self.boundary.upstreams:
             job.subqueries += 1
             if job.subqueries > self.limits.subqueries:
@@ -197,7 +206,11 @@ class UpstreamResolver:
         rdtype: dns.rdatatype.RdataType,
         *,
         job: ResolutionJob | None = None,
+        want_dnssec: bool = True,
     ) -> AcquiredAnswer:
+        # want_dnssec=False mirrors a Linux stub resolver for plain-DNS
+        # guests; every response still passes the flavor-independent
+        # security inspection in exchange().
         if rdtype in (dns.rdatatype.AXFR, dns.rdatatype.IXFR):
             raise RequestDenied("unsupported_dns_query")
         query_name = dns.name.from_text(name)
@@ -225,7 +238,7 @@ class UpstreamResolver:
                 raise RequestDenied("dns_alias_limit")
             visited = visited | {current}
             try:
-                response = await self.exchange(current, kind, job)
+                response = await self.exchange(current, kind, job, want_dnssec=want_dnssec)
             except RequestDenied as exc:
                 if str(exc) != "dns_upstream_unavailable" or alias_record is None:
                     raise

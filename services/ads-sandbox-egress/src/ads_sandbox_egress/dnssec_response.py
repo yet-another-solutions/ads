@@ -106,6 +106,26 @@ def fallback(
     return result
 
 
+def plain(
+    query: dns.message.Message,
+    acquired_message: dns.message.Message,
+    *,
+    safe_udp_payload: int,
+) -> dns.message.Message:
+    """Serve an inspected plain-DNS upstream answer to a DO=0 guest.
+
+    Not a DNSSEC publication: the upstream answer was boundary/public-IP
+    inspected during acquisition but is never cryptographically validated or
+    locally signed. Guests that request DNSSEC (DO=1) never reach this path.
+    """
+    result = _base(query, safe_udp_payload=safe_udp_payload)
+    result.set_rcode(acquired_message.rcode())
+    result.answer.extend(copy.deepcopy(item) for item in acquired_message.answer)
+    result.authority.extend(copy.deepcopy(item) for item in acquired_message.authority)
+    result.additional.extend(copy.deepcopy(item) for item in acquired_message.additional)
+    return result
+
+
 def resolution_failure(
     query: dns.message.Message,
     upstream: dns.message.Message | None,

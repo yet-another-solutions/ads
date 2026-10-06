@@ -30,7 +30,13 @@ from ads_sandbox_egress.dnssec_identity import (
     DNSSECUnrepresentable,
 )
 from ads_sandbox_egress.dnssec_lifecycle import DNSSECLifecycle, ZonePlan
-from ads_sandbox_egress.dnssec_response import diagnostics, fallback, render, resolution_failure
+from ads_sandbox_egress.dnssec_response import (
+    diagnostics,
+    fallback,
+    plain,
+    render,
+    resolution_failure,
+)
 from ads_sandbox_egress.dnssec_transform import DNSSECTransformer, KeySubstitution
 from ads_sandbox_egress.dnssec_validation import CryptoBudget
 from ads_sandbox_egress.ech_lifecycle import ECHLifecycle
@@ -95,6 +101,11 @@ class SyntheticDNS:
         if len(query.question) != 1:
             raise RequestDenied("dns_question_count")
         question = query.question[0]
+        # Guests that never request DNSSEC are served from plain upstream
+        # exchanges (Linux stub behavior). Their answers are inspected but
+        # never locally validated or signed; no publication is created.
+        if not query.ednsflags & dns.flags.DO:
+            return await self._plain(query, deadline=deadline)
         job = ResolutionJob(deadline)
         budget = CryptoBudget()
         authentication = MessageAuthentication("indeterminate", (), ())
@@ -197,6 +208,23 @@ class SyntheticDNS:
         except StateUnavailable:
             # State/quota/custody failure is not a fabricated DNSSEC response.
             raise RequestDenied("dns_persistent_state_unavailable") from None
+
+    async def _plain(self, query: dns.message.Message, *, deadline: float) -> dns.message.Message:
+        question = query.question[0]
+        try:
+            acquired = await self.resolver.acquire(
+                question.name.to_text(),
+                question.rdtype,
+                job=ResolutionJob(deadline),
+                want_dnssec=False,
+            )
+            assembled = assemble(acquired, deadline=deadline)
+        except DNSSECUnrepresentable as exc:
+            if time.monotonic() >= deadline:
+                raise RequestDenied("dns_resolution_deadline") from None
+            logging.getLogger(__name__).warning("plain DNS assembly unavailable: %s", exc)
+            return resolution_failure(query, None, safe_udp_payload=self.safe_udp_payload)
+        return plain(query, assembled, safe_udp_payload=self.safe_udp_payload)
 
     def _construct(
         self,

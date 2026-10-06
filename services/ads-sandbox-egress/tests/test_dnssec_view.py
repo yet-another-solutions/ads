@@ -254,3 +254,44 @@ def test_independent_delv_follows_stable_root_and_synthetic_delegations(state, t
             await upstream.close()
 
     asyncio.run(run())
+
+
+class PlainUpstream:
+    """Unsigned upstream fixture that accepts plain (DO=0) queries."""
+
+    def __init__(self, records):
+        self.records = records
+        self.calls = []
+
+    async def answer(self, query, *, deadline):
+        question = query.question[0]
+        self.calls.append((bool(query.ednsflags & dns.flags.DO), bool(query.flags & dns.flags.CD)))
+        response = dns.message.make_response(query)
+        response.flags |= dns.flags.RA
+        response.answer.extend(rrset for rrset in self.records if rrset.name == question.name)
+        return response
+
+
+@pytest.mark.parametrize("kind,record", [("A", "1.1.1.1"), ("AAAA", "2606:4700:4700::1111")])
+def test_plain_guest_gets_plain_upstream_answer_without_dnssec(state, kind, record):
+    fixture = PlainUpstream([dns.rrset.from_text(HOST, 60, "IN", kind, record)])
+
+    async def run():
+        upstream = transport(fixture)
+        _, port = await upstream.start("127.0.0.1", 0)
+        try:
+            view = make_view(state, fixture, port)
+            query = dns.message.make_query(HOST, kind)
+            assert not query.ednsflags & dns.flags.DO
+            result = await view.answer(query, deadline=time.monotonic() + 10)
+            assert result.rcode() == dns.rcode.NOERROR
+            assert not result.flags & dns.flags.AD
+            assert [item.to_text() for item in result.answer] == [
+                dns.rrset.from_text(HOST, 60, "IN", kind, record)[0].to_text()
+            ]
+            assert fixture.calls and all(not do and not cd for do, cd in fixture.calls)
+            assert state[0].publication_head("dns-generation/") is None
+        finally:
+            await upstream.close()
+
+    asyncio.run(run())
