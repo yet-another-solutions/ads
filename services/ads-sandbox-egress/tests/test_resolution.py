@@ -184,3 +184,38 @@ def test_real_udp_truncation_tcp_retry_and_fresh_second_lookup():
                 transport.close()
 
     asyncio.run(run())
+
+
+def test_plain_acquisition_sends_do0_cd0_and_dnssec_keeps_do1(monkeypatch):
+    async def run():
+        seen = []
+
+        async def exchange(query, where, **kwargs):
+            seen.append((bool(query.ednsflags & dns.flags.DO), bool(query.flags & dns.flags.CD)))
+            return answer("example.com", "A", "8.8.8.8")
+
+        monkeypatch.setattr("ads_sandbox_egress.resolution.exchange", exchange)
+        instance = resolver()
+        result = await instance.acquire("example.com", dns.rdatatype.A, want_dnssec=False)
+        assert result.addresses == frozenset((ipaddress.ip_address("8.8.8.8"),))
+        assert seen and all(not do and not cd for do, cd in seen)
+
+        seen.clear()
+        result = await instance.acquire("example.com", dns.rdatatype.A)
+        assert result.addresses == frozenset((ipaddress.ip_address("8.8.8.8"),))
+        assert seen and all(do and cd for do, cd in seen)
+
+    asyncio.run(run())
+
+
+def test_plain_acquisition_still_inspects_private_addresses(monkeypatch):
+    async def run():
+        async def exchange(query, where, **kwargs):
+            assert not query.ednsflags & dns.flags.DO
+            return answer("example.com", "A", "10.0.0.1")
+
+        monkeypatch.setattr("ads_sandbox_egress.resolution.exchange", exchange)
+        with pytest.raises(RequestDenied):
+            await resolver().acquire("example.com", dns.rdatatype.A, want_dnssec=False)
+
+    asyncio.run(run())
