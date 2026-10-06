@@ -114,8 +114,9 @@ class AppProvider(Provider):
         sessions: async_sessionmaker[AsyncSession],
         repository: LifecycleRepository,
         storage: CleanupKubernetes,
+        controls: PairCleanupKubernetes,
     ) -> PairTeardown | None:
-        return PairTeardown(settings, sessions, repository, storage)
+        return PairTeardown(settings, sessions, repository, storage, controls)
 
     lifecycle = provide(LifecycleService, scope=Scope.APP)
     recovery = provide(RecoveryService, scope=Scope.APP)

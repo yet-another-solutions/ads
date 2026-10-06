@@ -53,6 +53,18 @@ class FakeTeardownKube:
         if obj and obj["metadata"]["uid"] == target["uid"]:
             del self.remote.objects[(target["kind"], target["name"])]
 
+    async def capture(self, target):
+        """Mirror CleanupAdapter.capture: evidence on live uid-matched objects."""
+        obj = await self.observe(target)
+        result = dict(target)
+        if obj is None or not target.get("uid") or obj["metadata"]["uid"] != target["uid"]:
+            return result
+        result["captured"] = True
+        if target["kind"] == "PersistentVolumeClaim":
+            result["pv_name"] = obj.get("spec", {}).get("volumeName") or None
+            result["never_bound"] = result["pv_name"] is None
+        return result
+
     async def observe_pod(self, name):
         return deepcopy(self.remote.objects.get(("Pod", name)))
 
@@ -67,6 +79,46 @@ class FakeTeardownKube:
         return True
 
     async def reclaimed(self, target):
+        return True
+
+
+class FakePairControls:
+    """Controls deleter fake: uid-fenced delete with observed absence."""
+
+    def __init__(self, remote):
+        self.remote = remote
+
+    async def delete(self, pair, kind, role, uid):
+        from ads_sandbox_manager.pair_objects import pair_name
+
+        name = pair_name(pair, role)
+        obj = self.remote.objects.get((kind, name))
+        if obj is None:
+            return True
+        if obj["metadata"]["uid"] != uid:
+            return False
+        del self.remote.objects[(kind, name)]
+        return True
+
+    async def dispose_secret(self, pair, key, uid, *, persistent=None, retain=False):
+        from ads_sandbox_manager.pair_compute import relay_input_name
+        from ads_sandbox_manager.relay_keys import custody_identity
+
+        settings = SimpleNamespace(namespace="default", golden_version="0.0.67")
+        if key == "relay-custody":
+            name = custody_identity(settings, pair)["metadata"]["name"]
+        elif key.startswith("relay-input/"):
+            name = relay_input_name(pair, key.removeprefix("relay-input/"))
+        else:
+            name = persistent["metadata"]["name"] if persistent else None
+        if name is None:
+            return False
+        obj = self.remote.objects.get(("Secret", name))
+        if obj is None:
+            return True
+        if obj["metadata"]["uid"] != uid:
+            return False
+        del self.remote.objects[("Secret", name)]
         return True
 
 
@@ -86,7 +138,10 @@ async def pair_world(creation):
             select(PairIntent).where(PairIntent.session_id == f.row.session_id)
         )
     f.teardown_kube = FakeTeardownKube(f.remote)
-    f.teardown = PairTeardown(f.h.settings, f.h.sessions, LifecycleRepository(), f.teardown_kube)
+    f.teardown_controls = FakePairControls(f.remote)
+    f.teardown = PairTeardown(
+        f.h.settings, f.h.sessions, LifecycleRepository(), f.teardown_kube, f.teardown_controls
+    )
     f.pair_service = lifecycle(f)
     f.capture = f.pair_service.pair_capture
     await f.pair_service.admit(IDLE, Signal(row.session_id, row.sandbox_id))

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
+from ads_sandbox_manager.egress_state_objects import identity as egress_state_identity
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_objects import PairBinding
@@ -39,6 +40,23 @@ class PairTeardownKubernetes(Protocol):
     async def reclaimed(self, target: Object) -> bool: ...
 
 
+class PairTeardownControls(Protocol):
+    """Control-plane deleter surface (PairControlAdapter); absence-verified."""
+
+    async def delete(
+        self, pair: PairBinding, kind: str, role: str, uid: str
+    ) -> bool: ...
+    async def dispose_secret(
+        self,
+        pair: PairBinding,
+        key: str,
+        uid: str,
+        *,
+        persistent: Object | None = None,
+        retain: bool = False,
+    ) -> bool: ...
+
+
 class PairTeardown:
     """Thin ordered release replacing the journal-proof runtime teardown.
 
@@ -54,11 +72,13 @@ class PairTeardown:
         sessions: async_sessionmaker[AsyncSession],
         repository: LifecycleRepository,
         kube: PairTeardownKubernetes,
+        controls: PairTeardownControls | None = None,
     ) -> None:
         self.settings = settings
         self.sessions = sessions
         self.repository = repository
         self.kube = kube
+        self.controls = controls
 
     async def _owned(
         self, expected: CleanupWork, recovery: SandboxSession | None = None
@@ -99,6 +119,18 @@ class PairTeardown:
         except Exception:
             log.warning("paired teardown unavailable; exact targets retained")
             return False
+
+    @staticmethod
+    def _secret_key(name: str, binding: PairBinding) -> str | None:
+        """Classify a Secret target into a dispose_secret key, or None if unknown."""
+        if name == f"ads-relay-keys-{binding.sandbox_id}.{binding.generation}":
+            return "relay-custody"
+        for role in ("guest-relay", "egress-relay"):
+            if name == relay_input_name(binding, role):
+                return f"relay-input/{role}"
+        if name.startswith("ads-egress-key-"):
+            return "state-key"
+        return None
 
     async def _release(self, expected: CleanupWork, recovery: SandboxSession | None) -> bool:
         work = await self._owned(expected, recovery)
@@ -223,6 +255,87 @@ class PairTeardown:
                                 }
                             )
             non_pods.extend(obj for obj in extra if (obj["kind"], obj["name"]) not in seen)
+        # Control-plane objects (PodGroups, Services, NetworkPolicies) and
+        # custody/inputs Secrets are deleted through the pair control adapter:
+        # UID-fenced delete with observed absence as completion. The storage
+        # released()/reclaimed() evidence below is CSI/PV-specific and can never
+        # authorize a control or Secret; routing them there leaked them (and, for
+        # PVCs missing capture evidence, wedged idle teardown entirely).
+        # Controls for different kinds can share one object name (e.g. the
+        # egress PodGroup and NetworkPolicy are both ads-egress-<sandbox>), so
+        # identity is (kind, name), never name alone.
+        # A snapshotless orphan has no creator identity to fence with; its exact
+        # targets stay in the storage loop below, revalidated by their own uid.
+        control_keys: dict[tuple[str, str], str] = {}
+        if snapshot is not None:
+            for ckey, cuid in snapshot["control_uids"].items():
+                if cuid is None:
+                    continue
+                ckind, crole = ckey.split("/", 1)
+                control_keys[(ckind, pair_name(binding, crole))] = ckey
+        remaining: list[Object] = []
+        for obj in non_pods:
+            kind = obj["kind"]
+            if snapshot is not None and kind in ("PodGroup", "Service", "NetworkPolicy"):
+                key = control_keys.get((kind, obj["name"]))
+                uid = obj.get("uid")
+                if key is None or uid is None:
+                    # A control without snapshot identity can never be fenced.
+                    log.warning("unfenced pair control target retained: %s", obj["name"])
+                    return False
+                if self.controls is None:
+                    log.warning("pair controls unavailable; target retained: %s", obj["name"])
+                    return False
+                ckind, crole = key.split("/", 1)
+                if not await self.controls.delete(binding, ckind, crole, uid):
+                    return False
+                continue
+            if snapshot is not None and kind == "Secret":
+                if self.controls is None:
+                    log.warning("pair controls unavailable; target retained: %s", obj["name"])
+                    return False
+                uid = obj.get("uid")
+                if not uid:
+                    log.warning("unfenced pair secret target retained: %s", obj["name"])
+                    return False
+                key = self._secret_key(obj["name"], binding)
+                if key is None:
+                    log.warning("unknown pair secret target retained: %s", obj["name"])
+                    return False
+                persistent = None
+                if key == "state-key":
+                    # The state row outlives retained (idle) lifetimes, but its
+                    # key object belongs to the dying generation: the next one
+                    # re-issues it from the surviving row (HEAD parity).
+                    state_id = snapshot.get("egress_state_id") if snapshot else None
+                    if not state_id:
+                        log.warning("state key without egress state retained: %s", obj["name"])
+                        return False
+                    async with self.sessions.begin() as db:
+                        from ads_sandbox_manager.egress_state_store import EgressState
+
+                        state = await db.get(EgressState, UUID(state_id))
+                    if state is None:
+                        log.warning("egress state row missing; key retained: %s", obj["name"])
+                        return False
+                    persistent = egress_state_identity(state, "key")
+                if not await self.controls.dispose_secret(
+                    binding, key, uid, persistent=persistent, retain=False
+                ):
+                    return False
+                continue
+            remaining.append(obj)
+        non_pods = remaining
+        # Storage evidence backfill: the pair path (snapshot extras and carried
+        # targets) never persisted capture evidence, but released()/delete() below
+        # demand it (captured flag, pv_name, nodes). Build it live for PVCs that
+        # still exist; capture() itself UID-fences and verifies PV claim identity,
+        # so a replaced object surfaces as the bare dict (no "captured") and the
+        # later released() check fails closed exactly as before. Missing objects
+        # skip the loop body via observed-is-None and need no evidence.
+        for obj in non_pods:
+            if obj["kind"] == "PersistentVolumeClaim" and not obj.get("captured"):
+                obj.update(await self.kube.capture(obj))
         non_pods.sort(key=lambda t: t["kind"] != "Deployment")
         compute_pending = False
         for obj in non_pods:

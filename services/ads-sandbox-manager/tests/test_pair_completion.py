@@ -33,7 +33,11 @@ from test_kube_release import api  # noqa: F401
 from test_pair_controls import controls  # noqa: F401
 from test_pair_creation import creation  # noqa: F401
 from test_pair_store import ledger, snapshot  # noqa: F401
-from test_pair_teardown_world import FakeTeardownKube, lifecycle
+from test_pair_teardown_world import (
+    FakePairControls,
+    FakeTeardownKube,
+    lifecycle,
+)
 from test_pair_volume_publication import publication as volume_publication  # noqa: F401
 from test_session_objects import object_settings  # noqa: F401
 from test_sessions import row_for, sessions_harness  # noqa: F401
@@ -54,7 +58,14 @@ async def ready_world(creation):
             select(PairIntent).where(PairIntent.session_id == f.row.session_id)
         )
     f.teardown_kube = FakeTeardownKube(f.remote)
-    f.teardown = PairTeardown(f.h.settings, f.h.sessions, LifecycleRepository(), f.teardown_kube)
+    f.teardown_controls = FakePairControls(f.remote)
+    f.teardown = PairTeardown(
+        f.h.settings,
+        f.h.sessions,
+        LifecycleRepository(),
+        f.teardown_kube,
+        f.teardown_controls,
+    )
     f.pair_service = lifecycle(f)
     f.capture = f.pair_service.pair_capture
     f.retirements = PairRetirementRepository(f.pair_service.repository)
