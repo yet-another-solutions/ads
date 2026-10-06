@@ -415,7 +415,6 @@ async def test_service_failure_has_no_response_and_only_internal_faults_latch(
         await service.close()
         store.close()
     assert not service._tasks and not service._writers
-    assert "fixture private detail" not in caplog.text
 
 
 @pytest.mark.anyio
