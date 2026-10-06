@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 
 import dns.dnssec
@@ -31,6 +32,8 @@ PrivateKey = (
     | ed25519.Ed25519PrivateKey
     | ed448.Ed448PrivateKey
 )
+
+_LOG = logging.getLogger(__name__)
 DNSKey = dns.rdtypes.ANY.DNSKEY.DNSKEY
 _ROOT = "dnssec/root-v1"
 
@@ -175,6 +178,7 @@ class DNSSECIdentities:
         except StateUnavailable:
             raise
         except Exception:
+            _LOG.exception("retained DNSSEC identity rejected")
             raise StateUnavailable("invalid retained DNSSEC identity") from None
 
     def _prepare(

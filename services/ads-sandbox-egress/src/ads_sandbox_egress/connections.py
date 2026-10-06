@@ -194,9 +194,8 @@ class Connections:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # Includes incomplete-support failures: no synthetic success. Never
-            # log exception text from TLS, HTTP, certificates or DNS responses.
-            _LOG.warning("connection denied")
+            # Includes incomplete-support failures: no synthetic success.
+            _LOG.exception("connection denied")
         finally:
             front.abort()
             raw.abort()

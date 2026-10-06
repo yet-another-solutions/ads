@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import logging
 import re
 import socket
 import struct
@@ -22,6 +23,8 @@ from typing import Any
 from ads_sandbox_egress.connections import Connections
 from ads_sandbox_egress.policy import RequestDenied
 from ads_sandbox_egress.streams import OwnedStream
+
+_LOG = logging.getLogger(__name__)
 
 _ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
 
@@ -267,6 +270,7 @@ class Interception:
             address, port = original_destination(writer, self.boundary.network)
             self.connections.accept(reader, writer, address, port)
         except Exception:
+            _LOG.exception("connection accept failed")
             OwnedStream.tcp(reader, writer).abort()
 
     async def start(self) -> None:

@@ -262,7 +262,7 @@ class HTTP2Connection(H2Connection):
         try:
             _LOG.warning("http2_stream_reset reason=%s", reason)
         except Exception:
-            pass
+            _LOG.exception("http2 stream reset logging failed")
         stream = self.streams[stream_id]
         if stream.state_machine.state == StreamState.IDLE:
             # The peer DID send HEADERS. Advance that wire event, but do not

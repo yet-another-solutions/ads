@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 from dataclasses import dataclass
 
@@ -20,6 +21,8 @@ import dns.rrset
 from ads_sandbox_egress.identity_store import IdentityStore, StateUnavailable
 from ads_sandbox_egress.policy import canonical_host
 from ads_sandbox_egress.tls import ECHKey, TLSContext, TLSLibrary
+
+_LOG = logging.getLogger(__name__)
 
 _PREFIX = "ech-head/"
 
@@ -94,6 +97,7 @@ class ECHLifecycle:
         except StateUnavailable:
             raise
         except Exception:
+            _LOG.exception("retained ECH publication rejected")
             raise StateUnavailable("invalid retained ECH publication") from None
         self._context = context
         self._generation = value["generation"]

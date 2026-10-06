@@ -9,6 +9,7 @@ Completing TLS never authorizes an HTTP request.
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import threading
 from dataclasses import dataclass, field
@@ -20,6 +21,8 @@ from cffi import FFI
 
 from ads_sandbox_egress.identity_store import IdentityStore, StateUnavailable
 from ads_sandbox_egress.policy import RequestDenied, canonical_host
+
+_LOG = logging.getLogger(__name__)
 
 _ABI = """
 typedef struct ssl_ctx_st SSL_CTX;
@@ -408,6 +411,7 @@ class TLSContext:
             install_staples(self.library, connection, session.staples)
             return 0 if session.staples else 3
         except Exception:
+            _LOG.exception("TLS status query failed")
             return 2
 
     def _hello(self, connection: Any, alert: Any, unused: Any) -> int:
