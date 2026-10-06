@@ -169,7 +169,7 @@ def test_acquisition_does_not_renew_existing_deadline(monkeypatch):
         instance = resolver()
         finished = False
 
-        async def delayed(name, kind, job):
+        async def delayed(name, kind, job, *, want_dnssec=True):
             nonlocal finished
             await asyncio.sleep(0.2)
             finished = True

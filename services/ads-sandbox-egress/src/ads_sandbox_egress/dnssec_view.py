@@ -65,8 +65,14 @@ class _CandidateEvidence(UpstreamResolver):
         self._messages = messages
 
     async def exchange(
-        self, name: dns.name.Name, rdtype: dns.rdatatype.RdataType, job: ResolutionJob
+        self,
+        name: dns.name.Name,
+        rdtype: dns.rdatatype.RdataType,
+        job: ResolutionJob,
+        *,
+        want_dnssec: bool = True,
     ) -> dns.message.Message:
+        # Replays acquired evidence; query flavor does not change the message.
         if time.monotonic() >= job.deadline:
             raise RequestDenied("dns_resolution_deadline")
         found = self._messages.get((name, rdtype))

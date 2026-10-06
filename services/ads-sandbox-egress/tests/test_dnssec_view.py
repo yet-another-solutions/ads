@@ -263,6 +263,17 @@ class PlainUpstream:
         self.records = records
         self.calls = []
 
+    @property
+    def keys(self):
+        # make_view configures PositiveChains anchors eagerly and requires a
+        # root-scoped one; the plain path never consults upstream anchors, so
+        # a placeholder root DS suffices.
+        return {
+            ROOT: dns.rrset.from_text(
+                ".", 60, "IN", "DS", "1 8 1 0000000000000000000000000000000000000000"
+            )
+        }
+
     async def answer(self, query, *, deadline):
         question = query.question[0]
         self.calls.append((bool(query.ednsflags & dns.flags.DO), bool(query.flags & dns.flags.CD)))
