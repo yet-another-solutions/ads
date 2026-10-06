@@ -17,8 +17,8 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ads_sandbox_manager.config import Settings
-from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.egress_state_objects import identity as egress_state_identity
+from ads_sandbox_manager.lifecycle_store import CleanupWork, LifecycleRepository
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_objects import PairBinding
@@ -43,9 +43,7 @@ class PairTeardownKubernetes(Protocol):
 class PairTeardownControls(Protocol):
     """Control-plane deleter surface (PairControlAdapter); absence-verified."""
 
-    async def delete(
-        self, pair: PairBinding, kind: str, role: str, uid: str
-    ) -> bool: ...
+    async def delete(self, pair: PairBinding, kind: str, role: str, uid: str) -> bool: ...
     async def dispose_secret(
         self,
         pair: PairBinding,
