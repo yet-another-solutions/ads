@@ -297,9 +297,17 @@ def test_plain_guest_gets_plain_upstream_answer_without_dnssec(state, kind, reco
             result = await view.answer(query, deadline=time.monotonic() + 10)
             assert result.rcode() == dns.rcode.NOERROR
             assert not result.flags & dns.flags.AD
-            assert [item.to_text() for item in result.answer] == [
-                dns.rrset.from_text(HOST, 60, "IN", kind, record)[0].to_text()
-            ]
+            assert len(result.answer) == 1
+            served = result.answer[0]
+            expected = dns.rrset.from_text(HOST, 60, "IN", kind, record)
+            assert (served.name, served.rdtype, served.covers) == (
+                expected.name,
+                expected.rdtype,
+                expected.covers,
+            )
+            # assemble ages TTLs by elapsed acquisition time; never lengthens.
+            assert 0 < served.ttl <= expected.ttl
+            assert [item.to_text() for item in served] == [item.to_text() for item in expected]
             assert fixture.calls and all(not do and not cd for do, cd in fixture.calls)
             assert state[0].publication_head("dns-generation/") is None
         finally:
