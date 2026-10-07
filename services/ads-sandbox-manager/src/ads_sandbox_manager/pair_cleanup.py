@@ -132,9 +132,7 @@ class PairCleanupCapture:
                     continue
                 if entry.get("release") is not None:
                     continue
-                desired = volume_manifest(
-                    self.settings, intent.binding(), role, entry["payload"]
-                )
+                desired = volume_manifest(self.settings, intent.binding(), role, entry["payload"])
                 evidence = await self.kube.release_evidence(
                     desired["metadata"]["name"], entry["uid"]
                 )
