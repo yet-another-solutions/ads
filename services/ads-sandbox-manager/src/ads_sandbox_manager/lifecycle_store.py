@@ -241,6 +241,7 @@ class LifecycleRepository:
                 ):
                     merged[role] = {**entry, "dispatch": "settled", "uid": r.get("uid")}
             expected_snapshot = {**expected_snapshot, field: merged}
+
         # Release evidence is captured identity under the same fenced claim, not
         # ownership: record_pair_release/record_state_release store it on the
         # cleanup claim while the ready-scan backfill stores it on the live
