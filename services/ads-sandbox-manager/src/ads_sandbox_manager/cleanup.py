@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import UTC, datetime
 from typing import Protocol
 
 from kubernetes.client.exceptions import ApiException
@@ -21,8 +19,6 @@ class CleanupKubernetes(Protocol):
     async def released(self, target: Object) -> bool: ...
     async def reclaimed(self, target: Object) -> bool: ...
     async def unreferenced(self, target: Object) -> bool: ...
-    async def capture_unused(self, target: Object, *, unissued: bool) -> Object: ...
-    async def dispose_unused(self, captured: Object) -> bool: ...
 
 
 class CleanupAdapter:
@@ -52,57 +48,22 @@ class CleanupAdapter:
         return await read(target["name"])
 
     async def capture(self, target: Object) -> Object:
-        """Persist before deletion, including bound PV UID and nodes seen using the claim."""
+        """Persist stored bound-PV identity for a live claim before deletion.
+
+        Deletion-time capture is the legacy compatibility path only: paired
+        mint stores release evidence at creation/ready time, and this method
+        records the same exact shape for sessions created before that change.
+        Missing/replaced objects are not evidence and stay bare.
+        """
         result = dict(target)
-        obj = await self.observe(target)
-        if obj is None or not target["uid"] or obj["metadata"]["uid"] != target["uid"]:
-            return result  # Missing/replaced is not evidence of release/reclamation.
-        result["captured"] = True
         if target["kind"] != "PersistentVolumeClaim":
+            obj = await self.observe(target)
+            if obj is not None and target["uid"] and obj["metadata"]["uid"] == target["uid"]:
+                result["captured"] = True
             return result
-        k = self.kube
-        pods = await k._list(k.core.list_namespaced_pod, k.settings.namespace)
-        result["nodes"] = sorted(
-            {
-                pod["spec"]["nodeName"]
-                for pod in pods
-                if pod.get("spec", {}).get("nodeName") and self._uses(pod, target["name"])
-            }
-        )
-        result["observed_at"] = datetime.now(UTC).isoformat()
-        pv_name = obj.get("spec", {}).get("volumeName")
-        if not pv_name:
-            result["never_bound"] = obj.get("status", {}).get("phase") == "Pending"
-            return result
-        pv = await k._call(k.core.read_persistent_volume, pv_name)
-        spec = pv.get("spec", {})
-        claim = spec.get("claimRef", {})
-        if (
-            claim.get("uid") != target["uid"]
-            or claim.get("name") != target["name"]
-            or claim.get("namespace") != k.settings.namespace
-        ):
-            raise RuntimeError("PV claim identity changed")
-        result["pv_name"], result["pv_uid"] = pv_name, pv["metadata"]["uid"]
-        result["delete_policy"] = spec.get("persistentVolumeReclaimPolicy") == "Delete"
-        csi = spec.get("csi", {})
-        result["volume_key"] = (
-            f"kubernetes.io/csi/{csi['driver']}^{csi['volumeHandle']}"
-            if csi.get("driver") and csi.get("volumeHandle")
-            else None
-        )
-        # CSI deletion protection is the controller's storage-reclamation contract.
-        result["reclaim_guard"] = "external-provisioner.volume.kubernetes.io/finalizer" in pv.get(
-            "metadata", {}
-        ).get("finalizers", [])
-        if not csi and obj.get("spec", {}).get("volumeMode", "Filesystem") == "Filesystem":
-            sources = [kind for kind in ("local", "hostPath") if kind in spec]
-            if len(sources) == 1:
-                source = sources[0]
-                result["filesystem_backing"] = {
-                    "source": source,
-                    "path": deepcopy(spec[source].get("path")),
-                }
+        evidence = await self.kube.release_evidence(target["name"], target["uid"])
+        if evidence is not None:
+            result.update(evidence)
         return result
 
     @staticmethod
@@ -190,7 +151,7 @@ class CleanupAdapter:
         return await self.observe_pod(obj["metadata"]["name"]) is None
 
     async def released(self, target: Object) -> bool:
-        if not target.get("never_bound") and not (target.get("pv_name") and target.get("nodes")):
+        if not target.get("never_bound") and not (target.get("pv_name") and target.get("pv_uid")):
             return False
         return await self.unreferenced(target)
 
@@ -217,17 +178,6 @@ class CleanupAdapter:
             for a in attachments
         ):
             return False
-        for name in target["nodes"]:
-            node = await k._call(k.core.read_node, name)
-            status = node.get("status", {})
-            # Node health/heartbeat is not workload or volume-release evidence.
-            # Keep volume-specific negative observations as conservative blockers.
-            key = target.get("volume_key")
-            if key and (
-                key in status.get("volumesInUse", [])
-                or any(v.get("name") == key for v in status.get("volumesAttached", []))
-            ):
-                return False
         return True
 
     async def _storage_class_contract(self, name: str) -> Object:
@@ -240,145 +190,6 @@ class CleanupAdapter:
             "binding": value.get("volumeBindingMode", "Immediate"),
         }
 
-    async def capture_unused(self, target: Object, *, unissued: bool) -> Object:
-        evidence = await self.capture(target)
-        if not evidence.get("captured") or evidence.get("nodes"):
-            raise RuntimeError("original unused storage capture unavailable")
-        result = {
-            "mode": "never-mounted-csi",
-            "target": evidence,
-            "storage_class": None,
-            "pvc_created": None,
-        }
-        if evidence.get("filesystem_backing"):
-            pv = await self.kube._call(self.kube.core.read_persistent_volume, evidence["pv_name"])
-            terms = (
-                pv.get("spec", {})
-                .get("nodeAffinity", {})
-                .get("required", {})
-                .get("nodeSelectorTerms")
-            )
-            if (
-                pv["metadata"]["uid"] != evidence["pv_uid"]
-                or not isinstance(terms, list)
-                or len(terms) != 1
-                or set(terms[0]) != {"matchExpressions"}
-                or len(terms[0]["matchExpressions"]) != 1
-            ):
-                raise RuntimeError("exact unused filesystem backing node required")
-            expression = terms[0]["matchExpressions"][0]
-            if (
-                set(expression) != {"key", "operator", "values"}
-                or expression["key"] != "kubernetes.io/hostname"
-                or expression["operator"] != "In"
-                or not isinstance(expression["values"], list)
-                or len(expression["values"]) != 1
-                or not isinstance(expression["values"][0], str)
-                or not expression["values"][0]
-            ):
-                raise RuntimeError("exact unused filesystem backing node required")
-            return {
-                **result,
-                "mode": "never-mounted-filesystem",
-                "node": expression["values"][0],
-                "backing": None,
-            }
-        if not evidence.get("never_bound"):
-            return result  # Repository checks the positive consumer and CSI contract.
-        obj = await self.observe(target)
-        if (
-            not unissued
-            or obj is None
-            or obj["metadata"]["uid"] != target["uid"]
-            or obj.get("spec", {}).get("volumeName")
-            or obj["metadata"].get("annotations", {}).get("volume.kubernetes.io/selected-node")
-            or obj.get("status", {}).get("phase") != "Pending"
-        ):
-            raise RuntimeError("unbound provisioning history is ambiguous")
-        result.update(
-            mode="never-provisioned",
-            storage_class=await self._storage_class_contract(obj["spec"]["storageClassName"]),
-            pvc_created=obj["metadata"]["creationTimestamp"],
-        )
-        return result
-
-    async def dispose_unused(self, captured: Object) -> bool:
-        target = captured["target"]
-        if not await self.unreferenced(target):
-            return False
-        obj = await self.observe(target)
-        if obj is not None:
-            if obj["metadata"]["uid"] != target["uid"]:
-                raise RuntimeError("unused claim replacement refuses disposition")
-            if captured["mode"] == "never-provisioned":
-                if (
-                    target["retain"]
-                    or obj.get("spec", {}).get("volumeName")
-                    or obj.get("status", {}).get("phase") != "Pending"
-                    or obj["metadata"]
-                    .get("annotations", {})
-                    .get("volume.kubernetes.io/selected-node")
-                    or obj["metadata"].get("creationTimestamp") != captured["pvc_created"]
-                    or await self._storage_class_contract(obj["spec"]["storageClassName"])
-                    != captured["storage_class"]
-                ):
-                    raise RuntimeError("original never-provisioned contract changed")
-                # The RV precondition binds the unbound/unselected observation;
-                # do not re-read a changed claim then silently use its new RV.
-                try:
-                    await self.kube._call(
-                        self.kube.core.delete_namespaced_persistent_volume_claim,
-                        target["name"],
-                        self.kube.settings.namespace,
-                        body={
-                            "apiVersion": "v1",
-                            "kind": "DeleteOptions",
-                            "preconditions": {
-                                "uid": target["uid"],
-                                "resourceVersion": obj["metadata"]["resourceVersion"],
-                            },
-                        },
-                    )
-                except ApiException as exc:
-                    if exc.status == 409:
-                        return False
-                    if exc.status != 404:
-                        raise
-            else:
-                current = await self.capture(target)
-                if any(
-                    current.get(key) != target[key]
-                    for key in ("pv_name", "pv_uid", "volume_key", "delete_policy", "reclaim_guard")
-                ):
-                    raise RuntimeError("unused original CSI backing changed")
-                if captured["mode"] == "never-mounted-filesystem" and (
-                    current.get("filesystem_backing") != target["filesystem_backing"]
-                ):
-                    raise RuntimeError("unused original filesystem backing changed")
-                if target["retain"]:
-                    if obj["metadata"].get("deletionTimestamp"):
-                        raise RuntimeError("retained unused claim is terminating")
-                    return True
-                await self.delete(target)
-        elif target["retain"]:
-            raise RuntimeError("retained unused claim disappeared")
-        if await self.observe(target) is not None or not await self.unreferenced(target):
-            return False
-        if captured["mode"] == "never-provisioned":
-            return True  # Original positive ledger/contract, not API absence alone.
-        if not (
-            target["delete_policy"]
-            and (target["reclaim_guard"] or captured["mode"] == "never-mounted-filesystem")
-        ):
-            return False
-        try:
-            await self.kube._call(self.kube.core.read_persistent_volume, target["pv_name"])
-        except ApiException as exc:
-            if exc.status == 404:
-                return True
-            raise
-        return False
-
     async def reclaimed(self, target: Object) -> bool:
         obj = await self.observe(target)
         if obj is not None and obj["metadata"]["uid"] == target["uid"]:
@@ -387,13 +198,12 @@ class CleanupAdapter:
             return False
         if target.get("never_bound"):
             return True
-        if not target.get("delete_policy") or not target.get("reclaim_guard"):
-            return False
         try:
             await self.kube._call(self.kube.core.read_persistent_volume, target["pv_name"])
         except ApiException as exc:
             if exc.status == 404:
                 return True
             raise
-        # A replacement PV is not proof that the old backing store was reclaimed.
+        # A replacement PV is not proof that the old backing store was reclaimed;
+        # its reclamation is the storage driver's contract, not stored evidence.
         return False

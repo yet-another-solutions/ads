@@ -12,6 +12,7 @@ from ads_sandbox_manager.ca_objects import ca_metadata
 from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.objects import JOB_UID, Object
 from ads_sandbox_manager.pair_objects import PROJECT, PairBinding
+from ads_sandbox_manager.release_evidence import validate_release
 from ads_sandbox_manager.session_objects import CA_CONSUMERS, ca_consumer_pvc, session_pvc
 
 VOLUME_ROLES = ("workspace", "guest", "egress", "key")
@@ -23,7 +24,10 @@ def volume_role(role: str) -> None:
 
 
 def new_volume_resources() -> dict[str, Any]:
-    return {role: {"payload": None, "uid": None, "dispatch": "unissued"} for role in VOLUME_ROLES}
+    return {
+        role: {"payload": None, "uid": None, "dispatch": "unissued", "release": None}
+        for role in VOLUME_ROLES
+    }
 
 
 def source_snapshot(settings: Settings, role: str, obj: Object) -> Object:
@@ -109,8 +113,14 @@ def validate_volume_resources(value: object) -> None:
     if not isinstance(value, dict) or set(value) != set(VOLUME_ROLES):
         raise RuntimeError("corrupt paired clone resources")
     for role, entry in value.items():
-        if not isinstance(entry, dict) or set(entry) != {"payload", "uid", "dispatch"}:
+        if not isinstance(entry, dict) or not set(entry) <= {
+            "payload",
+            "uid",
+            "dispatch",
+            "release",
+        }:
             raise RuntimeError("corrupt paired clone resource")
+        validate_release(entry.get("release"))
         if entry["dispatch"] == "unissued":
             if entry != new_volume_resources()[role]:
                 raise RuntimeError("corrupt unissued paired clone")

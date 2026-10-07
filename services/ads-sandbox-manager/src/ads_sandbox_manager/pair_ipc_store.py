@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_ipc_inputs import ipc_role, validate_ipc_payload
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
+from ads_sandbox_manager.release_evidence import validate_release
 from ads_sandbox_manager.store import SandboxSession
 
 
@@ -91,7 +93,12 @@ class PairIpcRepository:
         if dispatch:
             intent.ipc_resources = {
                 **intent.ipc_resources,
-                role: {"payload": deepcopy(payload), "uid": None, "dispatch": "inflight"},
+                role: {
+                    "payload": deepcopy(payload),
+                    "uid": None,
+                    "dispatch": "inflight",
+                    "release": entry.get("release"),
+                },
             }
             await db.flush()
         return intent, dispatch
@@ -136,3 +143,31 @@ class PairIpcRepository:
             raise RuntimeError("paired IPC resource was never dispatched")
         intent.ipc_resources = {**intent.ipc_resources, role: {**entry, "dispatch": "settled"}}
         await db.flush()
+
+    async def record_release(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        role: str,
+        evidence: dict[str, Any] | None,
+    ) -> PairIntent:
+        """Persist stored bound-PV identity under the live claim; first wins."""
+        validate_release(evidence)
+        intent = await self.pairs.owned(db, row, owner, generation)
+        entry = intent.ipc_resources[role]
+        if evidence is None:
+            return intent
+        if entry["dispatch"] not in ("inflight", "settled") or not entry["uid"]:
+            raise RuntimeError("bound paired IPC release evidence required")
+        if entry.get("release") is not None:
+            if entry["release"] != evidence:
+                raise RuntimeError("stored release evidence changed")
+            return intent
+        intent.ipc_resources = {
+            **intent.ipc_resources,
+            role: {**entry, "release": evidence},
+        }
+        await db.flush()
+        return intent

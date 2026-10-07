@@ -33,6 +33,7 @@ from ads_sandbox_manager.pair_store import (
 )
 from ads_sandbox_manager.pair_volume_inputs import validate_volume_resources, volume_role
 from ads_sandbox_manager.relay_inputs import input_role, validate_relay_inputs
+from ads_sandbox_manager.release_evidence import validate_release
 from ads_sandbox_manager.session_objects import (
     CA_CONSUMERS,
     ca_consumer_name,
@@ -336,6 +337,21 @@ class LifecycleRepository:
         db.add(work)
         return work
 
+    async def ready_pairs(self, db: AsyncSession, limit: int) -> list[SandboxSession]:
+        """Ready pairs whose intents still miss release evidence, oldest first."""
+        return list(
+            await db.scalars(
+                select(SandboxSession)
+                .join(PairIntent, PairIntent.session_id == SandboxSession.session_id)
+                .where(
+                    SandboxSession.status == "ready",
+                    PairIntent.retired_at.is_(None),
+                )
+                .order_by(SandboxSession.status_changed_at)
+                .limit(limit)
+            )
+        )
+
     async def idle(
         self,
         db: AsyncSession,
@@ -601,6 +617,9 @@ class LifecycleRepository:
         validate_relay_custody(snapshot["relay_custody"])
         validate_ipc_resources(snapshot["ipc_resources"])
         validate_volume_resources(snapshot["volume_resources"])
+        for resources in ("ipc_resources", "volume_resources"):
+            for entry in snapshot[resources].values():
+                validate_release(entry.get("release"))
         if snapshot["topics_dispatch"] not in ("unissued", "inflight", "settled"):
             raise RuntimeError("corrupt paired topic cleanup evidence")
         state_id = snapshot["egress_state_id"]
@@ -1105,6 +1124,82 @@ class LifecycleRepository:
             state_from_snapshot(persistent)
             work.pair_snapshot = {**work.pair_snapshot, "egress_state": persistent}
             await db.flush()
+        return work
+
+    async def record_pair_release(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        family: str,
+        role: str,
+        evidence: dict[str, Any] | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        """Persist stored bound-PV identity inside one snapshot resource entry."""
+        validate_release(evidence)
+        if evidence is None or family not in ("volume_resources", "ipc_resources"):
+            return expected
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        await self.fence_pair_creators(db, work)
+        assert work.pair_snapshot is not None
+        resources = work.pair_snapshot[family]
+        entry = resources[role]
+        if entry["dispatch"] == "unissued" or not entry["uid"]:
+            raise RuntimeError("bound paired resource release evidence required")
+        if entry.get("release") is not None:
+            if entry["release"] != evidence:
+                raise RuntimeError("stored release evidence changed")
+            return work
+        work.pair_snapshot = {
+            **work.pair_snapshot,
+            family: {**resources, role: {**entry, "release": evidence}},
+        }
+        await db.flush()
+        return work
+
+    async def record_state_release(
+        self,
+        db: AsyncSession,
+        expected: CleanupWork,
+        evidence: dict[str, Any] | None,
+        now: datetime,
+        *,
+        recovery: SandboxSession | None = None,
+        recovery_seconds: float = 0,
+    ) -> CleanupWork:
+        """Persist stored egress volume identity on the row and its snapshot."""
+        validate_release(evidence)
+        if evidence is None:
+            return expected
+        work = await self.owned_pair_cleanup(
+            db, expected, now, recovery=recovery, recovery_seconds=recovery_seconds
+        )
+        await self.fence_pair_creators(db, work)
+        assert work.pair_snapshot is not None
+        persistent = work.pair_snapshot["egress_state"]
+        if persistent is None:
+            raise RuntimeError("persistent egress state was never reserved")
+        if persistent["volume_dispatch"] == "unissued" or not persistent["volume_uid"]:
+            raise RuntimeError("bound persistent egress volume release evidence required")
+        if persistent.get("volume_release") is not None:
+            if persistent["volume_release"] != evidence:
+                raise RuntimeError("stored release evidence changed")
+            return work
+        persistent = {**persistent, "volume_release": evidence}
+        state_from_snapshot(persistent)
+        work.pair_snapshot = {**work.pair_snapshot, "egress_state": persistent}
+        state = await db.get(EgressState, UUID(persistent["state_id"]), with_for_update=True)
+        if state is None:
+            raise RuntimeError("persistent egress state row missing")
+        if state.volume_release is not None and state.volume_release != evidence:
+            raise RuntimeError("stored release evidence changed")
+        state.volume_release = evidence
+        await db.flush()
         return work
 
     async def record_relay_custody(

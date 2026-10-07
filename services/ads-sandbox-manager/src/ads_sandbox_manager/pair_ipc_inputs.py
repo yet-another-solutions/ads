@@ -9,6 +9,7 @@ from ads_sandbox_manager.config import Settings
 from ads_sandbox_manager.objects import Object
 from ads_sandbox_manager.pair_ipc import paired_ipc_pod
 from ads_sandbox_manager.pair_objects import PROJECT, PairBinding, pair_labels
+from ads_sandbox_manager.release_evidence import validate_release
 from ads_sandbox_manager.session_objects import ipc_name, ipc_pvc
 
 IPC_ROLES = ("volume", "pod")
@@ -20,7 +21,10 @@ def ipc_role(role: str) -> None:
 
 
 def new_ipc_resources() -> dict[str, Any]:
-    return {role: {"payload": None, "uid": None, "dispatch": "unissued"} for role in IPC_ROLES}
+    return {
+        role: {"payload": None, "uid": None, "dispatch": "unissued", "release": None}
+        for role in IPC_ROLES
+    }
 
 
 def ipc_identity(settings: Settings, pair: PairBinding, role: str) -> Object:
@@ -84,8 +88,14 @@ def validate_ipc_resources(value: object) -> None:
     if not isinstance(value, dict) or set(value) != set(IPC_ROLES):
         raise RuntimeError("corrupt paired IPC resources")
     for role, entry in value.items():
-        if not isinstance(entry, dict) or set(entry) != {"payload", "uid", "dispatch"}:
+        if not isinstance(entry, dict) or not set(entry) <= {
+            "payload",
+            "uid",
+            "dispatch",
+            "release",
+        }:
             raise RuntimeError("corrupt paired IPC resource")
+        validate_release(entry.get("release"))
         if entry["dispatch"] == "unissued":
             if entry != new_ipc_resources()[role]:
                 raise RuntimeError("corrupt unissued paired IPC resource")
