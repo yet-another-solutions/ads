@@ -30,7 +30,7 @@ def cleanup(api):
     spec["claimRef"]["name"] = name
     spec["persistentVolumeReclaimPolicy"] = "Delete"
     pod = api.core.list_namespaced_pod.return_value["items"][0]
-    pod["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = name
+    pod["spec"]["volumes"] = [{"persistentVolumeClaim": {"claimName": name}}]
     return CleanupAdapter(api), target("PersistentVolumeClaim", name, uid)
 
 
@@ -38,86 +38,46 @@ def release(api):
     api.core.list_namespaced_pod.return_value["items"] = []
 
 
-async def test_capture_persistable_positive_release_and_reclaim_contract(api, cleanup):
+async def test_capture_stores_exact_pv_identity(api, cleanup):
     adapter, original = cleanup
     captured = await adapter.capture(original)
-    assert captured["pv_uid"] == "pv-uid" and captured["nodes"] == ["sandbox-node"]
-    assert captured["reclaim_guard"] and captured["delete_policy"]
-    assert not await adapter.released(captured)  # Even a terminal Pod still exists.
+    assert captured["captured"] is True
+    assert captured["pv_name"] == "pv-1" and captured["pv_uid"] == "pv-uid"
+    assert captured["volume_key"] == "kubernetes.io/csi/example.csi.test^disk-1"
+    assert "nodes" not in captured and "delete_policy" not in captured
+    assert "reclaim_guard" not in captured
+    # A live terminal Pod is unfinished runtime evidence and blocks release.
+    assert not await adapter.released(captured)
     release(api)
     assert await adapter.released(captured)
-    assert not await adapter.reclaimed(captured)
-    api.core.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
     assert not await adapter.reclaimed(captured)  # PVC disappearance alone is not reclamation.
+    api.core.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
+    assert not await adapter.reclaimed(captured)
     api.core.read_persistent_volume.side_effect = ApiException(status=404)
     assert await adapter.reclaimed(captured)
 
 
-@pytest.mark.parametrize("csi", [False, True])
-@pytest.mark.parametrize(
-    "conditions",
-    [
-        [],
-        [{"type": "Ready", "status": "False"}],
-        [{"type": "Ready", "status": "Unknown"}],
-        [{"type": "Ready", "status": "True"}],
-        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2000-01-01T00:00:00Z"}],
-        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "2999-01-01T00:00:00Z"}],
-        [{"type": "Ready", "status": "True", "lastHeartbeatTime": "invalid"}],
-    ],
-)
-async def test_node_health_does_not_gate_resource_release(api, cleanup, csi, conditions):
+async def test_release_demands_stored_pv_identity_and_fails_closed(api, cleanup):
     adapter, original = cleanup
-    if not csi:
-        del api.core.read_persistent_volume.return_value["spec"]["csi"]
     captured = await adapter.capture(original)
-    api.core.read_node.return_value["status"]["conditions"] = conditions
-    # A live consumer still blocks, regardless of Node health.
+    release(api)
+    for field in ("pv_name", "pv_uid"):
+        broken = {**captured, field: None}
+        assert not await adapter.released(broken)
+    bare = dict(original)
+    assert not await adapter.released(bare)
+    assert not await adapter.reclaimed(bare)
+
+
+async def test_missing_or_replaced_claim_capture_stays_bare(api, cleanup):
+    adapter, original = cleanup
+    api.core.read_namespaced_persistent_volume_claim.return_value["metadata"]["uid"] = "replaced"
+    captured = await adapter.capture(original)
+    assert not captured.get("captured") and "pv_name" not in captured
     assert not await adapter.released(captured)
-    release(api)
-    # No later Ready heartbeat is needed, including for persisted old targets.
-    assert await adapter.released(captured)
-    if csi:
-        api.core.read_node.return_value["status"]["volumesInUse"] = [captured["volume_key"]]
-        assert not await adapter.released(captured)
-
-
-@pytest.mark.parametrize(
-    "broken",
-    ["inuse", "attached", "attachment", "missing-nodes", "not-captured"],
-)
-async def test_release_fails_closed_for_incomplete_or_negative_evidence(api, cleanup, broken):
-    adapter, original = cleanup
-    captured = await adapter.capture(original)
-    release(api)
-    status = api.core.read_node.return_value["status"]
-    if broken == "inuse":
-        status["volumesInUse"] = [captured["volume_key"]]
-    elif broken == "attached":
-        status["volumesAttached"] = [{"name": captured["volume_key"]}]
-    elif broken == "attachment":
-        api.storage.list_volume_attachment.return_value["items"] = [
-            {
-                "spec": {"source": {"persistentVolumeName": "pv-1"}},
-                "status": {"attached": False},
-            }
-        ]
-    elif broken == "missing-nodes":
-        captured["nodes"] = []
-    else:
-        captured["captured"] = False
-    assert not await adapter.released(captured)
-
-
-@pytest.mark.parametrize("missing", ["reclaim_guard", "delete_policy"])
-async def test_reclaim_requires_controller_backing_storage_contract(api, cleanup, missing):
-    adapter, original = cleanup
-    captured = await adapter.capture(original)
-    captured[missing] = False
-    release(api)
     api.core.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
-    api.core.read_persistent_volume.side_effect = ApiException(status=404)
-    assert not await adapter.reclaimed(captured)
+    captured = await adapter.capture(original)
+    assert not captured.get("captured")
 
 
 async def test_exact_delete_uid_and_resource_version_preconditions(api, cleanup):
@@ -153,7 +113,6 @@ async def test_binding_race_and_foreign_claim_fail_closed(api, cleanup):
 async def test_never_bound_release_and_replacement_pv_are_distinct(api, cleanup):
     adapter, original = cleanup
     captured = await adapter.capture(original)
-    release(api)
     api.core.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
     api.core.read_persistent_volume.return_value["metadata"]["uid"] = "replacement"
     assert not await adapter.reclaimed(captured)
@@ -162,9 +121,22 @@ async def test_never_bound_release_and_replacement_pv_are_distinct(api, cleanup)
     pvc["spec"] = {}
     pvc["status"] = {"phase": "Pending"}
     never_bound = await adapter.capture(original)
+    assert never_bound["captured"] and never_bound.get("never_bound")
+    release(api)  # The planted consumer pod must be gone before release.
     assert await adapter.released(never_bound)
     api.core.read_namespaced_persistent_volume_claim.side_effect = ApiException(status=404)
     assert await adapter.reclaimed(never_bound)
+
+
+async def test_volume_attachment_blocks_release_without_node_reads(api, cleanup):
+    adapter, original = cleanup
+    captured = await adapter.capture(original)
+    release(api)
+    api.storage.list_volume_attachment.return_value["items"] = [
+        {"spec": {"source": {"persistentVolumeName": "pv-1"}}}
+    ]
+    assert not await adapter.released(captured)
+    api.core.read_node.assert_not_called()
 
 
 async def test_inventory_filters_unrelated_and_golden_objects(api, cleanup):

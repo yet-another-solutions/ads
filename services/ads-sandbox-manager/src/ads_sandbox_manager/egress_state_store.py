@@ -7,13 +7,16 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import BigInteger, DateTime, UniqueConstraint, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent, PairIntentRepository
+from ads_sandbox_manager.release_evidence import validate_release
 from ads_sandbox_manager.store import Base, SandboxSession
 
 STATE_SNAPSHOT_FIELDS = {
@@ -31,6 +34,7 @@ STATE_SNAPSHOT_FIELDS = {
     "key_uid",
     "volume_dispatch",
     "volume_uid",
+    "volume_release",
 }
 
 
@@ -74,9 +78,14 @@ class EgressState(Base):
     key_uid: Mapped[str | None]
     volume_dispatch: Mapped[str]
     volume_uid: Mapped[str | None]
+    # Stored bound-PV identity captured while the claim is alive; never
+    # derived at deletion. Written only after a settled bound volume under
+    # the original creator claim. None on rows predating paired capture.
+    volume_release: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 def validate(state: EgressState) -> None:
+    validate_release(state.volume_release)
     if (
         type(state.storage_bytes) is not int
         or not 0 < state.storage_bytes < 2**63
@@ -381,6 +390,42 @@ class EgressStateRepository:
             raise RuntimeError("egress state resource was never dispatched")
         setattr(state, f"{role}_dispatch", "settled")
         await db.flush()
+
+    async def record_volume_release(
+        self,
+        db: AsyncSession,
+        row: SandboxSession,
+        owner: UUID,
+        generation: UUID,
+        state_id: UUID,
+        evidence: dict[str, Any] | None,
+    ) -> EgressState:
+        """Persist stored bound-PV identity under the original creator claim.
+
+        First write wins; later evidence must match exactly. A retired or
+        replaced creator claim can never attach or alter release evidence.
+        """
+        validate_release(evidence)
+        pair = await self.pairs.owned(db, row, owner, generation)
+        if evidence is None:
+            state = await db.get(EgressState, state_id, with_for_update=True)
+            if state is None:
+                raise RuntimeError("persistent egress state row missing")
+            return state
+        if pair.egress_state_id != state_id:
+            raise PairClaimLost("persistent egress state anchor changed")
+        state = await db.get(EgressState, state_id, with_for_update=True)
+        if state is None or state.sandbox_id != pair.sandbox_id:
+            raise RuntimeError("persistent egress state row missing")
+        if state.volume_dispatch not in ("inflight", "settled") or not state.volume_uid:
+            raise RuntimeError("bound persistent egress volume release evidence required")
+        if state.volume_release is not None:
+            if state.volume_release != evidence:
+                raise RuntimeError("stored release evidence changed")
+            return state
+        state.volume_release = evidence
+        await db.flush()
+        return state
 
     async def snapshot(self, db: AsyncSession, state_id: UUID) -> EgressState | None:
         """Historical ownership only; no absence, release or retirement verdict."""

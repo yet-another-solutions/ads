@@ -417,6 +417,9 @@ class LifecycleService:
     async def scan(self, kind: str) -> None:
         now, s = datetime.now(UTC), self.settings
         signals: list[tuple[str, Signal]] = []
+        if kind == "release":
+            await self._release_scan(now)
+            return
         if kind == "orphan":
             registry = PairRegistry(self.repository)
             async with self.sessions.begin() as db:
@@ -530,6 +533,22 @@ class LifecycleService:
                     )
         for topic, message in signals:
             await self.emit(topic, message)  # No outbox: unpublished observation loss is accepted.
+
+    async def _release_scan(self, now: datetime) -> None:
+        """Persist stored release evidence for live ready pairs.
+
+        Creation-time storage is the contract; ready pairs have every claim
+        bound (WaitForFirstConsumer), so PV identity is final. Captured rows
+        are skipped; the pass only fills what a pre-ready death left missing.
+        The paired cleanup capture remains the recovery-time backstop.
+        """
+        async with self.sessions.begin() as db:
+            rows = await self.repository.ready_pairs(db, self.settings.lifecycle_batch)
+        for row in rows:
+            try:
+                await self.pair_capture.capture_ready(row)
+            except Exception:
+                log.warning("release evidence capture unavailable: %s", row.sandbox_id)
 
     async def _save_targets(self, work: CleanupWork, targets: list[Object]) -> bool:
         async with self.sessions.begin() as db:
@@ -698,6 +717,7 @@ class LifecycleService:
     async def run_once(self) -> None:
         for kind in ("idle", "reap", "watchdog", "orphan"):
             await self._locked(f"manager-scheduler-{kind}", partial(self.scan, kind))
+        await self._locked("manager-scheduler-release", partial(self.scan, "release"))
         async with self.sessions.begin() as db:
             ids = list(
                 await db.scalars(

@@ -24,7 +24,7 @@ from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_kube import ControlKind
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import PairClaimLost
-from ads_sandbox_manager.session_objects import ca_consumer_name
+from ads_sandbox_manager.session_objects import ca_consumer_name, session_name
 from ads_sandbox_manager.store import SandboxSession
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,6 @@ class PairTeardownKubernetes(Protocol):
     async def delete_pod(self, desired: Object, uid: str, *, node: str | None) -> bool: ...
     async def released(self, target: Object) -> bool: ...
     async def reclaimed(self, target: Object) -> bool: ...
-    async def capture(self, target: Object) -> Object: ...
 
 
 class PairTeardownControls(Protocol):
@@ -60,10 +59,11 @@ class PairTeardownControls(Protocol):
 class PairTeardown:
     """Thin ordered release replacing the journal-proof runtime teardown.
 
-    Reuses the exact-target discipline of the legacy path: capture check,
-    UID-fenced observation, Foreground deletion, and released()/reclaimed()
-    evidence per object. Idle work stays gated on the authenticated IPC
-    drain acknowledgement, which remains the hibernate boundary.
+    Reuses the exact-target discipline: stored release evidence merged onto
+    each target, UID-fenced observation, Foreground deletion, and
+    released()/reclaimed() per object. Deletion never captures; evidence is
+    consumed verbatim. Idle work stays gated on the authenticated IPC drain
+    acknowledgement, which remains the hibernate boundary.
     """
 
     def __init__(
@@ -187,6 +187,18 @@ class PairTeardown:
         # Non-pods in existing Deployment-first order, exactly like the legacy path.
         non_pods = [obj for obj in work.targets if obj["kind"] != "Pod"]
         if snapshot is not None:
+            # Stored workspace identity rides on the intent entry, not the
+            # carried target dict; merge it before any release check.
+            workspace = snapshot["volume_resources"]["workspace"]
+            evidence = workspace.get("release") if workspace.get("uid") else None
+            if evidence:
+                non_pods = [
+                    {**obj, **evidence}
+                    if obj["kind"] == "PersistentVolumeClaim"
+                    and obj["name"] == session_name(UUID(snapshot["session_id"]))
+                    else obj
+                    for obj in non_pods
+                ]
             # The retired generation owns its captured controls (PodGroups,
             # Services, NetworkPolicies) and CA clones until absence proves the
             # lifetime gone; a new generation's dispatch must never collide
@@ -211,11 +223,13 @@ class PairTeardown:
             for role, entry in snapshot["volume_resources"].items():
                 if role == "workspace" or not entry.get("uid"):
                     continue
+                evidence = entry.get("release") or {}
                 extra.append(
                     {
                         "kind": "PersistentVolumeClaim",
                         "name": ca_consumer_name(binding.sandbox_id, role),
                         "uid": entry["uid"],
+                        **evidence,
                     }
                 )
             custody = snapshot["relay_custody"]
@@ -247,11 +261,13 @@ class PairTeardown:
                 if state is not None:
                     for role, uid in (("key", state.key_uid), ("volume", state.volume_uid)):
                         if uid:
+                            evidence = state.volume_release if role == "volume" else {}
                             extra.append(
                                 {
                                     "kind": "Secret" if role == "key" else "PersistentVolumeClaim",
                                     "name": f"ads-egress-{role}-{state.state_id}",
                                     "uid": uid,
+                                    **(evidence or {}),
                                 }
                             )
             non_pods.extend(obj for obj in extra if (obj["kind"], obj["name"]) not in seen)
@@ -328,16 +344,11 @@ class PairTeardown:
                 continue
             remaining.append(obj)
         non_pods = remaining
-        # Storage evidence backfill: the pair path (snapshot extras and carried
-        # targets) never persisted capture evidence, but released()/delete() below
-        # demand it (captured flag, pv_name, nodes). Build it live for PVCs that
-        # still exist; capture() itself UID-fences and verifies PV claim identity,
-        # so a replaced object surfaces as the bare dict (no "captured") and the
-        # later released() check fails closed exactly as before. Missing objects
-        # skip the loop body via observed-is-None and need no evidence.
-        for obj in non_pods:
-            if obj["kind"] == "PersistentVolumeClaim" and not obj.get("captured"):
-                obj.update(await self.kube.capture(obj))
+        # Stored release evidence only: capture happened while the pair was
+        # alive (creation/ready-time or the paired cleanup capture), and this
+        # path never derives evidence during deletion. A PVC without stored
+        # identity stays bare and released() below fails closed, exactly as
+        # designed for evidence-free or replaced claims.
         non_pods.sort(key=lambda t: t["kind"] != "Deployment")
         compute_pending = False
         for obj in non_pods:
