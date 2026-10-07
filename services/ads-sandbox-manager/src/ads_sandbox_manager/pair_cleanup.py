@@ -105,7 +105,6 @@ class PairCleanupCapture:
         loses its fence and leaves stored evidence untouched. Missing evidence
         for a live claim stays missing (fail closed) and is retried next pass.
         """
-        owner = row.claimed_by
         async with (
             asyncio.timeout(self.settings.control_seconds),
             self.sessions.begin() as db,
@@ -113,6 +112,7 @@ class PairCleanupCapture:
             current = await db.get(SandboxSession, row.session_id)
             if current is None or current.status != "ready" or current.claimed_by is None:
                 return
+            owner = current.claimed_by
             generation = await db.scalar(
                 select(PairIntent.generation)
                 .where(PairIntent.session_id == row.session_id)
@@ -133,7 +133,7 @@ class PairCleanupCapture:
                 if entry.get("release") is not None:
                     continue
                 desired = volume_manifest(
-                    self.kube.settings, intent.binding(), role, entry["payload"]
+                    self.settings, intent.binding(), role, entry["payload"]
                 )
                 evidence = await self.kube.release_evidence(
                     desired["metadata"]["name"], entry["uid"]
