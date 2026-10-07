@@ -241,6 +241,39 @@ class LifecycleRepository:
                 ):
                     merged[role] = {**entry, "dispatch": "settled", "uid": r.get("uid")}
             expected_snapshot = {**expected_snapshot, field: merged}
+
+        # Release evidence is captured identity under the same fenced claim, not
+        # ownership: record_pair_release/record_state_release store it on the
+        # cleanup claim while the ready-scan backfill stores it on the live
+        # intent/state row. Either side may hold it without the other; writers
+        # enforce first-wins equality on their own side. One-sided evidence is
+        # normalized onto both sides; conflicting evidence stays ownership drift.
+        def merge_release(expected: Any, live: Any) -> tuple[Any, Any]:
+            if not isinstance(expected, dict) or not isinstance(live, dict):
+                return expected, live
+            merged_e, merged_r = deepcopy(expected), deepcopy(live)
+            for role, entry in expected.items():
+                other = live.get(role)
+                if not isinstance(entry, dict) or not isinstance(other, dict):
+                    continue
+                mine, theirs = entry.get("release"), other.get("release")
+                if mine is None and theirs is not None:
+                    merged_e[role] = {**entry, "release": theirs}
+                elif theirs is None and mine is not None:
+                    merged_r[role] = {**other, "release": mine}
+            return merged_e, merged_r
+
+        for field in ("volume_resources", "ipc_resources"):
+            merged_e, merged_r = merge_release(expected_snapshot.get(field), retained.get(field))
+            expected_snapshot = {**expected_snapshot, field: merged_e}
+            retained = {**retained, field: merged_r}
+        cape, rete = expected_snapshot.get("egress_state"), retained.get("egress_state")
+        if isinstance(cape, dict) and isinstance(rete, dict):
+            if cape.get("volume_release") is None and rete.get("volume_release") is not None:
+                expected_snapshot = {
+                    **expected_snapshot,
+                    "egress_state": {**cape, "volume_release": rete.get("volume_release")},
+                }
         cap, ret = expected_snapshot.get("relay_custody"), retained.get("relay_custody")
         if (
             isinstance(cap, dict)

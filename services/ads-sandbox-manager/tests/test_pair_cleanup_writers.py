@@ -160,3 +160,56 @@ async def test_fenced_never_dispatched_pair_has_no_writer_but_is_not_retired(con
     assert (await snapshot(f, intent.generation)).creation_fenced
     async with f.h.sessions.begin() as db:
         assert not await capture.repository.complete(db, await saved(f, work), datetime.now(UTC))
+
+
+EVIDENCE_PARAMS = [("volume_resources", "workspace"), ("ipc_resources", "volume")]
+
+
+@pytest.mark.parametrize("family,role", EVIDENCE_PARAMS)
+async def test_claim_side_release_evidence_does_not_fail_the_seal(creation, family, role):
+    """The 2026-10-07 idle-teardown wedge: record_pair_release stores bound-PV
+    evidence on the cleanup claim only; a seal must not treat one-sided stored
+    identity as ownership drift and raise PairClaimLost forever."""
+    f = creation
+    await build(f)
+    capture, work, claim = await cleanup_claim(f)
+    evidence = {"captured": True, "pv_name": "pv-test", "pv_uid": "pv-uid", "volume_key": None}
+    async with f.h.sessions.begin() as db:
+        stored = await db.get(CleanupWork, work.work_id)
+        snapshot_value = deepcopy(stored.pair_snapshot)
+        entry = snapshot_value[family][role]
+        assert entry["dispatch"] == "settled" and entry["uid"]
+        snapshot_value[family][role] = {**entry, "release": evidence}
+        stored.pair_snapshot = snapshot_value
+    current = await saved(f, work)
+    assert await check(f, capture, current, claim)
+    async with f.h.sessions.begin() as db:
+        assert await capture.repository.seal_pair_cleanup(
+            db, await saved(f, work), datetime.now(UTC), recovery=claim, recovery_seconds=120
+        )
+
+
+@pytest.mark.parametrize("family,role", EVIDENCE_PARAMS)
+async def test_release_evidence_drift_still_fails_the_seal(creation, family, role):
+    """Conflicting stored identity on either side is never silently merged."""
+    f = creation
+    await build(f)
+    capture, work, claim = await cleanup_claim(f)
+    evidence_a = {"captured": True, "pv_name": "pv-a", "pv_uid": "pv-a-uid", "volume_key": None}
+    evidence_b = {"captured": True, "pv_name": "pv-b", "pv_uid": "pv-b-uid", "volume_key": None}
+    async with f.h.sessions.begin() as db:
+        stored = await db.get(CleanupWork, work.work_id)
+        snapshot_value = deepcopy(stored.pair_snapshot)
+        entry = snapshot_value[family][role]
+        snapshot_value[family][role] = {**entry, "release": evidence_a}
+        stored.pair_snapshot = snapshot_value
+        intent = await db.get(PairIntent, f.intent.generation)
+        live = deepcopy(getattr(intent, family))
+        live[role] = {**live[role], "release": evidence_b}
+        setattr(intent, family, live)
+    current = await saved(f, work)
+    with pytest.raises(PairClaimLost, match="cleanup claim differs"):
+        async with f.h.sessions.begin() as db:
+            await capture.repository.seal_pair_cleanup(
+                db, current, datetime.now(UTC), recovery=claim, recovery_seconds=120
+            )

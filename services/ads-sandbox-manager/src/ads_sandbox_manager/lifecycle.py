@@ -23,7 +23,7 @@ from ads_sandbox_manager.pair_disposal import PairDisposal, PairDisposalReposito
 from ads_sandbox_manager.pair_objects import GENERATION, PROJECT
 from ads_sandbox_manager.pair_registry import PairRegistry
 from ads_sandbox_manager.pair_retirement import PairRetirementRepository
-from ads_sandbox_manager.pair_store import PairIntent
+from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
 from ads_sandbox_manager.pair_teardown import PairTeardown
 from ads_sandbox_manager.service import READY_TOPIC, Publisher
 from ads_sandbox_manager.session_objects import (
@@ -689,6 +689,14 @@ class LifecycleService:
                 return
             async with self.sessions.begin() as db:
                 await self.repository.complete(db, work, datetime.now(UTC))
+        except PairClaimLost as lost:
+            log.error(
+                "cleanup claim lost (%s); manual intervention required: %s %s",
+                lost,
+                work.kind,
+                work_id,
+            )
+            return
         except Exception:
             if work.kind == "idle":
                 log.warning("idle cleanup unavailable; workspace and intent retained: %s", work_id)

@@ -117,7 +117,7 @@ class PairTeardown:
         except PairClaimLost:
             raise
         except Exception:
-            log.warning("paired teardown unavailable; exact targets retained")
+            log.warning("paired teardown unavailable; exact targets retained", exc_info=True)
             return False
 
     @staticmethod
