@@ -52,6 +52,12 @@ class FakeTeardownKube:
         obj = await self.observe(target)
         if obj and obj["metadata"]["uid"] == target["uid"]:
             del self.remote.objects[(target["kind"], target["name"])]
+            if target["kind"] == "PersistentVolumeClaim":
+                # Dynamic provisioning with Delete reclaim: the bound PV goes
+                # with its claim once released.
+                pv_name = obj.get("spec", {}).get("volumeName")
+                if pv_name:
+                    self.remote.objects.pop(("PersistentVolume", pv_name), None)
 
     async def capture(self, target):
         """Mirror CleanupAdapter.capture: evidence on live uid-matched objects."""
@@ -76,10 +82,21 @@ class FakeTeardownKube:
         return True
 
     async def released(self, target):
+        # Mirror CleanupAdapter.released: fail closed without stored identity.
+        if not target.get("never_bound") and not (target.get("pv_name") and target.get("pv_uid")):
+            return False
+        obj = await self.observe(target)
+        if obj is not None and obj["metadata"]["uid"] != target["uid"]:
+            raise RuntimeError("original storage claim was replaced")
+        if obj is not None and obj.get("spec", {}).get("volumeName") != target.get("pv_name"):
+            return False
         return True
 
     async def reclaimed(self, target):
-        return True
+        if not await self.released(target):
+            return False
+        obj = await self.observe(target)
+        return obj is None
 
 
 class FakePairControls:
@@ -144,6 +161,12 @@ async def pair_world(creation):
     )
     f.pair_service = lifecycle(f)
     f.capture = f.pair_service.pair_capture
+    # Production stores bound-PV release evidence for every ready pair via the
+    # release scan (capture_ready); the world must mirror that contract or the
+    # reconstructed reap snapshot would legitimately lack stored identity.
+    async with f.h.sessions.begin() as db:
+        current = await db.get(SandboxSession, f.row.session_id)
+    await f.capture.capture_ready(current)
     await f.pair_service.admit(IDLE, Signal(row.session_id, row.sandbox_id))
     async with f.h.sessions.begin() as db:
         f.work = await db.scalar(
@@ -163,6 +186,10 @@ async def pair_world(creation):
 async def retire(f):
     """Sealed capture → finish_idle: stopped row, detached workspace, no work."""
     assert await f.capture.capture(f.work)
+    # The seal persists release evidence onto the stored claim snapshot; finish
+    # fences whole snapshots, so continue with the sealed row, not the stale copy.
+    async with f.h.sessions.begin() as db:
+        f.work = await db.get(CleanupWork, f.work.work_id)
     async with f.h.sessions.begin() as db:
         assert await f.retirements.finish_idle(db, f.work, datetime.now(UTC))
     async with f.h.sessions.begin() as db:

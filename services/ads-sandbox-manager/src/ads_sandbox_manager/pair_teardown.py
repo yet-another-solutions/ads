@@ -24,7 +24,7 @@ from ads_sandbox_manager.pair_compute import relay_input_name
 from ads_sandbox_manager.pair_kube import ControlKind
 from ads_sandbox_manager.pair_objects import PairBinding
 from ads_sandbox_manager.pair_store import PairClaimLost
-from ads_sandbox_manager.session_objects import ca_consumer_name, session_name
+from ads_sandbox_manager.session_objects import ca_consumer_name, ipc_name, session_name
 from ads_sandbox_manager.store import SandboxSession
 
 log = logging.getLogger(__name__)
@@ -187,15 +187,41 @@ class PairTeardown:
         # Non-pods in existing Deployment-first order, exactly like the legacy path.
         non_pods = [obj for obj in work.targets if obj["kind"] != "Pod"]
         if snapshot is not None:
-            # Stored workspace identity rides on the intent entry, not the
-            # carried target dict; merge it before any release check.
+            # Stored PVC identity rides on the intent entries, not the carried
+            # plain-column target dicts; merge it before any release check. The
+            # workspace object is named by its committed pvc_id (or is the single
+            # retained target), never by the session id alone.
             workspace = snapshot["volume_resources"]["workspace"]
-            evidence = workspace.get("release") if workspace.get("uid") else None
-            if evidence:
+            workspace_evidence = workspace.get("release") if workspace.get("uid") else None
+            workspace_name = None
+            try:
+                workspace_name = session_name(UUID(workspace["payload"]["pvc_id"]))
+            except (KeyError, TypeError, ValueError):
+                workspace_name = None
+            ipc_volume = snapshot["ipc_resources"]["volume"]
+            ipc_evidence = ipc_volume.get("release") if ipc_volume.get("uid") else None
+            ipc_pvc_name = ipc_name(UUID(snapshot["sandbox_id"]))
+            merged: list[Object] = []
+            for obj in non_pods:
+                if obj["kind"] == "PersistentVolumeClaim":
+                    if workspace_evidence and (obj["name"] == workspace_name or obj.get("retain")):
+                        obj = {**obj, **workspace_evidence}
+                    elif ipc_evidence and obj["name"] == ipc_pvc_name:
+                        obj = {**obj, **ipc_evidence}
+                merged.append(obj)
+            non_pods = merged
+            # Persistent egress state outlives retained lifetimes: its stored
+            # volume_release evidence rides on the state row, so merge it onto
+            # the matching target here (the extras below only cover destructive
+            # lifetimes, where the same evidence already spreads from the row).
+            state_release = None
+            if snapshot.get("egress_state") and snapshot["egress_state"].get("volume_release"):
+                state_release = snapshot["egress_state"]["volume_release"]
+            if state_release:
+                state_name = f"ads-egress-volume-{snapshot['egress_state_id']}"
                 non_pods = [
-                    {**obj, **evidence}
-                    if obj["kind"] == "PersistentVolumeClaim"
-                    and obj["name"] == session_name(UUID(snapshot["session_id"]))
+                    {**obj, **state_release}
+                    if obj["kind"] == "PersistentVolumeClaim" and obj["name"] == state_name
                     else obj
                     for obj in non_pods
                 ]
@@ -207,7 +233,6 @@ class PairTeardown:
             # egress-state key/volume are whole-lifetime secrets/storage.
             from ads_sandbox_manager.pair_objects import pair_name
 
-            seen = {(obj["kind"], obj["name"]) for obj in non_pods}
             binding = PairBinding(
                 session_id=UUID(snapshot["session_id"]),
                 sandbox_id=UUID(snapshot["sandbox_id"]),
@@ -270,7 +295,40 @@ class PairTeardown:
                                     **(evidence or {}),
                                 }
                             )
-            non_pods.extend(obj for obj in extra if (obj["kind"], obj["name"]) not in seen)
+            evidenced = {(obj["kind"], obj["name"]) for obj in extra}
+            # Evidenced extras replace the bare plain-column/retired duplicates:
+            # a same-named target without stored release identity can never pass
+            # the released() gate, so keeping it would wedge the whole teardown.
+            non_pods = [obj for obj in non_pods if (obj["kind"], obj["name"]) not in evidenced]
+            non_pods.extend(extra)
+            # Persist the merged stored identity back onto the claim targets
+            # (evidence-only, same-(kind,name), first-wins shape): the retained
+            # workspace receipt (finish_idle -> pvc.release_evidence) and the
+            # reap target built from it must carry pv_name/pv_uid, or the next
+            # phase re-wedges on the same bare plain-column targets.
+            evidence_by_key = {
+                (obj["kind"], obj["name"]): obj
+                for obj in non_pods
+                if obj["kind"] == "PersistentVolumeClaim"
+                and (obj.get("pv_name") or obj.get("never_bound"))
+            }
+            if evidence_by_key:
+                async with self.sessions.begin() as db:
+                    stored = await db.get(
+                        CleanupWork, work.work_id, with_for_update=True, populate_existing=True
+                    )
+                    if stored is None or (
+                        (stored.session_id, stored.kind, stored.state_changed)
+                        != (work.session_id, work.kind, work.state_changed)
+                    ):
+                        raise PairClaimLost("paired teardown claim vanished")
+                    stored.targets = [
+                        {**obj, **evidence_by_key[(obj["kind"], obj["name"])]}
+                        if (obj["kind"], obj["name"]) in evidence_by_key
+                        and not (obj.get("pv_name") or obj.get("never_bound"))
+                        else obj
+                        for obj in stored.targets
+                    ]
         # Control-plane objects (PodGroups, Services, NetworkPolicies) and
         # custody/inputs Secrets are deleted through the pair control adapter:
         # UID-fenced delete with observed absence as completion. The storage
@@ -375,15 +433,21 @@ class PairTeardown:
                 observed is None or observed["metadata"]["uid"] != obj["uid"]
             ):
                 return False
-            if not await self.kube.released(obj):
+            # Storage release evidence is CSI/PV-specific: it gates PVC claims
+            # only. Snapshotless orphan Secrets/controls carry no evidence and
+            # rely on UID-fenced deletion with observed absence — requiring
+            # released() for them wedged orphan teardown permanently.
+            if obj["kind"] == "PersistentVolumeClaim" and not await self.kube.released(obj):
                 return False
             if not obj.get("retain"):
                 await self.kube.delete(obj)
                 observed = await self.kube.observe(obj)
                 if observed is not None and observed["metadata"]["uid"] == obj["uid"]:
                     return False
-                if not obj["name"].startswith("ads-sandbox-ipc-") and not await self.kube.reclaimed(
-                    obj
+                if (
+                    obj["kind"] == "PersistentVolumeClaim"
+                    and not obj["name"].startswith("ads-sandbox-ipc-")
+                    and not await self.kube.reclaimed(obj)
                 ):
                     return False
         return not compute_pending

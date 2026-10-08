@@ -92,10 +92,15 @@ async def test_idle_work_loss_reconstructs_same_drain_and_retention_boundary(pai
     async with f.h.sessions.begin() as db:
         assert (await db.get(SandboxSession, f.row.session_id)).status == "stopped"
         await f.retirements.verify(db, f.intent.generation)
-    # Retained workspace PVC is the only survivor of an idle teardown in the
-    # plain-column world; guest runtimes are raw Pods (no Deployment/PV trio).
-    assert len(f.remote.objects) == 1
-    assert next(iter(f.remote.objects))[0] == "PersistentVolumeClaim"
+    # Retained workspace PVC is the only claim survivor of an idle teardown in
+    # the plain-column world; its bound PV stays with it (fake immediate-bind
+    # world). Guest runtimes are raw Pods (no Deployment/PV trio).
+    survivors = list(f.remote.objects)
+    assert len(survivors) == 2
+    assert {key[0] for key in f.remote.objects} == {
+        "PersistentVolumeClaim",
+        "PersistentVolume",
+    }
 
 
 async def test_retained_expiry_receipt_recovers_without_reopening_resume(pair_world):

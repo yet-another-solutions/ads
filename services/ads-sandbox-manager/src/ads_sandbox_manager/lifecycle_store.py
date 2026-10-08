@@ -496,23 +496,32 @@ class LifecycleRepository:
             # Every control builder names its object pair_name(binding, role).
             targets.append(target(kind, pair_name(binding, role), uid))
         targets.append(
-            target(
-                "PersistentVolumeClaim",
-                ipc_name(intent.sandbox_id),
-                intent.ipc_resources["volume"]["uid"],
-            )
+            {
+                **(intent.ipc_resources["volume"].get("release") or {}),
+                **target(
+                    "PersistentVolumeClaim",
+                    ipc_name(intent.sandbox_id),
+                    intent.ipc_resources["volume"]["uid"],
+                ),
+            }
         )
         # CA clone PVC uids are retired-generation intent state; the session
         # row's ca_clones is cleared by retirement and cannot be used here.
+        # Stored release evidence rides on the same intent entries and spreads
+        # verbatim: without it the released() gate can never pass after the
+        # pods are gone.
         for role in ("guest", "egress", "key"):
             entry = intent.volume_resources.get(role)
             if entry and entry.get("uid"):
                 targets.append(
-                    target(
-                        "PersistentVolumeClaim",
-                        ca_consumer_name(intent.sandbox_id, role),
-                        entry["uid"],
-                    )
+                    {
+                        **(entry.get("release") or {}),
+                        **target(
+                            "PersistentVolumeClaim",
+                            ca_consumer_name(intent.sandbox_id, role),
+                            entry["uid"],
+                        ),
+                    }
                 )
         for role, entry in intent.relay_inputs.items():
             if entry["uid"] is not None:
@@ -522,11 +531,14 @@ class LifecycleRepository:
             if state is not None:
                 for role, uid in (("key", state.key_uid), ("volume", state.volume_uid)):
                     targets.append(
-                        target(
-                            "Secret" if role == "key" else "PersistentVolumeClaim",
-                            f"ads-egress-{role}-{state.state_id}",
-                            uid,
-                        )
+                        {
+                            **(state.volume_release if role == "volume" else {}),
+                            **target(
+                                "Secret" if role == "key" else "PersistentVolumeClaim",
+                                f"ads-egress-{role}-{state.state_id}",
+                                uid,
+                            ),
+                        }
                     )
             # Relay custody Secret: retired-generation ownership is part of the
             # whole-lifetime teardown scope.

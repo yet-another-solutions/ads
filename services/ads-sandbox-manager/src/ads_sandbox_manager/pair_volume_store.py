@@ -156,10 +156,12 @@ class PairVolumeRepository:
         generation: UUID,
         role: str,
         evidence: dict[str, Any] | None,
+        *,
+        statuses: tuple[str, ...] = ("creating",),
     ) -> PairIntent:
         """Persist stored bound-PV identity under the live claim; first wins."""
         validate_release(evidence)
-        intent = await self.pairs.owned(db, row, owner, generation)
+        intent = await self.pairs.owned(db, row, owner, generation, statuses=statuses)
         entry = intent.volume_resources[role]
         if evidence is None:
             return intent

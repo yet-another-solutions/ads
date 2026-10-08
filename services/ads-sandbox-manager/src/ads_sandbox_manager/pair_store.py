@@ -182,7 +182,12 @@ class PairIntentRepository:
     """
 
     async def _owned(
-        self, db: AsyncSession, expected: SandboxSession, owner: UUID
+        self,
+        db: AsyncSession,
+        expected: SandboxSession,
+        owner: UUID,
+        *,
+        statuses: tuple[str, ...] = ("creating",),
     ) -> SandboxSession:
         identity = (
             expected.sandbox_id,
@@ -198,7 +203,7 @@ class PairIntentRepository:
         if (
             row is None
             or (row.sandbox_id, row.project_id, row.status_changed_at) != identity
-            or row.status != "creating"
+            or row.status not in statuses
             or row.claimed_by != owner
         ):
             raise PairClaimLost("session provisioning claim changed")
@@ -239,13 +244,26 @@ class PairIntentRepository:
             raise RuntimeError("incomplete or corrupt pair control intent")
 
     @staticmethod
-    def _matches(intent: PairIntent, row: SandboxSession, owner: UUID) -> None:
+    def _matches(
+        intent: PairIntent,
+        row: SandboxSession,
+        owner: UUID,
+        *,
+        statuses: tuple[str, ...] = ("creating",),
+    ) -> None:
         if (
             intent.session_id != row.session_id
             or intent.sandbox_id != row.sandbox_id
             or intent.project_id != row.project_id
             or intent.claim_owner != owner
-            or intent.claim_changed != row.status_changed_at
+            or (
+                intent.claim_changed != row.status_changed_at
+                # The ready transition deliberately advances status_changed_at;
+                # the creating-claim instant lives only on the intent. Ownership
+                # continuity for ready rows stays fenced by claim_owner, durable
+                # identity and the unfenced creation below.
+                and row.status not in statuses
+            )
         ):
             raise PairClaimLost("prior pair requires fenced retirement")
         if intent.creation_fenced or intent.retired_at is not None:
@@ -344,9 +362,11 @@ class PairIntentRepository:
         expected: SandboxSession,
         owner: UUID,
         generation: UUID,
+        *,
+        statuses: tuple[str, ...] = ("creating",),
     ) -> PairIntent:
         """Revalidate an existing intent without ever allocating a replacement."""
-        row = await self._owned(db, expected, owner)
+        row = await self._owned(db, expected, owner, statuses=statuses)
         intent = await db.scalar(
             select(PairIntent)
             .where(PairIntent.generation == generation)
@@ -355,7 +375,7 @@ class PairIntentRepository:
         )
         if intent is None:
             raise PairClaimLost("pair intent missing")
-        self._matches(intent, row, owner)
+        self._matches(intent, row, owner, statuses=statuses)
         self._validate(intent)
         await self._transfer(db, intent)
         return intent

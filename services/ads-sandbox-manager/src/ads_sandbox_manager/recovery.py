@@ -125,6 +125,17 @@ class RecoveryService:
                     if teardown is None or not await teardown.release(work, recovery=row):
                         log.warning("paired recovery requires complete kube teardown")
                         return
+            # Capture seals stored release evidence into the claim snapshot and
+            # teardown persists merged identity back onto stored targets; both
+            # fences compare whole snapshots/targets, so finish with fresh rows
+            # instead of the pre-capture copies loaded by execute().
+            async with self.sessions.begin() as db:
+                refreshed = await db.scalars(
+                    select(CleanupWork)
+                    .where(CleanupWork.session_id == row.session_id, CleanupWork.kind == "recovery")
+                    .order_by(CleanupWork.state_changed)
+                )
+                works = list(refreshed)
             await self._finish_paired(row, works)
             return
         if any(obj.get("retain") for work in works for obj in work.targets):

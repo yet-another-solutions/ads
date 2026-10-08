@@ -623,9 +623,26 @@ class LifecycleService:
                     if not await self.pair_capture.capture(work):
                         log.warning("paired writers unresolved; cleanup retained: %s", work_id)
                         return
+                    # The seal persists release evidence onto the stored claim
+                    # snapshot; every later fence (teardown _owned aside) compares
+                    # whole snapshots, so continue with the sealed row, not the
+                    # pre-capture copy.
+                    async with self.sessions.begin() as db:
+                        sealed = await db.get(CleanupWork, work.work_id)
+                    if sealed is None:
+                        return
+                    work = sealed
                 if self.pair_teardown is None or not await self.pair_teardown.release(work):
                     log.warning("pair teardown incomplete; targets retained: %s", work_id)
                     return
+                # Teardown persists merged stored identity back onto the claim
+                # targets; the one-way receipt fences whole targets, so finish
+                # with the post-release row, not the pre-teardown copy.
+                async with self.sessions.begin() as db:
+                    released = await db.get(CleanupWork, work.work_id)
+                if released is None:
+                    return
+                work = released
                 async with self.sessions.begin() as db:
                     if work.kind == "idle":
                         await PairRetirementRepository(self.repository).finish_idle(
