@@ -21,6 +21,7 @@ from ads_sandbox_manager.egress_state_store import (
     EgressStateRepository,
     state_snapshot,
 )
+from ads_sandbox_manager.lifecycle_store import CleanupWork
 from ads_sandbox_manager.objects import JOB_UID
 from ads_sandbox_manager.pair_compute_inputs import compute_manifest, validate_payload
 from ads_sandbox_manager.pair_store import PairClaimLost, PairIntent
@@ -192,10 +193,21 @@ async def test_cancellation_cleanup_owns_late_pod_without_release(publication, c
         first = await saved(f, work)
         assert first.pair_snapshot["compute_uids"]["Pod/egress"] is None
         assert first.pair_snapshot["compute_payloads"]["egress"] is not None
-        assert first.pair_snapshot["egress_state"] == state_snapshot(f.state)
+        # capture persists bound-PV release evidence onto the snapshot state;
+        # compare modulo that stored key (both sides, symmetric).
+        expected_state = dict(state_snapshot(f.state))
+        expected_state.pop("volume_release", None)
+        captured_state = dict(first.pair_snapshot["egress_state"])
+        captured_state.pop("volume_release", None)
+        assert captured_state == expected_state
         f.remote.release.set()
         assert await asyncio.to_thread(f.remote.finished.wait, 5)
         await f.service.drain()
+        # The first capture persisted release evidence into the stored
+        # snapshot; fences compare whole snapshots, so re-capture from a
+        # fresh row instead of the pre-capture copy.
+        async with f.h.sessions.begin() as db:
+            work = await db.get(CleanupWork, work.work_id)
         await capture.capture(work, recovery=claim)
         second = await saved(f, work)
         assert (

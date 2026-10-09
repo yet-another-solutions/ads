@@ -61,7 +61,14 @@ async def test_real_paired_builder_resumes_original_state_with_new_attachment(pa
         assert new.retained_from == f.intent.generation
         assert (await db.get(PairTransfer, new.generation)).validated_at is not None
         persistent = await db.get(EgressState, new.egress_state_id)
-        assert state_snapshot(persistent) == prior["egress_state"]
+        # Retention carries identity, not the prior capture's release evidence:
+        # the new attachment re-captures its own bound-PV identity, so compare
+        # modulo the stored key on both sides.
+        expected_state = dict(prior["egress_state"])
+        expected_state.pop("volume_release", None)
+        resumed_state = dict(state_snapshot(persistent))
+        resumed_state.pop("volume_release", None)
+        assert resumed_state == expected_state
         assert new.relay_custody["public_keys"] != prior["relay_custody"]["public_keys"]
         assert all(new.compute_uids[key] != value for key, value in prior["compute_uids"].items())
     assert all(f.remote.objects[key] == value for key, value in before.items())

@@ -38,6 +38,12 @@ class MemoryControlApi:
         adapter.custom = Mock()
         adapter.networking = Mock()
         adapter.kube.core.read_namespaced_pod.side_effect = partial(self.read, "Pod")
+        # Cluster-scoped PV reads answer from the same store; immediate-bind
+        # PVs created alongside their claims carry the exact claimRef identity
+        # release_evidence() validates.
+        adapter.kube.core.read_persistent_volume.side_effect = partial(
+            self.read, "PersistentVolume"
+        )
         for kind, sdk, name, verb in (
             ("PodGroup", adapter.custom, "custom_object", "get"),
             ("Service", adapter.kube.core, "service", "read"),

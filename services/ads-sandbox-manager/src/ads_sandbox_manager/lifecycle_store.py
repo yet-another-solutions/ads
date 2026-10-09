@@ -532,7 +532,7 @@ class LifecycleRepository:
                 for role, uid in (("key", state.key_uid), ("volume", state.volume_uid)):
                     targets.append(
                         {
-                            **(state.volume_release if role == "volume" else {}),
+                            **((state.volume_release or {}) if role == "volume" else {}),
                             **target(
                                 "Secret" if role == "key" else "PersistentVolumeClaim",
                                 f"ads-egress-{role}-{state.state_id}",
