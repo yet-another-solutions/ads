@@ -54,7 +54,23 @@ async def test_full_pair_settles_without_claiming_release_or_erasing_snapshots(c
     initial = deepcopy(work.pair_snapshot)
     assert await capture.capture(work, recovery=claim)
     current = await saved(f, work)
-    assert current.pair_snapshot == initial
+
+    # Capture persists PV release evidence into resource entries; equality
+    # holds modulo those stored keys (set symmetrically on both sides).
+    def strip_evidence(value):
+        value = deepcopy(value)
+        for family in ("volume_resources", "ipc_resources"):
+            for entry in value[family].values():
+                entry.pop("release", None)
+        if value.get("egress_state"):
+            value["egress_state"].pop("volume_release", None)
+        return value
+
+    assert strip_evidence(current.pair_snapshot) == strip_evidence(initial)
+    assert any(
+        entry.get("release") is not None
+        for entry in current.pair_snapshot["volume_resources"].values()
+    )
     assert (await snapshot(f, f.intent.generation)).creation_fenced
     assert await check(f, capture, current, claim)
     async with f.h.sessions.begin() as db:
@@ -95,7 +111,20 @@ async def test_each_inflight_writer_blocks_even_with_every_uid_captured(creation
     assert not await check(f, capture, current, claim)
     assert all(current.pair_snapshot["control_uids"].values())
     assert all(current.pair_snapshot["compute_uids"].values())
-    assert current.pair_snapshot == work.pair_snapshot
+
+    # The writer guarantee is "no dispatch/uid mutation"; capture may still
+    # persist PV release evidence into resource entries, so compare modulo
+    # the stored evidence keys.
+    def strip_evidence(value):
+        value = deepcopy(value)
+        for family in ("volume_resources", "ipc_resources"):
+            for entry in value[family].values():
+                entry.pop("release", None)
+        if value.get("egress_state"):
+            value["egress_state"].pop("volume_release", None)
+        return value
+
+    assert strip_evidence(current.pair_snapshot) == strip_evidence(work.pair_snapshot)
 
 
 @pytest.mark.parametrize(

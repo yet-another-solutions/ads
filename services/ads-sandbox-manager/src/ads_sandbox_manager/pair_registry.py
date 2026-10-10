@@ -179,21 +179,30 @@ class PairRegistry:
                 # Every control builder names its object pair_name(binding, role).
                 targets.append(target(ckind, pair_name(binding, crole), uid))
             targets.append(
-                target(
-                    "PersistentVolumeClaim",
-                    ipc_name(intent.sandbox_id),
-                    intent.ipc_resources["volume"]["uid"],
-                )
+                {
+                    **(intent.ipc_resources["volume"].get("release") or {}),
+                    **target(
+                        "PersistentVolumeClaim",
+                        ipc_name(intent.sandbox_id),
+                        intent.ipc_resources["volume"]["uid"],
+                    ),
+                }
             )
+            # Stored release evidence rides on the same intent entries and
+            # spreads verbatim: without it the released() gate can never pass
+            # after the pods are gone.
             for role in ("guest", "egress", "key"):
                 entry = intent.volume_resources.get(role)
                 if entry and entry.get("uid"):
                     targets.append(
-                        target(
-                            "PersistentVolumeClaim",
-                            ca_consumer_name(intent.sandbox_id, role),
-                            entry["uid"],
-                        )
+                        {
+                            **(entry.get("release") or {}),
+                            **target(
+                                "PersistentVolumeClaim",
+                                ca_consumer_name(intent.sandbox_id, role),
+                                entry["uid"],
+                            ),
+                        }
                     )
             for role, entry in intent.relay_inputs.items():
                 if entry["uid"] is not None:
@@ -203,20 +212,27 @@ class PairRegistry:
                 if state is not None:
                     for role, uid_name in (("key", state.key_uid), ("volume", state.volume_uid)):
                         targets.append(
-                            target(
-                                "Secret" if role == "key" else "PersistentVolumeClaim",
-                                f"ads-egress-{role}-{state.state_id}",
-                                uid_name,
-                            )
+                            {
+                                **((state.volume_release or {}) if role == "volume" else {}),
+                                **target(
+                                    "Secret" if role == "key" else "PersistentVolumeClaim",
+                                    f"ads-egress-{role}-{state.state_id}",
+                                    uid_name,
+                                ),
+                            }
                         )
+            workspace_release = intent.volume_resources["workspace"].get("release") or {}
             targets.append(
-                target(
-                    "PersistentVolumeClaim",
-                    session_name(pvc.pvc_id)
-                    if pvc
-                    else session_name(UUID(workspace["payload"]["pvc_id"])),
-                    workspace["uid"],
-                )
+                {
+                    **workspace_release,
+                    **target(
+                        "PersistentVolumeClaim",
+                        session_name(pvc.pvc_id)
+                        if pvc
+                        else session_name(UUID(workspace["payload"]["pvc_id"])),
+                        workspace["uid"],
+                    ),
+                }
             )
             # Relay custody Secret: retired-generation ownership is part of the
             # whole-lifetime teardown scope.
@@ -284,12 +300,18 @@ class PairRegistry:
         # with retain=True. Non-idle kinds never re-drain.
         targets = (
             [
-                target(
-                    "PersistentVolumeClaim",
-                    session_name(pvc.pvc_id),
-                    pvc.uid,
-                    retain=kind == "idle",
-                )
+                {
+                    # Stored workspace release evidence rides on the intent;
+                    # spread it so the retained receipt carries bound-PV
+                    # identity for the later reap phase.
+                    **(intent.volume_resources["workspace"].get("release") or {}),
+                    **target(
+                        "PersistentVolumeClaim",
+                        session_name(pvc.pvc_id),
+                        pvc.uid,
+                        retain=kind == "idle",
+                    ),
+                }
             ]
             if pvc
             else []
@@ -315,21 +337,30 @@ class PairRegistry:
                 ckind, crole = key.split("/", 1)
                 targets.append(target(ckind, pair_name(binding_full, crole), uid))
             targets.append(
-                target(
-                    "PersistentVolumeClaim",
-                    ipc_name(intent.sandbox_id),
-                    intent_full["ipc_resources"]["volume"]["uid"],
-                )
+                {
+                    **(intent_full["ipc_resources"]["volume"].get("release") or {}),
+                    **target(
+                        "PersistentVolumeClaim",
+                        ipc_name(intent.sandbox_id),
+                        intent_full["ipc_resources"]["volume"]["uid"],
+                    ),
+                }
             )
+            # Stored release evidence spreads verbatim from the reconstructed
+            # snapshot: without it the released() gate can never pass after
+            # the pods are gone.
             for role in ("guest", "egress", "key"):
                 entry = intent_full["volume_resources"].get(role)
                 if entry and entry.get("uid"):
                     targets.append(
-                        target(
-                            "PersistentVolumeClaim",
-                            ca_consumer_name(intent.sandbox_id, role),
-                            entry["uid"],
-                        )
+                        {
+                            **(entry.get("release") or {}),
+                            **target(
+                                "PersistentVolumeClaim",
+                                ca_consumer_name(intent.sandbox_id, role),
+                                entry["uid"],
+                            ),
+                        }
                     )
             if intent_full["relay_custody"].get("uid"):
                 targets.append(
@@ -350,11 +381,14 @@ class PairRegistry:
                     for role, uid in (("key", state.key_uid), ("volume", state.volume_uid)):
                         if uid:
                             targets.append(
-                                target(
-                                    "Secret" if role == "key" else "PersistentVolumeClaim",
-                                    f"ads-egress-{role}-{state.state_id}",
-                                    uid,
-                                )
+                                {
+                                    **((state.volume_release or {}) if role == "volume" else {}),
+                                    **target(
+                                        "Secret" if role == "key" else "PersistentVolumeClaim",
+                                        f"ads-egress-{role}-{state.state_id}",
+                                        uid,
+                                    ),
+                                }
                             )
             targets.append(
                 target(

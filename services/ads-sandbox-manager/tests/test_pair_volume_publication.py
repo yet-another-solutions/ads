@@ -58,6 +58,7 @@ async def publication(controls):
     kube.core.read_namespaced_persistent_volume_claim.side_effect = partial(
         f.remote.read, "PersistentVolumeClaim"
     )
+    kube.core.read_persistent_volume.side_effect = partial(f.remote.read, "PersistentVolume")
     kube.core.create_namespaced_persistent_volume_claim.side_effect = (
         lambda namespace, body, **kwargs: f.remote.create(namespace, body=body, **kwargs)
     )

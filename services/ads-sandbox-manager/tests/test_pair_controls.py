@@ -38,6 +38,12 @@ class MemoryControlApi:
         adapter.custom = Mock()
         adapter.networking = Mock()
         adapter.kube.core.read_namespaced_pod.side_effect = partial(self.read, "Pod")
+        # Cluster-scoped PV reads answer from the same store; immediate-bind
+        # PVs created alongside their claims carry the exact claimRef identity
+        # release_evidence() validates.
+        adapter.kube.core.read_persistent_volume.side_effect = partial(
+            self.read, "PersistentVolume"
+        )
         for kind, sdk, name, verb in (
             ("PodGroup", adapter.custom, "custom_object", "get"),
             ("Service", adapter.kube.core, "service", "read"),
@@ -66,6 +72,25 @@ class MemoryControlApi:
             obj["metadata"].update(uid=str(uuid4()), resourceVersion="1")
             if body["kind"] == "Service":
                 obj["spec"]["clusterIP"] = "10.2.3.4"
+            if body["kind"] == "PersistentVolumeClaim":
+                # Immediate-bind world: every created claim is Bound to a PV whose
+                # claimRef proves the exact (name, uid, namespace) identity, so
+                # release_evidence()/released() behave like the real cluster.
+                pv_name = f"pv-{body['metadata']['name']}"
+                obj["spec"]["volumeName"] = pv_name
+                obj["status"] = {"phase": "Bound"}
+                pvc_uid = obj["metadata"]["uid"]
+                self.objects[("PersistentVolume", pv_name)] = {
+                    "metadata": {"uid": f"pvuid-{pvc_uid}", "name": pv_name},
+                    "spec": {
+                        "claimRef": {
+                            "uid": pvc_uid,
+                            "name": body["metadata"]["name"],
+                            "namespace": body["metadata"]["namespace"],
+                        },
+                        "csi": {"driver": "example.csi.test", "volumeHandle": pvc_uid},
+                    },
+                }
             self.objects[key] = obj
             self.created.append(key)
             self.finished.set()

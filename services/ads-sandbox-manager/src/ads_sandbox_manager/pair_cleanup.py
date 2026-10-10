@@ -126,7 +126,7 @@ class PairCleanupCapture:
                 asyncio.timeout(self.settings.control_seconds),
                 self.sessions.begin() as db,
             ):
-                intent = await pairs.owned(db, row, owner, generation)
+                intent = await pairs.owned(db, row, owner, generation, statuses=("ready",))
                 entry = intent.volume_resources[role]
                 if entry["dispatch"] == "unissued" or not entry["uid"]:
                     continue
@@ -143,13 +143,15 @@ class PairCleanupCapture:
                         row.sandbox_id,
                     )
                     continue
-                await self.volumes.record_release(db, row, owner, generation, role, evidence)
+                await self.volumes.record_release(
+                    db, row, owner, generation, role, evidence, statuses=("ready",)
+                )
         for role in IPC_ROLES:
             async with (
                 asyncio.timeout(self.settings.control_seconds),
                 self.sessions.begin() as db,
             ):
-                intent = await pairs.owned(db, row, owner, generation)
+                intent = await pairs.owned(db, row, owner, generation, statuses=("ready",))
                 entry = intent.ipc_resources[role]
                 if role != "volume" or entry["dispatch"] == "unissued" or not entry["uid"]:
                     continue
@@ -162,7 +164,9 @@ class PairCleanupCapture:
                         row.sandbox_id,
                     )
                     continue
-                await self.ipcs.record_release(db, row, owner, generation, role, evidence)
+                await self.ipcs.record_release(
+                    db, row, owner, generation, role, evidence, statuses=("ready",)
+                )
 
     async def capture(self, work: CleanupWork, *, recovery: SandboxSession | None = None) -> bool:
         async with asyncio.timeout(self.settings.cleanup_seconds):
